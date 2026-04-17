@@ -3,6 +3,8 @@ import { useSession } from '@/hooks/useSession';
 import { StepHeader } from './StepHeader';
 import { findPlan, formularyTierFor, lookupByHNumber } from '@/lib/cmsPlans';
 import { BROKER } from '@/lib/constants';
+import { ComplianceChecklist } from '@/components/compliance/ComplianceChecklist';
+import { DISCLAIMERS, allComplianceItemIds } from '@/lib/compliance';
 import type { Plan, FormularyTier } from '@/types/plans';
 import type { SessionMode } from '@/types/session';
 
@@ -102,10 +104,19 @@ function NewQuoteMode() {
         onRecommend={setRecommendation}
       />
       <ClientDeliveryCard finalists={finalists} recommendation={recommendation} />
+      <ComplianceChecklist />
       <BrokerActions recommendation={recommendation} />
-      <EnrollConfirmPanel recommendation={recommendation} />
     </div>
   );
+}
+
+function useComplianceReady(): boolean {
+  const complianceChecked = useSession((s) => s.complianceChecked);
+  const disclaimersConfirmed = useSession((s) => s.disclaimersConfirmed);
+  const allIds = useMemo(allComplianceItemIds, []);
+  const itemsDone = allIds.every((id) => complianceChecked.includes(id));
+  const disclaimersDone = DISCLAIMERS.every((d) => disclaimersConfirmed.includes(d.id));
+  return itemsDone && disclaimersDone;
 }
 
 function SideBySideTable({
@@ -432,7 +443,15 @@ function Pill({ label }: { label: string }) {
 
 function BrokerActions({ recommendation }: { recommendation: string | null }) {
   const client = useSession((s) => s.client);
-  const disabled = !recommendation || !client.phone;
+  const complianceReady = useComplianceReady();
+  const hasRec = !!recommendation;
+  const sendDisabled = !hasRec || !client.phone;
+  const enrollDisabled = !hasRec || !complianceReady;
+
+  function enrollClick() {
+    if (enrollDisabled) return;
+    window.open(BROKER.sunfire, '_blank', 'noopener');
+  }
 
   return (
     <div className="pm-surface" style={{ padding: 14 }}>
@@ -446,110 +465,48 @@ function BrokerActions({ recommendation }: { recommendation: string | null }) {
         <button
           type="button"
           className="pm-btn"
-          disabled={disabled}
-          style={{ flex: 1, minWidth: 160, height: 40, opacity: disabled ? 0.5 : 1 }}
+          disabled={sendDisabled}
+          style={{ flex: 1, minWidth: 160, height: 40, opacity: sendDisabled ? 0.5 : 1 }}
         >
           📱 Send text
         </button>
         <button
           type="button"
           className="pm-btn"
-          disabled={disabled}
-          style={{ flex: 1, minWidth: 160, height: 40, opacity: disabled ? 0.5 : 1 }}
+          disabled={sendDisabled}
+          style={{ flex: 1, minWidth: 160, height: 40, opacity: sendDisabled ? 0.5 : 1 }}
         >
           ✉️ Send email
         </button>
         <button
           type="button"
-          disabled={disabled}
+          onClick={enrollClick}
+          disabled={enrollDisabled}
           style={{
             flex: 1,
             minWidth: 160,
             height: 40,
             padding: '0 14px',
             borderRadius: 8,
-            border: '1px solid var(--enroll)',
-            background: 'var(--enroll)',
-            color: '#fff',
+            border: `1px solid ${enrollDisabled ? 'var(--w2)' : 'var(--enroll)'}`,
+            background: enrollDisabled ? 'var(--w2)' : 'var(--enroll)',
+            color: enrollDisabled ? 'var(--i3)' : '#fff',
             fontWeight: 700,
             fontSize: 13,
-            cursor: disabled ? 'not-allowed' : 'pointer',
-            opacity: disabled ? 0.5 : 1,
+            cursor: enrollDisabled ? 'not-allowed' : 'pointer',
           }}
         >
           ✓ Enroll now
         </button>
       </div>
-      {disabled && (
+      {(!hasRec || !complianceReady) && (
         <div style={{ marginTop: 8, fontSize: 11, color: 'var(--i3)' }}>
-          Recommend a plan and confirm client phone before sending or enrolling.
+          {!hasRec && 'Recommend a plan above. '}
+          {!complianceReady &&
+            'Enroll unlocks once the 16-item compliance checklist above is complete. '}
+          {!client.phone && hasRec && 'Client phone required to send text or email.'}
         </div>
       )}
-    </div>
-  );
-}
-
-function EnrollConfirmPanel({ recommendation }: { recommendation: string | null }) {
-  const complianceChecked = useSession((s) => s.complianceChecked);
-  const disclaimersConfirmed = useSession((s) => s.disclaimersConfirmed);
-  const complianceReady =
-    complianceChecked.length >= 13 && disclaimersConfirmed.length >= 3;
-
-  if (!recommendation) return null;
-
-  return (
-    <div
-      className="pm-surface"
-      style={{
-        padding: 16,
-        borderColor: complianceReady ? 'var(--enroll)' : 'var(--amb)',
-        background: complianceReady ? '#E9F5EE' : 'var(--at)',
-      }}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div
-            className="uppercase font-semibold"
-            style={{
-              color: complianceReady ? 'var(--enroll)' : 'var(--amb)',
-              fontSize: 10,
-              letterSpacing: '0.08em',
-            }}
-          >
-            SunFire Matrix enrollment gate
-          </div>
-          <div className="font-lora" style={{ fontSize: 16, marginTop: 4 }}>
-            {complianceReady
-              ? 'All compliance items cleared — ready to enroll.'
-              : 'Compliance checklist incomplete.'}
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--i2)', marginTop: 4 }}>
-            {complianceChecked.length}/16 items checked ·{' '}
-            {disclaimersConfirmed.length}/3 disclaimers confirmed
-          </div>
-        </div>
-        <a
-          href={complianceReady ? BROKER.sunfire : undefined}
-          target="_blank"
-          rel="noreferrer"
-          onClick={(e) => {
-            if (!complianceReady) e.preventDefault();
-          }}
-          className="pm-btn"
-          style={{
-            height: 38,
-            padding: '0 16px',
-            background: complianceReady ? 'var(--enroll)' : 'var(--w2)',
-            color: complianceReady ? '#fff' : 'var(--i3)',
-            borderColor: complianceReady ? 'var(--enroll)' : 'var(--w2)',
-            fontWeight: 700,
-            cursor: complianceReady ? 'pointer' : 'not-allowed',
-            textDecoration: 'none',
-          }}
-        >
-          Open SunFire Matrix →
-        </a>
-      </div>
     </div>
   );
 }
