@@ -8,6 +8,7 @@ import type {
   SessionNote,
   SessionState,
 } from '@/types/session';
+import type { BenefitFilterState, BenefitKey } from '@/types/plans';
 
 function uid(prefix = ''): string {
   const r = Math.random().toString(36).slice(2, 10);
@@ -27,7 +28,25 @@ function emptyClient(): Client {
   };
 }
 
-function initialState(): SessionState {
+function emptyBenefitFilters(): BenefitFilterState {
+  const off = {
+    enabled: false,
+    subToggles: {},
+    tier: 'any' as const,
+  };
+  return {
+    dental: { ...off },
+    vision: { ...off },
+    hearing: { ...off },
+    transportation: { ...off },
+    otc: { ...off },
+    food_card: { ...off },
+    diabetic: { ...off },
+    fitness: { ...off },
+  };
+}
+
+function initialState(): SessionState & { benefitFilters: BenefitFilterState } {
   return {
     sessionId: uid('ses'),
     startedAt: Date.now(),
@@ -40,18 +59,30 @@ function initialState(): SessionState {
     recommendation: null,
     complianceChecked: [],
     disclaimersConfirmed: [],
+    currentPlanId: null,
+    selectedFinalists: [],
+    benefitFilters: emptyBenefitFilters(),
   };
 }
 
 interface SessionStore extends SessionState {
+  benefitFilters: BenefitFilterState;
   setMode: (mode: SessionMode) => void;
   updateClient: (patch: Partial<Client>) => void;
   addMedication: (med: Omit<Medication, 'id' | 'addedAt'>) => void;
   removeMedication: (id: string) => void;
-  addProvider: (p: Omit<Provider, 'id' | 'addedAt'>) => void;
+  addProvider: (p: Omit<Provider, 'id' | 'addedAt'>) => string;
+  updateProvider: (id: string, patch: Partial<Provider>) => void;
   removeProvider: (id: string) => void;
   addNote: (type: NoteType, body: string) => void;
   removeNote: (id: string) => void;
+  setCurrentPlanId: (id: string | null) => void;
+  setBenefitFilter: (key: BenefitKey, patch: Partial<import('@/types/plans').BenefitFilter>) => void;
+  resetBenefitFilters: () => void;
+  setSelectedFinalists: (ids: string[]) => void;
+  setRecommendation: (id: string | null) => void;
+  toggleComplianceItem: (id: string) => void;
+  confirmDisclaimer: (id: string) => void;
   resetSession: () => void;
 }
 
@@ -76,12 +107,20 @@ export const useSession = create<SessionStore>((set) => ({
       medications: state.medications.filter((m) => m.id !== id),
     })),
 
-  addProvider: (p) =>
+  addProvider: (p) => {
+    const id = uid('prv');
     set((state) => ({
       providers: [
         ...state.providers,
-        { ...p, id: uid('prv'), addedAt: Date.now() },
+        { ...p, id, addedAt: Date.now() },
       ],
+    }));
+    return id;
+  },
+
+  updateProvider: (id, patch) =>
+    set((state) => ({
+      providers: state.providers.map((p) => (p.id === id ? { ...p, ...patch } : p)),
     })),
 
   removeProvider: (id) =>
@@ -102,6 +141,36 @@ export const useSession = create<SessionStore>((set) => ({
 
   removeNote: (id) =>
     set((state) => ({ notes: state.notes.filter((n) => n.id !== id) })),
+
+  setCurrentPlanId: (id) => set({ currentPlanId: id }),
+
+  setBenefitFilter: (key, patch) =>
+    set((state) => ({
+      benefitFilters: {
+        ...state.benefitFilters,
+        [key]: { ...state.benefitFilters[key], ...patch },
+      },
+    })),
+
+  resetBenefitFilters: () => set({ benefitFilters: emptyBenefitFilters() }),
+
+  setSelectedFinalists: (ids) => set({ selectedFinalists: ids }),
+
+  setRecommendation: (id) => set({ recommendation: id }),
+
+  toggleComplianceItem: (id) =>
+    set((state) => ({
+      complianceChecked: state.complianceChecked.includes(id)
+        ? state.complianceChecked.filter((x) => x !== id)
+        : [...state.complianceChecked, id],
+    })),
+
+  confirmDisclaimer: (id) =>
+    set((state) => ({
+      disclaimersConfirmed: state.disclaimersConfirmed.includes(id)
+        ? state.disclaimersConfirmed
+        : [...state.disclaimersConfirmed, id],
+    })),
 
   resetSession: () => set(initialState()),
 }));

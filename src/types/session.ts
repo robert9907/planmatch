@@ -72,4 +72,10 @@ export interface SessionState {
   recommendation: string | null;
   complianceChecked: string[];
   disclaimersConfirmed: string[];
+  /**
+   * Annual-review mode only: beneficiary's current-year plan, looked up by
+   * H-number. Null in new-quote mode.
+   */
+  currentPlanId: string | null;
+  selectedFinalists: string[];
 }
