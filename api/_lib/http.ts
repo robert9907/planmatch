@@ -25,6 +25,19 @@ export function notFound(res: VercelResponse, message = 'Not found'): void {
 }
 
 export function serverError(res: VercelResponse, err: unknown): void {
-  const message = err instanceof Error ? err.message : 'Unknown error';
-  sendJson(res, 500, { error: message });
+  console.error('[api] error:', err);
+  const obj = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : {};
+  const message =
+    err instanceof Error
+      ? err.message
+      : typeof obj.message === 'string'
+        ? obj.message
+        : typeof err === 'string'
+          ? err
+          : 'Unknown error';
+  const body: Record<string, unknown> = { error: message };
+  if (typeof obj.code === 'string') body.code = obj.code;
+  if (typeof obj.details === 'string') body.details = obj.details;
+  if (typeof obj.hint === 'string') body.hint = obj.hint;
+  sendJson(res, 500, body);
 }
