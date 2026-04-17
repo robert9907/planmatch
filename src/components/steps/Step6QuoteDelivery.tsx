@@ -4,6 +4,7 @@ import { StepHeader } from './StepHeader';
 import { findPlan, formularyTierFor, lookupByHNumber } from '@/lib/cmsPlans';
 import { BROKER } from '@/lib/constants';
 import { ComplianceChecklist } from '@/components/compliance/ComplianceChecklist';
+import { SaveSessionButton } from '@/components/sync/SaveSessionButton';
 import { DISCLAIMERS, allComplianceItemIds } from '@/lib/compliance';
 import type { Plan, FormularyTier } from '@/types/plans';
 import type { SessionMode } from '@/types/session';
@@ -22,6 +23,8 @@ export function Step6QuoteDelivery() {
       />
 
       {mode === 'new_quote' ? <NewQuoteMode /> : <AnnualReviewMode />}
+
+      <SaveSessionButton />
     </div>
   );
 }
