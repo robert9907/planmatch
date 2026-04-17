@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { extractFromImage } from './_lib/vision';
-import { badRequest, cors, sendJson, serverError } from './_lib/http';
+import { extractFromImage } from './_lib/vision.js';
+import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 
 export const config = {
   api: {

@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomUUID } from 'node:crypto';
-import { supabase } from './_lib/supabase';
-import { sendCaptureSms, normalizePhone } from './_lib/twilio';
-import { badRequest, cors, sendJson, serverError } from './_lib/http';
+import { supabase } from './_lib/supabase.js';
+import { sendCaptureSms, normalizePhone } from './_lib/twilio.js';
+import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;

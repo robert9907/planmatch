@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { supabase, type CaptureSessionRow, type CaptureItem } from './_lib/supabase';
-import { badRequest, cors, notFound, sendJson, serverError } from './_lib/http';
+import { supabase, type CaptureSessionRow, type CaptureItem } from './_lib/supabase.js';
+import { badRequest, cors, notFound, sendJson, serverError } from './_lib/http.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;

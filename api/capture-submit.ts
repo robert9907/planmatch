@@ -1,9 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomUUID } from 'node:crypto';
-import { supabase, type CaptureItem, type CaptureSessionRow } from './_lib/supabase';
-import { extractFromImage } from './_lib/vision';
-import { storeCaptureImage } from './_lib/blob';
-import { badRequest, cors, notFound, sendJson, serverError } from './_lib/http';
+import { supabase, type CaptureItem, type CaptureSessionRow } from './_lib/supabase.js';
+import { extractFromImage } from './_lib/vision.js';
+import { storeCaptureImage } from './_lib/blob.js';
+import { badRequest, cors, notFound, sendJson, serverError } from './_lib/http.js';
 
 export const config = {
   api: {

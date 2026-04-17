@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { ExtractedItem } from './supabase';
+import type { ExtractedItem } from './supabase.js';
 
 const PROMPT = `You are reading a medication bottle label or prescription printout.
 Extract the following fields and return ONLY valid JSON, no markdown, no explanation.
