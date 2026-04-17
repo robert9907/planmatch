@@ -1,0 +1,95 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --sage: #4E7D63; --sl: #EBF3EE; --sm: #B8D8C4;
+  --warm: #F7F3EE; --wh: #fff; --w2: #EDE8E1; --w3: #DDD8CF;
+  --ink: #2A2720; --i2: #5C574F; --i3: #9A9389;
+  --blue: #2C5F9E; --bt: #EEF3FA;
+  --amb: #9A6B1A; --at: #FDF3E3;
+  --red: #9A2C2C; --rt: #FCEAEA;
+  --pur: #5A3D8C; --pt: #F0EBF8;
+  --teal: #0F6E56; --tl: #E1F5EE;
+  --enroll: #2D8B55;
+  --navy: #0A4A5C; --nvlt: #E8F5FA; --nvbd: #B5D8E8;
+}
+
+.dark {
+  --warm: #1A1714; --wh: #242220; --w2: #3A3834; --w3: #4A4844;
+  --ink: #E8E4DE; --i2: #B8B4AE; --i3: #6A6660;
+  --sl: #162A1E; --sm: #2A4A34; --bt: #0E1828; --at: #22180A;
+  --rt: #2A1010; --pt: #1A1430; --tl: #0A2018;
+  --nvlt: #0A1E28; --nvbd: #1A3840;
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    font-family: 'Source Sans 3', system-ui, sans-serif;
+    background: var(--warm);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1, h2, h3, h4, h5 {
+    font-family: 'Lora', serif;
+    letter-spacing: -0.01em;
+  }
+
+  ::selection {
+    background: var(--sm);
+    color: var(--ink);
+  }
+}
+
+@layer components {
+  .pm-surface {
+    background: var(--wh);
+    border: 1px solid var(--w2);
+    border-radius: 10px;
+  }
+
+  .pm-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid var(--w2);
+    background: var(--wh);
+    color: var(--i2);
+  }
+
+  .pm-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid var(--w2);
+    background: var(--wh);
+    color: var(--ink);
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
+  }
+  .pm-btn:hover { background: var(--w2); }
+  .pm-btn:active { transform: translateY(1px); }
+
+  .pm-btn-primary {
+    background: var(--sage);
+    color: #fff;
+    border-color: var(--sage);
+  }
+  .pm-btn-primary:hover { background: #3F6B53; border-color: #3F6B53; }
+}
