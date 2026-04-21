@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
   Client,
   Medication,
@@ -74,7 +75,7 @@ interface SessionStore extends SessionState {
   addProvider: (p: Omit<Provider, 'id' | 'addedAt'>) => string;
   updateProvider: (id: string, patch: Partial<Provider>) => void;
   removeProvider: (id: string) => void;
-  addNote: (type: NoteType, body: string) => void;
+  addNote: (type: NoteType, body: string, opts?: { carrier?: string; scenario?: string }) => void;
   removeNote: (id: string) => void;
   setCurrentPlanId: (id: string | null) => void;
   setBenefitFilter: (key: BenefitKey, patch: Partial<import('@/types/plans').BenefitFilter>) => void;
@@ -86,94 +87,114 @@ interface SessionStore extends SessionState {
   resetSession: () => void;
 }
 
-export const useSession = create<SessionStore>((set) => ({
-  ...initialState(),
+export const useSession = create<SessionStore>()(
+  persist(
+    (set) => ({
+      ...initialState(),
 
-  setMode: (mode) => set({ mode }),
+      setMode: (mode) => set({ mode }),
 
-  updateClient: (patch) =>
-    set((state) => ({ client: { ...state.client, ...patch } })),
+      updateClient: (patch) =>
+        set((state) => ({ client: { ...state.client, ...patch } })),
 
-  addMedication: (med) =>
-    set((state) => ({
-      medications: [
-        ...state.medications,
-        { ...med, id: uid('med'), addedAt: Date.now() },
-      ],
-    })),
+      addMedication: (med) =>
+        set((state) => ({
+          medications: [
+            ...state.medications,
+            { ...med, id: uid('med'), addedAt: Date.now() },
+          ],
+        })),
 
-  removeMedication: (id) =>
-    set((state) => ({
-      medications: state.medications.filter((m) => m.id !== id),
-    })),
+      removeMedication: (id) =>
+        set((state) => ({
+          medications: state.medications.filter((m) => m.id !== id),
+        })),
 
-  addProvider: (p) => {
-    const id = uid('prv');
-    set((state) => ({
-      providers: [
-        ...state.providers,
-        { ...p, id, addedAt: Date.now() },
-      ],
-    }));
-    return id;
-  },
-
-  updateProvider: (id, patch) =>
-    set((state) => ({
-      providers: state.providers.map((p) => (p.id === id ? { ...p, ...patch } : p)),
-    })),
-
-  removeProvider: (id) =>
-    set((state) => ({
-      providers: state.providers.filter((p) => p.id !== id),
-    })),
-
-  addNote: (type, body) => {
-    const trimmed = body.trim();
-    if (!trimmed) return;
-    set((state) => ({
-      notes: [
-        { id: uid('note'), type, body: trimmed, createdAt: Date.now() },
-        ...state.notes,
-      ],
-    }));
-  },
-
-  removeNote: (id) =>
-    set((state) => ({ notes: state.notes.filter((n) => n.id !== id) })),
-
-  setCurrentPlanId: (id) => set({ currentPlanId: id }),
-
-  setBenefitFilter: (key, patch) =>
-    set((state) => ({
-      benefitFilters: {
-        ...state.benefitFilters,
-        [key]: { ...state.benefitFilters[key], ...patch },
+      addProvider: (p) => {
+        const id = uid('prv');
+        set((state) => ({
+          providers: [
+            ...state.providers,
+            { ...p, id, addedAt: Date.now() },
+          ],
+        }));
+        return id;
       },
-    })),
 
-  resetBenefitFilters: () => set({ benefitFilters: emptyBenefitFilters() }),
+      updateProvider: (id, patch) =>
+        set((state) => ({
+          providers: state.providers.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+        })),
 
-  setSelectedFinalists: (ids) => set({ selectedFinalists: ids }),
+      removeProvider: (id) =>
+        set((state) => ({
+          providers: state.providers.filter((p) => p.id !== id),
+        })),
 
-  setRecommendation: (id) => set({ recommendation: id }),
+      addNote: (type, body, opts) => {
+        const trimmed = body.trim();
+        if (!trimmed) return;
+        set((state) => ({
+          notes: [
+            {
+              id: uid('note'),
+              type,
+              body: trimmed,
+              createdAt: Date.now(),
+              ...(opts?.carrier ? { carrier: opts.carrier } : {}),
+              ...(opts?.scenario ? { scenario: opts.scenario } : {}),
+            },
+            ...state.notes,
+          ],
+        }));
+      },
 
-  toggleComplianceItem: (id) =>
-    set((state) => ({
-      complianceChecked: state.complianceChecked.includes(id)
-        ? state.complianceChecked.filter((x) => x !== id)
-        : [...state.complianceChecked, id],
-    })),
+      removeNote: (id) =>
+        set((state) => ({ notes: state.notes.filter((n) => n.id !== id) })),
 
-  confirmDisclaimer: (id) =>
-    set((state) => ({
-      disclaimersConfirmed: state.disclaimersConfirmed.includes(id)
-        ? state.disclaimersConfirmed
-        : [...state.disclaimersConfirmed, id],
-    })),
+      setCurrentPlanId: (id) => set({ currentPlanId: id }),
 
-  resetSession: () => set(initialState()),
-}));
+      setBenefitFilter: (key, patch) =>
+        set((state) => ({
+          benefitFilters: {
+            ...state.benefitFilters,
+            [key]: { ...state.benefitFilters[key], ...patch },
+          },
+        })),
+
+      resetBenefitFilters: () => set({ benefitFilters: emptyBenefitFilters() }),
+
+      setSelectedFinalists: (ids) => set({ selectedFinalists: ids }),
+
+      setRecommendation: (id) => set({ recommendation: id }),
+
+      toggleComplianceItem: (id) =>
+        set((state) => ({
+          complianceChecked: state.complianceChecked.includes(id)
+            ? state.complianceChecked.filter((x) => x !== id)
+            : [...state.complianceChecked, id],
+        })),
+
+      confirmDisclaimer: (id) =>
+        set((state) => ({
+          disclaimersConfirmed: state.disclaimersConfirmed.includes(id)
+            ? state.disclaimersConfirmed
+            : [...state.disclaimersConfirmed, id],
+        })),
+
+      resetSession: () => set(initialState()),
+    }),
+    {
+      // Safety-net persistence: notes survive a page refresh mid-session.
+      // Key and partialize intentionally scope this to notes only — the rest
+      // of the session (client intake, meds, providers, plans, compliance)
+      // is intentionally ephemeral and re-entered per session.
+      name: 'pm_session_notes',
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({ notes: state.notes }),
+    },
+  ),
+);
 
 export const selectNotes = (s: SessionStore): SessionNote[] => s.notes;
 export const selectNoteCount = (s: SessionStore): number => s.notes.length;

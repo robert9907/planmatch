@@ -58,6 +58,8 @@ export interface SessionNote {
   type: NoteType;
   body: string;
   createdAt: number;
+  carrier?: string;
+  scenario?: string;
 }
 
 export interface SessionState {
