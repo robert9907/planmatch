@@ -1,22 +1,23 @@
 // GET /api/npi-search — server-side proxy for the CMS NPPES NPI Registry.
 //
-// The public NPPES endpoint (https://npiregistry.cms.hhs.gov/api) does
-// not send Access-Control-Allow-Origin headers on its responses, so any
-// direct browser fetch from our app origin fails with an opaque
-// "TypeError: Failed to fetch" before we can even read the status.
-// Proxying server-side (no CORS rules in a Node runtime) sidesteps
-// that and lets us surface real error bodies back to the UI.
+// NPPES doesn't send Access-Control-Allow-Origin, so direct browser
+// fetches fail with opaque "Failed to fetch". Proxying server-side
+// sidesteps that and lets us surface real error bodies to the UI.
 //
 // Query params:
-//   name  required · free-text provider name; either single token
-//           (treated as last_name) or multi-token (first + last).
-//   state optional · 2-letter state code
-//   limit optional · default 20, clamped to [1, 50]
+//   name  required · free-text provider name; single or multi-token.
+//   state optional · 2-letter state code.
+//   limit optional · default 20, clamped to [1, 50].
 //
-// Response shape mirrors NPPES for the fields we use downstream:
-//   { results: NppesRecord[] }
-// Errors surface as: { error: string, status?: number, detail?: string }
-// at HTTP 400/502/504 as appropriate.
+// Response:
+//   { results: NppesRecord[], fallback?: 'last_name_only', query?: {...} }
+//
+// Fallback behavior: a multi-token search with a state filter that
+// returns 0 results retries with last_name only, still state-scoped.
+// This rescues agent searches where the first name is misspelled
+// (e.g. "Kambiz Klein" — the doctor is actually "Kombiz Klein" in
+// NPPES). The UI uses the `fallback` marker to explain the widened
+// search.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
@@ -24,6 +25,34 @@ import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 const NPPES_URL = 'https://npiregistry.cms.hhs.gov/api/';
 const NPPES_VERSION = '2.1';
 const DEFAULT_TIMEOUT_MS = 12_000;
+
+interface NppesResponse {
+  result_count?: number;
+  results?: unknown[];
+  Errors?: unknown[];
+}
+
+async function fetchNppes(
+  params: URLSearchParams,
+  signal: AbortSignal,
+): Promise<{ ok: true; body: NppesResponse; text: string; url: string }
+  | { ok: false; status: number; text: string; url: string }> {
+  const url = `${NPPES_URL}?${params.toString()}`;
+  const upstream = await fetch(url, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+    signal,
+  });
+  const text = await upstream.text();
+  if (!upstream.ok) return { ok: false, status: upstream.status, text, url };
+  let body: NppesResponse = {};
+  try {
+    body = JSON.parse(text) as NppesResponse;
+  } catch {
+    return { ok: false, status: 502, text: 'non-JSON NPPES body', url };
+  }
+  return { ok: true, body, text, url };
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
@@ -45,56 +74,79 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     : 20;
 
   const tokens = nameRaw.split(/\s+/);
-  const params = new URLSearchParams({ version: NPPES_VERSION, limit: String(limit) });
+  const baseParams = () =>
+    new URLSearchParams({ version: NPPES_VERSION, limit: String(limit) });
+
+  const primary = baseParams();
   if (tokens.length >= 2) {
-    params.set('first_name', tokens[0]);
-    params.set('last_name', tokens.slice(1).join(' '));
-    params.set('use_first_name_alias', 'true');
+    primary.set('first_name', tokens[0]);
+    primary.set('last_name', tokens.slice(1).join(' '));
+    primary.set('use_first_name_alias', 'true');
   } else {
-    // Single token — try last_name first, which matches most agent searches.
-    params.set('last_name', tokens[0]);
+    const t = tokens[0];
+    // Single-token: probe both a person last-name match and an
+    // organization match. Wildcard the last_name when ≥3 chars so
+    // partial typing ("smi") still returns hits.
+    if (t.length >= 3) primary.set('last_name', t + '*');
+    else primary.set('last_name', t);
+    primary.set('organization_name', t);
   }
-  // NPPES also supports organization_name; surface both shapes so a
-  // search like "Duke Cardiology" returns organization hits too.
-  // Note: NPPES doesn't support OR across first_name / organization_name
-  // in one call, so we only include organization_name when the input
-  // looks like a single token (likely org rather than first+last).
-  if (tokens.length === 1) params.set('organization_name', tokens[0]);
-  if (state) params.set('state', state);
-
-  // Wildcards are documented for name-style params — agent-typed partial
-  // names should still find results. Only append when the token is long
-  // enough to be discriminating.
-  if (tokens.length === 1 && tokens[0].length >= 3) {
-    params.set('last_name', tokens[0] + '*');
-  }
-
-  const url = `${NPPES_URL}?${params.toString()}`;
+  if (state) primary.set('state', state);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
   try {
-    const upstream = await fetch(url, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      signal: controller.signal,
+    const primaryRes = await fetchNppes(primary, controller.signal);
+    console.log('[npi-search] primary', {
+      url: primaryRes.url,
+      state,
+      tokens: tokens.length,
+      ok: primaryRes.ok,
+      count: primaryRes.ok ? primaryRes.body.result_count ?? 0 : null,
+      status: primaryRes.ok ? 200 : primaryRes.status,
     });
-    const text = await upstream.text();
 
-    if (!upstream.ok) {
+    if (!primaryRes.ok) {
       return sendJson(res, 502, {
-        error: `NPPES ${upstream.status}`,
-        status: upstream.status,
-        detail: text.slice(0, 400),
+        error: `NPPES ${primaryRes.status}`,
+        status: primaryRes.status,
+        detail: primaryRes.text.slice(0, 400),
       });
     }
 
-    // Short cache so rapid re-types don't hammer NPPES but fresh enough
-    // that a correction ("Smith" → "Smyth") reflects immediately.
+    const primaryCount = primaryRes.body.result_count ?? 0;
+
+    // Fallback: multi-token + state + zero hits → retry with last_name
+    // only. Rescues first-name typos (Kambiz vs Kombiz) and alias gaps.
+    if (primaryCount === 0 && tokens.length >= 2) {
+      const fallback = baseParams();
+      const last = tokens.slice(1).join(' ');
+      if (last.length >= 3) fallback.set('last_name', last + '*');
+      else fallback.set('last_name', last);
+      if (state) fallback.set('state', state);
+
+      const fbRes = await fetchNppes(fallback, controller.signal);
+      console.log('[npi-search] fallback', {
+        url: fbRes.url,
+        reason: 'primary-zero-results',
+        ok: fbRes.ok,
+        count: fbRes.ok ? fbRes.body.result_count ?? 0 : null,
+      });
+
+      if (fbRes.ok && (fbRes.body.result_count ?? 0) > 0) {
+        res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60');
+        return sendJson(res, 200, {
+          ...fbRes.body,
+          fallback: 'last_name_only',
+          query: { tried: { first: tokens[0], last }, fell_back_to: { last } },
+        });
+      }
+    }
+
     res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60');
     res.setHeader('Content-Type', 'application/json');
-    res.status(200).send(text);
+    res.status(200).send(primaryRes.text);
     return;
   } catch (err) {
     if ((err as { name?: string })?.name === 'AbortError') {

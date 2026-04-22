@@ -10,6 +10,11 @@ export interface NpiProvider {
   phone: string | null;
 }
 
+export interface ProviderSearchResult {
+  providers: NpiProvider[];
+  fallback: 'last_name_only' | null;
+}
+
 // The browser talks to our own Vercel function, which proxies NPPES
 // server-side. NPPES itself doesn't send Access-Control-Allow-Origin
 // on its responses — a direct browser fetch fails with an opaque
@@ -27,9 +32,9 @@ interface ProxyError {
 export async function searchProvider(
   input: { name: string; state?: string },
   signal?: AbortSignal,
-): Promise<NpiProvider[]> {
+): Promise<ProviderSearchResult> {
   const raw = input.name.trim();
-  if (raw.length < 2) return [];
+  if (raw.length < 2) return { providers: [], fallback: null };
 
   const params = new URLSearchParams({ name: raw, limit: '20' });
   if (input.state) params.set('state', input.state);
@@ -64,7 +69,7 @@ export async function searchProvider(
     throw new Error(pieces.join(' — '));
   }
 
-  let body: { results?: unknown[] };
+  let body: { results?: unknown[]; fallback?: string };
   try {
     body = JSON.parse(text);
   } catch {
@@ -72,7 +77,9 @@ export async function searchProvider(
   }
 
   const results: unknown[] = Array.isArray(body?.results) ? body.results! : [];
-  return results.map(normalize).filter((r): r is NpiProvider => !!r);
+  const providers = results.map(normalize).filter((r): r is NpiProvider => !!r);
+  const fallback = body?.fallback === 'last_name_only' ? 'last_name_only' : null;
+  return { providers, fallback };
 }
 
 function normalize(raw: unknown): NpiProvider | null {
