@@ -10,9 +10,19 @@ export interface NpiProvider {
   phone: string | null;
 }
 
-// Note: NPI Registry has CORS enabled for GETs. If browser CORS ever blocks,
-// swap this for a /api/npi-search proxy.
-const BASE_URL = 'https://npiregistry.cms.hhs.gov/api';
+// The browser talks to our own Vercel function, which proxies NPPES
+// server-side. NPPES itself doesn't send Access-Control-Allow-Origin
+// on its responses — a direct browser fetch fails with an opaque
+// "TypeError: Failed to fetch" before we can read any status or body.
+// The /api/npi-search proxy returns either a NPPES-shaped body or a
+// structured { error, status?, detail? } JSON error we can surface.
+const PROXY_URL = '/api/npi-search';
+
+interface ProxyError {
+  error: string;
+  status?: number;
+  detail?: string;
+}
 
 export async function searchProvider(
   input: { name: string; state?: string },
@@ -21,23 +31,47 @@ export async function searchProvider(
   const raw = input.name.trim();
   if (raw.length < 2) return [];
 
-  const tokens = raw.split(/\s+/);
-  const params = new URLSearchParams({ version: '2.1', limit: '20' });
-
-  if (tokens.length >= 2) {
-    params.set('first_name', tokens[0]);
-    params.set('last_name', tokens.slice(1).join(' '));
-  } else {
-    params.set('last_name', tokens[0]);
-  }
+  const params = new URLSearchParams({ name: raw, limit: '20' });
   if (input.state) params.set('state', input.state);
 
-  const url = `${BASE_URL}/?${params.toString()}`;
-  const res = await fetch(url, { signal });
-  if (!res.ok) throw new Error(`NPI ${res.status}`);
-  const body = await res.json();
+  let res: Response;
+  try {
+    res = await fetch(`${PROXY_URL}?${params.toString()}`, {
+      method: 'GET',
+      signal,
+      headers: { Accept: 'application/json' },
+    });
+  } catch (err) {
+    // Network-level failure (offline, DNS, proxy down) — bubble a
+    // useful message instead of the stock "Failed to fetch".
+    if ((err as { name?: string })?.name === 'AbortError') throw err;
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`NPI proxy unreachable — ${reason}`);
+  }
 
-  const results: unknown[] = body?.results ?? [];
+  const text = await res.text();
+  if (!res.ok) {
+    let parsed: ProxyError | null = null;
+    try {
+      parsed = JSON.parse(text) as ProxyError;
+    } catch {
+      /* non-JSON body */
+    }
+    const pieces = [`NPI ${res.status}`];
+    if (parsed?.error) pieces.push(parsed.error);
+    if (parsed?.detail) pieces.push(parsed.detail);
+    if (!parsed) pieces.push(text.slice(0, 200));
+    throw new Error(pieces.join(' — '));
+  }
+
+  let body: { results?: unknown[] };
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new Error('NPI proxy returned non-JSON response.');
+  }
+
+  const results: unknown[] = Array.isArray(body?.results) ? body.results! : [];
   return results.map(normalize).filter((r): r is NpiProvider => !!r);
 }
 

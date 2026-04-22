@@ -84,7 +84,11 @@ export function NotepadPanel({ open, onClose }: NotepadPanelProps) {
   const addNote = useSession((s) => s.addNote);
   const removeNote = useSession((s) => s.removeNote);
 
-  const [selectedType, setSelectedType] = useState<NoteType>('general');
+  // Note type is pinned to 'general' now that the Quick Add grid is
+  // gone. Keep it as a const so addNote() + the textarea placeholder
+  // keep reading the same key; restoring typed notes later is a
+  // one-line swap back to useState.
+  const selectedType: NoteType = 'general';
   // Sticky across submits so an agent can batch-tag a run of notes for one
   // carrier. Cleared only by re-clicking the active carrier or picking another.
   const [selectedCarrier, setSelectedCarrier] = useState<string | null>(null);
@@ -286,45 +290,13 @@ export function NotepadPanel({ open, onClose }: NotepadPanelProps) {
           })}
         </div>
 
-        {/* Existing Quick Add (note type) row */}
-        <div
-          className="uppercase font-semibold mb-1"
-          style={{ ...sectionHeading, marginTop: 10 }}
-        >
-          Quick Add
-        </div>
-        <div className="grid grid-cols-5 gap-1">
-          {NOTE_TYPES.map((t) => {
-            const active = t.key === selectedType;
-            return (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setSelectedType(t.key)}
-                title={t.label}
-                style={{
-                  height: 38,
-                  padding: '4px 2px',
-                  borderRadius: 7,
-                  fontSize: 10,
-                  fontWeight: 600,
-                  lineHeight: 1.1,
-                  background: active ? t.bg : 'var(--wh)',
-                  color: active ? t.fg : 'var(--i2)',
-                  border: `1px solid ${active ? t.border : 'var(--w2)'}`,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <span style={{ fontSize: 11, fontWeight: 700 }}>{t.hint}</span>
-                <span style={{ fontSize: 9 }}>{t.label}</span>
-              </button>
-            );
-          })}
-        </div>
+        {/* Quick Add note-type grid removed — the 10 letter buttons
+         * (G/C/P/F/Q/O/D/X/M/S) were set-only, never consumed
+         * downstream, and cluttered the notepad. All new notes default
+         * to 'general'; carrier + scenario chips above still tag each
+         * note. Keeping the NOTE_TYPES / setSelectedType state so a
+         * future feature can reintroduce typed notes without rewiring
+         * session storage. */}
 
         <textarea
           ref={inputRef}

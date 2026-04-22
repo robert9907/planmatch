@@ -41,6 +41,16 @@ export function useCaptureSession(): UseCaptureSessionResult {
 
   const seenIds = useRef<Set<string>>(new Set());
   const lastSeenAtRef = useRef<string | null>(null);
+  // Mirror of `queue` state available synchronously so the approve
+  // handler can return the newly-approved item before the next render.
+  // React 18 runs setState functional updaters at flush-time, not
+  // during the setState call — reading `approved` from inside a
+  // `setQueue(prev => …)` closure and then `return approved`
+  // always returned null, which is why the captured medication
+  // detected "ADDED TO SESSION" but never made it into the session
+  // store (addMedication was skipped by the caller's `if (!approved)`
+  // guard).
+  const queueRef = useRef<IncomingQueueItem[]>([]);
 
   const pollQuery = useQuery({
     queryKey: ['capture-poll', token, lastSeenAtRef.current],
@@ -73,6 +83,13 @@ export function useCaptureSession(): UseCaptureSessionResult {
     }
   }, [pollQuery.data]);
 
+  // Keep queueRef in sync with queue state so approve() can read the
+  // current item synchronously without depending on when React
+  // flushes functional updaters.
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
+
   const start = useCallback(
     async (input: { client_name?: string; client_phone: string; send_sms?: boolean }) => {
       setIsStarting(true);
@@ -100,15 +117,15 @@ export function useCaptureSession(): UseCaptureSessionResult {
     [],
   );
 
-  const approve = useCallback((itemId: string) => {
-    let approved: IncomingQueueItem | null = null;
-    setQueue((prev) =>
-      prev.map((q) => {
-        if (q.id !== itemId) return q;
-        approved = { ...q, decision: 'approved' };
-        return approved;
-      }),
-    );
+  const approve = useCallback((itemId: string): IncomingQueueItem | null => {
+    const current = queueRef.current.find((q) => q.id === itemId);
+    if (!current) return null;
+    // Ignore double-taps on an already-decided item so a fast second
+    // click can't add the same medication twice to the session store.
+    if (current.decision !== 'pending') return null;
+    const approved: IncomingQueueItem = { ...current, decision: 'approved' };
+    setQueue((prev) => prev.map((q) => (q.id === itemId ? approved : q)));
+    queueRef.current = queueRef.current.map((q) => (q.id === itemId ? approved : q));
     return approved;
   }, []);
 

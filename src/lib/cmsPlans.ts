@@ -23,9 +23,34 @@ const BASE_FORMULARY: Record<string, FormularyTier> = {
   ozempic: 3,
 };
 
-const NC_COUNTIES = ['Durham', 'Wake', 'Orange', 'Mecklenburg', 'Guilford', 'Forsyth', 'Buncombe'];
-const TX_COUNTIES = ['Harris', 'Travis', 'Bexar', 'Dallas', 'Tarrant', 'Collin'];
-const GA_COUNTIES = ['Fulton', 'DeKalb', 'Gwinnett', 'Cobb', 'Chatham', 'Clayton'];
+// Per-state service-area seeds. Expanded well past the launch counties
+// so that real-world clients (Cabarrus, Union, Johnston, Rowan…) don't
+// fall out of the pool. When a plan is written by contract in the
+// entire state, listing every county explicitly is noisy but matches
+// the shape of the CMS landscape CSV, so we keep the array form for
+// parity with the eventual real-data import.
+const NC_COUNTIES = [
+  'Alamance', 'Brunswick', 'Buncombe', 'Burke', 'Cabarrus', 'Caldwell', 'Carteret',
+  'Catawba', 'Chatham', 'Cleveland', 'Columbus', 'Craven', 'Cumberland',
+  'Davidson', 'Duplin', 'Durham', 'Edgecombe', 'Forsyth', 'Franklin',
+  'Gaston', 'Granville', 'Guilford', 'Halifax', 'Harnett', 'Haywood',
+  'Henderson', 'Hoke', 'Iredell', 'Johnston', 'Lee', 'Lenoir', 'Lincoln',
+  'Mecklenburg', 'Moore', 'Nash', 'New Hanover', 'Onslow', 'Orange',
+  'Pender', 'Person', 'Pitt', 'Randolph', 'Robeson', 'Rockingham', 'Rowan',
+  'Rutherford', 'Sampson', 'Stanly', 'Stokes', 'Surry', 'Union', 'Vance',
+  'Wake', 'Watauga', 'Wayne', 'Wilkes', 'Wilson',
+];
+const TX_COUNTIES = [
+  'Bexar', 'Brazoria', 'Collin', 'Dallas', 'Denton', 'El Paso', 'Fort Bend',
+  'Galveston', 'Harris', 'Hays', 'Hidalgo', 'Jefferson', 'Lubbock',
+  'McLennan', 'Montgomery', 'Nueces', 'Tarrant', 'Travis', 'Webb', 'Williamson',
+];
+const GA_COUNTIES = [
+  'Bibb', 'Bulloch', 'Chatham', 'Cherokee', 'Clayton', 'Cobb', 'Columbia',
+  'DeKalb', 'Douglas', 'Forsyth', 'Fulton', 'Glynn', 'Gwinnett', 'Hall',
+  'Henry', 'Houston', 'Lowndes', 'Muscogee', 'Newton', 'Paulding',
+  'Richmond', 'Rockdale',
+];
 
 function p(override: Partial<Plan> & Pick<Plan, 'id' | 'contract_id' | 'plan_number' | 'carrier' | 'plan_name' | 'state' | 'plan_type'>): Plan {
   const counties =
@@ -328,12 +353,36 @@ export function plansForState(state: string | null): Plan[] {
   return PLANS.filter((p) => p.state === state);
 }
 
+// Normalize a county string for tolerant matching. The intake form is
+// free-text, a ZIP → county lookup may emit "Durham" while the client
+// or a CSV might write "Durham County" / "durham" / " Durham ", and
+// CMS's own landscape file occasionally throws in a trailing "Co.".
+// All of those should match the same plan service area.
+function normalizeCounty(raw: string | null | undefined): string {
+  if (!raw) return '';
+  return raw
+    .toLowerCase()
+    .replace(/\s+co\.?$/i, '')
+    .replace(/\s+county$/i, '')
+    .replace(/\s+parish$/i, '')
+    .trim();
+}
+
 export function plansForClient(client: { state: string | null; planType: string | null; county: string }): Plan[] {
+  const wanted = normalizeCounty(client.county);
   return PLANS.filter((plan) => {
     if (client.state && plan.state !== client.state) return false;
     if (client.planType && plan.plan_type !== client.planType) return false;
-    if (client.county && !plan.counties.includes(client.county)) return false;
-    return true;
+    if (!wanted) return true;
+    // A plan with an empty counties list is treated as statewide —
+    // we only hard-filter a plan out when it explicitly declares a
+    // service area AND the client's county isn't in it. This keeps
+    // the Finalists pool populated when the seed data doesn't yet
+    // enumerate every county in the state (demo / pre-landscape-
+    // import build).
+    if (!Array.isArray(plan.counties) || plan.counties.length === 0) return true;
+    const planCounties = plan.counties.map(normalizeCounty);
+    return planCounties.includes(wanted);
   });
 }
 
