@@ -78,6 +78,7 @@ interface BenefitRow {
   plan_id: string;
   segment_id: string;
   benefit_category: string;
+  benefit_description: string | null;
   coverage_amount: number | null;
   copay: number | null;
   coinsurance: number | null;
@@ -229,7 +230,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { data: benefitRows, error: benefitErr } = await sb
       .from('pm_plan_benefits')
       .select(
-        'contract_id, plan_id, segment_id, benefit_category, coverage_amount, copay, coinsurance, max_coverage',
+        'contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage',
       )
       .in('contract_id', contractIds)
       .in('plan_id', planIds);
@@ -297,42 +298,111 @@ function pickBenefitNumber(
 }
 
 function buildBenefits(rows: BenefitRow[]): PlanBenefits {
-  // Dental — pm_plan_benefits carries one "dental" row with
-  // max_coverage = annual benefit maximum. Preventive vs comprehensive
-  // isn't split out in the PBP sections we imported; treat presence of
-  // a dental row with max_coverage > 0 as comprehensive.
+  // Dental, vision, hearing — single-row categories from b16/b17/b18.
+  // max_coverage = annual benefit maximum; coverage_amount usually
+  // duplicates it. Preventive vs comprehensive isn't split out in the
+  // PBP extract, so we treat presence of a row with max_coverage > 0
+  // as comprehensive.
   const dental = rows.find((r) => r.benefit_category === 'dental');
-  const dentalMax = dental?.max_coverage ?? dental?.coverage_amount ?? 0;
+  const dentalMax = toNum(dental?.max_coverage ?? dental?.coverage_amount) ?? 0;
 
   const vision = rows.find((r) => r.benefit_category === 'vision');
-  const visionEyewear = vision?.max_coverage ?? vision?.coverage_amount ?? 0;
+  const visionEyewear = toNum(vision?.max_coverage ?? vision?.coverage_amount) ?? 0;
 
   const hearing = rows.find((r) => r.benefit_category === 'hearing');
-  const hearingAllowance = hearing?.max_coverage ?? hearing?.coverage_amount ?? 0;
+  const hearingAllowance = toNum(hearing?.max_coverage ?? hearing?.coverage_amount) ?? 0;
 
-  // OTC, transportation, food_card, diabetic, fitness — not yet
-  // imported by the PBP importer. Emit zeros so the benefit filter
-  // tiers reading them don't crash; Rob's tooling will mark these
-  // plans as "data pending" until a follow-up importer covers
-  // pbp_b13_other_services.txt.
+  // b13b → otc. Importer writes coverage_amount as the QUARTERLY
+  // equivalent ($/qtr), max_coverage as the ANNUAL max. Benefit
+  // Filters' "≥ $150 / qtr" tier reads allowance_per_quarter, so we
+  // feed coverage_amount directly.
+  const otc = rows.find((r) => r.benefit_category === 'otc');
+  const otcQuarterly = toNum(otc?.coverage_amount) ?? 0;
+
+  // b13c → food_card. coverage_amount = MONTHLY equivalent so the
+  // filter's "≥ $100 / mo" tier maps cleanly. A row with
+  // coverage_amount === 1 and no dollar signal is the importer's
+  // "offered but no dollar cap" marker (common for post-discharge
+  // meals benefits); surface it as > 0 so the filter's Any tier
+  // passes, but the specific dollar tiers won't.
+  const foodCard = rows.find((r) => r.benefit_category === 'food_card');
+  const foodCardMonthly = toNum(foodCard?.coverage_amount) ?? 0;
+
+  // b10b → transportation. coverage_amount is either a dollar cap OR
+  // the presence marker (1). The schema's transportation.rides_per_year
+  // doesn't fit a dollar cap cleanly, so we surface rides_per_year as
+  // a proxy: 12 rides if plan offers transportation at all (satisfies
+  // the "Any" tier), scaled up when a dollar cap hints at more. The
+  // real per-ride count isn't in b10b — plans file that in the SoB.
+  const transport = rows.find((r) => r.benefit_category === 'transportation');
+  const transportOffered = Boolean(transport);
+  const transportDollarCap = toNum(transport?.max_coverage);
+  const ridesProxy = transportOffered
+    ? transportDollarCap && transportDollarCap > 500
+      ? 48
+      : transportDollarCap && transportDollarCap > 200
+        ? 36
+        : 24
+    : 0;
+
+  // Fitness — PBP doesn't carry the program name in the structured
+  // extract (see comment in scripts/import-pbp-benefits.ts). When no
+  // row exists we DEFAULT enabled=true because MA plans on the CMS
+  // landscape almost universally include a fitness benefit
+  // (SilverSneakers / Renew Active / Active&Fit); defaulting to false
+  // would cause the fitness filter tier to wrongly eliminate every
+  // plan. Program stays null until the importer starts extracting
+  // name, at which point the row's benefit_description carries it.
+  const fitness = rows.find((r) => r.benefit_category === 'fitness');
+  const fitnessProgramMatch = fitness?.benefit_description?.match(/Fitness · ([^·]+)/);
+  const fitnessProgram = fitnessProgramMatch ? fitnessProgramMatch[1].trim() : null;
+
+  // Diabetic supplies — not imported from PBP (test strips + monitors
+  // are Part B, preferred-brands data lives in the carrier formulary).
+  // Leave covered=false until a dedicated importer lands; this makes
+  // the Diabetic filter tier eliminate plans, which is the correct
+  // posture when we can't confirm the benefit.
   return {
     dental: {
       preventive: Boolean(dental),
-      comprehensive: Number(dentalMax) > 0,
-      annual_max: Number(dentalMax) || 0,
+      comprehensive: dentalMax > 0,
+      annual_max: dentalMax,
     },
     vision: {
       exam: Boolean(vision),
-      eyewear_allowance_year: Number(visionEyewear) || 0,
+      eyewear_allowance_year: visionEyewear,
     },
     hearing: {
-      aid_allowance_year: Number(hearingAllowance) || 0,
+      aid_allowance_year: hearingAllowance,
       exam: Boolean(hearing),
     },
-    transportation: { rides_per_year: 0, distance_miles: 0 },
-    otc: { allowance_per_quarter: 0 },
-    food_card: { allowance_per_month: 0, restricted_to_medicaid_eligible: false },
+    transportation: {
+      rides_per_year: ridesProxy,
+      distance_miles: 0,
+    },
+    otc: { allowance_per_quarter: otcQuarterly },
+    food_card: {
+      allowance_per_month: foodCardMonthly,
+      restricted_to_medicaid_eligible: false,
+    },
     diabetic: { covered: false, preferred_brands: [] },
-    fitness: { enabled: false, program: null },
+    // PBP-as-source caveat: enabled stays true whether or not we
+    // extracted a fitness row — fitness is nearly ubiquitous on MA
+    // plans and PBP doesn't expose it in structured form. See the
+    // block comment above.
+    fitness: {
+      enabled: true,
+      program: fitnessProgram,
+    },
   };
+}
+
+function toNum(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }
