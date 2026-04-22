@@ -5,7 +5,9 @@ import { CaptureButton } from '@/components/capture/CaptureButton';
 import { CapturePanel } from '@/components/capture/CapturePanel';
 import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
 import { searchDrug, type RxNormDrug } from '@/lib/rxnorm';
-import { plansForClient, formularyTierFor } from '@/lib/cmsPlans';
+import { formularyTierFor } from '@/lib/cmsPlans';
+import { fetchPlansForClient } from '@/lib/planCatalog';
+import { bulkLookupFormulary, getCachedFormulary, type FormularyHit } from '@/lib/formularyLookup';
 import type { FormularyTier } from '@/types/plans';
 
 interface Step3Props {
@@ -56,10 +58,51 @@ export function Step3Medications({ capture, onAdvance }: Step3Props) {
     };
   }, [query]);
 
-  const eligiblePlans = useMemo(
-    () => plansForClient({ state: client.state, planType: client.planType, county: client.county }),
-    [client.state, client.planType, client.county],
+  // Live plan catalog instead of the 12-plan static seed. Step 3 only
+  // needs the plans to render per-plan formulary badges, so we cap to
+  // the first ~15 to keep the badge row legible; the real funnel runs
+  // against the full set in Step 5.
+  const [eligiblePlans, setEligiblePlans] = useState<import('@/types/plans').Plan[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetchPlansForClient({
+      state: client.state,
+      county: client.county,
+      planType: client.planType,
+    }).then((plans) => {
+      if (!cancelled) setEligiblePlans(plans.slice(0, 15));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [client.state, client.planType, client.county]);
+
+  // Bulk-prime the formulary cache for every (plan × med) pairing so
+  // MedicationRow's per-plan lookups hit memory synchronously. The
+  // second render after the promise resolves picks up the filled
+  // cache; no `ready` state needed because the fallback path renders
+  // legacy inline tiers in the interim.
+  const formularyPrimeNonce = useMemo(
+    () => `${eligiblePlans.length}:${medications.length}`,
+    [eligiblePlans, medications],
   );
+  const [, setFormularyPrimeTick] = useState(0);
+  useEffect(() => {
+    if (eligiblePlans.length === 0 || medications.length === 0) return;
+    let cancelled = false;
+    const contractIds = [...new Set(eligiblePlans.map((p) => p.contract_id))];
+    const rxcuis = medications
+      .map((m) => m.rxcui)
+      .filter((s): s is string => typeof s === 'string' && s.length > 0);
+    if (rxcuis.length === 0) return;
+    bulkLookupFormulary(contractIds, rxcuis).then(() => {
+      if (!cancelled) setFormularyPrimeTick((t) => t + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formularyPrimeNonce]);
 
   function onSelectDrug(d: RxNormDrug) {
     addMedication({
@@ -227,9 +270,28 @@ function MedicationRow({
   plans: import('@/types/plans').Plan[];
   onRemove: () => void;
 }) {
+  // Read each (plan, rxcui) tier from the primed formulary cache.
+  // bulkLookupFormulary in the parent pre-warms cache before this row
+  // renders; on a cache miss we fall through to the legacy inline
+  // plan.formulary dict so the static-fallback code path still renders
+  // something useful. rxcui absent (manual med with no RxNorm match)
+  // → treat as 'not covered' everywhere, same as a real exclusion.
   const planStatuses = useMemo(
-    () => plans.map((p) => ({ plan: p, tier: formularyTierFor(p, med.name) })),
-    [plans, med.name],
+    () =>
+      plans.map((p) => {
+        const contractPlanId = `${p.contract_id}_${p.plan_number}`;
+        const hit: FormularyHit | null = med.rxcui
+          ? getCachedFormulary(contractPlanId, med.rxcui)
+          : null;
+        if (hit) {
+          const tier =
+            hit.tier === 'not_covered' ? null : (hit.tier as FormularyTier);
+          return { plan: p, tier };
+        }
+        // Fallback: legacy inline dict on the static cmsPlans seed.
+        return { plan: p, tier: formularyTierFor(p, med.name) };
+      }),
+    [plans, med.name, med.rxcui],
   );
 
   const covered = planStatuses.filter((s) => s.tier !== null && s.tier !== 'excluded');

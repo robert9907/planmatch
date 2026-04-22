@@ -1,10 +1,10 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSession } from '@/hooks/useSession';
 import { StepHeader } from './StepHeader';
-import { plansForClient, findPlan } from '@/lib/cmsPlans';
+import { findPlan } from '@/lib/cmsPlans';
+import { fetchPlansForClient, lastPlanSource } from '@/lib/planCatalog';
 import { computeFunnel, finalistIdsFromSnapshot } from '@/lib/planFilter';
 import type { BenefitFilter, BenefitKey, CutTag, Plan } from '@/types/plans';
-import { useEffect } from 'react';
 
 interface Step5Props {
   onAdvance: () => void;
@@ -126,10 +126,36 @@ export function Step5BenefitFilters({ onAdvance }: Step5Props) {
   const resetBenefitFilters = useSession((s) => s.resetBenefitFilters);
   const setSelectedFinalists = useSession((s) => s.setSelectedFinalists);
 
-  const eligiblePlans = useMemo(
-    () => plansForClient({ state: client.state, planType: client.planType, county: client.county }),
-    [client.state, client.planType, client.county],
-  );
+  const [eligiblePlans, setEligiblePlans] = useState<Plan[]>([]);
+  const [plansLoading, setPlansLoading] = useState(false);
+  const [planSource, setPlanSource] = useState<'pm_plans' | 'static_fallback' | null>(null);
+
+  // Re-fetch pm_plans whenever the client's geo/plan-type narrows.
+  // planCatalog.fetchPlansForClient() proxies /api/plans which joins
+  // pm_plan_benefits so every plan in the result already carries its
+  // dental / vision / hearing / premium / star shape. AbortController
+  // ignores results from stale queries if the client types faster
+  // than the network can return.
+  useEffect(() => {
+    let cancelled = false;
+    setPlansLoading(true);
+    fetchPlansForClient({
+      state: client.state,
+      county: client.county,
+      planType: client.planType,
+    })
+      .then((plans) => {
+        if (cancelled) return;
+        setEligiblePlans(plans);
+        setPlanSource(lastPlanSource());
+      })
+      .finally(() => {
+        if (!cancelled) setPlansLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client.state, client.planType, client.county]);
 
   const snapshot = useMemo(
     () => computeFunnel({ plans: eligiblePlans, medications, providers, benefitFilters }),
@@ -158,7 +184,7 @@ export function Step5BenefitFilters({ onAdvance }: Step5Props) {
         }
       />
 
-      <FunnelStrip snapshot={snapshot} />
+      <FunnelStrip snapshot={snapshot} loading={plansLoading} source={planSource} />
 
       <div
         className="grid gap-3"
@@ -194,7 +220,15 @@ export function Step5BenefitFilters({ onAdvance }: Step5Props) {
   );
 }
 
-function FunnelStrip({ snapshot }: { snapshot: ReturnType<typeof computeFunnel> }) {
+function FunnelStrip({
+  snapshot,
+  loading,
+  source,
+}: {
+  snapshot: ReturnType<typeof computeFunnel>;
+  loading: boolean;
+  source: 'pm_plans' | 'static_fallback' | null;
+}) {
   const steps = [
     { label: 'Total in area', value: snapshot.total, color: 'var(--i2)' },
     { label: 'Providers ✓', value: snapshot.after_providers, color: 'var(--blue)' },
@@ -202,25 +236,44 @@ function FunnelStrip({ snapshot }: { snapshot: ReturnType<typeof computeFunnel> 
     { label: 'Finalists', value: snapshot.finalists, color: 'var(--sage)' },
   ];
   return (
-    <div className="pm-surface flex items-center" style={{ padding: 12, gap: 8 }}>
-      {steps.map((s, i) => (
-        <span key={s.label} className="flex items-center gap-2" style={{ flex: 1 }}>
-          <div style={{ flex: 1 }}>
-            <div
-              className="uppercase font-semibold"
-              style={{ color: 'var(--i3)', fontSize: 10, letterSpacing: '0.06em' }}
-            >
-              {s.label}
+    <div className="pm-surface" style={{ padding: 12 }}>
+      <div className="flex items-center" style={{ gap: 8 }}>
+        {steps.map((s, i) => (
+          <span key={s.label} className="flex items-center gap-2" style={{ flex: 1 }}>
+            <div style={{ flex: 1 }}>
+              <div
+                className="uppercase font-semibold"
+                style={{ color: 'var(--i3)', fontSize: 10, letterSpacing: '0.06em' }}
+              >
+                {s.label}
+              </div>
+              <div
+                style={{ color: s.color, fontSize: 22, fontWeight: 700, fontFamily: 'Lora, serif' }}
+              >
+                {loading ? '…' : s.value}
+              </div>
             </div>
-            <div style={{ color: s.color, fontSize: 22, fontWeight: 700, fontFamily: 'Lora, serif' }}>
-              {s.value}
-            </div>
-          </div>
-          {i < steps.length - 1 && (
-            <span style={{ color: 'var(--i3)', fontSize: 18 }}>→</span>
-          )}
-        </span>
-      ))}
+            {i < steps.length - 1 && (
+              <span style={{ color: 'var(--i3)', fontSize: 18 }}>→</span>
+            )}
+          </span>
+        ))}
+      </div>
+      {(source === 'static_fallback' || (source === 'pm_plans' && snapshot.total > 0)) && (
+        <div
+          style={{
+            marginTop: 8,
+            fontSize: 10,
+            color: source === 'static_fallback' ? 'var(--amb)' : 'var(--i3)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+          }}
+        >
+          {source === 'static_fallback'
+            ? '⚠ Static fallback — /api/plans errored. Results reflect 12-plan seed, not live landscape.'
+            : 'Source: pm_plans · CMS CY2026 landscape'}
+        </div>
+      )}
     </div>
   );
 }

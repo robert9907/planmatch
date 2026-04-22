@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSession } from '@/hooks/useSession';
 import { StepHeader } from './StepHeader';
 import { findPlan, formularyTierFor, lookupByHNumber } from '@/lib/cmsPlans';
+import { fetchPlansByIds } from '@/lib/planCatalog';
 import { BROKER } from '@/lib/constants';
 import { ComplianceChecklist } from '@/components/compliance/ComplianceChecklist';
 import { SaveSessionButton } from '@/components/sync/SaveSessionButton';
@@ -75,13 +76,53 @@ function NewQuoteMode() {
   const recommendation = useSession((s) => s.recommendation);
   const setRecommendation = useSession((s) => s.setRecommendation);
 
-  const finalists = useMemo(
-    () =>
-      finalistIds
-        .map((id) => findPlan(id))
-        .filter((p): p is Plan => !!p),
-    [finalistIds],
-  );
+  // Refetch the finalist set from pm_plans so the side-by-side renders
+  // live benefit/premium/star data instead of the stale Plan shape
+  // that was built in Step 5. Falls back to the static cmsPlans lookup
+  // by id when /api/plans errors, so Rob can still demo offline.
+  const [finalists, setFinalists] = useState<Plan[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (finalistIds.length === 0) {
+      setFinalists([]);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    fetchPlansByIds(finalistIds)
+      .then((plans) => {
+        if (cancelled) return;
+        if (plans.length > 0) {
+          setFinalists(plans);
+        } else {
+          // Last-ditch static fallback — the Plan TS type is stable so
+          // this keeps the table rendering if the server errors *and*
+          // the cmsPlans seed happens to contain the id.
+          const fallback = finalistIds
+            .map((id) => findPlan(id))
+            .filter((p): p is Plan => !!p);
+          setFinalists(fallback);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [finalistIds]);
+
+  if (loading && finalists.length === 0) {
+    return (
+      <div
+        className="pm-surface"
+        style={{ padding: 24, textAlign: 'center', color: 'var(--i2)', fontSize: 13 }}
+      >
+        Loading plans from CMS landscape…
+      </div>
+    );
+  }
 
   if (finalists.length === 0) {
     return (

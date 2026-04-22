@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { useSession } from '@/hooks/useSession';
 import { StepHeader } from './StepHeader';
 import type { PlanType, StateCode } from '@/types/session';
@@ -5,24 +6,6 @@ import type { PlanType, StateCode } from '@/types/session';
 interface Step2Props {
   onAdvance: () => void;
 }
-
-// ZIP prefix → {county, state} lookup for Rob's three states. Small cheat table
-// for demo — Phase 2 will swap this for a proper ZIP lookup (ZCTAs → county).
-const ZIP_MAP: Record<string, { county: string; state: StateCode }> = {
-  '277': { county: 'Durham', state: 'NC' },
-  '275': { county: 'Wake', state: 'NC' },
-  '282': { county: 'Mecklenburg', state: 'NC' },
-  '274': { county: 'Guilford', state: 'NC' },
-  '270': { county: 'Forsyth', state: 'NC' },
-  '287': { county: 'Buncombe', state: 'NC' },
-  '770': { county: 'Harris', state: 'TX' },
-  '787': { county: 'Travis', state: 'TX' },
-  '782': { county: 'Bexar', state: 'TX' },
-  '752': { county: 'Dallas', state: 'TX' },
-  '303': { county: 'Fulton', state: 'GA' },
-  '300': { county: 'DeKalb', state: 'GA' },
-  '314': { county: 'Chatham', state: 'GA' },
-};
 
 const PLAN_TYPES: { value: PlanType; label: string; body: string }[] = [
   { value: 'DSNP', label: 'D-SNP', body: 'Dual eligible (Medicare + Medicaid)' },
@@ -35,20 +18,59 @@ const PLAN_TYPES: { value: PlanType; label: string; body: string }[] = [
 export function Step2Intake({ onAdvance }: Step2Props) {
   const client = useSession((s) => s.client);
   const updateClient = useSession((s) => s.updateClient);
+  // Per-component cache of ZIP → {county, state} resolutions so the
+  // user can edit the ZIP field without re-hitting /api/zip-county on
+  // every keystroke past the 5th digit.
+  const zipCacheRef = useRef<Map<string, { county: string | null; state: StateCode | null }>>(
+    new Map(),
+  );
+  const inflightZipRef = useRef<AbortController | null>(null);
 
   function patch<K extends keyof typeof client>(key: K, value: (typeof client)[K]) {
     updateClient({ [key]: value });
   }
 
+  async function resolveZip(zip: string): Promise<{ county: string | null; state: StateCode | null }> {
+    const cached = zipCacheRef.current.get(zip);
+    if (cached) return cached;
+
+    if (inflightZipRef.current) inflightZipRef.current.abort();
+    const controller = new AbortController();
+    inflightZipRef.current = controller;
+
+    try {
+      const res = await fetch(`/api/zip-county?zip=${encodeURIComponent(zip)}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`zip-county ${res.status}`);
+      const body = (await res.json()) as { county: string | null; state: string | null };
+      const hit = {
+        county: body.county ?? null,
+        state: (body.state as StateCode | null) ?? null,
+      };
+      zipCacheRef.current.set(zip, hit);
+      return hit;
+    } catch (err) {
+      if ((err as { name?: string })?.name === 'AbortError') {
+        return { county: null, state: null };
+      }
+      console.warn('[Step2Intake] zip lookup failed:', err);
+      return { county: null, state: null };
+    }
+  }
+
   function onZipChange(raw: string) {
     const zip = raw.replace(/\D/g, '').slice(0, 5);
-    const patchObj: Partial<typeof client> = { zip };
-    if (zip.length >= 3) {
-      const hit = ZIP_MAP[zip.slice(0, 3)];
-      if (hit && !client.county) patchObj.county = hit.county;
-      if (hit && !client.state) patchObj.state = hit.state;
-    }
-    updateClient(patchObj);
+    updateClient({ zip });
+    if (zip.length !== 5) return;
+    void resolveZip(zip).then((hit) => {
+      const patchObj: Partial<typeof client> = {};
+      if (hit.county && !client.county) patchObj.county = hit.county;
+      if (hit.state && !client.state) patchObj.state = hit.state;
+      if (Object.keys(patchObj).length > 0) updateClient(patchObj);
+    });
   }
 
   function onPhoneChange(raw: string) {

@@ -1,3 +1,15 @@
+// ⚠ DEPRECATED as the primary plan catalog.
+//
+// This file is now the *fallback* for planCatalog.ts — the real source
+// of truth is pm_plans + pm_plan_benefits in Supabase, fetched via
+// /api/plans. The 12-plan static array below only renders when the
+// server route errors (graceful degradation so Rob can still demo
+// during a Supabase outage).
+//
+// Formulary lookups move to formularyLookup.ts / pm_formulary; leaving
+// the inline Plan.formulary dicts here only because the Plan TS type
+// still carries the field.
+
 import type { FormularyTier, Plan } from '@/types/plans';
 
 const BASE_FORMULARY: Record<string, FormularyTier> = {
@@ -366,6 +378,20 @@ function normalizeCounty(raw: string | null | undefined): string {
     .replace(/\s+county$/i, '')
     .replace(/\s+parish$/i, '')
     .trim();
+}
+
+/**
+ * Fallback plan filter used by planCatalog.ts when the /api/plans
+ * server route errors. Keep the signature compatible with the legacy
+ * `plansForClient` so consumers that haven't been migrated yet still
+ * compile.
+ */
+export function fallbackPlansForClient(client: {
+  state: string | null;
+  planType: string | null;
+  county: string;
+}): Plan[] {
+  return plansForClient(client);
 }
 
 export function plansForClient(client: { state: string | null; planType: string | null; county: string }): Plan[] {
