@@ -1,12 +1,20 @@
 import { WORKFLOW_STEPS, BROKER } from '@/lib/constants';
 import { useSession } from '@/hooks/useSession';
+import { VerificationSidebarPill } from '@/components/verification/VerificationSidebarPill';
 
 interface SidebarProps {
   activeStep: number;
   onStepClick: (stepId: number) => void;
+  pendingVerifications: number;
+  onOpenVerifications: () => void;
 }
 
-export function Sidebar({ activeStep, onStepClick }: SidebarProps) {
+export function Sidebar({
+  activeStep,
+  onStepClick,
+  pendingVerifications,
+  onOpenVerifications,
+}: SidebarProps) {
   const medCount = useSession((s) => s.medications.length);
   const providerCount = useSession((s) => s.providers.length);
   const mode = useSession((s) => s.mode);
@@ -49,6 +57,13 @@ export function Sidebar({ activeStep, onStepClick }: SidebarProps) {
         <div style={{ color: 'var(--i2)', fontSize: 11 }} className="mt-1">
           Step {activeStep} of {WORKFLOW_STEPS.length} · {progress}%
         </div>
+      </div>
+
+      <div className="px-2 pb-2">
+        <VerificationSidebarPill
+          pendingCount={pendingVerifications}
+          onOpen={onOpenVerifications}
+        />
       </div>
 
       <nav className="px-2 flex-1 overflow-y-auto">

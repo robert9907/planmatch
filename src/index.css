@@ -93,3 +93,8 @@
   }
   .pm-btn-primary:hover { background: #3F6B53; border-color: #3F6B53; }
 }
+
+@keyframes pmVerifyPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
