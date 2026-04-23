@@ -16,8 +16,20 @@
 //   Step 1 · /approximateTerm.json?term=<q>  → fuzzy/prefix candidates
 //   Step 2 · for the top named candidate, /drugs.json?name=<name>
 //           → full clinical drug tree (strengths, brand variants)
-//   Step 3 · merge + dedupe by rxcui, sort: exact > prefix > SBD/SCD
-//           > ingredient > other.
+//   Step 3 · merge + dedupe by rxcui, sort so that specific-strength
+//           tablet/capsule concepts come first — because those are the
+//           only rxcuis the CMS formulary file actually indexes.
+//
+// Why the sort was rewritten: the previous ranker keyed on exact-name
+// match, which floated ingredient-level (tty=IN) and approximateTerm
+// form concepts ("atorvastatin Oral Suspension") to the top. A user
+// picking "atorvastatin" got rxcui 83367 (ingredient) or 2631866
+// (Atorvaliq SBDF, a niche branded suspension) — neither of which
+// exists in pm_formulary. The badges rendered 0 / N covered even for
+// common drugs. New order: SCD tablet/capsule > SBD tablet/capsule >
+// other oral forms > ingredient/brand-name > dose-form/group > combos.
+// Within a bucket, sort by strength ascending so "10 MG, 20 MG, 40 MG,
+// 80 MG" surface in that order.
 //
 // Response: { drugs: RxNormDrug[], meta?: { approxCount, drugsName? } }
 
@@ -133,7 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const merged = [...approxDrugs, ...fullDrugs];
-    const ranked = rank(merged, q).slice(0, 25);
+    const ranked = rank(merged, q).slice(0, 40);
 
     console.log('[rxnorm-search]', {
       q,
@@ -161,17 +173,101 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 }
 
+// TTY bucket weight — lower is better. SCD (generic clinical drug) wins
+// over SBD (branded) so a bare "atorvastatin" search lands on the
+// generic 20 MG Oral Tablet, not on Lipitor 20 MG. Approximate-term
+// concepts (tty=undefined) slot below SBD so they don't outrank the
+// specific-strength forms returned by /drugs.json.
+function ttyWeight(tty: string | undefined): number {
+  switch (tty) {
+    case 'SCD':
+      return 10;
+    case 'SBD':
+      return 20;
+    case 'GPCK':
+      return 30;
+    case 'BPCK':
+      return 40;
+    case 'IN':
+    case 'MIN':
+    case 'PIN':
+      return 50;
+    case 'BN':
+      return 55;
+    case 'SCDF':
+    case 'SBDF':
+    case 'SCDG':
+    case 'SBDG':
+    case 'DF':
+    case 'DFG':
+      return 60;
+    default:
+      return 70;
+  }
+}
+
+// Form bucket — tablet/capsule are the overwhelmingly common oral forms
+// and the ones most plans carry. Suspensions/solutions/liquids are
+// niche branded variants (e.g. Atorvaliq for atorvastatin) that almost
+// never appear on MA formularies, so they sort after tablet/capsule
+// within the same tty bucket.
+function formWeight(name: string): number {
+  const n = name.toLowerCase();
+  if (/\b(oral tablet|tablet|capsule|oral capsule)\b/.test(n)) return 0;
+  if (/\bchewable tablet\b/.test(n)) return 1;
+  if (/\b(sublingual|orally disintegrating|odt)\b/.test(n)) return 2;
+  if (/\b(oral solution|oral suspension|oral liquid|syrup|elixir)\b/.test(n)) return 5;
+  if (/\b(injection|injectable|injectable solution|prefilled syringe)\b/.test(n)) return 6;
+  if (/\b(patch|cream|ointment|gel|spray|inhalation)\b/.test(n)) return 7;
+  return 4;
+}
+
+// Parse the first "<number> MG" (or MG/ML, MCG, etc.) so 10 MG sorts
+// before 20 MG before 40 MG within the same drug. Returns Infinity when
+// no strength is present so strengthless concepts (ingredient, BN,
+// dose-form) sink below specific-strength forms.
+function strengthFor(name: string): number {
+  const m = name.match(/(\d+(?:\.\d+)?)\s*(MG|MCG|G|ML|%)/i);
+  if (!m) return Number.POSITIVE_INFINITY;
+  const v = Number(m[1]);
+  if (!Number.isFinite(v)) return Number.POSITIVE_INFINITY;
+  const unit = m[2].toUpperCase();
+  if (unit === 'MCG') return v / 1000;
+  if (unit === 'G') return v * 1000;
+  return v;
+}
+
+// Combination products ("amlodipine 10 MG / atorvastatin 10 MG Oral
+// Tablet [Caduet]") have a slash separating ingredients. A user typing
+// the base ingredient almost never wants the combo, so we demote them
+// below single-ingredient concepts of the same form/strength.
+function isCombination(name: string): boolean {
+  return /\s\/\s/.test(name);
+}
+
 function rank(drugs: RxNormDrug[], query: string): RxNormDrug[] {
   const lq = query.toLowerCase();
-  const score = (d: RxNormDrug): number => {
-    const n = d.name.toLowerCase();
-    if (n === lq) return 0;
-    if (n.startsWith(lq)) return 1;
-    if (d.tty === 'SBD' || d.tty === 'SCD') return 2;
-    if (d.tty === 'IN' || d.tty === 'MIN' || d.tty === 'PIN') return 3;
-    if (d.tty === 'BN') return 4;
-    if (n.includes(lq)) return 5;
-    return 6;
-  };
-  return [...drugs].sort((a, b) => score(a) - score(b));
+  return [...drugs].sort((a, b) => {
+    const ca = isCombination(a.name) ? 1 : 0;
+    const cb = isCombination(b.name) ? 1 : 0;
+    if (ca !== cb) return ca - cb;
+
+    const wa = ttyWeight(a.tty) + formWeight(a.name);
+    const wb = ttyWeight(b.tty) + formWeight(b.name);
+    if (wa !== wb) return wa - wb;
+
+    const sa = strengthFor(a.name);
+    const sb = strengthFor(b.name);
+    if (sa !== sb) return sa - sb;
+
+    // Final tiebreaker: prefer a case-insensitive exact name match so
+    // typing "jardiance" surfaces the BN concept first within its
+    // (weaker) bucket, then alphabetical.
+    const na = a.name.toLowerCase();
+    const nb = b.name.toLowerCase();
+    const ea = na === lq ? 0 : 1;
+    const eb = nb === lq ? 0 : 1;
+    if (ea !== eb) return ea - eb;
+    return na.localeCompare(nb);
+  });
 }

@@ -62,6 +62,7 @@ async function expandRxcui(rxcui: string): Promise<string[]> {
   const candidates = new Set<string>([rxcui]);
   const ctl = new AbortController();
   const timeout = setTimeout(() => ctl.abort(), RELATED_TIMEOUT_MS);
+  let succeeded = false;
   try {
     const url = `${RXNAV}/rxcui/${encodeURIComponent(rxcui)}/related.json?tty=${RELATED_TTY}`;
     const res = await fetch(url, {
@@ -80,6 +81,7 @@ async function expandRxcui(rxcui: string): Promise<string[]> {
           if (c?.rxcui) candidates.add(String(c.rxcui));
         }
       }
+      succeeded = true;
     } else {
       console.log('[formulary] related.json failed', { rxcui, status: res.status });
     }
@@ -93,7 +95,14 @@ async function expandRxcui(rxcui: string): Promise<string[]> {
   }
 
   const list = [...candidates];
-  expansionCache.set(rxcui, list);
+  // Only memoize on success. Caching a failed expansion poisons the
+  // Fluid Compute instance for every subsequent request: a non-strength
+  // rxcui (BN / IN / SBDF / SBDG) that couldn't reach pm_formulary on
+  // its own would permanently render "0/N not covered" until the
+  // instance recycled. Jardiance BN 1545659, ingredient atorvastatin
+  // 83367 — all hit this. On failure we keep the self-only list
+  // transient so the next request retries RxNav.
+  if (succeeded) expansionCache.set(rxcui, list);
   return list;
 }
 
