@@ -35,12 +35,21 @@ interface Plan {
   counties: string[];
   plan_type: AppPlanType;
   premium: number;
+  annual_deductible: number | null;
   moop_in_network: number;
+  moop_out_of_network: number | null;
+  drug_deductible: number | null;
   part_b_giveback: number;
   star_rating: number;
   benefits: PlanBenefits;
   formulary: Record<string, never>; // populated lazily via /api/formulary
   in_network_npis: string[]; // empty — networkCheck.ts stamps its own
+}
+
+interface CostShare {
+  copay: number | null;
+  coinsurance: number | null;
+  description: string | null;
 }
 
 interface PlanBenefits {
@@ -52,6 +61,20 @@ interface PlanBenefits {
   food_card: { allowance_per_month: number; restricted_to_medicaid_eligible: boolean };
   diabetic: { covered: boolean; preferred_brands: string[] };
   fitness: { enabled: boolean; program: string | null };
+  medical: {
+    primary_care: CostShare;
+    specialist: CostShare;
+    urgent_care: CostShare;
+    emergency: CostShare;
+    inpatient: CostShare;
+  };
+  rx_tiers: {
+    tier_1: CostShare;
+    tier_2: CostShare;
+    tier_3: CostShare;
+    tier_4: CostShare;
+    tier_5: CostShare;
+  };
 }
 
 interface PlanRow {
@@ -65,6 +88,7 @@ interface PlanRow {
   state: string;
   county_name: string;
   monthly_premium: number | null;
+  annual_deductible: number | null;
   moop: number | null;
   drug_deductible: number | null;
   star_rating: number | null;
@@ -145,7 +169,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let plansQuery = sb
       .from('pm_plans')
       .select(
-        'contract_id, plan_id, segment_id, plan_name, carrier, parent_organization, plan_type, state, county_name, monthly_premium, moop, drug_deductible, star_rating, snp, snp_type, sanctioned',
+        'contract_id, plan_id, segment_id, plan_name, carrier, parent_organization, plan_type, state, county_name, monthly_premium, annual_deductible, moop, drug_deductible, star_rating, snp, snp_type, sanctioned',
       )
       .eq('sanctioned', false)
       .limit(limit);
@@ -264,7 +288,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         counties: [...counties].sort(),
         plan_type: mapPlanType(row.plan_type, row.snp, row.snp_type),
         premium: row.monthly_premium ?? 0,
+        annual_deductible: row.annual_deductible,
         moop_in_network: row.moop ?? 0,
+        // pm_plans only carries in-network MOOP; OON isn't in the
+        // landscape extract, so we leave it null and let the UI render
+        // "—" rather than fake a value.
+        moop_out_of_network: null,
+        drug_deductible: row.drug_deductible,
         part_b_giveback: partBGiveback ?? 0,
         star_rating: row.star_rating ?? 0,
         benefits,
@@ -295,6 +325,16 @@ function pickBenefitNumber(
   if (!hit) return null;
   const v = hit[field];
   return typeof v === 'number' ? v : v != null ? Number(v) : null;
+}
+
+function costShareFor(rows: BenefitRow[], category: string): CostShare {
+  const hit = rows.find((r) => r.benefit_category === category);
+  if (!hit) return { copay: null, coinsurance: null, description: null };
+  return {
+    copay: toNum(hit.copay),
+    coinsurance: toNum(hit.coinsurance),
+    description: hit.benefit_description ?? null,
+  };
 }
 
 function buildBenefits(rows: BenefitRow[]): PlanBenefits {
@@ -393,6 +433,20 @@ function buildBenefits(rows: BenefitRow[]): PlanBenefits {
     fitness: {
       enabled: true,
       program: fitnessProgram,
+    },
+    medical: {
+      primary_care: costShareFor(rows, 'primary_care'),
+      specialist: costShareFor(rows, 'specialist'),
+      urgent_care: costShareFor(rows, 'urgent_care'),
+      emergency: costShareFor(rows, 'emergency'),
+      inpatient: costShareFor(rows, 'inpatient'),
+    },
+    rx_tiers: {
+      tier_1: costShareFor(rows, 'rx_tier_1'),
+      tier_2: costShareFor(rows, 'rx_tier_2'),
+      tier_3: costShareFor(rows, 'rx_tier_3'),
+      tier_4: costShareFor(rows, 'rx_tier_4'),
+      tier_5: costShareFor(rows, 'rx_tier_5'),
     },
   };
 }

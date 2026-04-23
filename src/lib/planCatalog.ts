@@ -23,7 +23,10 @@ interface ApiPlan {
   counties: string[];
   plan_type: PlanType;
   premium: number;
+  annual_deductible: number | null;
   moop_in_network: number;
+  moop_out_of_network: number | null;
+  drug_deductible: number | null;
   part_b_giveback: number;
   star_rating: number;
   benefits: Partial<PlanBenefits>;
@@ -102,7 +105,10 @@ function toPlan(p: ApiPlan): Plan {
     counties: p.counties ?? [],
     plan_type: p.plan_type,
     premium: p.premium ?? 0,
+    annual_deductible: p.annual_deductible ?? null,
     moop_in_network: p.moop_in_network ?? 0,
+    moop_out_of_network: p.moop_out_of_network ?? null,
+    drug_deductible: p.drug_deductible ?? null,
     part_b_giveback: p.part_b_giveback ?? 0,
     star_rating: p.star_rating ?? 0,
     benefits: fillBenefits(p.benefits ?? {}),
@@ -152,5 +158,27 @@ function fillBenefits(partial: Partial<PlanBenefits>): PlanBenefits {
       enabled: partial.fitness?.enabled ?? false,
       program: partial.fitness?.program ?? null,
     },
+    medical: {
+      primary_care: cs(partial.medical?.primary_care),
+      specialist: cs(partial.medical?.specialist),
+      urgent_care: cs(partial.medical?.urgent_care),
+      emergency: cs(partial.medical?.emergency),
+      inpatient: cs(partial.medical?.inpatient),
+    },
+    rx_tiers: {
+      tier_1: cs(partial.rx_tiers?.tier_1),
+      tier_2: cs(partial.rx_tiers?.tier_2),
+      tier_3: cs(partial.rx_tiers?.tier_3),
+      tier_4: cs(partial.rx_tiers?.tier_4),
+      tier_5: cs(partial.rx_tiers?.tier_5),
+    },
+  };
+}
+
+function cs(v: { copay?: number | null; coinsurance?: number | null; description?: string | null } | undefined) {
+  return {
+    copay: v?.copay ?? null,
+    coinsurance: v?.coinsurance ?? null,
+    description: v?.description ?? null,
   };
 }

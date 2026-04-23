@@ -43,6 +43,32 @@ export interface FitnessBenefit {
   program: FitnessProgram;
 }
 
+// Cost-share for a single service line (copay OR coinsurance — PBP
+// extracts populate one or the other). null/null means the category
+// wasn't present in pm_plan_benefits for this plan and the UI should
+// render "—".
+export interface CostShare {
+  copay: number | null;
+  coinsurance: number | null;
+  description: string | null;
+}
+
+export interface MedicalCopays {
+  primary_care: CostShare;
+  specialist: CostShare;
+  urgent_care: CostShare;
+  emergency: CostShare;
+  inpatient: CostShare;
+}
+
+export interface RxTierCopays {
+  tier_1: CostShare;
+  tier_2: CostShare;
+  tier_3: CostShare;
+  tier_4: CostShare;
+  tier_5: CostShare;
+}
+
 export interface PlanBenefits {
   dental: DentalBenefit;
   vision: VisionBenefit;
@@ -52,6 +78,8 @@ export interface PlanBenefits {
   food_card: FoodCardBenefit;
   diabetic: DiabeticBenefit;
   fitness: FitnessBenefit;
+  medical: MedicalCopays;
+  rx_tiers: RxTierCopays;
 }
 
 export interface Plan {
@@ -64,7 +92,10 @@ export interface Plan {
   counties: string[];
   plan_type: PlanType;
   premium: number;
+  annual_deductible: number | null;
   moop_in_network: number;
+  moop_out_of_network: number | null;
+  drug_deductible: number | null;
   part_b_giveback: number;
   star_rating: number;
   benefits: PlanBenefits;

@@ -64,30 +64,58 @@ const GA_COUNTIES = [
   'Richmond', 'Rockdale',
 ];
 
-function p(override: Partial<Plan> & Pick<Plan, 'id' | 'contract_id' | 'plan_number' | 'carrier' | 'plan_name' | 'state' | 'plan_type'>): Plan {
+const EMPTY_COST_SHARE = { copay: null, coinsurance: null, description: null };
+const EMPTY_MEDICAL = {
+  primary_care: EMPTY_COST_SHARE,
+  specialist: EMPTY_COST_SHARE,
+  urgent_care: EMPTY_COST_SHARE,
+  emergency: EMPTY_COST_SHARE,
+  inpatient: EMPTY_COST_SHARE,
+};
+const EMPTY_RX_TIERS = {
+  tier_1: EMPTY_COST_SHARE,
+  tier_2: EMPTY_COST_SHARE,
+  tier_3: EMPTY_COST_SHARE,
+  tier_4: EMPTY_COST_SHARE,
+  tier_5: EMPTY_COST_SHARE,
+};
+
+type PlanOverride = Omit<Partial<Plan>, 'benefits'> &
+  Pick<Plan, 'id' | 'contract_id' | 'plan_number' | 'carrier' | 'plan_name' | 'state' | 'plan_type'> & {
+    benefits?: Partial<Plan['benefits']>;
+  };
+
+function p(override: PlanOverride): Plan {
   const counties =
     override.state === 'NC' ? NC_COUNTIES :
     override.state === 'TX' ? TX_COUNTIES :
     GA_COUNTIES;
+  const defaultBenefits: Plan['benefits'] = {
+    dental: { preventive: true, comprehensive: true, annual_max: 2000 },
+    vision: { exam: true, eyewear_allowance_year: 300 },
+    hearing: { aid_allowance_year: 2000, exam: true },
+    transportation: { rides_per_year: 36, distance_miles: 60 },
+    otc: { allowance_per_quarter: 185 },
+    food_card: { allowance_per_month: 0, restricted_to_medicaid_eligible: true },
+    diabetic: { covered: true, preferred_brands: ['OneTouch', 'Accu-Chek'] },
+    fitness: { enabled: true, program: 'SilverSneakers' },
+    medical: EMPTY_MEDICAL,
+    rx_tiers: EMPTY_RX_TIERS,
+  };
+  const { benefits: benefitsOverride, ...rest } = override;
   return {
     counties,
     premium: 0,
+    annual_deductible: null,
     moop_in_network: 4900,
+    moop_out_of_network: null,
+    drug_deductible: null,
     part_b_giveback: 0,
     star_rating: 4,
-    benefits: {
-      dental: { preventive: true, comprehensive: true, annual_max: 2000 },
-      vision: { exam: true, eyewear_allowance_year: 300 },
-      hearing: { aid_allowance_year: 2000, exam: true },
-      transportation: { rides_per_year: 36, distance_miles: 60 },
-      otc: { allowance_per_quarter: 185 },
-      food_card: { allowance_per_month: 0, restricted_to_medicaid_eligible: true },
-      diabetic: { covered: true, preferred_brands: ['OneTouch', 'Accu-Chek'] },
-      fitness: { enabled: true, program: 'SilverSneakers' },
-    },
+    benefits: { ...defaultBenefits, ...(benefitsOverride ?? {}) },
     formulary: { ...BASE_FORMULARY },
     in_network_npis: [],
-    ...override,
+    ...rest,
   };
 }
 

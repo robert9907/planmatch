@@ -10,7 +10,7 @@ import { SaveSessionButton } from '@/components/sync/SaveSessionButton';
 import { DISCLAIMERS, allComplianceItemIds } from '@/lib/compliance';
 import { buildClientInfoText } from '@/lib/clipboardFormat';
 import { fipsForCounty } from '@/lib/ncFips';
-import type { Plan, FormularyTier } from '@/types/plans';
+import type { CostShare, Plan, FormularyTier } from '@/types/plans';
 import type { SessionMode } from '@/types/session';
 
 // ─── Display helpers ────────────────────────────────────────────────
@@ -41,6 +41,26 @@ function formatQuarterlyAmount(amount: number): string {
 function formatFitness(fitness: Plan['benefits']['fitness']): string {
   if (!fitness.enabled) return '—';
   return fitness.program ?? 'Included';
+}
+// CostShare rendering — copay and coinsurance are mutually exclusive
+// in the PBP extract, so pick whichever is populated. Null/null means
+// the row wasn't in pm_plan_benefits for this plan.
+function formatCostShare(cs: CostShare, unit: string = ''): string {
+  if (cs.copay != null) return `$${cs.copay}${unit}`;
+  if (cs.coinsurance != null) return `${cs.coinsurance}%`;
+  return '—';
+}
+function formatDeductibleDollars(v: number | null | undefined): string {
+  if (v == null) return '—';
+  return `$${v.toLocaleString()}`;
+}
+function formatPartBGivebackMonthly(monthly: number | null | undefined): string {
+  if (monthly == null || monthly <= 0) return '—';
+  return `$${monthly}/mo`;
+}
+function formatTransportation(t: Plan['benefits']['transportation']): string {
+  if (t.rides_per_year) return `${t.rides_per_year} rides`;
+  return '—';
 }
 function clientFirstName(name: string): string {
   return name.trim().split(/\s+/)[0] ?? '';
@@ -320,70 +340,160 @@ function SideBySideTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [primeNonce]);
 
-  const rows: { label: string; render: (p: Plan) => React.ReactNode }[] = [
-    { label: 'Plan ID', render: (p) => `${p.contract_id}-${p.plan_number}` },
+  // formularyTick in scope keeps the Rx-row closure evaluating fresh
+  // cache entries as they arrive from bulkLookupFormulary.
+  void formularyTick;
+
+  type Row = { label: string; render: (p: Plan) => React.ReactNode; title?: (p: Plan) => string | undefined };
+  type Section = { heading: string; rows: Row[] };
+
+  const sections: Section[] = [
     {
-      label: 'Premium',
-      render: (p) => (
-        <span style={{ fontWeight: 700 }}>
-          {p.premium === 0 ? '$0' : `$${p.premium.toFixed(2)}/mo`}
-        </span>
-      ),
+      heading: 'Basics',
+      rows: [
+        { label: 'Plan ID', render: (p) => `${p.contract_id}-${p.plan_number}` },
+        { label: 'Star rating', render: (p) => `${p.star_rating} ★` },
+      ],
     },
     {
-      label: 'MOOP in-network',
-      render: (p) => `$${p.moop_in_network.toLocaleString()}`,
+      heading: 'Costs',
+      rows: [
+        {
+          label: 'Monthly premium',
+          render: (p) => (
+            <span style={{ fontWeight: 700 }}>
+              {p.premium === 0 ? '$0' : `$${p.premium.toFixed(2)}/mo`}
+            </span>
+          ),
+        },
+        {
+          label: 'Annual deductible (medical)',
+          render: (p) => formatDeductibleDollars(p.annual_deductible),
+        },
+        {
+          label: 'MOOP in-network',
+          render: (p) => `$${p.moop_in_network.toLocaleString()}`,
+        },
+        {
+          label: 'MOOP out-of-network',
+          render: (p) => formatDeductibleDollars(p.moop_out_of_network),
+        },
+        {
+          label: 'Part B giveback',
+          render: (p) => formatPartBGivebackMonthly(p.part_b_giveback),
+        },
+      ],
     },
     {
-      label: 'Star rating',
-      render: (p) => `${p.star_rating} ★`,
+      heading: 'Medical copays',
+      rows: [
+        {
+          label: 'PCP copay',
+          render: (p) => formatCostShare(p.benefits.medical.primary_care),
+          title: (p) => p.benefits.medical.primary_care.description ?? undefined,
+        },
+        {
+          label: 'Specialist copay',
+          render: (p) => formatCostShare(p.benefits.medical.specialist),
+          title: (p) => p.benefits.medical.specialist.description ?? undefined,
+        },
+        {
+          label: 'Urgent care',
+          render: (p) => formatCostShare(p.benefits.medical.urgent_care),
+          title: (p) => p.benefits.medical.urgent_care.description ?? undefined,
+        },
+        {
+          label: 'Emergency room',
+          render: (p) => formatCostShare(p.benefits.medical.emergency),
+          title: (p) => p.benefits.medical.emergency.description ?? undefined,
+        },
+        {
+          label: 'Inpatient hospital',
+          render: (p) => formatCostShare(p.benefits.medical.inpatient, '/day'),
+          title: (p) => p.benefits.medical.inpatient.description ?? undefined,
+        },
+      ],
     },
     {
-      label: 'Dental',
-      render: (p) => {
-        const d = p.benefits.dental;
-        const label = formatAnnualAllowance(d.annual_max, d.preventive);
-        return label === 'Included' || label === '—'
-          ? label
-          : `${label}${d.comprehensive ? ' · comp.' : ''}`;
-      },
+      heading: 'Prescription drug',
+      rows: [
+        {
+          label: 'Rx deductible',
+          render: (p) => formatDeductibleDollars(p.drug_deductible),
+        },
+        {
+          label: 'Tier 1 (preferred generic)',
+          render: (p) => formatCostShare(p.benefits.rx_tiers.tier_1),
+          title: (p) => p.benefits.rx_tiers.tier_1.description ?? undefined,
+        },
+        {
+          label: 'Tier 2 (generic)',
+          render: (p) => formatCostShare(p.benefits.rx_tiers.tier_2),
+          title: (p) => p.benefits.rx_tiers.tier_2.description ?? undefined,
+        },
+        {
+          label: 'Tier 3 (preferred brand)',
+          render: (p) => formatCostShare(p.benefits.rx_tiers.tier_3),
+          title: (p) => p.benefits.rx_tiers.tier_3.description ?? undefined,
+        },
+        {
+          label: 'Tier 4 (non-preferred brand)',
+          render: (p) => formatCostShare(p.benefits.rx_tiers.tier_4),
+          title: (p) => p.benefits.rx_tiers.tier_4.description ?? undefined,
+        },
+        {
+          label: 'Tier 5 (specialty)',
+          render: (p) => formatCostShare(p.benefits.rx_tiers.tier_5),
+          title: (p) => p.benefits.rx_tiers.tier_5.description ?? undefined,
+        },
+      ],
     },
     {
-      label: 'Vision eyewear',
-      render: (p) =>
-        formatAnnualAllowance(p.benefits.vision.eyewear_allowance_year, p.benefits.vision.exam),
-    },
-    {
-      label: 'Hearing aids',
-      render: (p) =>
-        formatAnnualAllowance(p.benefits.hearing.aid_allowance_year, p.benefits.hearing.exam),
-    },
-    {
-      label: 'Transportation',
-      render: (p) =>
-        p.benefits.transportation.rides_per_year
-          ? `${p.benefits.transportation.rides_per_year} rides`
-          : '—',
-    },
-    {
-      label: 'OTC / qtr',
-      render: (p) => formatQuarterlyAmount(p.benefits.otc.allowance_per_quarter),
-    },
-    {
-      label: 'Food card / mo',
-      render: (p) => formatMonthlyAmount(p.benefits.food_card.allowance_per_month),
-    },
-    {
-      label: 'Fitness',
-      render: (p) => formatFitness(p.benefits.fitness),
+      heading: 'Extra benefits',
+      rows: [
+        {
+          label: 'Dental (annual max)',
+          render: (p) => {
+            const d = p.benefits.dental;
+            const label = formatAnnualAllowance(d.annual_max, d.preventive);
+            return label === 'Included' || label === '—'
+              ? label
+              : `${label}${d.comprehensive ? ' · comp.' : ''}`;
+          },
+        },
+        {
+          label: 'Vision eyewear',
+          render: (p) =>
+            formatAnnualAllowance(p.benefits.vision.eyewear_allowance_year, p.benefits.vision.exam),
+        },
+        {
+          label: 'Hearing aids',
+          render: (p) =>
+            formatAnnualAllowance(p.benefits.hearing.aid_allowance_year, p.benefits.hearing.exam),
+        },
+        {
+          label: 'OTC / qtr',
+          render: (p) => formatQuarterlyAmount(p.benefits.otc.allowance_per_quarter),
+        },
+        {
+          label: 'Food card / mo',
+          render: (p) => formatMonthlyAmount(p.benefits.food_card.allowance_per_month),
+        },
+        {
+          label: 'Transportation',
+          render: (p) => formatTransportation(p.benefits.transportation),
+        },
+        {
+          label: 'Fitness',
+          render: (p) => formatFitness(p.benefits.fitness),
+        },
+      ],
     },
   ];
 
   if (medications.length > 0) {
-    // formularyTick in scope keeps the closure evaluating fresh cache
-    // entries as they arrive from bulkLookupFormulary.
-    void formularyTick;
-    rows.push({
+    const rxSection = sections.find((s) => s.heading === 'Prescription drug');
+    rxSection?.rows.push({
       label: `Rx coverage (${medications.length})`,
       render: (plan) => (
         <span className="flex flex-wrap" style={{ gap: 3 }}>
@@ -486,38 +596,62 @@ function SideBySideTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, i) => (
-            <tr key={row.label}>
-              <td
-                style={{
-                  ...bodyCellStyle,
-                  fontWeight: 600,
-                  color: 'var(--i2)',
-                  background: i % 2 === 0 ? 'var(--warm)' : 'var(--wh)',
-                  position: 'sticky',
-                  left: 0,
-                }}
-              >
-                {row.label}
-              </td>
-              {finalists.map((p) => (
+          {sections.flatMap((section) => {
+            const children: React.ReactNode[] = [
+              <tr key={`heading-${section.heading}`}>
                 <td
-                  key={p.id}
+                  colSpan={1 + finalists.length}
                   style={{
-                    ...bodyCellStyle,
-                    background:
-                      recommendation === p.id
-                        ? 'var(--sl)'
-                        : i % 2 === 0
-                          ? 'var(--warm)'
-                          : 'var(--wh)',
+                    padding: '10px 14px 6px',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: 'var(--i3)',
+                    background: 'var(--wh)',
+                    borderTop: '1px solid var(--w2)',
+                    borderBottom: '1px solid var(--w2)',
+                    position: 'sticky',
+                    left: 0,
                   }}
                 >
-                  {row.render(p)}
+                  {section.heading}
                 </td>
-              ))}
-            </tr>
-          ))}
+              </tr>,
+            ];
+            section.rows.forEach((row, i) => {
+              const zebra = i % 2 === 0 ? 'var(--warm)' : 'var(--wh)';
+              children.push(
+                <tr key={`${section.heading}-${row.label}`}>
+                  <td
+                    style={{
+                      ...bodyCellStyle,
+                      fontWeight: 600,
+                      color: 'var(--i2)',
+                      background: zebra,
+                      position: 'sticky',
+                      left: 0,
+                    }}
+                  >
+                    {row.label}
+                  </td>
+                  {finalists.map((p) => (
+                    <td
+                      key={p.id}
+                      title={row.title?.(p)}
+                      style={{
+                        ...bodyCellStyle,
+                        background: recommendation === p.id ? 'var(--sl)' : zebra,
+                      }}
+                    >
+                      {row.render(p)}
+                    </td>
+                  ))}
+                </tr>,
+              );
+            });
+            return children;
+          })}
         </tbody>
       </table>
     </div>
