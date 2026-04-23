@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSession } from '@/hooks/useSession';
 import { StepHeader } from './StepHeader';
 import { findPlan, formularyTierFor, lookupByHNumber } from '@/lib/cmsPlans';
@@ -7,6 +7,8 @@ import { BROKER } from '@/lib/constants';
 import { ComplianceChecklist } from '@/components/compliance/ComplianceChecklist';
 import { SaveSessionButton } from '@/components/sync/SaveSessionButton';
 import { DISCLAIMERS, allComplianceItemIds } from '@/lib/compliance';
+import { buildClientInfoText } from '@/lib/clipboardFormat';
+import { fipsForCounty } from '@/lib/ncFips';
 import type { Plan, FormularyTier } from '@/types/plans';
 import type { SessionMode } from '@/types/session';
 
@@ -75,6 +77,10 @@ function NewQuoteMode() {
   const finalistIds = useSession((s) => s.selectedFinalists);
   const recommendation = useSession((s) => s.recommendation);
   const setRecommendation = useSession((s) => s.setRecommendation);
+  const client = useSession((s) => s.client);
+  const medications = useSession((s) => s.medications);
+  const providers = useSession((s) => s.providers);
+  const [toastMsg, showToast] = useToast();
 
   // Refetch the finalist set from pm_plans so the side-by-side renders
   // live benefit/premium/star data instead of the stale Plan shape
@@ -140,16 +146,83 @@ function NewQuoteMode() {
     );
   }
 
+  async function handleCopy(plan: Plan) {
+    const text = buildClientInfoText({ client, plan, medications, providers });
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Copied to clipboard');
+    } catch {
+      showToast('Copy failed — check browser permissions');
+    }
+  }
+
+  function handleOpenSunfire(plan: Plan) {
+    const fips = fipsForCounty(client.county);
+    if (!client.zip || !fips) {
+      const missing = !client.zip ? 'ZIP' : `FIPS for county "${client.county}"`;
+      showToast(`Need ${missing} to open SunFire`);
+      return;
+    }
+    const url = `https://www.sunfirematrix.com/app/agent/medicareadvocates/#/plans/${client.zip}/${fips}/${plan.plan_type}`;
+    window.open(url, '_blank', 'noopener');
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <SideBySideTable
         finalists={finalists}
         recommendation={recommendation}
         onRecommend={setRecommendation}
+        onCopy={handleCopy}
+        onOpenSunfire={handleOpenSunfire}
       />
       <ClientDeliveryCard finalists={finalists} recommendation={recommendation} />
       <ComplianceChecklist />
       <BrokerActions recommendation={recommendation} />
+      <Toast message={toastMsg} />
+    </div>
+  );
+}
+
+function useToast(): [string | null, (msg: string) => void] {
+  const [msg, setMsg] = useState<string | null>(null);
+  const timerRef = useRef<number | null>(null);
+  function show(next: string) {
+    setMsg(next);
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => setMsg(null), 1800);
+  }
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    },
+    [],
+  );
+  return [msg, show];
+}
+
+function Toast({ message }: { message: string | null }) {
+  if (!message) return null;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        position: 'fixed',
+        bottom: 24,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        padding: '10px 16px',
+        borderRadius: 999,
+        background: 'var(--ink)',
+        color: 'var(--wh)',
+        fontSize: 13,
+        fontWeight: 600,
+        boxShadow: '0 6px 20px rgba(0,0,0,0.18)',
+        zIndex: 50,
+      }}
+    >
+      {message}
     </div>
   );
 }
@@ -167,10 +240,14 @@ function SideBySideTable({
   finalists,
   recommendation,
   onRecommend,
+  onCopy,
+  onOpenSunfire,
 }: {
   finalists: Plan[];
   recommendation: string | null;
   onRecommend: (id: string | null) => void;
+  onCopy: (plan: Plan) => void;
+  onOpenSunfire: (plan: Plan) => void;
 }) {
   const medications = useSession((s) => s.medications);
 
@@ -293,6 +370,36 @@ function SideBySideTable({
                   >
                     {recommended ? '★ Recommended' : 'Recommend'}
                   </button>
+                  <div className="flex" style={{ gap: 4, marginTop: 4 }}>
+                    <button
+                      type="button"
+                      onClick={() => onCopy(p)}
+                      className="pm-btn"
+                      style={{
+                        flex: 1,
+                        height: 24,
+                        fontSize: 10,
+                        padding: '0 6px',
+                      }}
+                      title="Copy client info to clipboard"
+                    >
+                      📋 Copy client info
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onOpenSunfire(p)}
+                      className="pm-btn"
+                      style={{
+                        flex: 1,
+                        height: 24,
+                        fontSize: 10,
+                        padding: '0 6px',
+                      }}
+                      title="Open this plan in SunFire Matrix"
+                    >
+                      Open SunFire →
+                    </button>
+                  </div>
                 </th>
               );
             })}
