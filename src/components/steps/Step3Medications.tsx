@@ -116,7 +116,6 @@ export function Step3Medications({ capture, onAdvance }: Step3Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formularyPrimeNonce]);
-  const primed = formularyTick > 0;
 
   function onSelectDrug(d: RxNormDrug) {
     addMedication({
@@ -259,7 +258,7 @@ export function Step3Medications({ capture, onAdvance }: Step3Props) {
                 key={med.id}
                 med={med}
                 plans={eligiblePlans}
-                primed={primed}
+                formularyTick={formularyTick}
                 onRemove={() => removeMedication(med.id)}
               />
             ))}
@@ -279,23 +278,29 @@ export function Step3Medications({ capture, onAdvance }: Step3Props) {
 function MedicationRow({
   med,
   plans,
-  primed,
+  formularyTick,
   onRemove,
 }: {
   med: import('@/types/session').Medication;
   plans: import('@/types/plans').Plan[];
-  primed: boolean;
+  formularyTick: number;
   onRemove: () => void;
 }) {
   // Read each (plan, rxcui) tier from the primed formulary cache
-  // populated by bulkLookupFormulary in the parent. `primed` tells us
-  // whether the bulk response has landed — before it has, a cache miss
-  // is "still loading", not "not covered". After it has, a cache miss
-  // is authoritative: pm_formulary has no row for any of the rxcui's
-  // related SCD/SBD forms on this plan, so the drug really isn't on
-  // this plan's formulary. Meds without an rxcui (captured by photo
-  // but never matched to RxNorm) get treated as not-covered since we
-  // can't authoritatively look them up.
+  // populated by bulkLookupFormulary in the parent. formularyTick
+  // increments every time a bulk prime completes, so listing it in
+  // this memo's deps guarantees the badges recompute after each new
+  // response — previously we depended on a boolean `primed` that
+  // flipped false→true on the first prime and stayed true forever,
+  // which meant adding a second medication never re-triggered the
+  // memo even though the cache now had entries for the new rxcui.
+  // That's the "every drug added second shows 0/13" bug.
+  //
+  // primed is derived from the tick so the UI can still distinguish
+  // "bulk hasn't landed yet" (show loading dots) from "bulk landed
+  // and this (plan, rxcui) really isn't in pm_formulary" (show red
+  // pill). It's not a dep by itself because it's a function of tick.
+  const primed = formularyTick > 0;
   const planStatuses = useMemo(
     () =>
       plans.map((p) => {
@@ -313,7 +318,7 @@ function MedicationRow({
         }
         return { plan: p, tier };
       }),
-    [plans, med.name, med.rxcui, primed],
+    [plans, med.name, med.rxcui, formularyTick],
   );
 
   const covered = planStatuses.filter(
