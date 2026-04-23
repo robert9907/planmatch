@@ -6,7 +6,7 @@ import type {
   Plan,
 } from '@/types/plans';
 import type { Medication, Provider } from '@/types/session';
-import { formularyTierFor } from './cmsPlans';
+import { getCachedFormulary } from './formularyLookup';
 
 interface FilterInput {
   plans: Plan[];
@@ -41,12 +41,20 @@ export function computeFunnel(input: FilterInput): FunnelSnapshot {
 
   const afterProviders = alive.size;
 
-  // --- Formulary elimination (any drug missing from formulary = cut) ---
+  // --- Formulary elimination (pm_formulary-backed) ---
+  // Reads the cache primed by bulkLookupFormulary. A missing cache entry
+  // means the server hasn't responded yet — treat as neutral and don't
+  // cut (the caller re-runs once the cache fills, see Step5's tick).
+  // A med with no rxcui is also neutral — can't authoritatively call it
+  // uncovered without an RxNorm match, so keep the plan.
   for (const med of medications) {
+    if (!med.rxcui) continue;
     for (const plan of plans) {
       if (!alive.has(plan.id)) continue;
-      const tier = formularyTierFor(plan, med.name);
-      if (tier === 'excluded' || tier === null) {
+      const contractPlanId = `${plan.contract_id}_${plan.plan_number}`;
+      const hit = getCachedFormulary(contractPlanId, med.rxcui);
+      if (!hit) continue;
+      if (hit.tier === 'not_covered' || hit.tier === 'excluded') {
         cuts.push({
           plan_id: plan.id,
           reason: 'formulary_gap',

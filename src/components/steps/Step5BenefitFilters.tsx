@@ -4,6 +4,7 @@ import { StepHeader } from './StepHeader';
 import { findPlan } from '@/lib/cmsPlans';
 import { fetchPlansForClient, lastPlanSource } from '@/lib/planCatalog';
 import { computeFunnel, finalistIdsFromSnapshot } from '@/lib/planFilter';
+import { bulkLookupFormulary } from '@/lib/formularyLookup';
 import type { BenefitFilter, BenefitKey, CutTag, Plan } from '@/types/plans';
 
 interface Step5Props {
@@ -157,9 +158,38 @@ export function Step5BenefitFilters({ onAdvance }: Step5Props) {
     };
   }, [client.state, client.planType, client.county]);
 
+  // Prime the pm_formulary cache so computeFunnel's lookups hit memory.
+  // Same pattern Step 3 uses for its per-row formulary badges — without
+  // this, computeFunnel sees a cold cache and treats every (plan × drug)
+  // pair as "still loading" (no cut). The tick forces re-render once
+  // the bulk response lands.
+  const [formularyTick, setFormularyTick] = useState(0);
+  const formularyPrimeNonce = useMemo(
+    () => `${eligiblePlans.length}:${medications.length}`,
+    [eligiblePlans, medications],
+  );
+  useEffect(() => {
+    if (eligiblePlans.length === 0 || medications.length === 0) return;
+    let cancelled = false;
+    const contractIds = [...new Set(eligiblePlans.map((p) => p.contract_id))];
+    const rxcuis = medications
+      .map((m) => m.rxcui)
+      .filter((s): s is string => typeof s === 'string' && s.length > 0);
+    if (rxcuis.length === 0) return;
+    bulkLookupFormulary(contractIds, rxcuis).then(() => {
+      if (!cancelled) setFormularyTick((t) => t + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formularyPrimeNonce]);
+
   const snapshot = useMemo(
     () => computeFunnel({ plans: eligiblePlans, medications, providers, benefitFilters }),
-    [eligiblePlans, medications, providers, benefitFilters],
+    // formularyTick participates so the funnel re-runs after cache primes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [eligiblePlans, medications, providers, benefitFilters, formularyTick],
   );
 
   const finalistIds = useMemo(
