@@ -292,18 +292,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       }
       const allCandidates = [...candidateToOriginals.keys()];
+      const contractIds = contractIdsCsv
+        ? contractIdsCsv.split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
 
-      let q = sb
-        .from('pm_formulary')
-        .select('contract_id, plan_id, rxcui, drug_name, tier, copay, coinsurance')
-        .in('rxcui', allCandidates)
-        .limit(50_000);
-      if (contractIdsCsv) {
-        const contractIds = contractIdsCsv.split(',').map((s) => s.trim()).filter(Boolean);
-        if (contractIds.length > 0) q = q.in('contract_id', contractIds);
+      // Chunk the rxcui filter. Combo-drug expansions like hydrocodone/
+      // APAP walk up to ~640 sibling clinical drugs, which overflow
+      // PostgREST's URL-length cap on a single .in(…) call and silently
+      // drop the tail of the list. 150 rxcuis per chunk keeps each URL
+      // well under 4 KB and runs the chunks in parallel.
+      const CHUNK = 150;
+      const chunkResults = await Promise.all(
+        Array.from({ length: Math.ceil(allCandidates.length / CHUNK) }, (_, i) => {
+          const chunk = allCandidates.slice(i * CHUNK, (i + 1) * CHUNK);
+          let q = sb
+            .from('pm_formulary')
+            .select('contract_id, plan_id, rxcui, drug_name, tier, copay, coinsurance')
+            .in('rxcui', chunk)
+            .limit(50_000);
+          if (contractIds.length > 0) q = q.in('contract_id', contractIds);
+          return q;
+        }),
+      );
+      const data: FormularyRow[] = [];
+      for (const res of chunkResults) {
+        if (res.error) throw res.error;
+        if (res.data) for (const r of res.data as FormularyRow[]) data.push(r);
       }
-      const { data, error } = await q;
-      if (error) throw error;
 
       // Collapse (contract_id, plan_id, original_rxcui) → best row. Each
       // cell is keyed per original so its own suppressCombos setting
@@ -311,7 +326,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       type CellKey = string;
       const cellOriginal = new Map<CellKey, string>();
       const best = new Map<CellKey, ScoredRow>();
-      for (const r of (data ?? []) as FormularyRow[]) {
+      for (const r of data) {
         const originalsForRow = candidateToOriginals.get(r.rxcui);
         if (!originalsForRow) continue;
         const combo = isComboName(r.drug_name);
@@ -373,22 +388,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ]);
     const suppressCombos = !queryIsCombo;
 
-    const { data, error } = await sb
-      .from('pm_formulary')
-      .select('drug_name, tier, copay, coinsurance, rxcui')
-      .eq('contract_id', contractId)
-      .eq('plan_id', planId)
-      .in('rxcui', candidates)
-      .limit(candidates.length);
-    if (error) throw error;
+    // Chunk the rxcui filter — see bulk-path comment. Same ~640-rxcui
+    // combo expansion applies here and would silently truncate.
+    const CHUNK = 150;
+    const chunkResults = await Promise.all(
+      Array.from({ length: Math.ceil(candidates.length / CHUNK) }, (_, i) => {
+        const chunk = candidates.slice(i * CHUNK, (i + 1) * CHUNK);
+        return sb
+          .from('pm_formulary')
+          .select('drug_name, tier, copay, coinsurance, rxcui')
+          .eq('contract_id', contractId)
+          .eq('plan_id', planId)
+          .in('rxcui', chunk)
+          .limit(chunk.length);
+      }),
+    );
+    const data: FormularyRow[] = [];
+    for (const res of chunkResults) {
+      if (res.error) throw res.error;
+      if (res.data) for (const r of res.data as FormularyRow[]) data.push(r);
+    }
 
-    if (!data || data.length === 0) {
+    if (data.length === 0) {
       res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300');
       return sendJson(res, 200, { tier: 'not_covered' });
     }
 
     let best: ScoredRow | undefined;
-    for (const r of data as FormularyRow[]) {
+    for (const r of data) {
       const scored: ScoredRow = {
         row: r,
         isExact: r.rxcui === rxcui,
