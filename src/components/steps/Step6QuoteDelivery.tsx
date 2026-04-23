@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSession } from '@/hooks/useSession';
 import { StepHeader } from './StepHeader';
-import { findPlan, formularyTierFor, lookupByHNumber } from '@/lib/cmsPlans';
+import { findPlan, lookupByHNumber } from '@/lib/cmsPlans';
 import { fetchPlansByIds } from '@/lib/planCatalog';
+import { bulkLookupFormulary, getCachedFormulary } from '@/lib/formularyLookup';
 import { BROKER } from '@/lib/constants';
 import { ComplianceChecklist } from '@/components/compliance/ComplianceChecklist';
 import { SaveSessionButton } from '@/components/sync/SaveSessionButton';
@@ -11,6 +12,39 @@ import { buildClientInfoText } from '@/lib/clipboardFormat';
 import { fipsForCounty } from '@/lib/ncFips';
 import type { Plan, FormularyTier } from '@/types/plans';
 import type { SessionMode } from '@/types/session';
+
+// ─── Display helpers ────────────────────────────────────────────────
+// The PBP structured extract carries a benefit row for many
+// dental / vision / hearing plans without an annual dollar cap (the
+// allowance is printed in the free-text SoB, not the structured file).
+// The importer marks those rows with coverage_amount = 1 — the
+// "offered" marker (see buildBenefits in api/plans.ts) — which earlier
+// code rendered as literal "$1" or "$0". These helpers distinguish
+// "offered but no dollar cap" from a real dollar allowance so the card
+// reads naturally ("Included" / "$X/yr" / "—").
+
+function formatAnnualAllowance(amount: number, offered: boolean): string {
+  if (amount > 1) return `$${amount.toLocaleString()}/yr`;
+  if (offered || amount === 1) return 'Included';
+  return '—';
+}
+function formatMonthlyAmount(amount: number): string {
+  if (amount > 1) return `$${amount}/mo`;
+  if (amount === 1) return 'Included';
+  return '—';
+}
+function formatQuarterlyAmount(amount: number): string {
+  if (amount > 1) return `$${amount}/qtr`;
+  if (amount === 1) return 'Included';
+  return '—';
+}
+function formatFitness(fitness: Plan['benefits']['fitness']): string {
+  if (!fitness.enabled) return '—';
+  return fitness.program ?? 'Included';
+}
+function clientFirstName(name: string): string {
+  return name.trim().split(/\s+/)[0] ?? '';
+}
 
 export function Step6QuoteDelivery() {
   const mode = useSession((s) => s.mode);
@@ -251,6 +285,33 @@ function SideBySideTable({
 }) {
   const medications = useSession((s) => s.medications);
 
+  // Prime the pm_formulary cache so per-row Rx tier lookups hit memory.
+  // Without this the Rx cells rendered "NO" for every plan because the
+  // legacy formularyTierFor() read from plan.formulary which is {} for
+  // pm_plans-sourced rows. The tick forces re-render once the bulk
+  // response lands; same pattern Step 3 and Step 5 use.
+  const [formularyTick, setFormularyTick] = useState(0);
+  const primeNonce = useMemo(
+    () => `${finalists.length}:${medications.length}`,
+    [finalists, medications],
+  );
+  useEffect(() => {
+    if (finalists.length === 0 || medications.length === 0) return;
+    let cancelled = false;
+    const contractIds = [...new Set(finalists.map((p) => p.contract_id))];
+    const rxcuis = medications
+      .map((m) => m.rxcui)
+      .filter((s): s is string => typeof s === 'string' && s.length > 0);
+    if (rxcuis.length === 0) return;
+    bulkLookupFormulary(contractIds, rxcuis).then(() => {
+      if (!cancelled) setFormularyTick((t) => t + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [primeNonce]);
+
   const rows: { label: string; render: (p: Plan) => React.ReactNode }[] = [
     { label: 'Plan ID', render: (p) => `${p.contract_id}-${p.plan_number}` },
     {
@@ -271,16 +332,23 @@ function SideBySideTable({
     },
     {
       label: 'Dental',
-      render: (p) =>
-        `$${p.benefits.dental.annual_max}/yr${p.benefits.dental.comprehensive ? ' · comp.' : ''}`,
+      render: (p) => {
+        const d = p.benefits.dental;
+        const label = formatAnnualAllowance(d.annual_max, d.preventive);
+        return label === 'Included' || label === '—'
+          ? label
+          : `${label}${d.comprehensive ? ' · comp.' : ''}`;
+      },
     },
     {
       label: 'Vision eyewear',
-      render: (p) => `$${p.benefits.vision.eyewear_allowance_year}/yr`,
+      render: (p) =>
+        formatAnnualAllowance(p.benefits.vision.eyewear_allowance_year, p.benefits.vision.exam),
     },
     {
       label: 'Hearing aids',
-      render: (p) => `$${p.benefits.hearing.aid_allowance_year}/yr`,
+      render: (p) =>
+        formatAnnualAllowance(p.benefits.hearing.aid_allowance_year, p.benefits.hearing.exam),
     },
     {
       label: 'Transportation',
@@ -291,28 +359,32 @@ function SideBySideTable({
     },
     {
       label: 'OTC / qtr',
-      render: (p) => `$${p.benefits.otc.allowance_per_quarter}`,
+      render: (p) => formatQuarterlyAmount(p.benefits.otc.allowance_per_quarter),
     },
     {
       label: 'Food card / mo',
-      render: (p) =>
-        p.benefits.food_card.allowance_per_month
-          ? `$${p.benefits.food_card.allowance_per_month}`
-          : '—',
+      render: (p) => formatMonthlyAmount(p.benefits.food_card.allowance_per_month),
     },
     {
       label: 'Fitness',
-      render: (p) => p.benefits.fitness.program ?? '—',
+      render: (p) => formatFitness(p.benefits.fitness),
     },
   ];
 
   if (medications.length > 0) {
+    // formularyTick in scope keeps the closure evaluating fresh cache
+    // entries as they arrive from bulkLookupFormulary.
+    void formularyTick;
     rows.push({
       label: `Rx coverage (${medications.length})`,
       render: (plan) => (
         <span className="flex flex-wrap" style={{ gap: 3 }}>
           {medications.map((m) => (
-            <MedTier key={m.id} tier={formularyTierFor(plan, m.name)} label={m.name} />
+            <MedTier
+              key={m.id}
+              tier={tierForMed(plan, m.rxcui)}
+              label={m.name}
+            />
           ))}
         </span>
       ),
@@ -444,31 +516,57 @@ function SideBySideTable({
   );
 }
 
-function MedTier({ tier, label }: { tier: FormularyTier | null; label: string }) {
+// Read the formulary cache primed by bulkLookupFormulary and collapse
+// it to the FormularyTier | null the MedTier badge expects. 'loading'
+// means the bulk request is still in flight — we surface that as its
+// own badge state instead of rendering the scary red "NO".
+type RxCell = FormularyTier | null | 'loading';
+
+function tierForMed(plan: Plan, rxcui: string | null | undefined): RxCell {
+  if (!rxcui) return null;
+  const contractPlanId = `${plan.contract_id}_${plan.plan_number}`;
+  const hit = getCachedFormulary(contractPlanId, rxcui);
+  if (!hit) return 'loading';
+  if (hit.tier === 'not_covered') return null;
+  if (hit.tier === 'excluded') return 'excluded';
+  return hit.tier;
+}
+
+function MedTier({ tier, label }: { tier: RxCell; label: string }) {
   const bg =
-    tier === null
-      ? 'var(--rt)'
-      : tier === 'excluded'
+    tier === 'loading'
+      ? 'var(--w2)'
+      : tier === null
         ? 'var(--rt)'
-        : tier === 1
-          ? 'var(--sl)'
-          : tier === 2
-            ? 'var(--tl)'
-            : tier === 3
-              ? 'var(--bt)'
-              : 'var(--at)';
+        : tier === 'excluded'
+          ? 'var(--rt)'
+          : tier === 1
+            ? 'var(--sl)'
+            : tier === 2
+              ? 'var(--tl)'
+              : tier === 3
+                ? 'var(--bt)'
+                : 'var(--at)';
   const fg =
-    tier === null || tier === 'excluded'
-      ? 'var(--red)'
-      : tier === 1
-        ? 'var(--sage)'
-        : tier === 2
-          ? 'var(--teal)'
-          : tier === 3
-            ? 'var(--blue)'
-            : 'var(--amb)';
+    tier === 'loading'
+      ? 'var(--i3)'
+      : tier === null || tier === 'excluded'
+        ? 'var(--red)'
+        : tier === 1
+          ? 'var(--sage)'
+          : tier === 2
+            ? 'var(--teal)'
+            : tier === 3
+              ? 'var(--blue)'
+              : 'var(--amb)';
   const text =
-    tier === null ? 'NO' : tier === 'excluded' ? 'EX' : `T${tier}`;
+    tier === 'loading'
+      ? '…'
+      : tier === null
+        ? 'NO'
+        : tier === 'excluded'
+          ? 'EX'
+          : `T${tier}`;
   return (
     <span
       title={label}
@@ -500,6 +598,15 @@ function ClientDeliveryCard({
 
   if (!recommended) return null;
 
+  const firstName = clientFirstName(client.name);
+  const dental = recommended.benefits.dental;
+  const otc = recommended.benefits.otc;
+  const food = recommended.benefits.food_card;
+
+  const dentalPill = formatAnnualAllowance(dental.annual_max, dental.preventive);
+  const otcPill = formatQuarterlyAmount(otc.allowance_per_quarter);
+  const foodPill = formatMonthlyAmount(food.allowance_per_month);
+
   return (
     <div
       className="pm-surface"
@@ -513,10 +620,12 @@ function ClientDeliveryCard({
         className="uppercase font-semibold"
         style={{ color: 'var(--sage)', fontSize: 10, letterSpacing: '0.08em' }}
       >
-        Client delivery · what Dorothy sees
+        Client delivery · {firstName ? `what ${firstName} sees` : 'what your client sees'}
       </div>
       <h2 className="font-lora" style={{ fontSize: 22, marginTop: 6, color: 'var(--ink)' }}>
-        Let's figure out what's right for you, {client.name.split(/\s+/)[0] || 'Dorothy'}.
+        {firstName
+          ? `Let's figure out what's right for you, ${firstName}.`
+          : `Let's figure out what's right for you.`}
       </h2>
       <p style={{ color: 'var(--i2)', fontSize: 14, marginTop: 6, lineHeight: 1.5 }}>
         Based on what you told me — your medications, your doctor, and the benefits that matter most —
@@ -543,10 +652,14 @@ function ClientDeliveryCard({
           style={{ gap: 6, marginTop: 10 }}
         >
           <Pill label={`$${recommended.premium}/mo premium`} />
-          <Pill label={`$${recommended.benefits.dental.annual_max}/yr dental`} />
-          <Pill label={`$${recommended.benefits.otc.allowance_per_quarter}/qtr OTC`} />
-          {recommended.benefits.food_card.allowance_per_month > 0 && (
-            <Pill label={`$${recommended.benefits.food_card.allowance_per_month}/mo food card`} />
+          {dentalPill !== '—' && (
+            <Pill label={dentalPill === 'Included' ? 'Dental included' : `${dentalPill} dental`} />
+          )}
+          {otcPill !== '—' && (
+            <Pill label={otcPill === 'Included' ? 'OTC included' : `${otcPill} OTC`} />
+          )}
+          {foodPill !== '—' && (
+            <Pill label={foodPill === 'Included' ? 'Food card included' : `${foodPill} food card`} />
           )}
           <Pill label={`${recommended.star_rating} ★`} />
         </div>
