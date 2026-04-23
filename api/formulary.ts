@@ -296,44 +296,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? contractIdsCsv.split(',').map((s) => s.trim()).filter(Boolean)
         : [];
 
-      // PostgREST on Supabase-hosted projects enforces a default
-      // max-rows=1000 cap per response — our `.limit(50_000)` is
-      // silently trimmed server-side. A bulk query with N rxcuis × 13
-      // contracts × ~30 plans per contract easily exceeds 1000, and
-      // the trimmed tail includes the exact-match rows we most need
-      // (metformin 861007 on NC plans was being dropped entirely while
-      // Modified/Osmotic ER variants survived).
+      // PostgREST on Supabase-hosted projects enforces a server-side
+      // max-rows=1000 cap per response. Our `.limit(...)` is silently
+      // trimmed when it would exceed it. A single bulk query across all
+      // contracts routinely returns thousands of rows for common drugs
+      // (metformin 861007 × 13 contracts × many plans) and the trimmed
+      // tail drops exact-match rows that the client then renders as
+      // "Not on formulary."
       //
-      // Fan out one query per (rxcui-chunk × contract_id). Each query
-      // scans at most CHUNK rxcuis against a single contract's ≤ ~30
-      // plans, keeping every response well under the 1000-row cap.
-      // Per-original expansions of up to ~640 rxcuis (combo drugs like
-      // hydrocodone/APAP) map to ~13 chunks × 13 contracts ≈ 170
-      // parallel queries — all fast, all safely bounded.
-      const CHUNK = 50;
+      // Fan out per (rxcui-chunk × contract_id). Each chunk targets a
+      // single contract, so max rows = CHUNK × plans_in_contract.
+      // Humana (H1036) has ~40 NC plans, so CHUNK=20 guarantees
+      // ≤ 800 rows per chunk — well below 1000 even if every rxcui in
+      // the chunk is on every plan. Belt-and-suspenders: if a chunk
+      // response hits exactly 1000, page the tail with Range until we
+      // exhaust it.
+      const CHUNK = 20;
       const queryContracts = contractIds.length > 0 ? contractIds : [null];
       const rxChunks: string[][] = [];
       for (let i = 0; i < allCandidates.length; i += CHUNK) {
         rxChunks.push(allCandidates.slice(i, i + CHUNK));
       }
+      async function fetchChunk(rxChunk: string[], cid: string | null): Promise<FormularyRow[]> {
+        const out: FormularyRow[] = [];
+        let from = 0;
+        const PAGE = 1000;
+        while (true) {
+          let q = sb
+            .from('pm_formulary')
+            .select('contract_id, plan_id, rxcui, drug_name, tier, copay, coinsurance')
+            .in('rxcui', rxChunk)
+            .range(from, from + PAGE - 1);
+          if (cid) q = q.eq('contract_id', cid);
+          const { data: page, error } = await q;
+          if (error) throw error;
+          if (!page || page.length === 0) break;
+          for (const r of page as FormularyRow[]) out.push(r);
+          if (page.length < PAGE) break;
+          from += PAGE;
+        }
+        return out;
+      }
       const chunkResults = await Promise.all(
-        rxChunks.flatMap((rxChunk) =>
-          queryContracts.map((cid) => {
-            let q = sb
-              .from('pm_formulary')
-              .select('contract_id, plan_id, rxcui, drug_name, tier, copay, coinsurance')
-              .in('rxcui', rxChunk)
-              .limit(1000);
-            if (cid) q = q.eq('contract_id', cid);
-            return q;
-          }),
-        ),
+        rxChunks.flatMap((rxChunk) => queryContracts.map((cid) => fetchChunk(rxChunk, cid))),
       );
       const data: FormularyRow[] = [];
-      for (const res of chunkResults) {
-        if (res.error) throw res.error;
-        if (res.data) for (const r of res.data as FormularyRow[]) data.push(r);
-      }
+      for (const rows of chunkResults) for (const r of rows) data.push(r);
 
       // Collapse (contract_id, plan_id, original_rxcui) → best row. Each
       // cell is keyed per original so its own suppressCombos setting
@@ -403,8 +411,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ]);
     const suppressCombos = !queryIsCombo;
 
-    // Chunk the rxcui filter — see bulk-path comment. Same ~640-rxcui
-    // combo expansion applies here and would silently truncate.
+    // Single lookup is bounded to one (contract, plan) pair so the
+    // 1000-row cap isn't reachable here, but we still chunk the rxcui
+    // list to keep URLs short and mirror the bulk path's ergonomics.
     const CHUNK = 150;
     const chunkResults = await Promise.all(
       Array.from({ length: Math.ceil(candidates.length / CHUNK) }, (_, i) => {
@@ -415,7 +424,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .eq('contract_id', contractId)
           .eq('plan_id', planId)
           .in('rxcui', chunk)
-          .limit(chunk.length);
+          .range(0, chunk.length - 1);
       }),
     );
     const data: FormularyRow[] = [];
