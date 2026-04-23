@@ -40,3 +40,8 @@ dist-ssr
 # Supabase CLI local state
 supabase/.temp/
 supabase/.branches/
+
+# CMS landscape CSVs and other bulk data imports (11 GB+) — ingested
+# into pm_plans / pm_formulary via separate tooling, never into git.
+data/
+*.csv
