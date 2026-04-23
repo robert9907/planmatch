@@ -32,11 +32,18 @@ interface NppesResponse {
   Errors?: unknown[];
 }
 
+// Always carries `status` regardless of the success branch so callers
+// can log it uniformly without having to narrow the discriminated
+// union. Previously the `ok: true` variant omitted `status`, which
+// made TS 5.9 fail to narrow inside `primaryRes.ok ? 200 :
+// primaryRes.status` ternaries during the Vercel build.
 async function fetchNppes(
   params: URLSearchParams,
   signal: AbortSignal,
-): Promise<{ ok: true; body: NppesResponse; text: string; url: string }
-  | { ok: false; status: number; text: string; url: string }> {
+): Promise<
+  | { ok: true; status: number; body: NppesResponse; text: string; url: string }
+  | { ok: false; status: number; body?: undefined; text: string; url: string }
+> {
   const url = `${NPPES_URL}?${params.toString()}`;
   const upstream = await fetch(url, {
     method: 'GET',
@@ -51,7 +58,7 @@ async function fetchNppes(
   } catch {
     return { ok: false, status: 502, text: 'non-JSON NPPES body', url };
   }
-  return { ok: true, body, text, url };
+  return { ok: true, status: upstream.status, body, text, url };
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -104,7 +111,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       tokens: tokens.length,
       ok: primaryRes.ok,
       count: primaryRes.ok ? primaryRes.body.result_count ?? 0 : null,
-      status: primaryRes.ok ? 200 : primaryRes.status,
+      status: primaryRes.status,
     });
 
     if (!primaryRes.ok) {
