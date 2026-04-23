@@ -433,7 +433,12 @@ function tierMeta(tier: FormularyCell): { bg: string; fg: string; border: string
   if (tier === 2) return { bg: 'var(--tl)', fg: 'var(--teal)', border: 'var(--teal)', label: 'T2' };
   if (tier === 3) return { bg: 'var(--bt)', fg: 'var(--blue)', border: 'var(--blue)', label: 'T3' };
   if (tier === 4) return { bg: 'var(--at)', fg: 'var(--amb)', border: 'var(--amb)', label: 'T4' };
-  return { bg: 'var(--pt)', fg: 'var(--pur)', border: 'var(--pur)', label: 'T5' };
+  if (tier === 5) return { bg: 'var(--pt)', fg: 'var(--pur)', border: 'var(--pur)', label: 'T5' };
+  // Tier 6/7/8 — carrier-specific extended tiers (e.g. Humana's
+  // preferred-generic tier 6 with $0 copay). Render in the same
+  // purple family as specialty (T5) but with the actual tier number
+  // so the badge doesn't misreport.
+  return { bg: 'var(--pt)', fg: 'var(--pur)', border: 'var(--pur)', label: `T${tier}` };
 }
 
 function SourceBadge({ source }: { source: 'manual' | 'capture' }) {

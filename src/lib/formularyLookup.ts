@@ -40,8 +40,13 @@ function cacheKey(contractPlanId: string, rxcui: string): string {
 function normalizeTier(raw: unknown): FormularyTier | 'not_covered' {
   if (raw === 'not_covered') return 'not_covered';
   if (raw === 'excluded') return 'excluded';
+  // CMS SPUF caps tier at 6 but some carriers (notably Humana H1036 on
+  // preferred generics) file at 6 and a few plans use 7-tier structures.
+  // Only a null/undefined/0 tier means the drug isn't on this plan's
+  // formulary — anything from 1 through 8 is a valid placement and
+  // should render as "covered" in the UI.
   const n = Number(raw);
-  if (n === 1 || n === 2 || n === 3 || n === 4 || n === 5) {
+  if (Number.isInteger(n) && n >= 1 && n <= 8) {
     return n as FormularyTier;
   }
   return 'not_covered';

@@ -1,6 +1,6 @@
 import type { PlanType, StateCode } from './session';
 
-export type FormularyTier = 1 | 2 | 3 | 4 | 5 | 'excluded';
+export type FormularyTier = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 'excluded';
 
 export interface DentalBenefit {
   preventive: boolean;

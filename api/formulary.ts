@@ -170,18 +170,42 @@ async function expandRxcui(rxcui: string): Promise<string[]> {
   return list;
 }
 
-// Lowest tier wins. null tier never beats a numeric tier. Used to
-// collapse multiple matching rows (different strengths of the same drug)
-// down to a single "what does this plan offer?" answer.
-function pickBestRow(
-  a: FormularyRow | undefined,
-  b: FormularyRow,
-): FormularyRow {
-  if (!a) return b;
-  if (a.tier == null && b.tier == null) return a;
-  if (a.tier == null) return b;
-  if (b.tier == null) return a;
-  return b.tier < a.tier ? b : a;
+// Rows get a score triple we compare lexically: (isExact, isCombo,
+// tier). Lower wins on every axis. Exact-match always beats any
+// sibling — the caller asked about rxcui X, so if pm_formulary has a
+// row with rxcui X for this plan, that row is the answer regardless of
+// tier. Within non-exact rows we exclude combinations (HCTZ/lisinopril
+// and amlodipine/atorvastatin combos share an ingredient with the
+// query but are different drugs) by giving them the highest isCombo
+// penalty, then fall back to lowest tier.
+interface ScoredRow {
+  row: FormularyRow;
+  isExact: boolean;
+  isCombo: boolean;
+}
+
+function isComboName(name: string | null): boolean {
+  return typeof name === 'string' && / \/ /.test(name);
+}
+
+function pickBestScored(
+  current: ScoredRow | undefined,
+  candidate: ScoredRow,
+): ScoredRow {
+  if (!current) return candidate;
+
+  if (current.isExact !== candidate.isExact) {
+    return current.isExact ? current : candidate;
+  }
+  if (current.isCombo !== candidate.isCombo) {
+    return current.isCombo ? candidate : current;
+  }
+  const ct = current.row.tier;
+  const nt = candidate.row.tier;
+  if (ct == null && nt == null) return current;
+  if (ct == null) return candidate;
+  if (nt == null) return current;
+  return nt < ct ? candidate : current;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -233,24 +257,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (error) throw error;
 
       // Collapse (contract_id, plan_id, original_rxcui) → best row.
-      const best = new Map<string, FormularyRow>();
+      const best = new Map<string, ScoredRow>();
       for (const r of (data ?? []) as FormularyRow[]) {
         const originalsForRow = candidateToOriginals.get(r.rxcui);
         if (!originalsForRow) continue;
+        const combo = isComboName(r.drug_name);
         for (const original of originalsForRow) {
           const key = `${r.contract_id}_${r.plan_id}::${original}`;
-          const synthetic: FormularyRow = { ...r, rxcui: original };
-          best.set(key, pickBestRow(best.get(key), synthetic));
+          const scored: ScoredRow = {
+            row: { ...r, rxcui: original },
+            isExact: r.rxcui === original,
+            isCombo: combo,
+          };
+          best.set(key, pickBestScored(best.get(key), scored));
         }
       }
-      const rows = [...best.values()].map((r) => ({
-        contract_plan_id: `${r.contract_id}_${r.plan_id}`,
-        rxcui: r.rxcui,
-        tier: r.tier,
-        copay: r.copay,
-        coinsurance: r.coinsurance,
-        drug_name: r.drug_name,
-      }));
+      const rows = [...best.values()]
+        // A (plan, rxcui) pair that only matched combination siblings
+        // isn't really covering this drug — suppress it so the client
+        // renders "not on formulary" instead of misattributing a combo's
+        // tier/copay to the user's standalone query.
+        .filter((s) => s.isExact || !s.isCombo)
+        .map(({ row: r }) => ({
+          contract_plan_id: `${r.contract_id}_${r.plan_id}`,
+          rxcui: r.rxcui,
+          tier: r.tier,
+          copay: r.copay,
+          coinsurance: r.coinsurance,
+          drug_name: r.drug_name,
+        }));
       res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=120');
       return sendJson(res, 200, { rows });
     }
@@ -279,17 +314,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return sendJson(res, 200, { tier: 'not_covered' });
     }
 
-    let best: FormularyRow | undefined;
+    let best: ScoredRow | undefined;
     for (const r of data as FormularyRow[]) {
-      best = pickBestRow(best, r);
+      const scored: ScoredRow = {
+        row: r,
+        isExact: r.rxcui === rxcui,
+        isCombo: isComboName(r.drug_name),
+      };
+      best = pickBestScored(best, scored);
+    }
+
+    // If the only match we found was a combination sibling, treat the
+    // drug as not covered — telling the user their lisinopril 10 MG is
+    // "covered tier 4" based on an HCTZ/lisinopril combo row would be
+    // wrong. Exact hits always pass this filter.
+    if (!best || (!best.isExact && best.isCombo)) {
+      res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300');
+      return sendJson(res, 200, { tier: 'not_covered' });
     }
 
     res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300');
     return sendJson(res, 200, {
-      tier: best?.tier ?? 'not_covered',
-      copay: best?.copay ?? null,
-      coinsurance: best?.coinsurance ?? null,
-      drug_name: best?.drug_name ?? null,
+      tier: best.row.tier ?? 'not_covered',
+      copay: best.row.copay ?? null,
+      coinsurance: best.row.coinsurance ?? null,
+      drug_name: best.row.drug_name ?? null,
     });
   } catch (err) {
     return serverError(res, err);
