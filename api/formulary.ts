@@ -296,23 +296,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? contractIdsCsv.split(',').map((s) => s.trim()).filter(Boolean)
         : [];
 
-      // Chunk the rxcui filter. Combo-drug expansions like hydrocodone/
-      // APAP walk up to ~640 sibling clinical drugs, which overflow
-      // PostgREST's URL-length cap on a single .in(…) call and silently
-      // drop the tail of the list. 150 rxcuis per chunk keeps each URL
-      // well under 4 KB and runs the chunks in parallel.
-      const CHUNK = 150;
+      // PostgREST on Supabase-hosted projects enforces a default
+      // max-rows=1000 cap per response — our `.limit(50_000)` is
+      // silently trimmed server-side. A bulk query with N rxcuis × 13
+      // contracts × ~30 plans per contract easily exceeds 1000, and
+      // the trimmed tail includes the exact-match rows we most need
+      // (metformin 861007 on NC plans was being dropped entirely while
+      // Modified/Osmotic ER variants survived).
+      //
+      // Fan out one query per (rxcui-chunk × contract_id). Each query
+      // scans at most CHUNK rxcuis against a single contract's ≤ ~30
+      // plans, keeping every response well under the 1000-row cap.
+      // Per-original expansions of up to ~640 rxcuis (combo drugs like
+      // hydrocodone/APAP) map to ~13 chunks × 13 contracts ≈ 170
+      // parallel queries — all fast, all safely bounded.
+      const CHUNK = 50;
+      const queryContracts = contractIds.length > 0 ? contractIds : [null];
+      const rxChunks: string[][] = [];
+      for (let i = 0; i < allCandidates.length; i += CHUNK) {
+        rxChunks.push(allCandidates.slice(i, i + CHUNK));
+      }
       const chunkResults = await Promise.all(
-        Array.from({ length: Math.ceil(allCandidates.length / CHUNK) }, (_, i) => {
-          const chunk = allCandidates.slice(i * CHUNK, (i + 1) * CHUNK);
-          let q = sb
-            .from('pm_formulary')
-            .select('contract_id, plan_id, rxcui, drug_name, tier, copay, coinsurance')
-            .in('rxcui', chunk)
-            .limit(50_000);
-          if (contractIds.length > 0) q = q.in('contract_id', contractIds);
-          return q;
-        }),
+        rxChunks.flatMap((rxChunk) =>
+          queryContracts.map((cid) => {
+            let q = sb
+              .from('pm_formulary')
+              .select('contract_id, plan_id, rxcui, drug_name, tier, copay, coinsurance')
+              .in('rxcui', rxChunk)
+              .limit(1000);
+            if (cid) q = q.eq('contract_id', cid);
+            return q;
+          }),
+        ),
       );
       const data: FormularyRow[] = [];
       for (const res of chunkResults) {
