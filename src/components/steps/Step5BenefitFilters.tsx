@@ -164,8 +164,15 @@ export function Step5BenefitFilters({ onAdvance }: Step5Props) {
   // pair as "still loading" (no cut). The tick forces re-render once
   // the bulk response lands.
   const [formularyTick, setFormularyTick] = useState(0);
+  // Nonce reflects the rxcuis we care about, not just the med count —
+  // useResolveRxcuis backfills rxcuis asynchronously and we need the
+  // bulk prime to re-fire when those land so the funnel recomputes.
   const formularyPrimeNonce = useMemo(
-    () => `${eligiblePlans.length}:${medications.length}`,
+    () =>
+      `${eligiblePlans.length}:${medications
+        .map((m) => m.rxcui ?? '')
+        .sort()
+        .join(',')}`,
     [eligiblePlans, medications],
   );
   useEffect(() => {

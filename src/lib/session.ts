@@ -70,7 +70,8 @@ interface SessionStore extends SessionState {
   benefitFilters: BenefitFilterState;
   setMode: (mode: SessionMode) => void;
   updateClient: (patch: Partial<Client>) => void;
-  addMedication: (med: Omit<Medication, 'id' | 'addedAt'>) => void;
+  addMedication: (med: Omit<Medication, 'id' | 'addedAt'>) => string;
+  updateMedication: (id: string, patch: Partial<Medication>) => void;
   removeMedication: (id: string) => void;
   addProvider: (p: Omit<Provider, 'id' | 'addedAt'>) => string;
   updateProvider: (id: string, patch: Partial<Provider>) => void;
@@ -97,12 +98,22 @@ export const useSession = create<SessionStore>()(
       updateClient: (patch) =>
         set((state) => ({ client: { ...state.client, ...patch } })),
 
-      addMedication: (med) =>
+      addMedication: (med) => {
+        const id = uid('med');
         set((state) => ({
           medications: [
             ...state.medications,
-            { ...med, id: uid('med'), addedAt: Date.now() },
+            { ...med, id, addedAt: Date.now() },
           ],
+        }));
+        return id;
+      },
+
+      updateMedication: (id, patch) =>
+        set((state) => ({
+          medications: state.medications.map((m) =>
+            m.id === id ? { ...m, ...patch } : m,
+          ),
         })),
 
       removeMedication: (id) =>

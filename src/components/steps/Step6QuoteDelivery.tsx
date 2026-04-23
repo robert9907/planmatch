@@ -291,8 +291,16 @@ function SideBySideTable({
   // pm_plans-sourced rows. The tick forces re-render once the bulk
   // response lands; same pattern Step 3 and Step 5 use.
   const [formularyTick, setFormularyTick] = useState(0);
+  // Nonce reflects the rxcuis we care about, not just the med count —
+  // useResolveRxcuis backfills rxcuis asynchronously for photo-capture
+  // and CRM-hydrated meds, and we need the bulk prime to re-fire when
+  // those land so the Rx badges update.
   const primeNonce = useMemo(
-    () => `${finalists.length}:${medications.length}`,
+    () =>
+      `${finalists.length}:${medications
+        .map((m) => m.rxcui ?? '')
+        .sort()
+        .join(',')}`,
     [finalists, medications],
   );
   useEffect(() => {

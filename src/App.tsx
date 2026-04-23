@@ -13,6 +13,7 @@ import { Step6QuoteDelivery } from '@/components/steps/Step6QuoteDelivery';
 import { ProviderVerificationDrawer } from '@/components/verification/ProviderVerificationDrawer';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { useVerificationsQueue } from '@/hooks/useVerificationsQueue';
+import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { WORKFLOW_STEPS } from '@/lib/constants';
 
 export default function App() {
@@ -31,6 +32,9 @@ function BrokerApp() {
   const [activeStep, setActiveStep] = useState(1);
   const capture = useCaptureSession();
   const verificationsQueue = useVerificationsQueue();
+  // Backfill missing rxcuis so photo-capture / CRM-hydrated meds can be
+  // matched against pm_formulary — otherwise their badges render red.
+  useResolveRxcuis();
 
   const advance = () => setActiveStep((n) => Math.min(n + 1, WORKFLOW_STEPS.length));
 

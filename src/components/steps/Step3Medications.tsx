@@ -88,8 +88,16 @@ export function Step3Medications({ capture, onAdvance }: Step3Props) {
   // result on first render and never recomputes when the bulk response
   // lands, leaving every badge stuck on "not covered".
   const [formularyTick, setFormularyTick] = useState(0);
+  // Nonce reflects the set of rxcuis we care about, not just the med
+  // count — useResolveRxcuis backfills rxcuis on meds that were added
+  // without one (photo-capture, CRM hydration), and we need the bulk
+  // prime to re-fire when those land so the badges update.
   const formularyPrimeNonce = useMemo(
-    () => `${eligiblePlans.length}:${medications.length}`,
+    () =>
+      `${eligiblePlans.length}:${medications
+        .map((m) => m.rxcui ?? '')
+        .sort()
+        .join(',')}`,
     [eligiblePlans, medications],
   );
   useEffect(() => {
