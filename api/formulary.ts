@@ -42,11 +42,14 @@ interface FormularyRow {
 }
 
 const RXNAV = 'https://rxnav.nlm.nih.gov/REST';
-// SCD = semantic clinical drug, SBD = semantic branded drug, GPCK/BPCK
-// = generic/branded pack. Covers every tty level we see in CMS
-// formulary files; deliberately excludes IN/PIN/MIN (ingredient) since
-// pm_formulary never carries those.
-const RELATED_TTY = 'SCD+SBD+GPCK+BPCK';
+// Clinical-drug tty set: SCD = semantic clinical drug, SBD = semantic
+// branded drug, GPCK/BPCK = generic/branded pack. Covers every tty
+// level that appears in the CMS landscape formulary file.
+const CLINICAL_TTY = 'SCD+SBD+GPCK+BPCK';
+// Ingredient tty set used by the tier-3 walk-up so one /related.json
+// call returns both the clinical-drug siblings and the ingredient
+// anchors we'd need for tier 3.
+const RELATED_TTY = 'SCD+SBD+GPCK+BPCK+IN+MIN+PIN';
 const RELATED_TIMEOUT_MS = 4_000;
 
 // Fluid Compute re-uses function instances across requests, so this
@@ -55,54 +58,115 @@ const RELATED_TIMEOUT_MS = 4_000;
 // candidate rxcuis to query pm_formulary against, including itself.
 const expansionCache = new Map<string, string[]>();
 
+// Fetch helper wrapping the 4-second abort and JSON parse. Returns the
+// set of rxcuis found under the requested tty filter (the input rxcui
+// is never added here — the caller decides whether to include it).
+async function relatedRxcuis(
+  rxcui: string,
+  tty: string,
+): Promise<{ ok: boolean; byTty: Map<string, string[]> }> {
+  const byTty = new Map<string, string[]>();
+  const ctl = new AbortController();
+  const timeout = setTimeout(() => ctl.abort(), RELATED_TIMEOUT_MS);
+  try {
+    const url = `${RXNAV}/rxcui/${encodeURIComponent(rxcui)}/related.json?tty=${tty}`;
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: ctl.signal,
+    });
+    if (!res.ok) {
+      console.log('[formulary] related.json failed', { rxcui, tty, status: res.status });
+      return { ok: false, byTty };
+    }
+    const body = (await res.json()) as {
+      relatedGroup?: {
+        conceptGroup?: { tty?: string; conceptProperties?: { rxcui?: string }[] }[];
+      };
+    };
+    for (const g of body.relatedGroup?.conceptGroup ?? []) {
+      const bucket = g.tty ?? 'UNKNOWN';
+      const list = byTty.get(bucket) ?? [];
+      for (const c of g.conceptProperties ?? []) {
+        if (c?.rxcui) list.push(String(c.rxcui));
+      }
+      if (list.length > 0) byTty.set(bucket, list);
+    }
+    return { ok: true, byTty };
+  } catch (err) {
+    console.log('[formulary] related.json error', {
+      rxcui,
+      tty,
+      err: (err as Error).message,
+    });
+    return { ok: false, byTty };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// Three-tier rxcui expansion driving the pm_formulary candidate set.
+//
+// Tier 1: self. `pm_formulary` is keyed on strength-level rxcuis, so if
+//   the user's rxcui is already a SCD/SBD/GPCK/BPCK row, this hits.
+// Tier 2: direct /related.json expansion with tty=SCD+SBD+GPCK+BPCK+
+//   IN+MIN+PIN. Adds sibling clinical drugs (e.g. SBD Jardiance 25 MG
+//   → SCD generic empagliflozin 25 MG) plus captures the ingredient
+//   rxcuis we need for tier 3.
+// Tier 3: for each ingredient found in tier 2, re-run /related.json
+//   with tty=SCD+SBD+GPCK+BPCK to pick up EVERY clinical drug under
+//   that ingredient. This catches non-strength starting points (BN
+//   "Jardiance", IN "empagliflozin", SBDF "empagliflozin Oral Tablet
+//   [Jardiance]"), which the previous expansion missed because
+//   related.json on a BN doesn't always surface every SBD.
+//
+// pickBestRow still prefers the exact user rxcui when rows exist for it
+// — the broader tier-3 set is only consulted when nothing tighter
+// matches, so the "covered / not covered" badge stays honest.
 async function expandRxcui(rxcui: string): Promise<string[]> {
   const cached = expansionCache.get(rxcui);
   if (cached) return cached;
 
   const candidates = new Set<string>([rxcui]);
-  const ctl = new AbortController();
-  const timeout = setTimeout(() => ctl.abort(), RELATED_TIMEOUT_MS);
-  let succeeded = false;
-  try {
-    const url = `${RXNAV}/rxcui/${encodeURIComponent(rxcui)}/related.json?tty=${RELATED_TTY}`;
-    const res = await fetch(url, {
-      headers: { Accept: 'application/json' },
-      signal: ctl.signal,
-    });
-    if (res.ok) {
-      const body = (await res.json()) as {
-        relatedGroup?: {
-          conceptGroup?: { tty?: string; conceptProperties?: { rxcui?: string }[] }[];
-        };
-      };
-      const groups = body.relatedGroup?.conceptGroup ?? [];
-      for (const g of groups) {
-        for (const c of g.conceptProperties ?? []) {
-          if (c?.rxcui) candidates.add(String(c.rxcui));
-        }
+  const ingredients = new Set<string>();
+
+  // Tier 2.
+  const tier2 = await relatedRxcuis(rxcui, RELATED_TTY);
+  if (tier2.ok) {
+    for (const [tty, list] of tier2.byTty) {
+      if (tty === 'IN' || tty === 'MIN' || tty === 'PIN') {
+        for (const r of list) ingredients.add(r);
+      } else {
+        for (const r of list) candidates.add(r);
       }
-      succeeded = true;
-    } else {
-      console.log('[formulary] related.json failed', { rxcui, status: res.status });
     }
-  } catch (err) {
-    console.log('[formulary] related.json error', {
-      rxcui,
-      err: (err as Error).message,
-    });
-  } finally {
-    clearTimeout(timeout);
+  }
+
+  // Tier 3 — walk each ingredient back down to every clinical drug.
+  // Runs in parallel because each call is independent. Kept behind the
+  // tier-2 succeeded check so a transient RxNav failure can be retried
+  // on the next request rather than cached as a narrow expansion.
+  let tier3Ok = true;
+  if (tier2.ok && ingredients.size > 0) {
+    const tier3Results = await Promise.all(
+      [...ingredients].map((ing) => relatedRxcuis(ing, CLINICAL_TTY)),
+    );
+    for (const r of tier3Results) {
+      if (!r.ok) {
+        tier3Ok = false;
+        continue;
+      }
+      for (const list of r.byTty.values()) {
+        for (const rx of list) candidates.add(rx);
+      }
+    }
   }
 
   const list = [...candidates];
-  // Only memoize on success. Caching a failed expansion poisons the
-  // Fluid Compute instance for every subsequent request: a non-strength
-  // rxcui (BN / IN / SBDF / SBDG) that couldn't reach pm_formulary on
-  // its own would permanently render "0/N not covered" until the
-  // instance recycled. Jardiance BN 1545659, ingredient atorvastatin
-  // 83367 — all hit this. On failure we keep the self-only list
-  // transient so the next request retries RxNav.
-  if (succeeded) expansionCache.set(rxcui, list);
+  // Memoize only when every RxNav call succeeded. A partial expansion
+  // (one tier-3 ingredient failed, or tier 2 itself failed) would
+  // permanently narrow the candidate set for this Fluid Compute
+  // instance; leaving it uncached lets the next request retry.
+  if (tier2.ok && tier3Ok) expansionCache.set(rxcui, list);
   return list;
 }
 

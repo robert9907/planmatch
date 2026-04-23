@@ -95,29 +95,55 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
     const candidates: ApproxCandidate[] = approxBody.approximateGroup?.candidate ?? [];
 
-    const approxDrugs: RxNormDrug[] = [];
-    const seen = new Set<string>();
+    // Merge by rxcui. A single rxcui can show up in both the approx
+    // response (often with an abbreviated name like "GABAPENTIN 300MG
+    // CAP" and no tty) and in /drugs.json (with the canonical name
+    // "gabapentin 300 MG Oral Capsule" and tty=SCD). We key on rxcui and
+    // upgrade the stored entry when drugs.json provides a typed version,
+    // so the ranker can score on the real tty + form.
+    const byRxcui = new Map<string, RxNormDrug>();
     for (const c of candidates) {
       if (!c.rxcui || !c.name) continue;
-      if (seen.has(c.rxcui)) continue;
-      seen.add(c.rxcui);
-      approxDrugs.push({ rxcui: String(c.rxcui), name: String(c.name) });
+      const rxcui = String(c.rxcui);
+      if (byRxcui.has(rxcui)) continue;
+      byRxcui.set(rxcui, { rxcui, name: String(c.name) });
     }
+    const approxDrugs = [...byRxcui.values()];
 
-    // Pick the top named candidate as the seed for /drugs.json — usually
-    // this is the ingredient-level name (e.g. "Gabapentin") which unlocks
-    // the full branded/strength tree in step 2.
-    const topName = approxDrugs[0]?.name ?? null;
+    // Resolve an INGREDIENT name to use as the seed for /drugs.json.
+    // Anchoring on approxDrugs[0].name directly breaks badly when the
+    // top approx result is a combination product or a strength-shaped
+    // form: "metformin 500 MG" → approx top "EMPAGLIFLOZIN 5MG/METFORMIN
+    // 500MG TAB" (Synjardy) → /drugs.json returns Synjardy's tree, not
+    // metformin's. Walking to the ingredient first gives us the full
+    // canonical drug tree every time, and rank() — with the strength
+    // boost — still surfaces the user's intended strength.
+    //
+    // Fallback chain (first non-empty wins): walk the approx results
+    // in order asking RxNav for each concept's IN/MIN, then if none
+    // resolves (SCDC components like 316256 "metformin 500 MG" have
+    // neither an IN nor a TTY), strip the trailing strength+unit from
+    // the original query. That handles bare-ingredient searches
+    // ("atorvastatin") as well as strength-qualified ones ("metformin
+    // 500 MG" → "metformin").
+    let ingredientName: string | null = null;
+    for (const d of approxDrugs.slice(0, 5)) {
+      ingredientName = await resolveIngredientName(d.rxcui, controller.signal);
+      if (ingredientName) break;
+    }
+    const strippedQuery = q.replace(/\s*\d+(?:\.\d+)?\s*(?:MG|MCG|G|ML|%|IU)\b.*$/i, '').trim();
+    const seedName =
+      ingredientName ?? (strippedQuery && strippedQuery !== q ? strippedQuery : null) ?? approxDrugs[0]?.name ?? null;
     let drugsName: string | null = null;
-    let fullDrugs: RxNormDrug[] = [];
-    if (topName) {
-      const drugsUrl = `${RXNAV}/drugs.json?name=${encodeURIComponent(topName)}`;
+    const fullDrugs: RxNormDrug[] = [];
+    if (seedName) {
+      const drugsUrl = `${RXNAV}/drugs.json?name=${encodeURIComponent(seedName)}`;
       const drugsRes = await fetch(drugsUrl, {
         headers: { Accept: 'application/json' },
         signal: controller.signal,
       });
       if (drugsRes.ok) {
-        drugsName = topName;
+        drugsName = seedName;
         const drugsBody = (await drugsRes.json()) as {
           drugGroup?: { conceptGroup?: { tty?: string; conceptProperties?: DrugConcept[] }[] };
         };
@@ -126,25 +152,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const tty = group?.tty;
           for (const c of group?.conceptProperties ?? []) {
             if (!c?.rxcui || !c?.name) continue;
-            if (seen.has(String(c.rxcui))) continue;
-            seen.add(String(c.rxcui));
-            fullDrugs.push({
-              rxcui: String(c.rxcui),
+            const rxcui = String(c.rxcui);
+            const typed: RxNormDrug = {
+              rxcui,
               name: String(c.name),
               synonym: c.synonym ? String(c.synonym) : undefined,
               tty: tty ? String(tty) : c.tty ? String(c.tty) : undefined,
-            });
+            };
+            // Upgrade: drugs.json carries the canonical name + tty.
+            // Overwrite the approx entry so the ranker sees the tty
+            // bucket and the real form (capsule/tablet/etc).
+            byRxcui.set(rxcui, typed);
+            fullDrugs.push(typed);
           }
         }
       } else {
         console.log('[rxnorm-search] drugs.json failed', {
           status: drugsRes.status,
-          topName,
+          seedName,
         });
       }
     }
 
-    const merged = [...approxDrugs, ...fullDrugs];
+    const merged = [...byRxcui.values()];
     const ranked = rank(merged, q).slice(0, 40);
 
     console.log('[rxnorm-search]', {
@@ -170,6 +200,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return serverError(res, err);
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+// Ingredient lookup — returns the ingredient (IN/MIN) name for a given
+// rxcui so /drugs.json can anchor on the canonical drug tree instead of
+// whatever idiosyncratic string the approxTerm endpoint returned first.
+// Cached across invocations since the ingredient ↔ rxcui mapping is
+// stable and Fluid Compute re-uses function instances.
+const ingredientNameCache = new Map<string, string | null>();
+
+async function resolveIngredientName(
+  rxcui: string,
+  signal: AbortSignal,
+): Promise<string | null> {
+  const cached = ingredientNameCache.get(rxcui);
+  if (cached !== undefined) return cached;
+  try {
+    const res = await fetch(
+      `${RXNAV}/rxcui/${encodeURIComponent(rxcui)}/related.json?tty=IN+MIN`,
+      { headers: { Accept: 'application/json' }, signal },
+    );
+    if (!res.ok) {
+      ingredientNameCache.set(rxcui, null);
+      return null;
+    }
+    const body = (await res.json()) as {
+      relatedGroup?: {
+        conceptGroup?: { tty?: string; conceptProperties?: { name?: string }[] }[];
+      };
+    };
+    const groups = body.relatedGroup?.conceptGroup ?? [];
+    for (const g of groups) {
+      for (const c of g.conceptProperties ?? []) {
+        if (c?.name) {
+          ingredientNameCache.set(rxcui, c.name);
+          return c.name;
+        }
+      }
+    }
+    ingredientNameCache.set(rxcui, null);
+    return null;
+  } catch {
+    // Don't cache transient errors so a subsequent request can retry.
+    return null;
   }
 }
 
@@ -245,8 +319,31 @@ function isCombination(name: string): boolean {
   return /\s\/\s/.test(name);
 }
 
+// Extended-release / sustained-release / delayed-release modifiers.
+// Within the same tty+form+strength bucket, a search for "metformin
+// 500 MG" should prefer the immediate-release 500 MG tablet over the
+// "24 HR ... Extended Release" variant — the IR form is what most
+// prescriptions default to and is the one that matches the widest set
+// of formulary rows. Detected via the RxNorm name conventions: "24 HR",
+// "12 HR", "Extended Release", "Modified", "Osmotic", "Sustained",
+// "Delayed", "Once-Daily", and the bare -ER / -XR / -SR / -DR suffixes.
+function isExtendedRelease(name: string): boolean {
+  return /\b(\d+\s*HR|Extended Release|Sustained Release|Delayed Release|Modified|Osmotic|Once-Daily|ER|XR|SR|DR)\b/i.test(
+    name,
+  );
+}
+
 function rank(drugs: RxNormDrug[], query: string): RxNormDrug[] {
   const lq = query.toLowerCase();
+  // When the user includes a strength in the query ("Jardiance 25 MG",
+  // "Gabapentin 300 MG"), promote concepts with that exact strength
+  // above other specific-strength concepts in the same tty+form bucket.
+  // Without this, sort-by-strength-ascending surfaces the lowest dose
+  // first and the user has to scroll past 100 / 200 / 300 MG to reach
+  // what they typed.
+  const qStrength = strengthFor(query);
+  const hasQueryStrength = Number.isFinite(qStrength);
+
   return [...drugs].sort((a, b) => {
     const ca = isCombination(a.name) ? 1 : 0;
     const cb = isCombination(b.name) ? 1 : 0;
@@ -255,6 +352,20 @@ function rank(drugs: RxNormDrug[], query: string): RxNormDrug[] {
     const wa = ttyWeight(a.tty) + formWeight(a.name);
     const wb = ttyWeight(b.tty) + formWeight(b.name);
     if (wa !== wb) return wa - wb;
+
+    if (hasQueryStrength) {
+      const ma = strengthFor(a.name) === qStrength ? 0 : 1;
+      const mb = strengthFor(b.name) === qStrength ? 0 : 1;
+      if (ma !== mb) return ma - mb;
+    }
+
+    // Prefer immediate-release over extended-release within the same
+    // tty+form+strength bucket. Applied after the strength-match check
+    // so "metformin 500 MG ER" still beats "metformin 750 MG IR" when
+    // the user typed "500 MG"; the ER penalty only sorts among ties.
+    const ea = isExtendedRelease(a.name) ? 1 : 0;
+    const eb = isExtendedRelease(b.name) ? 1 : 0;
+    if (ea !== eb) return ea - eb;
 
     const sa = strengthFor(a.name);
     const sb = strengthFor(b.name);
@@ -265,9 +376,9 @@ function rank(drugs: RxNormDrug[], query: string): RxNormDrug[] {
     // (weaker) bucket, then alphabetical.
     const na = a.name.toLowerCase();
     const nb = b.name.toLowerCase();
-    const ea = na === lq ? 0 : 1;
-    const eb = nb === lq ? 0 : 1;
-    if (ea !== eb) return ea - eb;
+    const exa = na === lq ? 0 : 1;
+    const exb = nb === lq ? 0 : 1;
+    if (exa !== exb) return exa - exb;
     return na.localeCompare(nb);
   });
 }
