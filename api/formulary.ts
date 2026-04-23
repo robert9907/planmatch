@@ -178,6 +178,12 @@ async function expandRxcui(rxcui: string): Promise<string[]> {
 // and amlodipine/atorvastatin combos share an ingredient with the
 // query but are different drugs) by giving them the highest isCombo
 // penalty, then fall back to lowest tier.
+//
+// The combo penalty only applies when the user's queried drug itself
+// isn't a combination. For a query like hydrocodone/APAP 856903 — a
+// drug that is BY DEFINITION a combo — every real match will have a
+// combo name and suppressing them would force "not covered". The
+// suppressCombos flag lets the caller opt out when appropriate.
 interface ScoredRow {
   row: FormularyRow;
   isExact: boolean;
@@ -188,16 +194,49 @@ function isComboName(name: string | null): boolean {
   return typeof name === 'string' && / \/ /.test(name);
 }
 
+// Combo-drug detection on the queried rxcui. Hits RxNav's property
+// endpoint once per rxcui and caches the answer across requests (Fluid
+// Compute instance reuse). A failed fetch returns false without
+// caching so the next request can retry rather than living with a
+// stale "not a combo" verdict.
+const comboCache = new Map<string, boolean>();
+
+async function isCombinationRxcui(rxcui: string): Promise<boolean> {
+  const cached = comboCache.get(rxcui);
+  if (cached !== undefined) return cached;
+  const ctl = new AbortController();
+  const timeout = setTimeout(() => ctl.abort(), RELATED_TIMEOUT_MS);
+  try {
+    const res = await fetch(
+      `${RXNAV}/rxcui/${encodeURIComponent(rxcui)}/property.json?propName=RxNorm%20Name`,
+      { headers: { Accept: 'application/json' }, signal: ctl.signal },
+    );
+    if (!res.ok) return false;
+    const body = (await res.json()) as {
+      propConceptGroup?: { propConcept?: { propValue?: string }[] };
+    };
+    const name = body.propConceptGroup?.propConcept?.[0]?.propValue ?? null;
+    const combo = isComboName(name);
+    comboCache.set(rxcui, combo);
+    return combo;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function pickBestScored(
   current: ScoredRow | undefined,
   candidate: ScoredRow,
+  suppressCombos: boolean,
 ): ScoredRow {
   if (!current) return candidate;
 
   if (current.isExact !== candidate.isExact) {
     return current.isExact ? current : candidate;
   }
-  if (current.isCombo !== candidate.isCombo) {
+  if (suppressCombos && current.isCombo !== candidate.isCombo) {
     return current.isCombo ? candidate : current;
   }
   const ct = current.row.tier;
@@ -227,9 +266,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const originals = rxcuisCsv.split(',').map((s) => s.trim()).filter(Boolean);
       if (originals.length === 0) return sendJson(res, 200, { rows: [] });
 
-      // Expand each input rxcui in parallel and build a reverse index
-      // from each candidate rxcui back to the original that produced it.
-      const expansions = await Promise.all(originals.map(expandRxcui));
+      // Expansion and combo-classification run in parallel per original.
+      // Combo classification is what decides whether the caller's final
+      // filter should suppress combo siblings: a query on hydrocodone/
+      // APAP itself is a combo, so suppressing combos would zero every
+      // plan's coverage.
+      const [expansions, comboFlags] = await Promise.all([
+        Promise.all(originals.map(expandRxcui)),
+        Promise.all(originals.map(isCombinationRxcui)),
+      ]);
+      const suppressByOriginal = new Map<string, boolean>();
+      for (let i = 0; i < originals.length; i++) {
+        suppressByOriginal.set(originals[i], !comboFlags[i]);
+      }
       const candidateToOriginals = new Map<string, Set<string>>();
       for (let i = 0; i < originals.length; i++) {
         const original = originals[i];
@@ -256,36 +305,54 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await q;
       if (error) throw error;
 
-      // Collapse (contract_id, plan_id, original_rxcui) → best row.
-      const best = new Map<string, ScoredRow>();
+      // Collapse (contract_id, plan_id, original_rxcui) → best row. Each
+      // cell is keyed per original so its own suppressCombos setting
+      // applies during the pickBestScored comparison.
+      type CellKey = string;
+      const cellOriginal = new Map<CellKey, string>();
+      const best = new Map<CellKey, ScoredRow>();
       for (const r of (data ?? []) as FormularyRow[]) {
         const originalsForRow = candidateToOriginals.get(r.rxcui);
         if (!originalsForRow) continue;
         const combo = isComboName(r.drug_name);
         for (const original of originalsForRow) {
           const key = `${r.contract_id}_${r.plan_id}::${original}`;
+          cellOriginal.set(key, original);
           const scored: ScoredRow = {
             row: { ...r, rxcui: original },
             isExact: r.rxcui === original,
             isCombo: combo,
           };
-          best.set(key, pickBestScored(best.get(key), scored));
+          const suppress = suppressByOriginal.get(original) ?? true;
+          best.set(key, pickBestScored(best.get(key), scored, suppress));
         }
       }
-      const rows = [...best.values()]
-        // A (plan, rxcui) pair that only matched combination siblings
-        // isn't really covering this drug — suppress it so the client
-        // renders "not on formulary" instead of misattributing a combo's
-        // tier/copay to the user's standalone query.
-        .filter((s) => s.isExact || !s.isCombo)
-        .map(({ row: r }) => ({
+      const rows: {
+        contract_plan_id: string;
+        rxcui: string;
+        tier: number | null;
+        copay: number | null;
+        coinsurance: number | null;
+        drug_name: string | null;
+      }[] = [];
+      for (const [key, s] of best) {
+        const original = cellOriginal.get(key);
+        const suppress = suppressByOriginal.get(original ?? '') ?? true;
+        // Suppress combo-only sibling hits so a plan covering the wrong
+        // drug (HCTZ/lisinopril vs. plain lisinopril) doesn't render as
+        // covered. When the query is itself a combo drug, every match
+        // legitimately has a combo drug_name and suppression is off.
+        if (suppress && !s.isExact && s.isCombo) continue;
+        const r = s.row;
+        rows.push({
           contract_plan_id: `${r.contract_id}_${r.plan_id}`,
           rxcui: r.rxcui,
           tier: r.tier,
           copay: r.copay,
           coinsurance: r.coinsurance,
           drug_name: r.drug_name,
-        }));
+        });
+      }
       res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=120');
       return sendJson(res, 200, { rows });
     }
@@ -299,7 +366,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return badRequest(res, 'contract_plan_id must be "<contract_id>_<plan_id>"');
     }
 
-    const candidates = await expandRxcui(rxcui);
+    // Expand + classify the query's combo status in parallel.
+    const [candidates, queryIsCombo] = await Promise.all([
+      expandRxcui(rxcui),
+      isCombinationRxcui(rxcui),
+    ]);
+    const suppressCombos = !queryIsCombo;
+
     const { data, error } = await sb
       .from('pm_formulary')
       .select('drug_name, tier, copay, coinsurance, rxcui')
@@ -321,14 +394,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         isExact: r.rxcui === rxcui,
         isCombo: isComboName(r.drug_name),
       };
-      best = pickBestScored(best, scored);
+      best = pickBestScored(best, scored, suppressCombos);
     }
 
-    // If the only match we found was a combination sibling, treat the
-    // drug as not covered — telling the user their lisinopril 10 MG is
-    // "covered tier 4" based on an HCTZ/lisinopril combo row would be
-    // wrong. Exact hits always pass this filter.
-    if (!best || (!best.isExact && best.isCombo)) {
+    // Suppress combo-only sibling hits unless the query is itself a
+    // combo drug. An exact match always passes; a combo-drug query
+    // (hydrocodone/APAP, amlodipine/benazepril) accepts combo siblings
+    // because by definition every valid match has a combo drug_name.
+    if (!best || (suppressCombos && !best.isExact && best.isCombo)) {
       res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300');
       return sendJson(res, 200, { tier: 'not_covered' });
     }
