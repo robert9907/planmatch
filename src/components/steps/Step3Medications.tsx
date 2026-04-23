@@ -5,10 +5,14 @@ import { CaptureButton } from '@/components/capture/CaptureButton';
 import { CapturePanel } from '@/components/capture/CapturePanel';
 import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
 import { searchDrug, type RxNormDrug } from '@/lib/rxnorm';
-import { formularyTierFor } from '@/lib/cmsPlans';
 import { fetchPlansForClient } from '@/lib/planCatalog';
-import { bulkLookupFormulary, getCachedFormulary, type FormularyHit } from '@/lib/formularyLookup';
+import { bulkLookupFormulary, getCachedFormulary } from '@/lib/formularyLookup';
 import type { FormularyTier } from '@/types/plans';
+
+// 'loading' covers the gap between "bulk prime dispatched" and
+// "bulk prime resolved" — a cache miss during that window is not the
+// same as "not covered" and must not render as a red badge.
+type FormularyCell = FormularyTier | null | 'loading';
 
 interface Step3Props {
   capture: UseCaptureSessionResult;
@@ -78,15 +82,16 @@ export function Step3Medications({ capture, onAdvance }: Step3Props) {
   }, [client.state, client.planType, client.county]);
 
   // Bulk-prime the formulary cache for every (plan × med) pairing so
-  // MedicationRow's per-plan lookups hit memory synchronously. The
-  // second render after the promise resolves picks up the filled
-  // cache; no `ready` state needed because the fallback path renders
-  // legacy inline tiers in the interim.
+  // MedicationRow's per-plan lookups hit memory synchronously. We track
+  // the completion tick as real state and thread it into the row's
+  // useMemo deps — without that, the memo captures the empty-cache
+  // result on first render and never recomputes when the bulk response
+  // lands, leaving every badge stuck on "not covered".
+  const [formularyTick, setFormularyTick] = useState(0);
   const formularyPrimeNonce = useMemo(
     () => `${eligiblePlans.length}:${medications.length}`,
     [eligiblePlans, medications],
   );
-  const [, setFormularyPrimeTick] = useState(0);
   useEffect(() => {
     if (eligiblePlans.length === 0 || medications.length === 0) return;
     let cancelled = false;
@@ -96,13 +101,14 @@ export function Step3Medications({ capture, onAdvance }: Step3Props) {
       .filter((s): s is string => typeof s === 'string' && s.length > 0);
     if (rxcuis.length === 0) return;
     bulkLookupFormulary(contractIds, rxcuis).then(() => {
-      if (!cancelled) setFormularyPrimeTick((t) => t + 1);
+      if (!cancelled) setFormularyTick((t) => t + 1);
     });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formularyPrimeNonce]);
+  const primed = formularyTick > 0;
 
   function onSelectDrug(d: RxNormDrug) {
     addMedication({
@@ -245,6 +251,7 @@ export function Step3Medications({ capture, onAdvance }: Step3Props) {
                 key={med.id}
                 med={med}
                 plans={eligiblePlans}
+                primed={primed}
                 onRemove={() => removeMedication(med.id)}
               />
             ))}
@@ -264,38 +271,48 @@ export function Step3Medications({ capture, onAdvance }: Step3Props) {
 function MedicationRow({
   med,
   plans,
+  primed,
   onRemove,
 }: {
   med: import('@/types/session').Medication;
   plans: import('@/types/plans').Plan[];
+  primed: boolean;
   onRemove: () => void;
 }) {
-  // Read each (plan, rxcui) tier from the primed formulary cache.
-  // bulkLookupFormulary in the parent pre-warms cache before this row
-  // renders; on a cache miss we fall through to the legacy inline
-  // plan.formulary dict so the static-fallback code path still renders
-  // something useful. rxcui absent (manual med with no RxNorm match)
-  // → treat as 'not covered' everywhere, same as a real exclusion.
+  // Read each (plan, rxcui) tier from the primed formulary cache
+  // populated by bulkLookupFormulary in the parent. `primed` tells us
+  // whether the bulk response has landed — before it has, a cache miss
+  // is "still loading", not "not covered". After it has, a cache miss
+  // is authoritative: pm_formulary has no row for any of the rxcui's
+  // related SCD/SBD forms on this plan, so the drug really isn't on
+  // this plan's formulary. Meds without an rxcui (captured by photo
+  // but never matched to RxNorm) get treated as not-covered since we
+  // can't authoritatively look them up.
   const planStatuses = useMemo(
     () =>
       plans.map((p) => {
-        const contractPlanId = `${p.contract_id}_${p.plan_number}`;
-        const hit: FormularyHit | null = med.rxcui
-          ? getCachedFormulary(contractPlanId, med.rxcui)
-          : null;
-        if (hit) {
-          const tier =
-            hit.tier === 'not_covered' ? null : (hit.tier as FormularyTier);
-          return { plan: p, tier };
+        let tier: FormularyCell;
+        if (!med.rxcui) {
+          tier = null;
+        } else {
+          const contractPlanId = `${p.contract_id}_${p.plan_number}`;
+          const hit = getCachedFormulary(contractPlanId, med.rxcui);
+          if (hit) {
+            tier = hit.tier === 'not_covered' ? null : (hit.tier as FormularyTier);
+          } else {
+            tier = primed ? null : 'loading';
+          }
         }
-        // Fallback: legacy inline dict on the static cmsPlans seed.
-        return { plan: p, tier: formularyTierFor(p, med.name) };
+        return { plan: p, tier };
       }),
-    [plans, med.name, med.rxcui],
+    [plans, med.name, med.rxcui, primed],
   );
 
-  const covered = planStatuses.filter((s) => s.tier !== null && s.tier !== 'excluded');
+  const covered = planStatuses.filter(
+    (s) => s.tier !== null && s.tier !== 'excluded' && s.tier !== 'loading',
+  );
   const missing = planStatuses.filter((s) => s.tier === null || s.tier === 'excluded');
+  const stillLoading = planStatuses.filter((s) => s.tier === 'loading').length;
 
   return (
     <div
@@ -348,6 +365,7 @@ function MedicationRow({
           style={{ color: 'var(--i3)', fontSize: 10, letterSpacing: '0.06em', marginBottom: 4 }}
         >
           Formulary status · {covered.length}/{planStatuses.length} plans
+          {stillLoading > 0 && ` · checking ${stillLoading}…`}
         </div>
         <div className="flex flex-wrap" style={{ gap: 4 }}>
           {planStatuses.map((s) => (
@@ -369,12 +387,20 @@ function FormularyBadge({
   tier,
 }: {
   plan: import('@/types/plans').Plan;
-  tier: FormularyTier | null;
+  tier: FormularyCell;
 }) {
   const meta = tierMeta(tier);
+  const titleTier =
+    tier === 'loading'
+      ? 'checking formulary…'
+      : tier === null
+        ? 'not covered'
+        : tier === 'excluded'
+          ? 'excluded'
+          : `tier ${tier}`;
   return (
     <span
-      title={`${plan.carrier} · ${plan.plan_name} · ${tier === null ? 'not covered' : tier === 'excluded' ? 'excluded' : `tier ${tier}`}`}
+      title={`${plan.carrier} · ${plan.plan_name} · ${titleTier}`}
       style={{
         fontSize: 10,
         fontWeight: 600,
@@ -391,7 +417,8 @@ function FormularyBadge({
   );
 }
 
-function tierMeta(tier: FormularyTier | null): { bg: string; fg: string; border: string; label: string } {
+function tierMeta(tier: FormularyCell): { bg: string; fg: string; border: string; label: string } {
+  if (tier === 'loading') return { bg: 'var(--w2)', fg: 'var(--i3)', border: 'var(--w3)', label: '…' };
   if (tier === null) return { bg: 'var(--w2)', fg: 'var(--i2)', border: 'var(--w3)', label: '—' };
   if (tier === 'excluded') return { bg: 'var(--rt)', fg: 'var(--red)', border: 'var(--red)', label: 'excl' };
   if (tier === 1) return { bg: 'var(--sl)', fg: 'var(--sage)', border: 'var(--sage)', label: 'T1' };
