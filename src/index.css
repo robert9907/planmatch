@@ -13,6 +13,22 @@
   --teal: #0F6E56; --tl: #E1F5EE;
   --enroll: #2D8B55;
   --navy: #0A4A5C; --nvlt: #E8F5FA; --nvbd: #B5D8E8;
+
+  /* v4 mockup tokens — navy/seafoam/gray.
+     Used by WorkflowNav + redesigned pages under the .pm4 root.
+     Kept separate from the legacy sage/warm tokens so existing
+     components (capture / watch / compliance) stay untouched. */
+  --v4-navy: #0d2f5e; --v4-navy-lt: #1a4a8a; --v4-navy-dk: #091f3f;
+  --v4-sea: #83f0f9; --v4-sea-dim: rgba(131,240,249,0.1);
+  --v4-g50: #f8f9fa; --v4-g100: #f1f3f5; --v4-g200: #e9ecef;
+  --v4-g300: #dee2e6; --v4-g400: #ced4da; --v4-g500: #adb5bd;
+  --v4-g600: #868e96; --v4-g700: #495057; --v4-g800: #343a40; --v4-g900: #212529;
+  --v4-grn: #1a9c55; --v4-grn-bg: rgba(46,204,113,0.08); --v4-grn-bdr: rgba(46,204,113,0.2);
+  --v4-red: #d63031; --v4-red-bg: rgba(231,76,60,0.06); --v4-red-bdr: rgba(231,76,60,0.2);
+  --v4-amb: #e67e22; --v4-amb-bg: rgba(243,156,18,0.08);
+  --v4-fb: 'Inter',system-ui,sans-serif;
+  --v4-fm: 'JetBrains Mono',ui-monospace,monospace;
+  --v4-fd: 'Fraunces','Lora',serif;
 }
 
 .dark {
