@@ -7,6 +7,7 @@
 // phdr + sticky bbar. The user gets the mockup chrome without us
 // re-implementing the tangle of logic that Step6 already handles.
 
+import { useEffect } from 'react';
 import { Step6QuoteDelivery } from '@/components/steps/Step6QuoteDelivery';
 import { useSession } from '@/hooks/useSession';
 
@@ -19,6 +20,18 @@ export function QuotePage({ onBack }: Props) {
   const medications = useSession((s) => s.medications);
   const providers = useSession((s) => s.providers);
   const selectedFinalists = useSession((s) => s.selectedFinalists);
+  const mode = useSession((s) => s.mode);
+  const setMode = useSession((s) => s.setMode);
+
+  // The v4 flow always lands on the side-by-side table. LandingPage
+  // flips mode='annual_review' whenever the hydrated client has a
+  // current_plan_id (to enable the CMS-import path elsewhere); that
+  // branch isn't part of the v4 Quote screen. Force new_quote here
+  // so the finalist table renders. Annual Review CMS import stays
+  // accessible via the legacy Step6 ModeToggle rendered inside.
+  useEffect(() => {
+    if (mode !== 'new_quote') setMode('new_quote');
+  }, [mode, setMode]);
   return (
     <>
       <div className="scroll">
