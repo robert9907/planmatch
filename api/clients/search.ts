@@ -13,7 +13,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from '../_lib/http.js';
-import { supabase } from '../_lib/supabase.js';
+import { agentbaseSupabase } from '../_lib/agentbaseSupabase.js';
 
 interface ClientSearchRow {
   id: number;
@@ -53,7 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     'part_b_month, part_b_year, year, lead_source, updated_at';
 
   try {
-    const sb = supabase();
+    const sb = agentbaseSupabase();
     let query = sb.from('clients').select(columns);
 
     if (q) {

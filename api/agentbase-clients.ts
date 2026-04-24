@@ -1,7 +1,7 @@
 // AgentBase clients lookup — multiplexed endpoint for the v4 Landing
-// page. SUPABASE_URL and AGENTBASE_SUPABASE_URL point at the same
-// project, so this reuses the existing service-role client from
-// api/_lib/supabase.ts rather than spinning up a second one.
+// page. AgentBase lives in a separate Supabase project from
+// plan-match-prod, so this uses agentbaseSupabase() (AGENTBASE_*
+// env vars) — never the plan-match-prod client from supabase().
 //
 // Modes (mutually exclusive, evaluated in this order):
 //   GET ?stats=true        → { stats: { total } }
@@ -14,7 +14,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
-import { supabase } from './_lib/supabase.js';
+import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
 
 interface ClientRow {
   id: number;
@@ -55,7 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Cache-Control', 'no-store');
 
   try {
-    const sb = supabase();
+    const sb = agentbaseSupabase();
 
     if (req.query.stats === 'true' || req.query.stats === '1') {
       const { count, error } = await sb

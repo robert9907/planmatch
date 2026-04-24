@@ -10,7 +10,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, notFound, sendJson, serverError } from '../_lib/http.js';
-import { supabase } from '../_lib/supabase.js';
+import { agentbaseSupabase } from '../_lib/agentbaseSupabase.js';
 
 interface ClientRow {
   id: number;
@@ -74,7 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!id || !/^\d+$/.test(id)) return badRequest(res, 'id must be a numeric client id');
 
   try {
-    const sb = supabase();
+    const sb = agentbaseSupabase();
     // Three parallel queries — saves ~200ms vs sequential fetches and
     // keeps the failure modes independent (a flaky providers table
     // doesn't block the client row from loading).
