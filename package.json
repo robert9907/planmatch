@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "mg:scrape": "node scripts/scrape-medicare-gov.mjs",
+    "db:migrate:print": "cat scripts/migrations/001_pbp_benefits.sql"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",
