@@ -14,8 +14,14 @@ import type { FormularyTier } from '@/types/plans';
 export interface FormularyHit {
   tier: FormularyTier | 'not_covered';
   copay: number | null;
+  // Fraction from pm_formulary (0.25 = 25%). UI that mixes formulary
+  // coinsurance with pm_plan_benefits rx_tier coinsurance (percent
+  // integer) must convert — see Step6QuoteDelivery's medication cell.
   coinsurance: number | null;
   drug_name: string | null;
+  prior_auth: boolean;
+  step_therapy: boolean;
+  quantity_limit: boolean;
 }
 
 interface BulkRow {
@@ -25,6 +31,9 @@ interface BulkRow {
   copay: number | null;
   coinsurance: number | null;
   drug_name: string | null;
+  prior_auth?: boolean;
+  step_therapy?: boolean;
+  quantity_limit?: boolean;
 }
 
 // Short-lived in-memory cache keyed on the natural composite key. The
@@ -61,7 +70,7 @@ export async function lookupFormulary(
     // No RxNorm match on the session med — we can't authoritatively
     // claim covered vs excluded, but from the UI's perspective it
     // behaves the same as "not on formulary" (same red-pill rendering).
-    return { tier: 'not_covered', copay: null, coinsurance: null, drug_name: null };
+    return emptyHit();
   }
   const key = cacheKey(contractPlanId, rxcui);
   const cached = cache.get(key);
@@ -80,13 +89,28 @@ export async function lookupFormulary(
       copay: typeof body.copay === 'number' ? body.copay : null,
       coinsurance: typeof body.coinsurance === 'number' ? body.coinsurance : null,
       drug_name: typeof body.drug_name === 'string' ? body.drug_name : null,
+      prior_auth: body.prior_auth === true,
+      step_therapy: body.step_therapy === true,
+      quantity_limit: body.quantity_limit === true,
     };
     cache.set(key, hit);
     return hit;
   } catch (err) {
     console.warn('[formularyLookup] fetch failed:', err);
-    return { tier: 'not_covered', copay: null, coinsurance: null, drug_name: null };
+    return emptyHit();
   }
+}
+
+function emptyHit(): FormularyHit {
+  return {
+    tier: 'not_covered',
+    copay: null,
+    coinsurance: null,
+    drug_name: null,
+    prior_auth: false,
+    step_therapy: false,
+    quantity_limit: false,
+  };
 }
 
 /**
@@ -120,6 +144,9 @@ export async function bulkLookupFormulary(
         copay: r.copay,
         coinsurance: r.coinsurance,
         drug_name: r.drug_name,
+        prior_auth: r.prior_auth === true,
+        step_therapy: r.step_therapy === true,
+        quantity_limit: r.quantity_limit === true,
       };
       const key = cacheKey(r.contract_plan_id, r.rxcui);
       out.set(key, hit);

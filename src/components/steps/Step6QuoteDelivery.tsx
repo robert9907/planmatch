@@ -11,7 +11,8 @@ import { DISCLAIMERS, allComplianceItemIds } from '@/lib/compliance';
 import { buildClientInfoText } from '@/lib/clipboardFormat';
 import { fipsForCounty } from '@/lib/ncFips';
 import type { CostShare, Plan, FormularyTier } from '@/types/plans';
-import type { SessionMode } from '@/types/session';
+import type { Medication, SessionMode } from '@/types/session';
+import type { FormularyHit } from '@/lib/formularyLookup';
 
 // ─── Display helpers ────────────────────────────────────────────────
 // The PBP structured extract carries a benefit row for many
@@ -64,6 +65,106 @@ function formatTransportation(t: Plan['benefits']['transportation']): string {
 }
 function clientFirstName(name: string): string {
   return name.trim().split(/\s+/)[0] ?? '';
+}
+
+// Medication cost resolution. pm_formulary carries per-(plan, drug)
+// copay/coinsurance for the specific drug; when that's null (the
+// carrier filed only the tier and leaves the tier copay generic in
+// PBP), fall back to pm_plan_benefits.rx_tiers.tier_N — the plan's
+// generic 30-day retail copay for that tier. Coinsurance units also
+// differ between the two sources: pm_formulary stores a fraction
+// (0.25 = 25%) while pm_plan_benefits stores a percent integer (25).
+// This helper normalizes both to percent integer so the cell renderer
+// has a single code path.
+interface MedCost {
+  coverage: 'covered' | 'not_covered' | 'excluded' | 'loading' | 'no_rxcui';
+  tier: FormularyTier | null;
+  copay: number | null;
+  coinsurancePct: number | null;
+  priorAuth: boolean;
+  stepTherapy: boolean;
+  quantityLimit: boolean;
+  source: 'formulary' | 'plan_tier' | null;
+}
+
+function planTierShare(plan: Plan, tier: FormularyTier | null): CostShare | null {
+  if (tier == null || tier === 'excluded') return null;
+  const map: Record<number, CostShare | undefined> = {
+    1: plan.benefits.rx_tiers.tier_1,
+    2: plan.benefits.rx_tiers.tier_2,
+    3: plan.benefits.rx_tiers.tier_3,
+    4: plan.benefits.rx_tiers.tier_4,
+    5: plan.benefits.rx_tiers.tier_5,
+  };
+  // Tiers 6–8 are carrier-specific extended tiers (e.g. Humana's
+  // preferred generic T6 at $0) and aren't broken out in the PBP rx_tier
+  // rows we import. Return null so the UI renders the tier badge
+  // without a fallback dollar figure.
+  return map[tier] ?? null;
+}
+
+function resolveMedCost(plan: Plan, hit: FormularyHit | null): MedCost {
+  if (!hit) {
+    return {
+      coverage: 'loading',
+      tier: null,
+      copay: null,
+      coinsurancePct: null,
+      priorAuth: false,
+      stepTherapy: false,
+      quantityLimit: false,
+      source: null,
+    };
+  }
+  if (hit.tier === 'not_covered') {
+    return {
+      coverage: 'not_covered',
+      tier: null,
+      copay: null,
+      coinsurancePct: null,
+      priorAuth: hit.prior_auth,
+      stepTherapy: hit.step_therapy,
+      quantityLimit: hit.quantity_limit,
+      source: null,
+    };
+  }
+  if (hit.tier === 'excluded') {
+    return {
+      coverage: 'excluded',
+      tier: null,
+      copay: null,
+      coinsurancePct: null,
+      priorAuth: hit.prior_auth,
+      stepTherapy: hit.step_therapy,
+      quantityLimit: hit.quantity_limit,
+      source: null,
+    };
+  }
+  let copay = hit.copay;
+  // pm_formulary coinsurance is a fraction; convert to percent integer
+  // before comparing against pm_plan_benefits' percent-integer tier
+  // coinsurance.
+  let coinsurancePct =
+    hit.coinsurance != null ? Math.round(hit.coinsurance * 100) : null;
+  let source: MedCost['source'] = copay != null || coinsurancePct != null ? 'formulary' : null;
+  if (copay == null && coinsurancePct == null) {
+    const share = planTierShare(plan, hit.tier);
+    if (share) {
+      copay = share.copay;
+      coinsurancePct = share.coinsurance;
+      source = 'plan_tier';
+    }
+  }
+  return {
+    coverage: 'covered',
+    tier: hit.tier,
+    copay,
+    coinsurancePct,
+    priorAuth: hit.prior_auth,
+    stepTherapy: hit.step_therapy,
+    quantityLimit: hit.quantity_limit,
+    source,
+  };
 }
 
 export function Step6QuoteDelivery() {
@@ -340,12 +441,158 @@ function SideBySideTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [primeNonce]);
 
-  // formularyTick in scope keeps the Rx-row closure evaluating fresh
-  // cache entries as they arrive from bulkLookupFormulary.
+  // formularyTick in scope keeps every closure below (MedicationCell,
+  // TOTAL row summer) re-reading fresh cache entries as each bulk
+  // response lands. Without the reference the React compiler may hoist
+  // the render functions into a stable identity and miss the update.
   void formularyTick;
 
-  type Row = { label: string; render: (p: Plan) => React.ReactNode; title?: (p: Plan) => string | undefined };
+  type Row = { label: React.ReactNode; render: (p: Plan) => React.ReactNode; title?: (p: Plan) => string | undefined; emphasis?: 'total' };
   type Section = { heading: string; rows: Row[] };
+
+  // Per-drug rows + TOTAL annual Rx row. Sits between Basics and
+  // Medical copays so the first thing the broker scans is which plan
+  // actually covers the client's drugs at what cost.
+  const medicationsSection: Section | null = medications.length > 0
+    ? {
+        heading: `Your medications (${medications.length})`,
+        rows: [
+          ...medications.map<Row>((med) => ({
+            label: (
+              <span>
+                {med.name}
+                {med.strength ? (
+                  <span style={{ color: 'var(--i3)', fontWeight: 400 }}> · {med.strength}</span>
+                ) : null}
+              </span>
+            ),
+            render: (plan) => <MedicationCell plan={plan} med={med} />,
+          })),
+          {
+            label: 'TOTAL annual Rx cost',
+            emphasis: 'total',
+            render: (plan) => <MedicationTotalCell plan={plan} medications={medications} />,
+          },
+        ],
+      }
+    : null;
+
+  // Medical copay rows the PBP extract covers directly.
+  const medicalRows: Row[] = [
+    {
+      label: 'PCP copay',
+      render: (p) => formatCostShare(p.benefits.medical.primary_care),
+      title: (p) => p.benefits.medical.primary_care.description ?? undefined,
+    },
+    {
+      label: 'Specialist copay',
+      render: (p) => formatCostShare(p.benefits.medical.specialist),
+      title: (p) => p.benefits.medical.specialist.description ?? undefined,
+    },
+    {
+      label: 'Emergency room',
+      render: (p) => formatCostShare(p.benefits.medical.emergency),
+      title: (p) => p.benefits.medical.emergency.description ?? undefined,
+    },
+    {
+      label: 'Urgent care',
+      render: (p) => formatCostShare(p.benefits.medical.urgent_care),
+      title: (p) => p.benefits.medical.urgent_care.description ?? undefined,
+    },
+    {
+      label: 'Inpatient hospital (per day)',
+      render: (p) => formatCostShare(p.benefits.medical.inpatient, '/day'),
+      title: (p) => p.benefits.medical.inpatient.description ?? undefined,
+    },
+    // These categories aren't in the CMS PBP structured extract we
+    // import into pm_plan_benefits — they live only in the per-plan SoB
+    // PDFs. Render the row so the broker sees it's unaccounted for
+    // rather than silently dropping it; tooltip documents the gap.
+    ...(['Outpatient surgery', 'Lab / X-ray', 'Mental health (outpatient)', 'Physical therapy'].map<Row>(
+      (label) => ({
+        label,
+        render: () => <span style={{ color: 'var(--i3)' }}>—</span>,
+        title: () =>
+          'Not in CMS PBP structured extract. Verify directly in the SoB or Plan Finder.',
+      }),
+    )),
+  ];
+
+  const costRows: Row[] = [
+    {
+      label: 'Monthly premium',
+      render: (p) => (
+        <span style={{ fontWeight: 700 }}>
+          {p.premium === 0 ? '$0' : `$${p.premium.toFixed(2)}/mo`}
+        </span>
+      ),
+    },
+    {
+      label: 'Annual deductible (medical)',
+      render: (p) => formatDeductibleDollars(p.annual_deductible),
+    },
+    {
+      label: 'MOOP in-network',
+      render: (p) => `$${p.moop_in_network.toLocaleString()}`,
+    },
+    {
+      label: 'MOOP out-of-network',
+      render: (p) => formatDeductibleDollars(p.moop_out_of_network),
+    },
+    {
+      label: 'Part B giveback',
+      render: (p) => formatPartBGivebackMonthly(p.part_b_giveback),
+    },
+    {
+      label: 'Rx deductible',
+      render: (p) => formatDeductibleDollars(p.drug_deductible),
+    },
+  ];
+
+  const extraRows: Row[] = [
+    {
+      label: 'Dental (annual max)',
+      render: (p) => {
+        const d = p.benefits.dental;
+        const label = formatAnnualAllowance(d.annual_max, d.preventive);
+        return label === 'Included' || label === '—'
+          ? label
+          : `${label}${d.comprehensive ? ' · comp.' : ''}`;
+      },
+    },
+    {
+      label: 'Vision eyewear',
+      render: (p) =>
+        formatAnnualAllowance(p.benefits.vision.eyewear_allowance_year, p.benefits.vision.exam),
+    },
+    {
+      label: 'Hearing aids',
+      render: (p) =>
+        formatAnnualAllowance(p.benefits.hearing.aid_allowance_year, p.benefits.hearing.exam),
+    },
+    {
+      label: 'OTC / qtr',
+      render: (p) => formatQuarterlyAmount(p.benefits.otc.allowance_per_quarter),
+    },
+    {
+      label: 'Food card / mo',
+      render: (p) => formatMonthlyAmount(p.benefits.food_card.allowance_per_month),
+    },
+    {
+      label: 'Fitness / gym',
+      render: (p) => formatFitness(p.benefits.fitness),
+    },
+    {
+      label: 'Transportation',
+      render: (p) => formatTransportation(p.benefits.transportation),
+    },
+    {
+      label: 'Telehealth copay',
+      render: () => <span style={{ color: 'var(--i3)' }}>—</span>,
+      title: () =>
+        'Not in CMS PBP structured extract. Verify directly in the SoB or Plan Finder.',
+    },
+  ];
 
   const sections: Section[] = [
     {
@@ -355,159 +602,11 @@ function SideBySideTable({
         { label: 'Star rating', render: (p) => `${p.star_rating} ★` },
       ],
     },
-    {
-      heading: 'Costs',
-      rows: [
-        {
-          label: 'Monthly premium',
-          render: (p) => (
-            <span style={{ fontWeight: 700 }}>
-              {p.premium === 0 ? '$0' : `$${p.premium.toFixed(2)}/mo`}
-            </span>
-          ),
-        },
-        {
-          label: 'Annual deductible (medical)',
-          render: (p) => formatDeductibleDollars(p.annual_deductible),
-        },
-        {
-          label: 'MOOP in-network',
-          render: (p) => `$${p.moop_in_network.toLocaleString()}`,
-        },
-        {
-          label: 'MOOP out-of-network',
-          render: (p) => formatDeductibleDollars(p.moop_out_of_network),
-        },
-        {
-          label: 'Part B giveback',
-          render: (p) => formatPartBGivebackMonthly(p.part_b_giveback),
-        },
-      ],
-    },
-    {
-      heading: 'Medical copays',
-      rows: [
-        {
-          label: 'PCP copay',
-          render: (p) => formatCostShare(p.benefits.medical.primary_care),
-          title: (p) => p.benefits.medical.primary_care.description ?? undefined,
-        },
-        {
-          label: 'Specialist copay',
-          render: (p) => formatCostShare(p.benefits.medical.specialist),
-          title: (p) => p.benefits.medical.specialist.description ?? undefined,
-        },
-        {
-          label: 'Urgent care',
-          render: (p) => formatCostShare(p.benefits.medical.urgent_care),
-          title: (p) => p.benefits.medical.urgent_care.description ?? undefined,
-        },
-        {
-          label: 'Emergency room',
-          render: (p) => formatCostShare(p.benefits.medical.emergency),
-          title: (p) => p.benefits.medical.emergency.description ?? undefined,
-        },
-        {
-          label: 'Inpatient hospital',
-          render: (p) => formatCostShare(p.benefits.medical.inpatient, '/day'),
-          title: (p) => p.benefits.medical.inpatient.description ?? undefined,
-        },
-      ],
-    },
-    {
-      heading: 'Prescription drug',
-      rows: [
-        {
-          label: 'Rx deductible',
-          render: (p) => formatDeductibleDollars(p.drug_deductible),
-        },
-        {
-          label: 'Tier 1 (preferred generic)',
-          render: (p) => formatCostShare(p.benefits.rx_tiers.tier_1),
-          title: (p) => p.benefits.rx_tiers.tier_1.description ?? undefined,
-        },
-        {
-          label: 'Tier 2 (generic)',
-          render: (p) => formatCostShare(p.benefits.rx_tiers.tier_2),
-          title: (p) => p.benefits.rx_tiers.tier_2.description ?? undefined,
-        },
-        {
-          label: 'Tier 3 (preferred brand)',
-          render: (p) => formatCostShare(p.benefits.rx_tiers.tier_3),
-          title: (p) => p.benefits.rx_tiers.tier_3.description ?? undefined,
-        },
-        {
-          label: 'Tier 4 (non-preferred brand)',
-          render: (p) => formatCostShare(p.benefits.rx_tiers.tier_4),
-          title: (p) => p.benefits.rx_tiers.tier_4.description ?? undefined,
-        },
-        {
-          label: 'Tier 5 (specialty)',
-          render: (p) => formatCostShare(p.benefits.rx_tiers.tier_5),
-          title: (p) => p.benefits.rx_tiers.tier_5.description ?? undefined,
-        },
-      ],
-    },
-    {
-      heading: 'Extra benefits',
-      rows: [
-        {
-          label: 'Dental (annual max)',
-          render: (p) => {
-            const d = p.benefits.dental;
-            const label = formatAnnualAllowance(d.annual_max, d.preventive);
-            return label === 'Included' || label === '—'
-              ? label
-              : `${label}${d.comprehensive ? ' · comp.' : ''}`;
-          },
-        },
-        {
-          label: 'Vision eyewear',
-          render: (p) =>
-            formatAnnualAllowance(p.benefits.vision.eyewear_allowance_year, p.benefits.vision.exam),
-        },
-        {
-          label: 'Hearing aids',
-          render: (p) =>
-            formatAnnualAllowance(p.benefits.hearing.aid_allowance_year, p.benefits.hearing.exam),
-        },
-        {
-          label: 'OTC / qtr',
-          render: (p) => formatQuarterlyAmount(p.benefits.otc.allowance_per_quarter),
-        },
-        {
-          label: 'Food card / mo',
-          render: (p) => formatMonthlyAmount(p.benefits.food_card.allowance_per_month),
-        },
-        {
-          label: 'Transportation',
-          render: (p) => formatTransportation(p.benefits.transportation),
-        },
-        {
-          label: 'Fitness',
-          render: (p) => formatFitness(p.benefits.fitness),
-        },
-      ],
-    },
+    ...(medicationsSection ? [medicationsSection] : []),
+    { heading: 'Medical copays', rows: medicalRows },
+    { heading: 'Costs', rows: costRows },
+    { heading: 'Extra benefits', rows: extraRows },
   ];
-
-  if (medications.length > 0) {
-    const rxSection = sections.find((s) => s.heading === 'Prescription drug');
-    rxSection?.rows.push({
-      label: `Rx coverage (${medications.length})`,
-      render: (plan) => (
-        <span className="flex flex-wrap" style={{ gap: 3 }}>
-          {medications.map((m) => (
-            <MedTier
-              key={m.id}
-              tier={tierForMed(plan, m.rxcui)}
-              label={m.name}
-            />
-          ))}
-        </span>
-      ),
-    });
-  }
 
   return (
     <div className="pm-surface" style={{ padding: 0, overflowX: 'auto' }}>
@@ -621,16 +720,22 @@ function SideBySideTable({
             ];
             section.rows.forEach((row, i) => {
               const zebra = i % 2 === 0 ? 'var(--warm)' : 'var(--wh)';
+              const isTotal = row.emphasis === 'total';
+              const rowBg = isTotal ? 'var(--sl)' : zebra;
               children.push(
-                <tr key={`${section.heading}-${row.label}`}>
+                <tr key={`${section.heading}-${i}`}>
                   <td
                     style={{
                       ...bodyCellStyle,
-                      fontWeight: 600,
-                      color: 'var(--i2)',
-                      background: zebra,
+                      fontWeight: isTotal ? 700 : 600,
+                      color: isTotal ? 'var(--sage)' : 'var(--i2)',
+                      background: rowBg,
                       position: 'sticky',
                       left: 0,
+                      borderTop: isTotal ? '2px solid var(--sm)' : undefined,
+                      textTransform: isTotal ? 'uppercase' : undefined,
+                      letterSpacing: isTotal ? '0.06em' : undefined,
+                      fontSize: isTotal ? 11 : undefined,
                     }}
                   >
                     {row.label}
@@ -641,7 +746,9 @@ function SideBySideTable({
                       title={row.title?.(p)}
                       style={{
                         ...bodyCellStyle,
-                        background: recommendation === p.id ? 'var(--sl)' : zebra,
+                        background: recommendation === p.id ? 'var(--sl)' : rowBg,
+                        borderTop: isTotal ? '2px solid var(--sm)' : undefined,
+                        fontWeight: isTotal ? 700 : undefined,
                       }}
                     >
                       {row.render(p)}
@@ -658,70 +765,148 @@ function SideBySideTable({
   );
 }
 
-// Read the formulary cache primed by bulkLookupFormulary and collapse
-// it to the FormularyTier | null the MedTier badge expects. 'loading'
-// means the bulk request is still in flight — we surface that as its
-// own badge state instead of rendering the scary red "NO".
-type RxCell = FormularyTier | null | 'loading';
-
-function tierForMed(plan: Plan, rxcui: string | null | undefined): RxCell {
-  if (!rxcui) return null;
+// Per-(plan, medication) cell for the Your Medications section.
+// Stacks tier + 30-day cost line, PA/ST/QL flag pills, and an annual
+// estimate. Annual is omitted for coinsurance-only cells because we
+// don't have a drug reference price to resolve a percent into a
+// dollar figure honestly.
+function MedicationCell({ plan, med }: { plan: Plan; med: Medication }) {
+  if (!med.rxcui) {
+    return (
+      <span
+        title="No RxNorm match on this medication — cannot look up formulary coverage."
+        style={{ color: 'var(--red)', fontWeight: 600 }}
+      >
+        NO RXCUI
+      </span>
+    );
+  }
   const contractPlanId = `${plan.contract_id}_${plan.plan_number}`;
-  const hit = getCachedFormulary(contractPlanId, rxcui);
-  if (!hit) return 'loading';
-  if (hit.tier === 'not_covered') return null;
-  if (hit.tier === 'excluded') return 'excluded';
-  return hit.tier;
+  const hit = getCachedFormulary(contractPlanId, med.rxcui);
+  const cost = resolveMedCost(plan, hit);
+
+  if (cost.coverage === 'loading') {
+    return <span style={{ color: 'var(--i3)' }}>…</span>;
+  }
+  if (cost.coverage === 'not_covered') {
+    return (
+      <span style={{ color: 'var(--red)', fontWeight: 600 }}>
+        Not covered
+      </span>
+    );
+  }
+  if (cost.coverage === 'excluded') {
+    return (
+      <span style={{ color: 'var(--red)', fontWeight: 600 }}>
+        Excluded
+      </span>
+    );
+  }
+
+  const copayText =
+    cost.copay != null
+      ? `$${cost.copay.toFixed(cost.copay % 1 === 0 ? 0 : 2)}`
+      : cost.coinsurancePct != null
+        ? `${cost.coinsurancePct}% coins.`
+        : '—';
+  const annualText =
+    cost.copay != null ? `$${(cost.copay * 12).toLocaleString()}/yr` : '—';
+  const sourceNote =
+    cost.source === 'plan_tier'
+      ? 'Tier copay (plan-wide)'
+      : cost.source === 'formulary'
+        ? 'Per-drug filed copay'
+        : undefined;
+
+  return (
+    <div className="flex flex-col" style={{ gap: 3, lineHeight: 1.35 }}>
+      <div style={{ fontSize: 12, fontWeight: 600 }} title={sourceNote}>
+        T{cost.tier} · {copayText}
+      </div>
+      {(cost.priorAuth || cost.stepTherapy || cost.quantityLimit) && (
+        <div className="flex flex-wrap" style={{ gap: 3 }}>
+          {cost.priorAuth && <RxFlag label="PA" title="Prior authorization required" />}
+          {cost.stepTherapy && <RxFlag label="ST" title="Step therapy" />}
+          {cost.quantityLimit && <RxFlag label="QL" title="Quantity limit" />}
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: 'var(--i3)' }}>{annualText}</div>
+    </div>
+  );
 }
 
-function MedTier({ tier, label }: { tier: RxCell; label: string }) {
-  const bg =
-    tier === 'loading'
-      ? 'var(--w2)'
-      : tier === null
-        ? 'var(--rt)'
-        : tier === 'excluded'
-          ? 'var(--rt)'
-          : tier === 1
-            ? 'var(--sl)'
-            : tier === 2
-              ? 'var(--tl)'
-              : tier === 3
-                ? 'var(--bt)'
-                : 'var(--at)';
-  const fg =
-    tier === 'loading'
-      ? 'var(--i3)'
-      : tier === null || tier === 'excluded'
-        ? 'var(--red)'
-        : tier === 1
-          ? 'var(--sage)'
-          : tier === 2
-            ? 'var(--teal)'
-            : tier === 3
-              ? 'var(--blue)'
-              : 'var(--amb)';
-  const text =
-    tier === 'loading'
-      ? '…'
-      : tier === null
-        ? 'NO'
-        : tier === 'excluded'
-          ? 'EX'
-          : `T${tier}`;
+// TOTAL annual Rx row. Sums copay-based annual estimates across the
+// client's medications for the plan. Any drug that's not-covered /
+// excluded / loading shows a caveat after the dollar total so the
+// broker knows the number is a floor rather than the final answer.
+function MedicationTotalCell({
+  plan,
+  medications,
+}: {
+  plan: Plan;
+  medications: Medication[];
+}) {
+  let annualTotal = 0;
+  let copayDrugCount = 0;
+  let coinsuranceCount = 0;
+  let uncoveredCount = 0;
+  let loadingCount = 0;
+  const contractPlanId = `${plan.contract_id}_${plan.plan_number}`;
+  for (const med of medications) {
+    if (!med.rxcui) {
+      uncoveredCount += 1;
+      continue;
+    }
+    const hit = getCachedFormulary(contractPlanId, med.rxcui);
+    const cost = resolveMedCost(plan, hit);
+    if (cost.coverage === 'loading') {
+      loadingCount += 1;
+      continue;
+    }
+    if (cost.coverage !== 'covered') {
+      uncoveredCount += 1;
+      continue;
+    }
+    if (cost.copay != null) {
+      annualTotal += cost.copay * 12;
+      copayDrugCount += 1;
+    } else if (cost.coinsurancePct != null) {
+      coinsuranceCount += 1;
+    } else {
+      uncoveredCount += 1;
+    }
+  }
+  const caveats: string[] = [];
+  if (coinsuranceCount > 0) caveats.push(`+${coinsuranceCount} coins.`);
+  if (uncoveredCount > 0) caveats.push(`${uncoveredCount} not cov.`);
+  if (loadingCount > 0) caveats.push('loading…');
+  const dollar =
+    copayDrugCount > 0 ? `$${Math.round(annualTotal).toLocaleString()}/yr` : '—';
+  return (
+    <div className="flex flex-col" style={{ gap: 2, lineHeight: 1.3 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--sage)' }}>{dollar}</div>
+      {caveats.length > 0 && (
+        <div style={{ fontSize: 10, color: 'var(--i3)' }}>{caveats.join(' · ')}</div>
+      )}
+    </div>
+  );
+}
+
+function RxFlag({ label, title }: { label: string; title: string }) {
   return (
     <span
-      title={label}
+      title={title}
       style={{
         fontSize: 9,
         fontWeight: 700,
         padding: '1px 5px',
         borderRadius: 4,
-        background: bg,
-        color: fg,
+        background: 'var(--at)',
+        color: 'var(--amb)',
+        border: '1px solid var(--amb)',
       }}
     >
-      {text}
+      {label}
     </span>
   );
 }

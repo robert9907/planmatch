@@ -38,7 +38,14 @@ interface FormularyRow {
   drug_name: string | null;
   tier: number | null;
   copay: number | null;
+  // Coinsurance in pm_formulary is stored as a fraction (0.20 = 20%).
+  // pm_plan_benefits stores rx_tier coinsurance as a percent integer
+  // (25 = 25%). Callers rendering a mixed UI must normalize to one or
+  // the other — the Step 6 MedicationsSection does percent.
   coinsurance: number | null;
+  prior_auth: boolean | null;
+  step_therapy: boolean | null;
+  quantity_limit: boolean | null;
 }
 
 const RXNAV = 'https://rxnav.nlm.nih.gov/REST';
@@ -324,7 +331,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         while (true) {
           let q = sb
             .from('pm_formulary')
-            .select('contract_id, plan_id, rxcui, drug_name, tier, copay, coinsurance')
+            .select(
+              'contract_id, plan_id, rxcui, drug_name, tier, copay, coinsurance, prior_auth, step_therapy, quantity_limit',
+            )
             .in('rxcui', rxChunk)
             .range(from, from + PAGE - 1);
           if (cid) q = q.eq('contract_id', cid);
@@ -372,6 +381,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         copay: number | null;
         coinsurance: number | null;
         drug_name: string | null;
+        prior_auth: boolean;
+        step_therapy: boolean;
+        quantity_limit: boolean;
       }[] = [];
       for (const [key, s] of best) {
         const original = cellOriginal.get(key);
@@ -389,6 +401,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           copay: r.copay,
           coinsurance: r.coinsurance,
           drug_name: r.drug_name,
+          prior_auth: r.prior_auth === true,
+          step_therapy: r.step_therapy === true,
+          quantity_limit: r.quantity_limit === true,
         });
       }
       res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=120');
@@ -420,7 +435,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const chunk = candidates.slice(i * CHUNK, (i + 1) * CHUNK);
         return sb
           .from('pm_formulary')
-          .select('drug_name, tier, copay, coinsurance, rxcui')
+          .select(
+            'drug_name, tier, copay, coinsurance, rxcui, prior_auth, step_therapy, quantity_limit',
+          )
           .eq('contract_id', contractId)
           .eq('plan_id', planId)
           .in('rxcui', chunk)
@@ -463,6 +480,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       copay: best.row.copay ?? null,
       coinsurance: best.row.coinsurance ?? null,
       drug_name: best.row.drug_name ?? null,
+      prior_auth: best.row.prior_auth === true,
+      step_therapy: best.row.step_therapy === true,
+      quantity_limit: best.row.quantity_limit === true,
     });
   } catch (err) {
     return serverError(res, err);
