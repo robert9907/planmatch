@@ -59,6 +59,22 @@ export interface MedicalCopays {
   urgent_care: CostShare;
   emergency: CostShare;
   inpatient: CostShare;
+  // New categories imported from PBP b7/b8/b9 for v4 Quote & Delivery.
+  // Every field is still optional-by-nullness — a plan that didn't file a
+  // given row shows `{copay:null, coinsurance:null}` and the UI renders $0
+  // (Original Medicare default) or the coinsurance percent accordingly.
+  outpatient_surgery_hospital: CostShare;
+  outpatient_surgery_asc: CostShare;
+  outpatient_observation: CostShare;
+  lab_services: CostShare;
+  diagnostic_tests: CostShare;
+  xray: CostShare;
+  diagnostic_radiology: CostShare;
+  therapeutic_radiology: CostShare;
+  mental_health_individual: CostShare;
+  mental_health_group: CostShare;
+  physical_therapy: CostShare;
+  telehealth: CostShare;
 }
 
 export interface RxTierCopays {

@@ -3,16 +3,16 @@ import { useSession } from '@/hooks/useSession';
 import { StepHeader } from './StepHeader';
 import { findPlan, lookupByHNumber } from '@/lib/cmsPlans';
 import { fetchPlansByIds } from '@/lib/planCatalog';
-import { bulkLookupFormulary, getCachedFormulary } from '@/lib/formularyLookup';
+import { bulkLookupFormulary } from '@/lib/formularyLookup';
 import { BROKER } from '@/lib/constants';
 import { ComplianceChecklist } from '@/components/compliance/ComplianceChecklist';
 import { SaveSessionButton } from '@/components/sync/SaveSessionButton';
 import { DISCLAIMERS, allComplianceItemIds } from '@/lib/compliance';
 import { buildClientInfoText } from '@/lib/clipboardFormat';
 import { fipsForCounty } from '@/lib/ncFips';
-import type { CostShare, Plan, FormularyTier } from '@/types/plans';
-import type { Medication, SessionMode } from '@/types/session';
-import type { FormularyHit } from '@/lib/formularyLookup';
+import type { Plan } from '@/types/plans';
+import type { SessionMode } from '@/types/session';
+import { QuoteDeliveryV4 } from './QuoteDeliveryV4';
 
 // ─── Display helpers ────────────────────────────────────────────────
 // The PBP structured extract carries a benefit row for many
@@ -39,133 +39,10 @@ function formatQuarterlyAmount(amount: number): string {
   if (amount === 1) return 'Included';
   return '—';
 }
-function formatFitness(fitness: Plan['benefits']['fitness']): string {
-  if (!fitness.enabled) return '—';
-  return fitness.program ?? 'Included';
-}
-// CostShare rendering — copay and coinsurance are mutually exclusive
-// in the PBP extract, so pick whichever is populated. Null/null means
-// the row wasn't in pm_plan_benefits for this plan.
-function formatCostShare(cs: CostShare, unit: string = ''): string {
-  if (cs.copay != null) return `$${cs.copay}${unit}`;
-  if (cs.coinsurance != null) return `${cs.coinsurance}%`;
-  return '—';
-}
-function formatDeductibleDollars(v: number | null | undefined): string {
-  if (v == null) return '—';
-  return `$${v.toLocaleString()}`;
-}
-function formatPartBGivebackMonthly(monthly: number | null | undefined): string {
-  if (monthly == null || monthly <= 0) return '—';
-  return `$${monthly}/mo`;
-}
-function formatTransportation(t: Plan['benefits']['transportation']): string {
-  if (t.rides_per_year) return `${t.rides_per_year} rides`;
-  return '—';
-}
 function clientFirstName(name: string): string {
   return name.trim().split(/\s+/)[0] ?? '';
 }
 
-// Medication cost resolution. pm_formulary carries per-(plan, drug)
-// copay/coinsurance for the specific drug; when that's null (the
-// carrier filed only the tier and leaves the tier copay generic in
-// PBP), fall back to pm_plan_benefits.rx_tiers.tier_N — the plan's
-// generic 30-day retail copay for that tier. Coinsurance units also
-// differ between the two sources: pm_formulary stores a fraction
-// (0.25 = 25%) while pm_plan_benefits stores a percent integer (25).
-// This helper normalizes both to percent integer so the cell renderer
-// has a single code path.
-interface MedCost {
-  coverage: 'covered' | 'not_covered' | 'excluded' | 'loading' | 'no_rxcui';
-  tier: FormularyTier | null;
-  copay: number | null;
-  coinsurancePct: number | null;
-  priorAuth: boolean;
-  stepTherapy: boolean;
-  quantityLimit: boolean;
-  source: 'formulary' | 'plan_tier' | null;
-}
-
-function planTierShare(plan: Plan, tier: FormularyTier | null): CostShare | null {
-  if (tier == null || tier === 'excluded') return null;
-  const map: Record<number, CostShare | undefined> = {
-    1: plan.benefits.rx_tiers.tier_1,
-    2: plan.benefits.rx_tiers.tier_2,
-    3: plan.benefits.rx_tiers.tier_3,
-    4: plan.benefits.rx_tiers.tier_4,
-    5: plan.benefits.rx_tiers.tier_5,
-  };
-  // Tiers 6–8 are carrier-specific extended tiers (e.g. Humana's
-  // preferred generic T6 at $0) and aren't broken out in the PBP rx_tier
-  // rows we import. Return null so the UI renders the tier badge
-  // without a fallback dollar figure.
-  return map[tier] ?? null;
-}
-
-function resolveMedCost(plan: Plan, hit: FormularyHit | null): MedCost {
-  if (!hit) {
-    return {
-      coverage: 'loading',
-      tier: null,
-      copay: null,
-      coinsurancePct: null,
-      priorAuth: false,
-      stepTherapy: false,
-      quantityLimit: false,
-      source: null,
-    };
-  }
-  if (hit.tier === 'not_covered') {
-    return {
-      coverage: 'not_covered',
-      tier: null,
-      copay: null,
-      coinsurancePct: null,
-      priorAuth: hit.prior_auth,
-      stepTherapy: hit.step_therapy,
-      quantityLimit: hit.quantity_limit,
-      source: null,
-    };
-  }
-  if (hit.tier === 'excluded') {
-    return {
-      coverage: 'excluded',
-      tier: null,
-      copay: null,
-      coinsurancePct: null,
-      priorAuth: hit.prior_auth,
-      stepTherapy: hit.step_therapy,
-      quantityLimit: hit.quantity_limit,
-      source: null,
-    };
-  }
-  let copay = hit.copay;
-  // pm_formulary coinsurance is a fraction; convert to percent integer
-  // before comparing against pm_plan_benefits' percent-integer tier
-  // coinsurance.
-  let coinsurancePct =
-    hit.coinsurance != null ? Math.round(hit.coinsurance * 100) : null;
-  let source: MedCost['source'] = copay != null || coinsurancePct != null ? 'formulary' : null;
-  if (copay == null && coinsurancePct == null) {
-    const share = planTierShare(plan, hit.tier);
-    if (share) {
-      copay = share.copay;
-      coinsurancePct = share.coinsurance;
-      source = 'plan_tier';
-    }
-  }
-  return {
-    coverage: 'covered',
-    tier: hit.tier,
-    copay,
-    coinsurancePct,
-    priorAuth: hit.prior_auth,
-    stepTherapy: hit.step_therapy,
-    quantityLimit: hit.quantity_limit,
-    source,
-  };
-}
 
 export function Step6QuoteDelivery() {
   const mode = useSession((s) => s.mode);
@@ -324,8 +201,11 @@ function NewQuoteMode() {
 
   return (
     <div className="flex flex-col gap-4">
-      <SideBySideTable
+      <V4TableWithPrime
         finalists={finalists}
+        currentPlan={null}
+        medications={medications}
+        providers={providers}
         recommendation={recommendation}
         onRecommend={setRecommendation}
         onCopy={handleCopy}
@@ -336,6 +216,69 @@ function NewQuoteMode() {
       <BrokerActions recommendation={recommendation} />
       <Toast message={toastMsg} />
     </div>
+  );
+}
+
+// Primes the per-(plan, rxcui) formulary cache before handing off to the
+// v4 table. Owns a tick so the V4 cell closures re-read the cache after
+// each bulk response lands. Same pattern as Steps 3 & 5.
+function V4TableWithPrime({
+  finalists,
+  currentPlan,
+  medications,
+  providers,
+  recommendation,
+  onRecommend,
+  onCopy,
+  onOpenSunfire,
+}: {
+  finalists: Plan[];
+  currentPlan: Plan | null;
+  medications: import('@/types/session').Medication[];
+  providers: import('@/types/session').Provider[];
+  recommendation: string | null;
+  onRecommend: (id: string | null) => void;
+  onCopy: (plan: Plan) => void;
+  onOpenSunfire: (plan: Plan) => void;
+}) {
+  const [formularyTick, setFormularyTick] = useState(0);
+  const primeNonce = useMemo(
+    () =>
+      `${finalists.length}:${medications
+        .map((m) => m.rxcui ?? '')
+        .sort()
+        .join(',')}`,
+    [finalists, medications],
+  );
+  useEffect(() => {
+    if (finalists.length === 0 || medications.length === 0) return;
+    let cancelled = false;
+    const contractIds = [...new Set(finalists.map((p) => p.contract_id))];
+    const rxcuis = medications
+      .map((m) => m.rxcui)
+      .filter((s): s is string => typeof s === 'string' && s.length > 0);
+    if (rxcuis.length === 0) return;
+    bulkLookupFormulary(contractIds, rxcuis).then(() => {
+      if (!cancelled) setFormularyTick((t) => t + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [primeNonce]);
+
+  return (
+    <QuoteDeliveryV4
+      finalists={finalists}
+      currentPlan={currentPlan}
+      medications={medications}
+      providers={providers}
+      recommendation={recommendation}
+      onRecommend={onRecommend}
+      onCopy={onCopy}
+      onOpenSunfire={onOpenSunfire}
+      formularyTick={formularyTick}
+    />
   );
 }
 
@@ -389,526 +332,6 @@ function useComplianceReady(): boolean {
   const itemsDone = allIds.every((id) => complianceChecked.includes(id));
   const disclaimersDone = DISCLAIMERS.every((d) => disclaimersConfirmed.includes(d.id));
   return itemsDone && disclaimersDone;
-}
-
-function SideBySideTable({
-  finalists,
-  recommendation,
-  onRecommend,
-  onCopy,
-  onOpenSunfire,
-}: {
-  finalists: Plan[];
-  recommendation: string | null;
-  onRecommend: (id: string | null) => void;
-  onCopy: (plan: Plan) => void;
-  onOpenSunfire: (plan: Plan) => void;
-}) {
-  const medications = useSession((s) => s.medications);
-
-  // Prime the pm_formulary cache so per-row Rx tier lookups hit memory.
-  // Without this the Rx cells rendered "NO" for every plan because the
-  // legacy formularyTierFor() read from plan.formulary which is {} for
-  // pm_plans-sourced rows. The tick forces re-render once the bulk
-  // response lands; same pattern Step 3 and Step 5 use.
-  const [formularyTick, setFormularyTick] = useState(0);
-  // Nonce reflects the rxcuis we care about, not just the med count —
-  // useResolveRxcuis backfills rxcuis asynchronously for photo-capture
-  // and CRM-hydrated meds, and we need the bulk prime to re-fire when
-  // those land so the Rx badges update.
-  const primeNonce = useMemo(
-    () =>
-      `${finalists.length}:${medications
-        .map((m) => m.rxcui ?? '')
-        .sort()
-        .join(',')}`,
-    [finalists, medications],
-  );
-  useEffect(() => {
-    if (finalists.length === 0 || medications.length === 0) return;
-    let cancelled = false;
-    const contractIds = [...new Set(finalists.map((p) => p.contract_id))];
-    const rxcuis = medications
-      .map((m) => m.rxcui)
-      .filter((s): s is string => typeof s === 'string' && s.length > 0);
-    if (rxcuis.length === 0) return;
-    bulkLookupFormulary(contractIds, rxcuis).then(() => {
-      if (!cancelled) setFormularyTick((t) => t + 1);
-    });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [primeNonce]);
-
-  // formularyTick in scope keeps every closure below (MedicationCell,
-  // TOTAL row summer) re-reading fresh cache entries as each bulk
-  // response lands. Without the reference the React compiler may hoist
-  // the render functions into a stable identity and miss the update.
-  void formularyTick;
-
-  type Row = { label: React.ReactNode; render: (p: Plan) => React.ReactNode; title?: (p: Plan) => string | undefined; emphasis?: 'total' };
-  type Section = { heading: string; rows: Row[] };
-
-  // Per-drug rows + TOTAL annual Rx row. Sits between Basics and
-  // Medical copays so the first thing the broker scans is which plan
-  // actually covers the client's drugs at what cost.
-  const medicationsSection: Section | null = medications.length > 0
-    ? {
-        heading: `Your medications (${medications.length})`,
-        rows: [
-          ...medications.map<Row>((med) => ({
-            label: (
-              <span>
-                {med.name}
-                {med.strength ? (
-                  <span style={{ color: 'var(--i3)', fontWeight: 400 }}> · {med.strength}</span>
-                ) : null}
-              </span>
-            ),
-            render: (plan) => <MedicationCell plan={plan} med={med} />,
-          })),
-          {
-            label: 'TOTAL annual Rx cost',
-            emphasis: 'total',
-            render: (plan) => <MedicationTotalCell plan={plan} medications={medications} />,
-          },
-        ],
-      }
-    : null;
-
-  // Medical copay rows the PBP extract covers directly.
-  const medicalRows: Row[] = [
-    {
-      label: 'PCP copay',
-      render: (p) => formatCostShare(p.benefits.medical.primary_care),
-      title: (p) => p.benefits.medical.primary_care.description ?? undefined,
-    },
-    {
-      label: 'Specialist copay',
-      render: (p) => formatCostShare(p.benefits.medical.specialist),
-      title: (p) => p.benefits.medical.specialist.description ?? undefined,
-    },
-    {
-      label: 'Emergency room',
-      render: (p) => formatCostShare(p.benefits.medical.emergency),
-      title: (p) => p.benefits.medical.emergency.description ?? undefined,
-    },
-    {
-      label: 'Urgent care',
-      render: (p) => formatCostShare(p.benefits.medical.urgent_care),
-      title: (p) => p.benefits.medical.urgent_care.description ?? undefined,
-    },
-    {
-      label: 'Inpatient hospital (per day)',
-      render: (p) => formatCostShare(p.benefits.medical.inpatient, '/day'),
-      title: (p) => p.benefits.medical.inpatient.description ?? undefined,
-    },
-    // These categories aren't in the CMS PBP structured extract we
-    // import into pm_plan_benefits — they live only in the per-plan SoB
-    // PDFs. Render the row so the broker sees it's unaccounted for
-    // rather than silently dropping it; tooltip documents the gap.
-    ...(['Outpatient surgery', 'Lab / X-ray', 'Mental health (outpatient)', 'Physical therapy'].map<Row>(
-      (label) => ({
-        label,
-        render: () => <span style={{ color: 'var(--i3)' }}>—</span>,
-        title: () =>
-          'Not in CMS PBP structured extract. Verify directly in the SoB or Plan Finder.',
-      }),
-    )),
-  ];
-
-  const costRows: Row[] = [
-    {
-      label: 'Monthly premium',
-      render: (p) => (
-        <span style={{ fontWeight: 700 }}>
-          {p.premium === 0 ? '$0' : `$${p.premium.toFixed(2)}/mo`}
-        </span>
-      ),
-    },
-    {
-      label: 'Annual deductible (medical)',
-      render: (p) => formatDeductibleDollars(p.annual_deductible),
-    },
-    {
-      label: 'MOOP in-network',
-      render: (p) => `$${p.moop_in_network.toLocaleString()}`,
-    },
-    {
-      label: 'MOOP out-of-network',
-      render: (p) => formatDeductibleDollars(p.moop_out_of_network),
-    },
-    {
-      label: 'Part B giveback',
-      render: (p) => formatPartBGivebackMonthly(p.part_b_giveback),
-    },
-    {
-      label: 'Rx deductible',
-      render: (p) => formatDeductibleDollars(p.drug_deductible),
-    },
-  ];
-
-  const extraRows: Row[] = [
-    {
-      label: 'Dental (annual max)',
-      render: (p) => {
-        const d = p.benefits.dental;
-        const label = formatAnnualAllowance(d.annual_max, d.preventive);
-        return label === 'Included' || label === '—'
-          ? label
-          : `${label}${d.comprehensive ? ' · comp.' : ''}`;
-      },
-    },
-    {
-      label: 'Vision eyewear',
-      render: (p) =>
-        formatAnnualAllowance(p.benefits.vision.eyewear_allowance_year, p.benefits.vision.exam),
-    },
-    {
-      label: 'Hearing aids',
-      render: (p) =>
-        formatAnnualAllowance(p.benefits.hearing.aid_allowance_year, p.benefits.hearing.exam),
-    },
-    {
-      label: 'OTC / qtr',
-      render: (p) => formatQuarterlyAmount(p.benefits.otc.allowance_per_quarter),
-    },
-    {
-      label: 'Food card / mo',
-      render: (p) => formatMonthlyAmount(p.benefits.food_card.allowance_per_month),
-    },
-    {
-      label: 'Fitness / gym',
-      render: (p) => formatFitness(p.benefits.fitness),
-    },
-    {
-      label: 'Transportation',
-      render: (p) => formatTransportation(p.benefits.transportation),
-    },
-    {
-      label: 'Telehealth copay',
-      render: () => <span style={{ color: 'var(--i3)' }}>—</span>,
-      title: () =>
-        'Not in CMS PBP structured extract. Verify directly in the SoB or Plan Finder.',
-    },
-  ];
-
-  const sections: Section[] = [
-    {
-      heading: 'Basics',
-      rows: [
-        { label: 'Plan ID', render: (p) => `${p.contract_id}-${p.plan_number}` },
-        { label: 'Star rating', render: (p) => `${p.star_rating} ★` },
-      ],
-    },
-    ...(medicationsSection ? [medicationsSection] : []),
-    { heading: 'Medical copays', rows: medicalRows },
-    { heading: 'Costs', rows: costRows },
-    { heading: 'Extra benefits', rows: extraRows },
-  ];
-
-  return (
-    <div className="pm-surface" style={{ padding: 0, overflowX: 'auto' }}>
-      <table
-        style={{
-          width: '100%',
-          borderCollapse: 'separate',
-          borderSpacing: 0,
-          fontSize: 12,
-        }}
-      >
-        <thead>
-          <tr>
-            <th style={headerCellStyle}>Feature</th>
-            {finalists.map((p) => {
-              const recommended = recommendation === p.id;
-              return (
-                <th
-                  key={p.id}
-                  style={{
-                    ...headerCellStyle,
-                    background: recommended ? 'var(--sl)' : 'var(--wh)',
-                    borderBottom: `2px solid ${recommended ? 'var(--sage)' : 'var(--w2)'}`,
-                    minWidth: 190,
-                    verticalAlign: 'top',
-                  }}
-                >
-                  <div style={{ fontSize: 11, color: 'var(--i2)', fontWeight: 500 }}>
-                    {p.carrier}
-                  </div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)', marginTop: 2 }}>
-                    {p.plan_name}
-                  </div>
-                  <div style={{ fontSize: 10, color: 'var(--i3)', marginTop: 2 }}>
-                    {p.plan_type} · {p.state}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => onRecommend(recommended ? null : p.id)}
-                    className="pm-btn"
-                    style={{
-                      marginTop: 6,
-                      width: '100%',
-                      height: 26,
-                      fontSize: 11,
-                      background: recommended ? 'var(--sage)' : 'var(--wh)',
-                      color: recommended ? '#fff' : 'var(--ink)',
-                      borderColor: recommended ? 'var(--sage)' : 'var(--w2)',
-                    }}
-                  >
-                    {recommended ? '★ Recommended' : 'Recommend'}
-                  </button>
-                  <div className="flex" style={{ gap: 4, marginTop: 4 }}>
-                    <button
-                      type="button"
-                      onClick={() => onCopy(p)}
-                      className="pm-btn"
-                      style={{
-                        flex: 1,
-                        height: 24,
-                        fontSize: 10,
-                        padding: '0 6px',
-                      }}
-                      title="Copy client info to clipboard"
-                    >
-                      📋 Copy client info
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onOpenSunfire(p)}
-                      className="pm-btn"
-                      style={{
-                        flex: 1,
-                        height: 24,
-                        fontSize: 10,
-                        padding: '0 6px',
-                      }}
-                      title="Open this plan in SunFire Matrix"
-                    >
-                      Open SunFire →
-                    </button>
-                  </div>
-                </th>
-              );
-            })}
-          </tr>
-        </thead>
-        <tbody>
-          {sections.flatMap((section) => {
-            const children: React.ReactNode[] = [
-              <tr key={`heading-${section.heading}`}>
-                <td
-                  colSpan={1 + finalists.length}
-                  style={{
-                    padding: '10px 14px 6px',
-                    fontSize: 10,
-                    fontWeight: 700,
-                    letterSpacing: '0.08em',
-                    textTransform: 'uppercase',
-                    color: 'var(--i3)',
-                    background: 'var(--wh)',
-                    borderTop: '1px solid var(--w2)',
-                    borderBottom: '1px solid var(--w2)',
-                    position: 'sticky',
-                    left: 0,
-                  }}
-                >
-                  {section.heading}
-                </td>
-              </tr>,
-            ];
-            section.rows.forEach((row, i) => {
-              const zebra = i % 2 === 0 ? 'var(--warm)' : 'var(--wh)';
-              const isTotal = row.emphasis === 'total';
-              const rowBg = isTotal ? 'var(--sl)' : zebra;
-              children.push(
-                <tr key={`${section.heading}-${i}`}>
-                  <td
-                    style={{
-                      ...bodyCellStyle,
-                      fontWeight: isTotal ? 700 : 600,
-                      color: isTotal ? 'var(--sage)' : 'var(--i2)',
-                      background: rowBg,
-                      position: 'sticky',
-                      left: 0,
-                      borderTop: isTotal ? '2px solid var(--sm)' : undefined,
-                      textTransform: isTotal ? 'uppercase' : undefined,
-                      letterSpacing: isTotal ? '0.06em' : undefined,
-                      fontSize: isTotal ? 11 : undefined,
-                    }}
-                  >
-                    {row.label}
-                  </td>
-                  {finalists.map((p) => (
-                    <td
-                      key={p.id}
-                      title={row.title?.(p)}
-                      style={{
-                        ...bodyCellStyle,
-                        background: recommendation === p.id ? 'var(--sl)' : rowBg,
-                        borderTop: isTotal ? '2px solid var(--sm)' : undefined,
-                        fontWeight: isTotal ? 700 : undefined,
-                      }}
-                    >
-                      {row.render(p)}
-                    </td>
-                  ))}
-                </tr>,
-              );
-            });
-            return children;
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// Per-(plan, medication) cell for the Your Medications section.
-// Stacks tier + 30-day cost line, PA/ST/QL flag pills, and an annual
-// estimate. Annual is omitted for coinsurance-only cells because we
-// don't have a drug reference price to resolve a percent into a
-// dollar figure honestly.
-function MedicationCell({ plan, med }: { plan: Plan; med: Medication }) {
-  if (!med.rxcui) {
-    return (
-      <span
-        title="No RxNorm match on this medication — cannot look up formulary coverage."
-        style={{ color: 'var(--red)', fontWeight: 600 }}
-      >
-        NO RXCUI
-      </span>
-    );
-  }
-  const contractPlanId = `${plan.contract_id}_${plan.plan_number}`;
-  const hit = getCachedFormulary(contractPlanId, med.rxcui);
-  const cost = resolveMedCost(plan, hit);
-
-  if (cost.coverage === 'loading') {
-    return <span style={{ color: 'var(--i3)' }}>…</span>;
-  }
-  if (cost.coverage === 'not_covered') {
-    return (
-      <span style={{ color: 'var(--red)', fontWeight: 600 }}>
-        Not covered
-      </span>
-    );
-  }
-  if (cost.coverage === 'excluded') {
-    return (
-      <span style={{ color: 'var(--red)', fontWeight: 600 }}>
-        Excluded
-      </span>
-    );
-  }
-
-  const copayText =
-    cost.copay != null
-      ? `$${cost.copay.toFixed(cost.copay % 1 === 0 ? 0 : 2)}`
-      : cost.coinsurancePct != null
-        ? `${cost.coinsurancePct}% coins.`
-        : '—';
-  const annualText =
-    cost.copay != null ? `$${(cost.copay * 12).toLocaleString()}/yr` : '—';
-  const sourceNote =
-    cost.source === 'plan_tier'
-      ? 'Tier copay (plan-wide)'
-      : cost.source === 'formulary'
-        ? 'Per-drug filed copay'
-        : undefined;
-
-  return (
-    <div className="flex flex-col" style={{ gap: 3, lineHeight: 1.35 }}>
-      <div style={{ fontSize: 12, fontWeight: 600 }} title={sourceNote}>
-        T{cost.tier} · {copayText}
-      </div>
-      {(cost.priorAuth || cost.stepTherapy || cost.quantityLimit) && (
-        <div className="flex flex-wrap" style={{ gap: 3 }}>
-          {cost.priorAuth && <RxFlag label="PA" title="Prior authorization required" />}
-          {cost.stepTherapy && <RxFlag label="ST" title="Step therapy" />}
-          {cost.quantityLimit && <RxFlag label="QL" title="Quantity limit" />}
-        </div>
-      )}
-      <div style={{ fontSize: 11, color: 'var(--i3)' }}>{annualText}</div>
-    </div>
-  );
-}
-
-// TOTAL annual Rx row. Sums copay-based annual estimates across the
-// client's medications for the plan. Any drug that's not-covered /
-// excluded / loading shows a caveat after the dollar total so the
-// broker knows the number is a floor rather than the final answer.
-function MedicationTotalCell({
-  plan,
-  medications,
-}: {
-  plan: Plan;
-  medications: Medication[];
-}) {
-  let annualTotal = 0;
-  let copayDrugCount = 0;
-  let coinsuranceCount = 0;
-  let uncoveredCount = 0;
-  let loadingCount = 0;
-  const contractPlanId = `${plan.contract_id}_${plan.plan_number}`;
-  for (const med of medications) {
-    if (!med.rxcui) {
-      uncoveredCount += 1;
-      continue;
-    }
-    const hit = getCachedFormulary(contractPlanId, med.rxcui);
-    const cost = resolveMedCost(plan, hit);
-    if (cost.coverage === 'loading') {
-      loadingCount += 1;
-      continue;
-    }
-    if (cost.coverage !== 'covered') {
-      uncoveredCount += 1;
-      continue;
-    }
-    if (cost.copay != null) {
-      annualTotal += cost.copay * 12;
-      copayDrugCount += 1;
-    } else if (cost.coinsurancePct != null) {
-      coinsuranceCount += 1;
-    } else {
-      uncoveredCount += 1;
-    }
-  }
-  const caveats: string[] = [];
-  if (coinsuranceCount > 0) caveats.push(`+${coinsuranceCount} coins.`);
-  if (uncoveredCount > 0) caveats.push(`${uncoveredCount} not cov.`);
-  if (loadingCount > 0) caveats.push('loading…');
-  const dollar =
-    copayDrugCount > 0 ? `$${Math.round(annualTotal).toLocaleString()}/yr` : '—';
-  return (
-    <div className="flex flex-col" style={{ gap: 2, lineHeight: 1.3 }}>
-      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--sage)' }}>{dollar}</div>
-      {caveats.length > 0 && (
-        <div style={{ fontSize: 10, color: 'var(--i3)' }}>{caveats.join(' · ')}</div>
-      )}
-    </div>
-  );
-}
-
-function RxFlag({ label, title }: { label: string; title: string }) {
-  return (
-    <span
-      title={title}
-      style={{
-        fontSize: 9,
-        fontWeight: 700,
-        padding: '1px 5px',
-        borderRadius: 4,
-        background: 'var(--at)',
-        color: 'var(--amb)',
-        border: '1px solid var(--amb)',
-      }}
-    >
-      {label}
-    </span>
-  );
 }
 
 function ClientDeliveryCard({

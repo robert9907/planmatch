@@ -71,6 +71,18 @@ const EMPTY_MEDICAL = {
   urgent_care: EMPTY_COST_SHARE,
   emergency: EMPTY_COST_SHARE,
   inpatient: EMPTY_COST_SHARE,
+  outpatient_surgery_hospital: EMPTY_COST_SHARE,
+  outpatient_surgery_asc: EMPTY_COST_SHARE,
+  outpatient_observation: EMPTY_COST_SHARE,
+  lab_services: EMPTY_COST_SHARE,
+  diagnostic_tests: EMPTY_COST_SHARE,
+  xray: EMPTY_COST_SHARE,
+  diagnostic_radiology: EMPTY_COST_SHARE,
+  therapeutic_radiology: EMPTY_COST_SHARE,
+  mental_health_individual: EMPTY_COST_SHARE,
+  mental_health_group: EMPTY_COST_SHARE,
+  physical_therapy: EMPTY_COST_SHARE,
+  telehealth: EMPTY_COST_SHARE,
 };
 const EMPTY_RX_TIERS = {
   tier_1: EMPTY_COST_SHARE,

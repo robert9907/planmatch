@@ -67,6 +67,18 @@ interface PlanBenefits {
     urgent_care: CostShare;
     emergency: CostShare;
     inpatient: CostShare;
+    outpatient_surgery_hospital: CostShare;
+    outpatient_surgery_asc: CostShare;
+    outpatient_observation: CostShare;
+    lab_services: CostShare;
+    diagnostic_tests: CostShare;
+    xray: CostShare;
+    diagnostic_radiology: CostShare;
+    therapeutic_radiology: CostShare;
+    mental_health_individual: CostShare;
+    mental_health_group: CostShare;
+    physical_therapy: CostShare;
+    telehealth: CostShare;
   };
   rx_tiers: {
     tier_1: CostShare;
@@ -123,11 +135,18 @@ function normalizeCounty(raw: string): string {
 
 function mapPlanType(raw: string | null, snp: boolean, snpType: string | null): AppPlanType {
   const t = (raw ?? '').toUpperCase().trim();
-  // SNP takes priority — D-SNP plans ride HMO/PPO structures in the
-  // source file but the app treats them as their own bucket.
+  // SNP takes priority — D-SNP + C-SNP plans ride HMO/PPO structures
+  // in the source file but the app treats them as their own bucket.
+  // The Intake planType filter (MAPD) must never surface SNP plans
+  // since eligibility rules differ (Medicaid for D-SNP, chronic
+  // condition attestation for C-SNP).
   if (snp) {
     const s = (snpType ?? '').toUpperCase();
     if (s.includes('D-SNP') || s.includes('DSNP')) return 'DSNP';
+    // C-SNP and I-SNP aren't in the app's PlanType enum yet; tag them
+    // as DSNP so the MAPD filter excludes them. A downstream follow-up
+    // can split C-SNP/I-SNP into their own buckets.
+    return 'DSNP';
   }
   if (t === 'PDP') return 'PDP';
   // Everything else in the source (HMO, Local PPO, Regional PPO,
@@ -440,6 +459,18 @@ function buildBenefits(rows: BenefitRow[]): PlanBenefits {
       urgent_care: costShareFor(rows, 'urgent_care'),
       emergency: costShareFor(rows, 'emergency'),
       inpatient: costShareFor(rows, 'inpatient'),
+      outpatient_surgery_hospital: costShareFor(rows, 'outpatient_surgery_hospital'),
+      outpatient_surgery_asc: costShareFor(rows, 'outpatient_surgery_asc'),
+      outpatient_observation: costShareFor(rows, 'outpatient_observation'),
+      lab_services: costShareFor(rows, 'lab_services'),
+      diagnostic_tests: costShareFor(rows, 'diagnostic_tests'),
+      xray: costShareFor(rows, 'xray'),
+      diagnostic_radiology: costShareFor(rows, 'diagnostic_radiology'),
+      therapeutic_radiology: costShareFor(rows, 'therapeutic_radiology'),
+      mental_health_individual: costShareFor(rows, 'mental_health_individual'),
+      mental_health_group: costShareFor(rows, 'mental_health_group'),
+      physical_therapy: costShareFor(rows, 'physical_therapy'),
+      telehealth: costShareFor(rows, 'telehealth'),
     },
     rx_tiers: {
       tier_1: costShareFor(rows, 'rx_tier_1'),
