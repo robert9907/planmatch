@@ -77,3 +77,44 @@ export function buildClientInfoText({
     providerLines,
   ].join('\n');
 }
+
+// Compact SunFire-handoff payload — fired automatically when the broker
+// taps "Recommend" on a finalist column. Different shape from
+// buildClientInfoText: only the fields a SunFire enrollment screen
+// actually needs (identity + the recommended plan + cost story), so
+// the broker can paste once into SunFire's quote/enrollment intake
+// without trimming a longer block.
+export function buildSunfireRecommendationText({
+  client,
+  plan,
+  totalRxAnnual,
+  totalAnnualValue,
+  whySwitch,
+}: {
+  client: Client;
+  plan: Plan;
+  totalRxAnnual: number;
+  totalAnnualValue: number;
+  whySwitch: string;
+}): string {
+  const planId = `${plan.contract_id}-${plan.plan_number}`;
+  const lines = [
+    'SUNFIRE HANDOFF',
+    `Client: ${client.name}`,
+    `DOB: ${formatDob(client.dob)}`,
+    `Phone: ${client.phone}`,
+    `ZIP: ${client.zip}`,
+    '',
+    'RECOMMENDED PLAN',
+    `${plan.carrier} · ${plan.plan_name}`,
+    `Plan ID: ${planId}`,
+    `Premium: ${formatPremium(plan.premium)}`,
+    '',
+    `Total Rx Cost: $${Math.round(totalRxAnnual).toLocaleString()}/yr`,
+    `Total Annual Value: $${Math.round(totalAnnualValue).toLocaleString()}/yr`,
+  ];
+  if (whySwitch && whySwitch.trim()) {
+    lines.push('', `Why switch: ${whySwitch}`);
+  }
+  return lines.join('\n');
+}

@@ -77,7 +77,7 @@ export async function searchClients(query: string, signal?: AbortSignal): Promis
   const qs = new URLSearchParams();
   if (query.trim()) qs.set('q', query.trim());
   try {
-    const res = await fetch(`/api/clients/search?${qs.toString()}`, {
+    const res = await fetch(`/api/agentbase-clients?${qs.toString()}`, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       signal,
@@ -93,6 +93,52 @@ export async function searchClients(query: string, signal?: AbortSignal): Promis
       console.warn('[agentbase] search errored:', err);
     }
     return [];
+  }
+}
+
+export async function fetchRecentClients(limit = 5, signal?: AbortSignal): Promise<AgentBaseClient[]> {
+  try {
+    const res = await fetch(`/api/agentbase-clients?recent=${encodeURIComponent(String(limit))}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal,
+    });
+    if (!res.ok) {
+      console.warn('[agentbase] recent failed with', res.status);
+      return [];
+    }
+    const body = (await res.json()) as ApiClientsResponse;
+    return (body.clients ?? []).map(deriveSummary);
+  } catch (err) {
+    if ((err as { name?: string })?.name !== 'AbortError') {
+      console.warn('[agentbase] recent errored:', err);
+    }
+    return [];
+  }
+}
+
+export interface AgentBaseStats {
+  total: number;
+}
+
+export async function fetchClientStats(signal?: AbortSignal): Promise<AgentBaseStats | null> {
+  try {
+    const res = await fetch('/api/agentbase-clients?stats=true', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal,
+    });
+    if (!res.ok) {
+      console.warn('[agentbase] stats failed with', res.status);
+      return null;
+    }
+    const body = (await res.json()) as { stats?: { total?: number } };
+    return { total: Number(body?.stats?.total ?? 0) };
+  } catch (err) {
+    if ((err as { name?: string })?.name !== 'AbortError') {
+      console.warn('[agentbase] stats errored:', err);
+    }
+    return null;
   }
 }
 

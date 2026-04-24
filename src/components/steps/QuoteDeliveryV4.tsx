@@ -508,6 +508,16 @@ interface QuoteDeliveryV4Props {
   providers: Provider[];
   recommendation: string | null;
   onRecommend: (id: string | null) => void;
+  // Fired when the broker picks a plan as the recommendation. Receives
+  // the precomputed cost story so the parent can build a SunFire-ready
+  // clipboard payload without re-computing rxAnnual/Why-switch upstream.
+  // Skipped when the broker un-toggles a previous recommendation.
+  onRecommendCopy?: (args: {
+    plan: Plan;
+    totalRxAnnual: number;
+    totalAnnualValue: number;
+    whySwitch: string;
+  }) => void;
   onCopy: (plan: Plan) => void;
   onOpenSunfire: (plan: Plan) => void;
   formularyTick: number; // parent re-renders on tick bumps
@@ -535,6 +545,7 @@ export function QuoteDeliveryV4({
   providers,
   recommendation,
   onRecommend,
+  onRecommendCopy,
   onCopy,
   onOpenSunfire,
   formularyTick,
@@ -981,7 +992,7 @@ export function QuoteDeliveryV4({
             {/* ACTIONS */}
             <tr>
               <th className="lc" />
-              {columns.map((col) => (
+              {columns.map((col, idx) => (
                 <td key={col.plan.id} className={`act-cell ${bgClass(col.bucket)}`}>
                   {col.bucket === 'cur' ? (
                     <button type="button" className="abtn sec">
@@ -992,9 +1003,27 @@ export function QuoteDeliveryV4({
                       <button
                         type="button"
                         className="abtn rec"
-                        onClick={() =>
-                          onRecommend(recommendation === col.plan.id ? null : col.plan.id)
-                        }
+                        onClick={() => {
+                          const next = recommendation === col.plan.id ? null : col.plan.id;
+                          onRecommend(next);
+                          // Only fire the SunFire copy when the broker is
+                          // *picking* a plan, not un-toggling — un-toggle
+                          // is a correction, not a handoff signal.
+                          if (next && onRecommendCopy) {
+                            onRecommendCopy({
+                              plan: col.plan,
+                              totalRxAnnual: totals[idx].rxAnnual,
+                              totalAnnualValue: totals[idx].totalAnnualValue,
+                              whySwitch: whySwitch(
+                                col,
+                                baseline,
+                                totals[idx],
+                                baselineTotals,
+                                medications.length,
+                              ),
+                            });
+                          }
+                        }}
                         style={
                           col.bucket === 'gb'
                             ? { background: '#228B22', color: '#fff' }

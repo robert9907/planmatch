@@ -11,6 +11,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSession } from '@/hooks/useSession';
 import {
   fetchClientDetail,
+  fetchClientStats,
+  fetchRecentClients,
   searchClients,
   type AgentBaseClient,
 } from '@/lib/agentbase';
@@ -33,13 +35,33 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
 
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<AgentBaseClient[]>([]);
+  const [recentClients, setRecentClients] = useState<AgentBaseClient[]>([]);
+  const [totalClients, setTotalClients] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [hydrating, setHydrating] = useState(false);
 
-  // Debounced search. Empty query returns the 20 most-recent clients,
-  // which is exactly what the Landing Recent Sessions card wants on
-  // first paint — no separate fetch needed.
+  // Recent + stats are independent of the search input so typing in the
+  // search box doesn't blank the Recent Sessions card. Both fire once on
+  // mount; search results below override the dropdown when q is non-empty.
   useEffect(() => {
+    const controller = new AbortController();
+    fetchRecentClients(5, controller.signal).then((list) => {
+      if (!controller.signal.aborted) setRecentClients(list);
+    });
+    fetchClientStats(controller.signal).then((stats) => {
+      if (!controller.signal.aborted && stats) setTotalClients(stats.total);
+    });
+    return () => controller.abort();
+  }, []);
+
+  // Debounced search. Empty query keeps Recent Sessions visible without
+  // an extra fetch; a typed query overrides the dropdown.
+  useEffect(() => {
+    if (!query.trim()) {
+      setResults([]);
+      setLoading(false);
+      return;
+    }
     const controller = new AbortController();
     setLoading(true);
     const timer = window.setTimeout(async () => {
@@ -65,16 +87,16 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
   }, []);
 
   const stats = useMemo(() => {
-    // Only "Active Clients" is a real number today — the others need
-    // session_status + needs_review columns the clients table doesn't
-    // carry yet. We show "—" rather than invent numbers.
+    // "Active Clients" is the real count from /api/agentbase-clients?stats.
+    // The others stay "—" until session_status / needs_review ship on the
+    // clients table — no invented numbers.
     return {
-      active: results.length > 0 ? guessActiveCount(results) : 0,
+      active: totalClients,
       enrolled: null as number | null,
       pending: null as number | null,
       needsAttention: null as number | null,
     };
-  }, [results]);
+  }, [totalClients]);
 
   async function pickClient(c: AgentBaseClient) {
     if (hydrating) return;
@@ -135,7 +157,12 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
     }
   }
 
-  const recent = results.slice(0, 5);
+  // Search results take precedence when the user has typed something;
+  // otherwise show the dedicated Recent Sessions list.
+  const showingSearch = query.trim().length > 0;
+  const dropdown = showingSearch ? results : recentClients;
+  const recent = dropdown.slice(0, 5);
+  const bookSize = totalClients ?? recentClients.length;
 
   return (
     <div className="scroll">
@@ -144,7 +171,7 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
           Good morning, <span>{firstName()}</span>
         </div>
         <div className="hero-s">
-          {today} · {results.length} client{results.length === 1 ? '' : 's'} in your book
+          {today} · {bookSize} client{bookSize === 1 ? '' : 's'} in your book
         </div>
         <div className="sb-wrap">
           <div className="si">⌕</div>
@@ -174,22 +201,30 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
       </div>
 
       <div className="stats">
-        <StatCard icon="📋" iconCls="bl" value={String(stats.active)} label="Active Clients" />
+        <StatCard icon="📋" iconCls="bl" value={fmtStat(stats.active)} label="Active Clients" />
         <StatCard icon="✓" iconCls="gr" value={fmtStat(stats.enrolled)} label="Enrolled This Month" />
         <StatCard icon="⏱" iconCls="am" value={fmtStat(stats.pending)} label="Quotes Pending" />
         <StatCard icon="⚠" iconCls="rd" value={fmtStat(stats.needsAttention)} label="Need Attention" />
       </div>
 
       <div className="lmain">
-        {/* Recent Sessions */}
+        {/* Recent Sessions (or live search results when query is non-empty) */}
         <div className="card">
           <div className="chdr">
-            <div className="cht">Recent Sessions</div>
-            <div className="chact">{loading ? 'Loading…' : `${results.length} total`}</div>
+            <div className="cht">{showingSearch ? 'Search Results' : 'Recent Sessions'}</div>
+            <div className="chact">
+              {showingSearch
+                ? loading
+                  ? 'Searching…'
+                  : `${results.length} match${results.length === 1 ? '' : 'es'}`
+                : `${recentClients.length} shown`}
+            </div>
           </div>
           {recent.length === 0 && !loading ? (
             <div style={{ padding: '16px', fontSize: 12, color: 'var(--v4-g500)' }}>
-              No clients yet. Click <strong>+ New Client</strong> to start a session.
+              {showingSearch
+                ? <>No clients match <strong>{query}</strong>.</>
+                : <>No clients yet. Click <strong>+ New Client</strong> to start a session.</>}
             </div>
           ) : (
             recent.map((c) => <RecentRow key={c.id} c={c} onPick={() => pickClient(c)} />)
@@ -235,7 +270,7 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
         </div>
 
         {/* AEP Progress */}
-        <AepProgress totalClients={results.length} />
+        <AepProgress totalClients={bookSize} />
       </div>
     </div>
   );
@@ -355,12 +390,6 @@ function relativeTime(iso: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function guessActiveCount(results: AgentBaseClient[]): number {
-  // /api/clients/search returns up to 20 with an empty query — treat
-  // that ceiling as a floor signal for "active clients" until the DB
-  // exposes a real count.
-  return results.length >= 20 ? 20 : results.length;
-}
 
 function aepStatus(): { daysLeft: number | null; windowCopy: string } {
   // 2027 AEP runs Oct 15 – Dec 7 2026. Before it opens: countdown.

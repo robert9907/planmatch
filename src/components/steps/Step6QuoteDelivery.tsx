@@ -8,7 +8,7 @@ import { BROKER } from '@/lib/constants';
 import { ComplianceChecklist } from '@/components/compliance/ComplianceChecklist';
 import { SaveSessionButton } from '@/components/sync/SaveSessionButton';
 import { DISCLAIMERS, allComplianceItemIds } from '@/lib/compliance';
-import { buildClientInfoText } from '@/lib/clipboardFormat';
+import { buildClientInfoText, buildSunfireRecommendationText } from '@/lib/clipboardFormat';
 import { fipsForCounty } from '@/lib/ncFips';
 import type { Plan } from '@/types/plans';
 import type { SessionMode } from '@/types/session';
@@ -197,8 +197,41 @@ function NewQuoteMode() {
       showToast(`Need ${missing} to open SunFire`);
       return;
     }
-    const url = `https://www.sunfirematrix.com/app/agent/medicareadvocates/#/plans/${client.zip}/${fips}/${plan.plan_type}`;
+    // Per spec the segment after FIPS is always literal "MAPD" — that's
+    // the SunFire route for Medicare Advantage. The plan id is appended
+    // as a query param; SunFire's hash router ignores unknown params if
+    // the deep-link form changes, so this stays safe to send.
+    const planId = `${plan.contract_id}-${plan.plan_number}`;
+    const url =
+      `https://www.sunfirematrix.com/app/agent/medicareadvocates` +
+      `/#/plans/${client.zip}/${fips}/MAPD?planId=${encodeURIComponent(planId)}`;
     window.open(url, '_blank', 'noopener');
+  }
+
+  async function handleRecommendCopy({
+    plan,
+    totalRxAnnual,
+    totalAnnualValue,
+    whySwitch,
+  }: {
+    plan: Plan;
+    totalRxAnnual: number;
+    totalAnnualValue: number;
+    whySwitch: string;
+  }) {
+    const text = buildSunfireRecommendationText({
+      client,
+      plan,
+      totalRxAnnual,
+      totalAnnualValue,
+      whySwitch,
+    });
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Client info copied for SunFire');
+    } catch {
+      showToast('Copy failed — check browser permissions');
+    }
   }
 
   return (
@@ -210,6 +243,7 @@ function NewQuoteMode() {
         providers={providers}
         recommendation={recommendation}
         onRecommend={setRecommendation}
+        onRecommendCopy={handleRecommendCopy}
         onCopy={handleCopy}
         onOpenSunfire={handleOpenSunfire}
         clientPhone={client.phone}
@@ -234,6 +268,7 @@ function V4TableWithPrime({
   providers,
   recommendation,
   onRecommend,
+  onRecommendCopy,
   onCopy,
   onOpenSunfire,
   clientPhone,
@@ -246,6 +281,12 @@ function V4TableWithPrime({
   providers: import('@/types/session').Provider[];
   recommendation: string | null;
   onRecommend: (id: string | null) => void;
+  onRecommendCopy?: (args: {
+    plan: Plan;
+    totalRxAnnual: number;
+    totalAnnualValue: number;
+    whySwitch: string;
+  }) => void;
   onCopy: (plan: Plan) => void;
   onOpenSunfire: (plan: Plan) => void;
   clientPhone?: string;
@@ -289,6 +330,7 @@ function V4TableWithPrime({
       providers={providers}
       recommendation={recommendation}
       onRecommend={onRecommend}
+      onRecommendCopy={onRecommendCopy}
       onCopy={onCopy}
       onOpenSunfire={onOpenSunfire}
       formularyTick={formularyTick}
