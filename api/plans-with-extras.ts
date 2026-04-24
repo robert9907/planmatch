@@ -84,7 +84,11 @@ function parseTripleId(id: string): { contract_id: string; plan_id: string; segm
 }
 
 function tripleToId(r: Pick<PmBenefitRow, 'contract_id' | 'plan_id' | 'segment_id'>): string {
-  return `${r.contract_id}-${r.plan_id}-${r.segment_id || '000'}`;
+  // pm_plan_benefits stores segment as '0' / '001' etc. Triple ids
+  // everywhere else zero-pad to 3 chars, so normalize here so a
+  // federal row for segment '0' lines up with triple 'H…-…-000'.
+  const seg = (r.segment_id ?? '0').padStart(3, '0');
+  return `${r.contract_id}-${r.plan_id}-${seg}`;
 }
 
 function priorityRank(source: Source): number {
@@ -112,16 +116,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const sb = supabase();
 
     // ─── Federal PBP base layer ────────────────────────────────────
+    //
+    // pm_plan_benefits stores segment_id as a bare string — most rows
+    // are '0' for the unsegmented plan, occasionally '001' etc. The
+    // triple-id format everyone else uses ("H5253-189-000") always
+    // zero-pads to 3 chars, so we filter on contract+plan only and
+    // then match segments in JS with a normalizer that treats '0' and
+    // '000' as equal.
     const contractIds = [...new Set(triples.map((t) => t.contract_id))];
     const planIds = [...new Set(triples.map((t) => t.plan_id))];
-    const segIds = [...new Set(triples.map((t) => t.segment_id))];
     const { data: pmRows, error: pmErr } = await sb
       .from('pm_plan_benefits')
       .select('contract_id, plan_id, segment_id, benefit_category, benefit_description, copay, coinsurance')
       .in('contract_id', contractIds)
-      .in('plan_id', planIds)
-      .in('segment_id', segIds);
+      .in('plan_id', planIds);
     if (pmErr) throw pmErr;
+    const normSeg = (s: string | null | undefined) => {
+      const t = (s ?? '0').replace(/^0+/, '') || '0';
+      return t;
+    };
+    const wantedSegs = new Set(triples.map((t) => normSeg(t.segment_id)));
+    const pmRowsForTriples = ((pmRows ?? []) as PmBenefitRow[]).filter((r) =>
+      wantedSegs.has(normSeg(r.segment_id)),
+    );
 
     // ─── Overlay layer — pbp_benefits ──────────────────────────────
     //
@@ -186,7 +203,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       else overlayHits.add(key);
     }
 
-    for (const r of (pmRows ?? []) as PmBenefitRow[]) {
+    for (const r of pmRowsForTriples) {
       const planTripleId = tripleToId(r);
       considerRow(
         planTripleId,
