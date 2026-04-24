@@ -218,6 +218,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       plansQuery = plansQuery.in('contract_id', contractIds).in('plan_id', planIds);
     } else {
       if (state) plansQuery = plansQuery.eq('state', state);
+      if (wantedCounty) {
+        // Push the county match into PostgREST. Without this we fetch up
+        // to `limit` rows from a state with thousands of plan-county
+        // rows (NC alone has 6,220) and then filter to ~80 in JS — most
+        // of the wanted county's rows fall outside the row window and
+        // get silently dropped (this was the Durham 11-vs-74 bug).
+        // 'All Counties' is the PDP state-wide wildcard. ilike is
+        // case-insensitive; we strip PostgREST-significant chars first.
+        const safe = wantedCounty.replace(/[,()*%]/g, '').trim();
+        plansQuery = plansQuery.or(
+          `county_name.ilike.${safe},county_name.eq.All Counties`,
+        );
+      }
     }
 
     const { data: rawRows, error: planErr } = await plansQuery;
@@ -225,8 +238,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     let rows = (rawRows ?? []) as PlanRow[];
 
-    // County filter applied in JS so we can match on the normalized
-    // form + "All Counties" PDP wildcard in one pass.
+    // Defensive county re-filter — handles the ids-path (which skips the
+    // PostgREST county filter above) and any DB rows whose county_name
+    // normalizes differently than the input string.
     if (wantedCounty) {
       rows = rows.filter((r) => {
         const c = normalizeCounty(r.county_name);
