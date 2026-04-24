@@ -4,6 +4,7 @@ import type { Medication, Provider } from '@/types/session';
 import type { FormularyHit } from '@/lib/formularyLookup';
 import { getCachedFormulary } from '@/lib/formularyLookup';
 import { startScreenShare, type ActiveShare } from '@/lib/screenShare';
+import type { PharmacyMode, PlanDrugCost } from '@/lib/drugCosts';
 
 // Scoped port of the v4 mockup. Everything lives under the `.qv4`
 // root so the component's styles don't bleed into the rest of the app.
@@ -515,6 +516,16 @@ interface QuoteDeliveryV4Props {
   clientPhone?: string;
   clientFirstName?: string;
   brokerName?: string;
+  // Live Medicare.gov drug-cost data indexed by Plan.id and a few
+  // normalized variants (see useDrugCosts). When present, overrides
+  // the tier-based rxSummary() for the Total Rx Cost + Annual Cost +
+  // Total Annual Value rows.
+  planDrugCosts?: Record<string, PlanDrugCost>;
+  pharmacyMode?: PharmacyMode;
+  onPharmacyModeChange?: (mode: PharmacyMode) => void;
+  drugCostsLoading?: boolean;
+  drugCostsSource?: string | null;
+  drugCostsError?: string | null;
 }
 
 export function QuoteDeliveryV4({
@@ -530,6 +541,12 @@ export function QuoteDeliveryV4({
   clientPhone,
   clientFirstName,
   brokerName,
+  planDrugCosts,
+  pharmacyMode,
+  onPharmacyModeChange,
+  drugCostsLoading,
+  drugCostsSource,
+  drugCostsError,
 }: QuoteDeliveryV4Props) {
   // Re-subscribing to formularyTick keeps every memo below re-evaluating
   // as bulk formulary responses land. Without it the per-drug cells
@@ -540,10 +557,17 @@ export function QuoteDeliveryV4({
     () => classifyColumns(finalists, currentPlan, medications.length),
     [finalists, currentPlan, medications.length],
   );
-  const totals = useMemo(
+  const baseTotals = useMemo(
     () => columns.map((c) => computeTotals(c.plan, medications)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [columns, medications, formularyTick],
+  );
+  // Overlay with live Medicare.gov costs when available. Medicare.gov's
+  // annual figure already includes the Rx deductible, so we replace
+  // annualCost outright and recompute the bottom-line total.
+  const totals = useMemo(
+    () => columns.map((c, i) => overrideWithLiveRx(baseTotals[i], c.plan, planDrugCosts)),
+    [columns, baseTotals, planDrugCosts],
   );
   const baseline = currentPlan ?? columns[0]?.plan ?? null;
   const baselineIdx = columns.findIndex((c) => c.plan.id === baseline?.id);
@@ -567,6 +591,16 @@ export function QuoteDeliveryV4({
         clientFirstName={clientFirstName}
         brokerName={brokerName}
       />
+      {onPharmacyModeChange && (
+        <PharmacyModeBar
+          mode={pharmacyMode ?? 'retail'}
+          onChange={onPharmacyModeChange}
+          loading={drugCostsLoading ?? false}
+          source={drugCostsSource ?? null}
+          error={drugCostsError ?? null}
+          medsCount={medications.length}
+        />
+      )}
       <div className="wrap">
         <table>
           <thead>
@@ -1506,4 +1540,131 @@ function formatElapsed(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+// ─── Live drug cost override ────────────────────────────────────────
+//
+// When Medicare.gov has returned real numbers for a plan, replace the
+// tier-based rxSummary estimates so every downstream row (Total Rx
+// Cost, Annual Cost, Total Annual Value) renders dollars-for-dollars
+// the same figures the client would see on Plan Finder.
+
+function lookupLivePlanCost(
+  plan: Plan,
+  map: Record<string, PlanDrugCost> | undefined,
+): PlanDrugCost | null {
+  if (!map) return null;
+  const parts = plan.id.split('-');
+  const seg = parts[2] ?? '0';
+  const segPadded = seg.padStart(3, '0');
+  return (
+    map[plan.id] ??
+    map[`${plan.contract_id}-${plan.plan_number}-${seg}`] ??
+    map[`${plan.contract_id}-${plan.plan_number}-${segPadded}`] ??
+    map[`${plan.contract_id}-${plan.plan_number}`] ??
+    null
+  );
+}
+
+function overrideWithLiveRx(
+  base: PlanTotals,
+  plan: Plan,
+  map: Record<string, PlanDrugCost> | undefined,
+): PlanTotals {
+  const live = lookupLivePlanCost(plan, map);
+  if (!live || live.annual_cost == null) return base;
+  const rxAnnual = live.annual_cost;
+  const rxMonthly = live.monthly_cost ?? rxAnnual / 12;
+  // Medicare.gov's annual_cost is inclusive of the Rx deductible.
+  const annualCost = rxAnnual;
+  const giveback = plan.part_b_giveback * 12;
+  const totalAnnualValue = annualCost - base.extraBenefitsValue - giveback;
+  return {
+    ...base,
+    rxMonthly,
+    rxAnnual,
+    rxHasCoins: false,
+    annualCost,
+    totalAnnualValue,
+  };
+}
+
+// ─── Pharmacy mode toggle ───────────────────────────────────────────
+
+function PharmacyModeBar({
+  mode,
+  onChange,
+  loading,
+  source,
+  error,
+  medsCount,
+}: {
+  mode: PharmacyMode;
+  onChange: (mode: PharmacyMode) => void;
+  loading: boolean;
+  source: string | null;
+  error: string | null;
+  medsCount: number;
+}) {
+  let status: { text: string; color: string };
+  if (medsCount === 0) {
+    status = { text: 'No medications — add Rx on Step 3 to see live drug pricing.', color: '#868e96' };
+  } else if (loading) {
+    status = { text: 'Loading live pricing from Medicare.gov…', color: '#0d2f5e' };
+  } else if (error) {
+    status = { text: `Live pricing unavailable — ${error}. Showing tier-based estimate.`, color: '#d63031' };
+  } else if (source === 'rate_limited' || source === 'cache:rate_limited') {
+    status = { text: 'Medicare.gov rate-limited — retry in 5 min. Showing estimate.', color: '#e67e22' };
+  } else if (source === 'no_ndcs') {
+    status = { text: 'No NDCs resolved for these drugs — showing tier-based estimate.', color: '#868e96' };
+  } else if (source && source.startsWith('cache:')) {
+    status = { text: 'Live prices (cached from Medicare.gov, 24h TTL).', color: '#1a9c55' };
+  } else if (source === 'live') {
+    status = { text: 'Live prices from Medicare.gov.', color: '#1a9c55' };
+  } else {
+    status = { text: 'Tier-based estimate. Live pricing runs when rxcuis resolve.', color: '#868e96' };
+  }
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '10px 14px',
+        marginBottom: 8,
+        background: '#f8f9fa',
+        border: '1px solid #e9ecef',
+        borderRadius: 10,
+        fontFamily: 'Inter, sans-serif',
+      }}
+    >
+      <div style={{ display: 'inline-flex', borderRadius: 8, background: '#e9ecef', padding: 3 }}>
+        {(['retail', 'mail'] as const).map((m) => {
+          const active = mode === m;
+          return (
+            <button
+              key={m}
+              type="button"
+              onClick={() => onChange(m)}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                border: 'none',
+                background: active ? '#fff' : 'transparent',
+                color: active ? '#0d2f5e' : '#495057',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                boxShadow: active ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+              }}
+            >
+              {m === 'retail' ? '30-day Retail' : '90-day Mail Order'}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 12, color: status.color, flex: 1 }}>{status.text}</div>
+    </div>
+  );
 }

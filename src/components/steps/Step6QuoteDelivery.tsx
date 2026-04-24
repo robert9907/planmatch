@@ -13,6 +13,8 @@ import { fipsForCounty } from '@/lib/ncFips';
 import type { Plan } from '@/types/plans';
 import type { SessionMode } from '@/types/session';
 import { QuoteDeliveryV4 } from './QuoteDeliveryV4';
+import { useDrugCosts } from '@/hooks/useDrugCosts';
+import type { PharmacyMode } from '@/lib/drugCosts';
 
 // ─── Display helpers ────────────────────────────────────────────────
 // The PBP structured extract carries a benefit row for many
@@ -251,6 +253,7 @@ function V4TableWithPrime({
   brokerName?: string;
 }) {
   const [formularyTick, setFormularyTick] = useState(0);
+  const [pharmacyMode, setPharmacyMode] = useState<PharmacyMode>('retail');
   const primeNonce = useMemo(
     () =>
       `${finalists.length}:${medications
@@ -276,6 +279,8 @@ function V4TableWithPrime({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [primeNonce]);
 
+  const drugCosts = useDrugCosts(finalists, medications, pharmacyMode);
+
   return (
     <QuoteDeliveryV4
       finalists={finalists}
@@ -290,6 +295,12 @@ function V4TableWithPrime({
       clientPhone={clientPhone}
       clientFirstName={clientFirstName}
       brokerName={brokerName}
+      planDrugCosts={drugCosts.byPlanId}
+      pharmacyMode={pharmacyMode}
+      onPharmacyModeChange={setPharmacyMode}
+      drugCostsLoading={drugCosts.loading}
+      drugCostsSource={drugCosts.source}
+      drugCostsError={drugCosts.error}
     />
   );
 }
