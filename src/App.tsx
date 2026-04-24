@@ -4,6 +4,7 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { TabColumn } from '@/components/layout/TabColumn';
 import { NotepadPanel } from '@/components/layout/NotepadPanel';
 import { CaptureApp } from '@/capture/CaptureApp';
+import { WatchApp } from '@/watch/WatchApp';
 import { Step1ClientLookup } from '@/components/steps/Step1ClientLookup';
 import { Step2Intake } from '@/components/steps/Step2Intake';
 import { Step3Medications } from '@/components/steps/Step3Medications';
@@ -18,12 +19,18 @@ import { WORKFLOW_STEPS } from '@/lib/constants';
 
 export default function App() {
   if (isCaptureRoute()) return <CaptureApp />;
+  if (isWatchRoute()) return <WatchApp />;
   return <BrokerApp />;
 }
 
 function isCaptureRoute(): boolean {
   if (typeof window === 'undefined') return false;
   return window.location.pathname.startsWith('/capture/');
+}
+
+function isWatchRoute(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.location.pathname.startsWith('/watch/');
 }
 
 function BrokerApp() {

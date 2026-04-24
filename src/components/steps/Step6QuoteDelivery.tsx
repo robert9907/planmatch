@@ -210,6 +210,9 @@ function NewQuoteMode() {
         onRecommend={setRecommendation}
         onCopy={handleCopy}
         onOpenSunfire={handleOpenSunfire}
+        clientPhone={client.phone}
+        clientFirstName={clientFirstName(client.name)}
+        brokerName={BROKER.name}
       />
       <ClientDeliveryCard finalists={finalists} recommendation={recommendation} />
       <ComplianceChecklist />
@@ -231,6 +234,9 @@ function V4TableWithPrime({
   onRecommend,
   onCopy,
   onOpenSunfire,
+  clientPhone,
+  clientFirstName,
+  brokerName,
 }: {
   finalists: Plan[];
   currentPlan: Plan | null;
@@ -240,6 +246,9 @@ function V4TableWithPrime({
   onRecommend: (id: string | null) => void;
   onCopy: (plan: Plan) => void;
   onOpenSunfire: (plan: Plan) => void;
+  clientPhone?: string;
+  clientFirstName?: string;
+  brokerName?: string;
 }) {
   const [formularyTick, setFormularyTick] = useState(0);
   const primeNonce = useMemo(
@@ -278,6 +287,9 @@ function V4TableWithPrime({
       onCopy={onCopy}
       onOpenSunfire={onOpenSunfire}
       formularyTick={formularyTick}
+      clientPhone={clientPhone}
+      clientFirstName={clientFirstName}
+      brokerName={brokerName}
     />
   );
 }

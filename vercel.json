@@ -10,6 +10,7 @@
   },
   "rewrites": [
     { "source": "/capture/:token", "destination": "/index.html" },
+    { "source": "/watch/:roomId", "destination": "/index.html" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "headers": [

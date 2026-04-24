@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CostShare, Plan, FormularyTier } from '@/types/plans';
 import type { Medication, Provider } from '@/types/session';
 import type { FormularyHit } from '@/lib/formularyLookup';
 import { getCachedFormulary } from '@/lib/formularyLookup';
+import { startScreenShare, type ActiveShare } from '@/lib/screenShare';
 
 // Scoped port of the v4 mockup. Everything lives under the `.qv4`
 // root so the component's styles don't bleed into the rest of the app.
@@ -509,6 +510,11 @@ interface QuoteDeliveryV4Props {
   onCopy: (plan: Plan) => void;
   onOpenSunfire: (plan: Plan) => void;
   formularyTick: number; // parent re-renders on tick bumps
+  // Screen-share context. Button is hidden when clientPhone is empty
+  // so the broker isn't prompted to pick a screen they can't SMS.
+  clientPhone?: string;
+  clientFirstName?: string;
+  brokerName?: string;
 }
 
 export function QuoteDeliveryV4({
@@ -521,6 +527,9 @@ export function QuoteDeliveryV4({
   onCopy,
   onOpenSunfire,
   formularyTick,
+  clientPhone,
+  clientFirstName,
+  brokerName,
 }: QuoteDeliveryV4Props) {
   // Re-subscribing to formularyTick keeps every memo below re-evaluating
   // as bulk formulary responses land. Without it the per-drug cells
@@ -553,6 +562,11 @@ export function QuoteDeliveryV4({
   return (
     <div className="qv4">
       <style>{CSS}</style>
+      <ScreenShareBar
+        clientPhone={clientPhone}
+        clientFirstName={clientFirstName}
+        brokerName={brokerName}
+      />
       <div className="wrap">
         <table>
           <thead>
@@ -1291,4 +1305,205 @@ function bgClass(bucket: ColorBucket): string {
     case 'gb': return 'gb-bg';
     default: return '';
   }
+}
+
+// ─── Screen share bar ───────────────────────────────────────────────
+//
+// Lives above the comparison table. Single button that toggles between
+// "Share Screen" and "Stop Sharing · MM:SS" with a red pulsing dot when
+// active. Under the hood: getDisplayMedia → Twilio Video room → SMS
+// link to the client's phone. The server caps at 30-min idle and also
+// exposes a /api/screen-share-stop belt-and-suspenders cleanup.
+
+function ScreenShareBar({
+  clientPhone,
+  clientFirstName,
+  brokerName,
+}: {
+  clientPhone?: string;
+  clientFirstName?: string;
+  brokerName?: string;
+}) {
+  const [active, setActive] = useState<ActiveShare | null>(null);
+  const [status, setStatus] = useState<'idle' | 'starting' | 'active' | 'error'>('idle');
+  const [message, setMessage] = useState<string | null>(null);
+  const [link, setLink] = useState<string | null>(null);
+  const [smsFailed, setSmsFailed] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const startedAtRef = useRef<number>(0);
+
+  // Drive the MM:SS counter on the active button. Resets to 0 when the
+  // share ends so the next start doesn't inherit a stale timer.
+  useEffect(() => {
+    if (status !== 'active') {
+      setElapsed(0);
+      return;
+    }
+    startedAtRef.current = Date.now();
+    const id = window.setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startedAtRef.current) / 1000));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [status]);
+
+  // Belt-and-suspenders: if the user navigates away from the app while
+  // sharing, tear the room down so the viewer doesn't see a frozen
+  // final frame for 30s.
+  useEffect(() => {
+    if (!active) return;
+    function onUnload() { void active!.stop('unload'); }
+    window.addEventListener('beforeunload', onUnload);
+    return () => window.removeEventListener('beforeunload', onUnload);
+  }, [active]);
+
+  async function onStart() {
+    if (!clientPhone) {
+      setMessage('Add the client phone on Step 1 before sharing.');
+      setStatus('error');
+      return;
+    }
+    setStatus('starting');
+    setMessage(null);
+    setSmsFailed(false);
+    setLink(null);
+    try {
+      const { active: a, share } = await startScreenShare({
+        clientPhone,
+        clientFirstName,
+        brokerName,
+        onEnded: (reason) => {
+          setActive(null);
+          setStatus('idle');
+          if (reason === 'idle_timeout') setMessage('Auto-stopped after 30 minutes.');
+          else if (reason === 'browser_stop') setMessage('Stopped from the browser control.');
+          else setMessage(null);
+        },
+      });
+      setActive(a);
+      setLink(share.link);
+      setSmsFailed(share.smsFailed);
+      setStatus('active');
+      if (share.smsFailed) {
+        setMessage(`SMS didn't send — read aloud: ${share.link}`);
+      } else {
+        setMessage(`Texted ${clientFirstName || 'client'} at ${clientPhone}`);
+      }
+    } catch (err) {
+      console.error('[screenShare] start failed', err);
+      setStatus('error');
+      const msg =
+        err instanceof DOMException && err.name === 'NotAllowedError'
+          ? 'Permission denied — pick a tab or window to share.'
+          : (err as Error).message;
+      setMessage(msg);
+    }
+  }
+
+  async function onStop() {
+    if (active) await active.stop('manual');
+  }
+
+  const isActive = status === 'active';
+  const phoneMissing = !clientPhone;
+  const label = isActive
+    ? `Stop Sharing · ${formatElapsed(elapsed)}`
+    : status === 'starting'
+      ? 'Starting…'
+      : 'Share Screen';
+
+  return (
+    <div
+      className="qv4-share"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '12px 16px',
+        marginBottom: 8,
+        background: isActive ? '#fff5f5' : '#f8f9fa',
+        border: `1px solid ${isActive ? '#d63031' : '#e9ecef'}`,
+        borderRadius: 10,
+        fontFamily: 'Inter, sans-serif',
+      }}
+    >
+      <button
+        type="button"
+        onClick={isActive ? onStop : onStart}
+        disabled={status === 'starting' || phoneMissing}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '9px 16px',
+          borderRadius: 8,
+          border: 'none',
+          background: isActive ? '#d63031' : '#0d2f5e',
+          color: '#fff',
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 13,
+          fontWeight: 600,
+          cursor: phoneMissing ? 'not-allowed' : 'pointer',
+          opacity: phoneMissing || status === 'starting' ? 0.7 : 1,
+        }}
+      >
+        {isActive && <RecordingDot />}
+        {label}
+      </button>
+      <div style={{ fontSize: 12, color: '#495057', flex: 1 }}>
+        {phoneMissing ? (
+          <span style={{ color: '#868e96' }}>
+            Add the client phone on Step 1 to enable screen share.
+          </span>
+        ) : isActive ? (
+          <>
+            <div style={{ fontWeight: 600 }}>
+              Sharing with {clientFirstName || 'client'} · {clientPhone}
+            </div>
+            {message && <div style={{ color: smsFailed ? '#d63031' : '#1a9c55' }}>{message}</div>}
+            {link && (
+              <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#868e96' }}>
+                {link}
+              </div>
+            )}
+          </>
+        ) : status === 'error' ? (
+          <span style={{ color: '#d63031' }}>{message}</span>
+        ) : (
+          <>
+            <div>Walk {clientFirstName || 'the client'} through the quote on their phone.</div>
+            <div style={{ color: '#868e96' }}>
+              Opens a browser picker → texts {clientPhone} a one-tap link.
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RecordingDot() {
+  return (
+    <>
+      <style>
+        {`@keyframes qv4-pulse { 0%,100% { opacity:1 } 50% { opacity:.3 } }`}
+      </style>
+      <span
+        aria-hidden
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: '#fff',
+          boxShadow: '0 0 0 2px rgba(255,255,255,.35)',
+          animation: 'qv4-pulse 1.2s ease-in-out infinite',
+        }}
+      />
+    </>
+  );
+}
+
+function formatElapsed(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
 }
