@@ -37,13 +37,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const roomId = `pm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
     const client = twilioClient();
+    // type:'go' was the legacy free tier — deprecated on new Twilio
+    // accounts. 'group-small' is the cheapest paid tier and caps at 4
+    // participants, which is plenty for broker + client (and a second
+    // household member if Dorothy's daughter joins the call).
     const room = await client.video.v1.rooms.create({
       uniqueName: roomId,
-      type: 'go', // free WebRTC Go tier — 1:1 + 1 publisher + N viewers fits within
-      // Go tier allows up to 2 participants per room. That's broker + one
-      // client on their phone — the exact shape of this flow. If a
-      // household wants multiple viewers, switch to type: 'group' once
-      // the account plan supports it.
+      type: 'group-small',
       emptyRoomTimeout: 5,
       unusedRoomTimeout: 5,
     });
