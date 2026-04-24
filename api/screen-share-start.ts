@@ -37,13 +37,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const roomId = `pm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
     const client = twilioClient();
-    // type:'go' was the legacy free tier — deprecated on new Twilio
-    // accounts. 'group-small' is the cheapest paid tier and caps at 4
-    // participants, which is plenty for broker + client (and a second
-    // household member if Dorothy's daughter joins the call).
+    // 'go' and 'group-small' are both deprecated on current Twilio
+    // accounts — only 'peer-to-peer' and 'group' are supported now.
+    // 'group' gives us SFU-backed WebRTC which is required for the
+    // viewer side to reliably decode the broker's screen track on
+    // mobile Safari/Chrome; peer-to-peer breaks on many NATs.
     const room = await client.video.v1.rooms.create({
       uniqueName: roomId,
-      type: 'group-small',
+      type: 'group',
       emptyRoomTimeout: 5,
       unusedRoomTimeout: 5,
     });
