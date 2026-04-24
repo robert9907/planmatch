@@ -107,6 +107,11 @@ export async function bulkLookupFormulary(
     rxcuis: realRxcuis.join(','),
     contract_ids: contractIds.join(','),
   });
+  const callId = `bulk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  console.log('[bulkLookup]', callId, 'REQUEST', {
+    rxcuis: realRxcuis,
+    contractCount: contractIds.length,
+  });
   try {
     const res = await fetch(`/api/formulary?${qs.toString()}`, {
       method: 'GET',
@@ -114,7 +119,9 @@ export async function bulkLookupFormulary(
     });
     if (!res.ok) throw new Error(`formulary bulk ${res.status}`);
     const body = (await res.json()) as { rows: BulkRow[] };
+    const rowsByRxcui = new Map<string, number>();
     for (const r of body.rows ?? []) {
+      rowsByRxcui.set(r.rxcui, (rowsByRxcui.get(r.rxcui) ?? 0) + 1);
       const hit: FormularyHit = {
         tier: normalizeTier(r.tier),
         copay: r.copay,
@@ -125,9 +132,14 @@ export async function bulkLookupFormulary(
       out.set(key, hit);
       cache.set(key, hit);
     }
+    console.log('[bulkLookup]', callId, 'RESPONSE', {
+      totalRows: body.rows?.length ?? 0,
+      rowsByRxcui: Object.fromEntries(rowsByRxcui),
+      cacheSize: cache.size,
+    });
     return out;
   } catch (err) {
-    console.warn('[formularyLookup] bulk fetch failed:', err);
+    console.warn('[bulkLookup]', callId, 'fetch failed:', err);
     return out;
   }
 }

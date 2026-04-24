@@ -265,6 +265,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (rxcuisCsv) {
       const originals = rxcuisCsv.split(',').map((s) => s.trim()).filter(Boolean);
       if (originals.length === 0) return sendJson(res, 200, { rows: [] });
+      const reqId = `f-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      console.log('[formulary]', reqId, 'BULK IN', {
+        originals,
+        contractIdsCsvLen: contractIdsCsv.length,
+      });
 
       // Expansion and combo-classification run in parallel per original.
       // Combo classification is what decides whether the caller's final
@@ -275,6 +280,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         Promise.all(originals.map(expandRxcui)),
         Promise.all(originals.map(isCombinationRxcui)),
       ]);
+      for (let i = 0; i < originals.length; i++) {
+        console.log('[formulary]', reqId, 'expansion', {
+          original: originals[i],
+          candidateCount: expansions[i].length,
+          isCombo: comboFlags[i],
+        });
+      }
       const suppressByOriginal = new Map<string, boolean>();
       for (let i = 0; i < originals.length; i++) {
         suppressByOriginal.set(originals[i], !comboFlags[i]);
@@ -337,11 +349,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         return out;
       }
+      console.log('[formulary]', reqId, 'query plan', {
+        totalCandidates: allCandidates.length,
+        chunkCount: rxChunks.length,
+        contractCount: queryContracts.length,
+        parallelCalls: rxChunks.length * queryContracts.length,
+      });
       const chunkResults = await Promise.all(
         rxChunks.flatMap((rxChunk) => queryContracts.map((cid) => fetchChunk(rxChunk, cid))),
       );
       const data: FormularyRow[] = [];
       for (const rows of chunkResults) for (const r of rows) data.push(r);
+      const rowsByOriginalInDb = new Map<string, number>();
+      for (const r of data) {
+        const originalsForRow = candidateToOriginals.get(r.rxcui);
+        if (!originalsForRow) continue;
+        for (const original of originalsForRow) {
+          rowsByOriginalInDb.set(original, (rowsByOriginalInDb.get(original) ?? 0) + 1);
+        }
+      }
+      console.log('[formulary]', reqId, 'db hit', {
+        totalRows: data.length,
+        rowsByOriginal: Object.fromEntries(rowsByOriginalInDb),
+      });
 
       // Collapse (contract_id, plan_id, original_rxcui) → best row. Each
       // cell is keyed per original so its own suppressCombos setting
@@ -391,6 +421,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           drug_name: r.drug_name,
         });
       }
+      const rowsByOriginalOut = new Map<string, number>();
+      for (const r of rows) rowsByOriginalOut.set(r.rxcui, (rowsByOriginalOut.get(r.rxcui) ?? 0) + 1);
+      console.log('[formulary]', reqId, 'BULK OUT', {
+        totalRows: rows.length,
+        rowsByOriginal: Object.fromEntries(rowsByOriginalOut),
+      });
       res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=120');
       return sendJson(res, 200, { rows });
     }
