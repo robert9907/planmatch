@@ -1022,6 +1022,21 @@ async function main() {
     }
 
     for (let i = 0; i < targets.length; i++) {
+      // Re-warm the Akamai session every 15 counties. The _abck / bm_sz
+      // sensors degrade over a long run and the SPA's /plans/search
+      // starts timing out at ~60s after ~15-20 counties without a
+      // refresh. Re-navigating /plan-compare/ rotates the sensors and
+      // restores throughput. Cheap (~6s total) compared to losing 80
+      // counties to soft-throttling.
+      if (i > 0 && i % 15 === 0) {
+        if (verbose) console.log('  re-warming Akamai session...');
+        try {
+          await page.goto(WARM_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+          await page.waitForTimeout(COOKIE_WARM_MS);
+        } catch (err) {
+          console.warn('  re-warm failed (continuing):', err.message);
+        }
+      }
       const t = targets[i];
       try { await scrapeOneTarget(page, t, {
         verbose, planLimit, args, bodyTemplate, env,
