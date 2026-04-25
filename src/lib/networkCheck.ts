@@ -12,6 +12,16 @@
 // wire it in as a new branch before the mock — everything behind
 // `source === 'directory'` is the truth, everything else is a
 // placeholder.
+//
+// ─── DIAGNOSTIC LOGGING ──────────────────────────────────────────────
+// Every call emits a console line under the `[network-check]` tag so
+// Rob can see what the directory "actually returned" for any (NPI,
+// carrier, contract) pair. Because we're on a mock, those logs are
+// brutally honest: they include `source: unverified_mock` and the hash
+// bucket that produced the result, so a confusing "out-of-network for
+// UHC" is immediately traceable to the mock instead of an imaginary
+// FHIR endpoint bug. UHC contracts (H5521, H4513, H2001…) get an extra
+// warning line because Rob hits those most.
 
 import type { Plan } from '@/types/plans';
 
@@ -29,14 +39,55 @@ export interface NetworkCheckResult {
   note: string;
 }
 
+// One-time startup banner so anyone watching the console knows the
+// mock is in play before they see the first per-plan log line.
+let bannerShown = false;
+function showBannerOnce(): void {
+  if (bannerShown) return;
+  bannerShown = true;
+  if (typeof console === 'undefined') return;
+  console.warn(
+    '[network-check] No real FHIR carrier-directory proxy is wired up. ' +
+      'All status values returned by checkNetwork() are deterministic mock ' +
+      'results derived from hash(NPI + plan_id). Treat in/out/unknown as ' +
+      'unverified — the manual override on the Providers page is the ' +
+      'authoritative signal until carrier proxies (UHC PDEX, Humana, Aetna) ' +
+      'are implemented.',
+  );
+}
+
+// Plan year is currently inferred from the Plan record (which the
+// CMS landscape import stamps). Logged verbatim so a 2026 vs 2027
+// mismatch would be obvious; today we always show '2026' from
+// pm_plans.
+function planYearFor(_plan: Plan): string {
+  // pm_plans rows in this build are 2026 landscape data. When the
+  // 2027 import lands, plumb plan.contract_year through here.
+  return '2026';
+}
+
+// UHC contract IDs Rob is most likely to look at. Not used for any
+// logic — only to escalate the diagnostic log line so a UHC mismatch
+// shows up clearly when scanning the console.
+const UHC_CONTRACT_PREFIXES = ['H5521', 'H4513', 'H2001', 'H0271', 'H0294'];
+
+function isUhcContract(plan: Plan): boolean {
+  if (plan.carrier?.toLowerCase().includes('united')) return true;
+  if (plan.carrier?.toLowerCase().includes('aarp')) return true;
+  return UHC_CONTRACT_PREFIXES.some((pfx) => plan.contract_id?.startsWith(pfx));
+}
+
 export async function checkNetwork(npi: string, plan: Plan): Promise<NetworkCheckResult> {
+  showBannerOnce();
+
   // Simulated latency so the UI doesn't flicker through 12 instant
   // status changes — matches the prior mock's behavior.
-  await sleep(220 + (hash(npi + plan.id) % 380));
+  const hashed = hash(npi + plan.id);
+  await sleep(220 + (hashed % 380));
 
-  const bucket = hash(npi + plan.id) % 10;
+  const bucket = hashed % 10;
   const status: NetworkStatus = bucket < 2 ? 'out' : bucket < 8 ? 'unknown' : 'in';
-  return {
+  const result: NetworkCheckResult = {
     plan_id: plan.id,
     carrier: plan.carrier,
     status,
@@ -45,6 +96,9 @@ export async function checkNetwork(npi: string, plan: Plan): Promise<NetworkChec
     note:
       'Unverified — mock network status until the carrier FHIR directory proxy ships. Confirm in-network with the carrier before enrolling.',
   };
+
+  logCheck(npi, plan, result, { hash: hashed, bucket });
+  return result;
 }
 
 export async function checkNetworkAcross(
@@ -52,6 +106,38 @@ export async function checkNetworkAcross(
   plans: Plan[],
 ): Promise<NetworkCheckResult[]> {
   return Promise.all(plans.map((plan) => checkNetwork(npi, plan)));
+}
+
+function logCheck(
+  npi: string,
+  plan: Plan,
+  result: NetworkCheckResult,
+  diag: { hash: number; bucket: number },
+): void {
+  if (typeof console === 'undefined') return;
+  const tag = '[network-check]';
+  const line = {
+    npi,
+    carrier: plan.carrier,
+    contract: plan.contract_id,
+    plan_number: plan.plan_number,
+    plan_id: plan.id,
+    plan_year: planYearFor(plan),
+    status: result.status,
+    source: result.source,
+    mock_hash: diag.hash,
+    mock_bucket: diag.bucket, // 0–1 → out, 2–7 → unknown, 8–9 → in
+    checked_at: new Date(result.checked_at).toISOString(),
+  };
+  console.info(tag, line);
+  if (isUhcContract(plan)) {
+    console.warn(
+      `${tag} UHC directory call would have happened here: ` +
+        `endpoint=https://public.fhir.uhc.com/PublicAndProtected/api/PractitionerRole?practitioner.identifier=${npi}&plan-network=${plan.contract_id}-${plan.plan_number} ` +
+        `(NOT CALLED — mock returned status=${result.status}). ` +
+        `If the agent verified Dr.${npi} is in-network for this carrier, use the per-carrier "I verified this is wrong" override on the Providers page.`,
+    );
+  }
 }
 
 function hash(s: string): number {

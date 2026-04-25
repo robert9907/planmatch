@@ -38,6 +38,15 @@ export interface Provider {
   source: 'manual' | 'capture' | 'from_med';
   networkStatus?: Record<string, 'in' | 'out' | 'unknown'>;
   manuallyConfirmed?: boolean;
+  /**
+   * Per-carrier "I verified this is in-network" overrides. Keyed by
+   * carrier name (e.g. "UnitedHealthcare"). When set, every plan from
+   * that carrier is treated as in-network for this provider regardless
+   * of what the directory check returned. The note captures *how* Rob
+   * verified — typically "called the office" or "saw provider in the
+   * carrier's findcare portal."
+   */
+  manualOverrides?: Record<string, { status: 'in'; note: string; at: number }>;
   addedAt: number;
 }
 

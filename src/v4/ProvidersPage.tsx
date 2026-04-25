@@ -4,6 +4,13 @@
 // FHIR network check, manual override. The UI now matches the mockup:
 // capture bar, funnel, provider card with per-carrier network badges
 // and a Network Verification summary card at the bottom.
+//
+// Manual-override UX is per-carrier: any badge that comes back `out`
+// or `unknown` is clickable. Clicking expands an inline confirm form
+// with a note field, and on submit flips that carrier's plans to `in`
+// for this provider. The override note (e.g. "verified on
+// findcare.guest.uhc.com") is preserved on the card so Rob can recall
+// later why a carrier was overridden.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSession } from '@/hooks/useSession';
@@ -67,12 +74,14 @@ export function ProvidersPage({ capture, onBack, onContinue }: Props) {
 
   // Funnel: plans-with-all-meds (assume full pool here — the medications
   // page already filtered upstream) minus any plan where any added
-  // provider is confirmed out-of-network.
+  // provider is confirmed out-of-network. A per-carrier override
+  // upgrades the carrier's plans back to 'in' for that provider.
   const inNetworkPlans = useMemo(() => {
     if (providers.length === 0) return eligiblePlans.length;
     return eligiblePlans.filter((p) =>
       providers.every((pr) => {
         if (pr.manuallyConfirmed) return true;
+        if (pr.manualOverrides?.[p.carrier]?.status === 'in') return true;
         const s = pr.networkStatus?.[p.id];
         return s !== 'out';
       }),
@@ -101,6 +110,31 @@ export function ProvidersPage({ capture, onBack, onContinue }: Props) {
 
   function toggleManualOverride(prov: Provider) {
     updateProvider(prov.id, { manuallyConfirmed: !prov.manuallyConfirmed });
+  }
+
+  function confirmCarrier(prov: Provider, carrier: string, note: string) {
+    const overrides = { ...(prov.manualOverrides ?? {}) };
+    overrides[carrier] = { status: 'in', note: note.trim(), at: Date.now() };
+    // Also rewrite the per-plan networkStatus for every plan of this
+    // carrier so downstream consumers (planFilter, Plan Brain, the
+    // funnel above) see the override without each having to re-implement
+    // the carrier-key lookup.
+    const carrierPlanIds = eligiblePlans.filter((p) => p.carrier === carrier).map((p) => p.id);
+    const nextStatus = { ...(prov.networkStatus ?? {}) };
+    for (const id of carrierPlanIds) nextStatus[id] = 'in';
+    updateProvider(prov.id, { manualOverrides: overrides, networkStatus: nextStatus });
+  }
+
+  function clearCarrierOverride(prov: Provider, carrier: string) {
+    const overrides = { ...(prov.manualOverrides ?? {}) };
+    delete overrides[carrier];
+    updateProvider(prov.id, { manualOverrides: overrides });
+    // Recheck so the freshly-cleared carrier picks up the directory
+    // status again instead of staying stuck on 'in'.
+    if (prov.npi) {
+      const carrierPlans = eligiblePlans.filter((p) => p.carrier === carrier);
+      runChecks(prov.id, prov.npi, carrierPlans, updateProvider);
+    }
   }
 
   return (
@@ -189,6 +223,8 @@ export function ProvidersPage({ capture, onBack, onContinue }: Props) {
                   onRecheck={() => recheck(pr)}
                   onOverride={() => toggleManualOverride(pr)}
                   onRemove={() => removeProvider(pr.id)}
+                  onConfirmCarrier={(carrier, note) => confirmCarrier(pr, carrier, note)}
+                  onClearCarrier={(carrier) => clearCarrierOverride(pr, carrier)}
                 />
               ))
             )}
@@ -211,18 +247,22 @@ export function ProvidersPage({ capture, onBack, onContinue }: Props) {
 }
 
 function ProviderCard({
-  provider, plans, onRecheck, onOverride, onRemove,
+  provider, plans, onRecheck, onOverride, onRemove, onConfirmCarrier, onClearCarrier,
 }: {
   provider: Provider; plans: Plan[];
   onRecheck: () => void; onOverride: () => void; onRemove: () => void;
+  onConfirmCarrier: (carrier: string, note: string) => void;
+  onClearCarrier: (carrier: string) => void;
 }) {
-  // One badge per carrier — collapse duplicate plans (a carrier with
-  // 5 plans all in-network renders as one green "Humana ✓").
+  // One row per carrier — collapse duplicate plans (a carrier with
+  // 5 plans all in-network renders as one green "Humana ✓"). Override
+  // wins over the directory result.
   const byCarrier = new Map<string, 'in' | 'out' | 'unknown'>();
   for (const p of plans) {
-    const s = provider.networkStatus?.[p.id] ?? 'unknown';
+    const override = provider.manualOverrides?.[p.carrier];
+    const raw = provider.networkStatus?.[p.id] ?? 'unknown';
+    const s: 'in' | 'out' | 'unknown' = override?.status === 'in' ? 'in' : raw;
     const prev = byCarrier.get(p.carrier);
-    // A single "in" wins the carrier; otherwise keep worst-case.
     if (s === 'in' || prev === 'in') byCarrier.set(p.carrier, 'in');
     else if (s === 'out' || prev === 'out') byCarrier.set(p.carrier, 'out');
     else byCarrier.set(p.carrier, 'unknown');
@@ -231,8 +271,14 @@ function ProviderCard({
   const outCount = [...byCarrier.values()].filter((v) => v === 'out').length;
   const initials = provider.name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('');
 
-  const badges = [...byCarrier.entries()].slice(0, 4);
-  const hiddenCarriers = byCarrier.size - badges.length;
+  // No more "+X more" truncation — every carrier in the eligible pool
+  // gets its own row so Rob can override any of them.
+  const carrierEntries = [...byCarrier.entries()];
+
+  // One open editor at a time — clicking "I verified this is wrong" on
+  // a carrier expands an inline note field below the row.
+  const [openCarrier, setOpenCarrier] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState('');
 
   return (
     <div className="pi">
@@ -244,22 +290,147 @@ function ProviderCard({
         {provider.npi && (
           <div className="pnpi">NPI <span>{provider.npi}</span>{provider.manuallyConfirmed ? ' · MANUAL' : ''}</div>
         )}
-        <div className="nrow">
-          {badges.length === 0 ? (
+
+        <div className="nrow" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 4, marginTop: 8 }}>
+          {carrierEntries.length === 0 ? (
             <span className="nb ot">Checking…</span>
           ) : (
-            badges.map(([carrier, status]) => (
-              <span key={carrier} className={`nb ${status === 'in' ? 'in' : status === 'out' ? 'ot' : 'ot'}`}>
-                {firstWord(carrier)} {status === 'in' ? '✓' : status === 'out' ? '✗' : '?'}
-              </span>
-            ))
+            carrierEntries.map(([carrier, status]) => {
+              const override = provider.manualOverrides?.[carrier];
+              const isOpen = openCarrier === carrier;
+              return (
+                <div key={carrier}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span
+                      className={`nb ${status === 'in' ? 'in' : 'ot'}`}
+                      style={{ minWidth: 110, justifyContent: 'space-between' }}
+                    >
+                      <span>{carrier}</span>
+                      <span style={{ marginLeft: 6 }}>
+                        {status === 'in' ? '✓ In-network' : status === 'out' ? '✗ Out' : '? Unknown'}
+                      </span>
+                    </span>
+                    {override ? (
+                      <>
+                        <span style={{ fontSize: 10, color: 'var(--v4-grn)', fontWeight: 600 }}>
+                          VERIFIED · {override.note || 'no note'}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn out"
+                          style={{ fontSize: 10, padding: '3px 8px', marginLeft: 'auto' }}
+                          onClick={() => onClearCarrier(carrier)}
+                        >
+                          Undo
+                        </button>
+                      </>
+                    ) : status === 'in' ? null : (
+                      <button
+                        type="button"
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 600,
+                          padding: '4px 10px',
+                          marginLeft: 'auto',
+                          borderRadius: 6,
+                          border: '1px solid var(--v4-grn-bdr)',
+                          background: isOpen ? 'var(--v4-grn)' : 'var(--v4-grn-bg)',
+                          color: isOpen ? '#fff' : 'var(--v4-grn)',
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => {
+                          if (isOpen) { setOpenCarrier(null); setNoteDraft(''); }
+                          else { setOpenCarrier(carrier); setNoteDraft(''); }
+                        }}
+                      >
+                        ✓ I verified this is wrong
+                      </button>
+                    )}
+                  </div>
+                  {isOpen && !override && (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        marginBottom: 6,
+                        padding: 10,
+                        background: 'var(--v4-grn-bg)',
+                        border: '1px solid var(--v4-grn-bdr)',
+                        borderRadius: 7,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ fontSize: 11, color: 'var(--v4-grn)', fontWeight: 600 }}>
+                        Confirm {carrier} is in-network for {provider.name}
+                      </div>
+                      <input
+                        type="text"
+                        autoFocus
+                        value={noteDraft}
+                        onChange={(e) => setNoteDraft(e.target.value)}
+                        placeholder="How did you verify? e.g. 'called the office', 'findcare.guest.uhc.com'"
+                        style={{
+                          padding: '6px 10px',
+                          border: '1px solid var(--v4-grn-bdr)',
+                          borderRadius: 5,
+                          fontSize: 12,
+                          fontFamily: 'inherit',
+                          background: '#fff',
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            onConfirmCarrier(carrier, noteDraft);
+                            setOpenCarrier(null);
+                            setNoteDraft('');
+                          } else if (e.key === 'Escape') {
+                            setOpenCarrier(null);
+                            setNoteDraft('');
+                          }
+                        }}
+                      />
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button
+                          type="button"
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 700,
+                            padding: '6px 12px',
+                            borderRadius: 5,
+                            border: 'none',
+                            background: 'var(--v4-grn)',
+                            color: '#fff',
+                            cursor: 'pointer',
+                          }}
+                          onClick={() => {
+                            onConfirmCarrier(carrier, noteDraft);
+                            setOpenCarrier(null);
+                            setNoteDraft('');
+                          }}
+                        >
+                          Confirm in-network
+                        </button>
+                        <button
+                          type="button"
+                          className="btn out"
+                          style={{ fontSize: 11, padding: '6px 12px' }}
+                          onClick={() => { setOpenCarrier(null); setNoteDraft(''); }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
           )}
-          {hiddenCarriers > 0 && inCount > 0 && <span className="nb in">+{hiddenCarriers} more</span>}
         </div>
+
         {provider.manuallyConfirmed && (
-          <div className="mo">
+          <div className="mo" style={{ marginTop: 8 }}>
             <div className="moc">✓</div>
-            Confirmed in-network manually — overrides FHIR check.
+            All carriers manually confirmed in-network — overrides FHIR check.
           </div>
         )}
       </div>
@@ -269,7 +440,7 @@ function ProviderCard({
         </div>
         <button type="button" className="btn out" style={{ fontSize: 10, padding: '4px 8px' }} onClick={onRecheck}>Recheck</button>
         <button type="button" className="btn out" style={{ fontSize: 10, padding: '4px 8px' }} onClick={onOverride}>
-          {provider.manuallyConfirmed ? 'Remove override' : 'Manual override'}
+          {provider.manuallyConfirmed ? 'Remove all-override' : 'Override all'}
         </button>
         <button type="button" className="mrem" onClick={onRemove}>Remove</button>
       </div>
@@ -281,16 +452,26 @@ function NetworkSummary({ providers, plans, inNet }: { providers: Provider[]; pl
   const carrierCount = new Set(plans.map((p) => p.carrier)).size;
   const confirmedIn = providers.reduce((acc, pr) => {
     const carriers = new Set(
-      plans.filter((p) => pr.networkStatus?.[p.id] === 'in').map((p) => p.carrier),
+      plans.filter((p) => {
+        if (pr.manualOverrides?.[p.carrier]?.status === 'in') return true;
+        return pr.networkStatus?.[p.id] === 'in';
+      }).map((p) => p.carrier),
     );
     return acc + carriers.size;
   }, 0);
   const confirmedOut = providers.reduce((acc, pr) => {
     const carriers = new Set(
-      plans.filter((p) => pr.networkStatus?.[p.id] === 'out').map((p) => p.carrier),
+      plans.filter((p) => {
+        if (pr.manualOverrides?.[p.carrier]?.status === 'in') return false;
+        return pr.networkStatus?.[p.id] === 'out';
+      }).map((p) => p.carrier),
     );
     return acc + carriers.size;
   }, 0);
+  const overrideCount = providers.reduce(
+    (acc, pr) => acc + Object.keys(pr.manualOverrides ?? {}).length,
+    0,
+  );
   return (
     <div className="fsm">
       <div className="fst">Network Verification</div>
@@ -298,6 +479,9 @@ function NetworkSummary({ providers, plans, inNet }: { providers: Provider[]; pl
       <div className="fsr"><div className="fsc p">✓</div><div className="fsx"><strong>{confirmedIn}</strong> confirmed in-network</div></div>
       {confirmedOut > 0 && (
         <div className="fsr"><div className="fsc f">✗</div><div className="fsx"><strong>{confirmedOut}</strong> out-of-network</div></div>
+      )}
+      {overrideCount > 0 && (
+        <div className="fsr"><div className="fsc p">✓</div><div className="fsx"><strong>{overrideCount}</strong> agent-verified override{overrideCount === 1 ? '' : 's'}</div></div>
       )}
       <div className="fsr"><div className="fsc p">✓</div><div className="fsx"><strong>{inNet}</strong> plan{inNet === 1 ? '' : 's'} remain</div></div>
     </div>
@@ -317,6 +501,9 @@ async function runChecks(
       const result = await checkNetwork(npi, plan);
       const curr = useSession.getState().providers.find((p) => p.id === providerId);
       if (!curr) return;
+      // Carrier override always wins — never overwrite an agent-verified
+      // 'in' with a fresh directory 'out' from a re-check.
+      if (curr.manualOverrides?.[plan.carrier]?.status === 'in') continue;
       updateProvider(providerId, {
         networkStatus: { ...(curr.networkStatus ?? {}), [plan.id]: result.status },
       });
@@ -325,5 +512,3 @@ async function runChecks(
     }
   }
 }
-
-function firstWord(s: string): string { return s.split(/\s+/)[0] ?? s; }
