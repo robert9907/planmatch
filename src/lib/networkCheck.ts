@@ -1,32 +1,30 @@
 // networkCheck — provider network status per plan.
 //
-// Today this stays on the deterministic hash mock that fhir.ts used.
-// The new thing is the `source` discriminator: every result is now
-// stamped 'unverified_mock' instead of the hopeful 'fhir_mock' /
-// 'seed_data' labels the old module used. The UI can (and should)
-// surface "Verify with carrier" alongside the mock status so Rob
-// never enrolls someone on a provider we haven't actually confirmed.
+// Real lookup against /api/network-check, which:
+//   1. reads pm_provider_network_cache (per-plan covered booleans
+//      populated by the consumer-side Medicare.gov writer);
+//   2. on cache miss, calls Medicare.gov /plans/search with
+//      ?providers=<NPI> and writes the parsed results back to the
+//      cache;
+//   3. returns per-plan { status, from, covered } so the agent UI
+//      can show in/out/unknown plus where the answer came from.
 //
-// When a real carrier directory proxy lands (Humana / UHC / Aetna
-// PDEX FHIR endpoints each need their own auth + response shape),
-// wire it in as a new branch before the mock — everything behind
-// `source === 'directory'` is the truth, everything else is a
-// placeholder.
+// Both single (`checkNetwork`) and batch (`checkNetworkBatch`)
+// helpers are exposed; the batch path is preferred from the
+// Providers page because one round trip handles every finalist
+// plan for a single NPI.
 //
-// ─── DIAGNOSTIC LOGGING ──────────────────────────────────────────────
-// Every call emits a console line under the `[network-check]` tag so
-// Rob can see what the directory "actually returned" for any (NPI,
-// carrier, contract) pair. Because we're on a mock, those logs are
-// brutally honest: they include `source: unverified_mock` and the hash
-// bucket that produced the result, so a confusing "out-of-network for
-// UHC" is immediately traceable to the mock instead of an imaginary
-// FHIR endpoint bug. UHC contracts (H5521, H4513, H2001…) get an extra
-// warning line because Rob hits those most.
+// Diagnostic logging stays on a `[network-check]` tag. The logged
+// `source` field is now meaningful: 'cache' / 'live' / 'directory'
+// reflect real data; 'fallback_unknown' is reserved for cases where
+// neither the cache nor the live call could answer (network error,
+// unparseable response, missing zip/fips). The hash mock is gone.
 
 import type { Plan } from '@/types/plans';
+import { fipsForCounty } from './ncFips';
 
 export type NetworkStatus = 'in' | 'out' | 'unknown';
-export type NetworkSource = 'directory' | 'unverified_mock';
+export type NetworkSource = 'cache' | 'live' | 'directory' | 'fallback_unknown';
 
 export interface NetworkCheckResult {
   plan_id: string;
@@ -34,120 +32,137 @@ export interface NetworkCheckResult {
   status: NetworkStatus;
   source: NetworkSource;
   checked_at: number;
-  /** Human-readable explanation — shown in the UI tooltip next to the
-   *  status pill so the agent always knows if a value is trustable. */
+  /** Human-readable explanation — surfaced in the UI tooltip. */
   note: string;
 }
 
-// One-time startup banner so anyone watching the console knows the
-// mock is in play before they see the first per-plan log line.
-let bannerShown = false;
-function showBannerOnce(): void {
-  if (bannerShown) return;
-  bannerShown = true;
-  if (typeof console === 'undefined') return;
-  console.warn(
-    '[network-check] No real FHIR carrier-directory proxy is wired up. ' +
-      'All status values returned by checkNetwork() are deterministic mock ' +
-      'results derived from hash(NPI + plan_id). Treat in/out/unknown as ' +
-      'unverified — the manual override on the Providers page is the ' +
-      'authoritative signal until carrier proxies (UHC PDEX, Humana, Aetna) ' +
-      'are implemented.',
-  );
+interface BatchResultRow {
+  plan_id: string;
+  contract_id: string;
+  plan_number: string;
+  segment_id: string;
+  status: NetworkStatus;
+  from: 'cache' | 'live' | 'miss';
+  covered: boolean | null;
 }
 
-// Plan year is currently inferred from the Plan record (which the
-// CMS landscape import stamps). Logged verbatim so a 2026 vs 2027
-// mismatch would be obvious; today we always show '2026' from
-// pm_plans.
-function planYearFor(_plan: Plan): string {
-  // pm_plans rows in this build are 2026 landscape data. When the
-  // 2027 import lands, plumb plan.contract_year through here.
-  return '2026';
+interface BatchResponse {
+  source: 'cache' | 'live' | 'mixed' | 'empty';
+  results: BatchResultRow[];
+  stats: { cacheHits: number; liveHits: number; misses: number; total: number };
+  fhir_diagnostic?: unknown;
 }
 
-// UHC contract IDs Rob is most likely to look at. Not used for any
-// logic — only to escalate the diagnostic log line so a UHC mismatch
-// shows up clearly when scanning the console.
-const UHC_CONTRACT_PREFIXES = ['H5521', 'H4513', 'H2001', 'H0271', 'H0294'];
-
-function isUhcContract(plan: Plan): boolean {
-  if (plan.carrier?.toLowerCase().includes('united')) return true;
-  if (plan.carrier?.toLowerCase().includes('aarp')) return true;
-  return UHC_CONTRACT_PREFIXES.some((pfx) => plan.contract_id?.startsWith(pfx));
+interface BatchContext {
+  zip?: string | null;
+  fips?: string | null;
+  planType?: string;
+  year?: number;
+  /** When omitted, the helper derives FIPS from the NC table. */
+  county?: string | null;
 }
 
-export async function checkNetwork(npi: string, plan: Plan): Promise<NetworkCheckResult> {
-  showBannerOnce();
+export async function checkNetworkBatch(
+  npi: string,
+  plans: Plan[],
+  ctx: BatchContext = {},
+): Promise<Map<string, NetworkCheckResult>> {
+  const out = new Map<string, NetworkCheckResult>();
+  if (plans.length === 0) return out;
 
-  // Simulated latency so the UI doesn't flicker through 12 instant
-  // status changes — matches the prior mock's behavior.
-  const hashed = hash(npi + plan.id);
-  await sleep(220 + (hashed % 380));
+  const fips = ctx.fips ?? fipsForCounty(ctx.county);
+  const planIds = plans.map((p) => p.id);
 
-  const bucket = hashed % 10;
-  const status: NetworkStatus = bucket < 2 ? 'out' : bucket < 8 ? 'unknown' : 'in';
-  const result: NetworkCheckResult = {
-    plan_id: plan.id,
-    carrier: plan.carrier,
-    status,
-    source: 'unverified_mock',
-    checked_at: Date.now(),
-    note:
-      'Unverified — mock network status until the carrier FHIR directory proxy ships. Confirm in-network with the carrier before enrolling.',
-  };
+  let body: BatchResponse | null = null;
+  try {
+    const resp = await fetch('/api/network-check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        npi,
+        plan_ids: planIds,
+        zip: ctx.zip ?? undefined,
+        fips: fips ?? undefined,
+        plan_type: ctx.planType ?? 'PLAN_TYPE_MAPD',
+        year: ctx.year ?? new Date().getFullYear(),
+      }),
+    });
+    if (!resp.ok) {
+      const sample = await resp.text();
+      throw new Error(`api/network-check ${resp.status}: ${sample.slice(0, 200)}`);
+    }
+    body = (await resp.json()) as BatchResponse;
+  } catch (err) {
+    console.warn('[network-check] batch call failed:', (err as Error).message);
+  }
 
-  logCheck(npi, plan, result, { hash: hashed, bucket });
-  return result;
+  // Always log the call summary so Rob can correlate UI status to
+  // upstream cache vs. live behavior.
+  if (body) {
+    console.info('[network-check] batch', {
+      npi,
+      plan_count: planIds.length,
+      source: body.source,
+      stats: body.stats,
+    });
+    if (body.fhir_diagnostic) {
+      console.info('[network-check] live diagnostic:', body.fhir_diagnostic);
+    }
+  }
+
+  const byPlanId = new Map<string, BatchResultRow>();
+  for (const r of body?.results ?? []) byPlanId.set(r.plan_id, r);
+
+  for (const plan of plans) {
+    const row = byPlanId.get(plan.id);
+    if (!row) {
+      out.set(plan.id, fallbackResult(plan, 'no_response'));
+      continue;
+    }
+    const source: NetworkSource =
+      row.from === 'cache' ? 'cache' : row.from === 'live' ? 'live' : 'fallback_unknown';
+    out.set(plan.id, {
+      plan_id: plan.id,
+      carrier: plan.carrier,
+      status: row.status,
+      source,
+      checked_at: Date.now(),
+      note:
+        source === 'fallback_unknown'
+          ? 'Cache miss; live Medicare.gov fetch could not answer (likely missing zip/fips or upstream error). Use the per-carrier "I verified this is wrong" override on the Providers page after confirming with the carrier.'
+          : source === 'cache'
+            ? 'Read from pm_provider_network_cache (Medicare.gov directory data, populated by the consumer-side writer).'
+            : 'Fetched live from Medicare.gov plans/search and written back to pm_provider_network_cache.',
+    });
+  }
+  return out;
+}
+
+export async function checkNetwork(
+  npi: string,
+  plan: Plan,
+  ctx: BatchContext = {},
+): Promise<NetworkCheckResult> {
+  const map = await checkNetworkBatch(npi, [plan], ctx);
+  return map.get(plan.id) ?? fallbackResult(plan, 'no_response');
 }
 
 export async function checkNetworkAcross(
   npi: string,
   plans: Plan[],
+  ctx: BatchContext = {},
 ): Promise<NetworkCheckResult[]> {
-  return Promise.all(plans.map((plan) => checkNetwork(npi, plan)));
+  const map = await checkNetworkBatch(npi, plans, ctx);
+  return plans.map((p) => map.get(p.id) ?? fallbackResult(p, 'no_response'));
 }
 
-function logCheck(
-  npi: string,
-  plan: Plan,
-  result: NetworkCheckResult,
-  diag: { hash: number; bucket: number },
-): void {
-  if (typeof console === 'undefined') return;
-  const tag = '[network-check]';
-  const line = {
-    npi,
-    carrier: plan.carrier,
-    contract: plan.contract_id,
-    plan_number: plan.plan_number,
+function fallbackResult(plan: Plan, reason: string): NetworkCheckResult {
+  return {
     plan_id: plan.id,
-    plan_year: planYearFor(plan),
-    status: result.status,
-    source: result.source,
-    mock_hash: diag.hash,
-    mock_bucket: diag.bucket, // 0–1 → out, 2–7 → unknown, 8–9 → in
-    checked_at: new Date(result.checked_at).toISOString(),
+    carrier: plan.carrier,
+    status: 'unknown',
+    source: 'fallback_unknown',
+    checked_at: Date.now(),
+    note: `Network status unavailable (${reason}). Use the per-carrier override after confirming with the carrier.`,
   };
-  console.info(tag, line);
-  if (isUhcContract(plan)) {
-    console.warn(
-      `${tag} UHC directory call would have happened here: ` +
-        `endpoint=https://public.fhir.uhc.com/PublicAndProtected/api/PractitionerRole?practitioner.identifier=${npi}&plan-network=${plan.contract_id}-${plan.plan_number} ` +
-        `(NOT CALLED — mock returned status=${result.status}). ` +
-        `If the agent verified Dr.${npi} is in-network for this carrier, use the per-carrier "I verified this is wrong" override on the Providers page.`,
-    );
-  }
-}
-
-function hash(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  }
-  return Math.abs(h);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

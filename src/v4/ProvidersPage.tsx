@@ -18,7 +18,7 @@ import { CaptureButton } from '@/components/capture/CaptureButton';
 import { CapturePanel } from '@/components/capture/CapturePanel';
 import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
 import { searchProvider, type NpiProvider } from '@/lib/npi';
-import { checkNetwork } from '@/lib/networkCheck';
+import { checkNetworkBatch } from '@/lib/networkCheck';
 import { fetchPlansForClient } from '@/lib/planCatalog';
 import type { Plan } from '@/types/plans';
 import type { Provider } from '@/types/session';
@@ -99,13 +99,13 @@ export function ProvidersPage({ capture, onBack, onContinue }: Props) {
       networkStatus: {},
     });
     setQuery(''); setResults([]);
-    await runChecks(id, p.npi, eligiblePlans, updateProvider);
+    await runChecks(id, p.npi, eligiblePlans, updateProvider, { zip: client.zip, county: client.county });
   }
 
   async function recheck(prov: Provider) {
     if (!prov.npi) return;
     updateProvider(prov.id, { networkStatus: {} });
-    await runChecks(prov.id, prov.npi, eligiblePlans, updateProvider);
+    await runChecks(prov.id, prov.npi, eligiblePlans, updateProvider, { zip: client.zip, county: client.county });
   }
 
   function toggleManualOverride(prov: Provider) {
@@ -133,7 +133,7 @@ export function ProvidersPage({ capture, onBack, onContinue }: Props) {
     // status again instead of staying stuck on 'in'.
     if (prov.npi) {
       const carrierPlans = eligiblePlans.filter((p) => p.carrier === carrier);
-      runChecks(prov.id, prov.npi, carrierPlans, updateProvider);
+      runChecks(prov.id, prov.npi, carrierPlans, updateProvider, { zip: client.zip, county: client.county });
     }
   }
 
@@ -493,22 +493,26 @@ async function runChecks(
   npi: string,
   plans: Plan[],
   updateProvider: (id: string, patch: Partial<Provider>) => void,
+  ctx: { zip?: string | null; county?: string | null } = {},
 ) {
-  // Stagger checks so we don't stampede each carrier's FHIR endpoint
-  // all at once.
-  for (const plan of plans) {
-    try {
-      const result = await checkNetwork(npi, plan);
-      const curr = useSession.getState().providers.find((p) => p.id === providerId);
-      if (!curr) return;
+  // One round trip handles every plan: /api/network-check reads
+  // pm_provider_network_cache for hits and falls back to a live
+  // Medicare.gov call for misses.
+  try {
+    const map = await checkNetworkBatch(npi, plans, ctx);
+    const curr = useSession.getState().providers.find((p) => p.id === providerId);
+    if (!curr) return;
+    const next = { ...(curr.networkStatus ?? {}) };
+    for (const plan of plans) {
       // Carrier override always wins — never overwrite an agent-verified
       // 'in' with a fresh directory 'out' from a re-check.
       if (curr.manualOverrides?.[plan.carrier]?.status === 'in') continue;
-      updateProvider(providerId, {
-        networkStatus: { ...(curr.networkStatus ?? {}), [plan.id]: result.status },
-      });
-    } catch {
-      // non-fatal — keep going with remaining plans
+      const r = map.get(plan.id);
+      if (!r) continue;
+      next[plan.id] = r.status;
     }
+    updateProvider(providerId, { networkStatus: next });
+  } catch (err) {
+    console.warn('[providers] runChecks failed:', (err as Error).message);
   }
 }
