@@ -344,6 +344,7 @@ async function searchPlansViaApi(page, { zip, fips, planType, capturedTemplate, 
   const resp = await page.request.post(url, {
     data: reqBody,
     headers: buildSearchHeaders(),
+    timeout: 60_000,
   });
   const status = resp.status();
   const ct = resp.headers()['content-type'] ?? '';
@@ -359,7 +360,7 @@ async function searchPlansViaApi(page, { zip, fips, planType, capturedTemplate, 
 async function fetchPlanDetail(page, { year, contract, plan, segment, verbose }) {
   const url = PLAN_DETAIL_URL_FN(year, contract, plan, segment);
   if (verbose) console.log('   GET', url);
-  const resp = await page.request.get(url, { headers: buildSearchHeaders() });
+  const resp = await page.request.get(url, { headers: buildSearchHeaders(), timeout: 60_000 });
   const status = resp.status();
   if (!resp.ok()) {
     const sample = (await resp.text()).slice(0, 300);
@@ -1022,7 +1023,36 @@ async function main() {
 
     for (let i = 0; i < targets.length; i++) {
       const t = targets[i];
+      try { await scrapeOneTarget(page, t, {
+        verbose, planLimit, args, bodyTemplate, env,
+        onCounts: (p, r, w) => { totalPlans += p; totalRows += r; totalWritten += w; },
+      }); } catch (err) {
+        failures.push({ target: t, message: err.message });
+        console.warn(`  ✗ ${t.zip}/${t.fips} target failed: ${err.message}`);
+      }
+      if (i < targets.length - 1) await page.waitForTimeout(PER_COUNTY_DELAY_MS);
+    }
+  } finally {
+    await browser.close().catch(() => {});
+  }
 
+  console.log('\nsummary:');
+  console.log(`  plans processed:    ${totalPlans}`);
+  console.log(`  benefit rows:       ${totalRows}`);
+  console.log(`  rows written to DB: ${totalWritten}`);
+  console.log(`  failures:           ${failures.length}`);
+  if (failures.length === targets.length && targets.length > 0) {
+    console.error('\nEvery target failed. Inspect _tmp/medicare-gov/ payloads.');
+    process.exit(2);
+  }
+  if (failures.length > 0) {
+    console.log('\nfailed targets:');
+    for (const f of failures) console.log(`  ${f.target.zip}/${f.target.fips}  ${f.message}`);
+  }
+}
+
+// ─── per-target scrape (broken out so caller can try/catch) ────────
+async function scrapeOneTarget(page, t, { verbose, planLimit, args, bodyTemplate, env, onCounts }) {
       // ─── try API ───
       let usingDom = args.forceDom;
       let plans = [];
@@ -1053,21 +1083,15 @@ async function main() {
 
       // ─── DOM fallback ───
       if (usingDom) {
-        try {
-          const domResult = await searchPlansViaDom(page, {
-            zip: t.zip,
-            fips: t.fips,
-            planType: args.planType,
-            planLimit,
-            verbose,
-          });
-          plans = domResult.body.plans;
-          rawBody = domResult.body;
-        } catch (err) {
-          failures.push({ target: t, source: 'dom', message: err.message });
-          console.warn(`  ✗ ${t.zip}/${t.fips} DOM: ${err.message}`);
-          continue;
-        }
+        const domResult = await searchPlansViaDom(page, {
+          zip: t.zip,
+          fips: t.fips,
+          planType: args.planType,
+          planLimit,
+          verbose,
+        });
+        plans = domResult.body.plans;
+        rawBody = domResult.body;
       } else if (planLimit) {
         plans = plans.slice(0, planLimit);
       }
@@ -1078,6 +1102,8 @@ async function main() {
 
       const upsertBatch = [];
       const planTriples = [];
+      let processedHere = 0;
+      let rowsHere = 0;
       for (let pi = 0; pi < plans.length; pi++) {
         const raw = plans[pi];
         const planFilter = t.planFilter ?? args.plan;
@@ -1085,7 +1111,8 @@ async function main() {
 
         // ── Fetch the per-plan detail card for full ma_benefits + Rx
         // tiers + inpatient day-stage + supplemental enums. Throttle
-        // 2s between detail calls to stay polite.
+        // 2s between detail calls to stay polite. Detail-fetch errors
+        // are non-fatal — we fall back to summary-only rows.
         let detailCard = null;
         if (!args.skipDetail) {
           if (pi > 0) await page.waitForTimeout(PER_PLAN_DELAY_MS);
@@ -1105,40 +1132,26 @@ async function main() {
         const { triple, rows } = normalizePlanToBenefits(raw, detailCard, planFilter);
         if (!triple) continue;
         planTriples.push(triple);
-        totalPlans += 1;
-        totalRows += rows.length;
+        processedHere += 1;
+        rowsHere += rows.length;
         for (const r of rows) upsertBatch.push(r);
         if (verbose) {
           console.log(`   ${triple} → ${rows.length} rows${detailCard ? ' (with detail)' : ''}`);
         }
       }
+      let writtenHere = 0;
       if (args.write && upsertBatch.length > 0) {
         await sbDeleteForPlans(env, planTriples);
         const CHUNK = 500;
         for (let j = 0; j < upsertBatch.length; j += CHUNK) {
           await sbInsert(env, upsertBatch.slice(j, j + CHUNK));
         }
-        totalWritten += upsertBatch.length;
+        writtenHere = upsertBatch.length;
       }
       console.log(
-        `  ✓ ${t.zip}/${t.fips} [${usingDom ? 'dom' : 'api'}] → ${plans.length} plan${plans.length === 1 ? '' : 's'}, ${upsertBatch.length} rows${args.write ? ` (wrote ${upsertBatch.length})` : ' (dry-run)'}`,
+        `  ✓ ${t.zip}/${t.fips} [${usingDom ? 'dom' : 'api'}] → ${plans.length} plan${plans.length === 1 ? '' : 's'}, ${upsertBatch.length} rows${args.write ? ` (wrote ${writtenHere})` : ' (dry-run)'}`,
       );
-
-      if (i < targets.length - 1) await page.waitForTimeout(PER_COUNTY_DELAY_MS);
-    }
-  } finally {
-    await browser.close().catch(() => {});
-  }
-
-  console.log('\nsummary:');
-  console.log(`  plans processed:    ${totalPlans}`);
-  console.log(`  benefit rows:       ${totalRows}`);
-  console.log(`  rows written to DB: ${totalWritten}`);
-  console.log(`  failures:           ${failures.length}`);
-  if (failures.length === targets.length && targets.length > 0) {
-    console.error('\nEvery target failed. Inspect _tmp/medicare-gov/ payloads.');
-    process.exit(2);
-  }
+      onCounts(processedHere, rowsHere, writtenHere);
 }
 
 main().catch((err) => {
