@@ -39,6 +39,14 @@ const OUT_DIR = path.join(ROOT, '_tmp', 'medicare-gov');
 // fingerprints.
 const PLAN_SEARCH_URL =
   'https://www.medicare.gov/api/v1/data/plan-compare/plans/search';
+// Per-plan detail endpoint (discovered 2026-04-25). Returns plan_card
+// with ma_benefits[] (53 service rows × cost_sharing min/max copay +
+// coinsurance), abstract_benefits.initial_coverage.tiers[] (5 Rx tier
+// rows with retail / mail-order / 30-day / 90-day pricing), inpatient
+// + SNF tiered_cost_sharing day-stage rows, package_benefits
+// (deductibles + MOOP), and additional_supplemental_benefits.
+const PLAN_DETAIL_URL_FN = (year, contract, plan, segment) =>
+  `https://www.medicare.gov/api/v1/data/plan-compare/plan/${year}/${contract}/${plan}/${segment}?lis=LIS_NO_HELP`;
 const WARM_URL = 'https://www.medicare.gov/plan-compare/';
 const SEARCH_RESULTS_HASH =
   'https://www.medicare.gov/plan-compare/#/search-results';
@@ -63,6 +71,7 @@ function parseArgs(argv) {
     planType: 'PLAN_TYPE_MAPD',
     verbose: false,
     forceDom: false,
+    skipDetail: false,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -77,6 +86,7 @@ function parseArgs(argv) {
       case '--dry-run': out.dryRun = true; break;
       case '--write': out.write = true; break;
       case '--force-dom': out.forceDom = true; break;
+      case '--no-detail': out.skipDetail = true; break;
       case '--verbose': case '-v': out.verbose = true; break;
       default: break;
     }
@@ -345,6 +355,103 @@ async function searchPlansViaApi(page, { zip, fips, planType, capturedTemplate, 
   return { ok: true, status, body };
 }
 
+// ─── Per-plan detail fetch ─────────────────────────────────────────
+async function fetchPlanDetail(page, { year, contract, plan, segment, verbose }) {
+  const url = PLAN_DETAIL_URL_FN(year, contract, plan, segment);
+  if (verbose) console.log('   GET', url);
+  const resp = await page.request.get(url, { headers: buildSearchHeaders() });
+  const status = resp.status();
+  if (!resp.ok()) {
+    const sample = (await resp.text()).slice(0, 300);
+    if (verbose) console.warn(`   detail ${status}: ${sample}`);
+    return null;
+  }
+  const ct = resp.headers()['content-type'] ?? '';
+  if (!ct.includes('json')) return null;
+  const body = await resp.json();
+  return body?.plan_card ?? null;
+}
+
+// ─── Service → benefit_type mapping ────────────────────────────────
+// Keys are the SERVICE strings on plan_card.ma_benefits[].service.
+// Values are pbp_benefits.benefit_type. Anything not mapped falls
+// through to a generic '<category_lower>__<service_lower>' name so
+// no row is dropped silently.
+const SERVICE_TO_BENEFIT = {
+  GROUND_AMBULANCE: 'ambulance',
+  SERVICE_DURABLE_MEDICAL_EQUIPMENT: 'dme',
+  SERVICE_PROSTHETICS: 'prosthetics',
+  SERVICE_DIABETES_SUPPLIES: 'diabetic_supplies',
+  SERVICE_DIALYSIS: 'dialysis',
+  ACUPUNCTURE: 'acupuncture',
+  OTC_ITEMS: 'otc_items',
+  MEALS_SHORT_DURATION: 'meals_short_duration',
+  ANNUAL_PHYSICAL: 'annual_physical',
+  FITNESS: 'fitness_visit',
+  SERVICE_PART_B_INSULIN: 'part_b_insulin',
+  PART_B_CHEMOTHERAPY_DRUGS: 'part_b_chemo',
+  PART_B_OTHER_DRUGS: 'part_b_other',
+  SERVICE_ORAL_EXAM: 'dental_oral_exam',
+  SERVICE_DENTAL_XRAYS: 'dental_xray',
+  PROPHYLAXIS: 'dental_cleaning',
+  OTHER_PREVENTATIVE_DENTAL_SERVICES: 'dental_preventive_other',
+  SERVICE_RESTORATIVE_SERVICES: 'dental_restorative',
+  SERVICE_ENDODONTICS: 'dental_endodontics',
+  SERVICE_PERIODONTICS: 'dental_periodontics',
+  PROSTHODONTICS_REMOVABLE: 'dental_prosthodontics_removable',
+  PROSTHODONTICS_FIXED: 'dental_prosthodontics_fixed',
+  ORAL_AND_MAXILLOFACIAL_SURGERY: 'dental_oral_surgery',
+  ADJUNCTIVE_GENERAL_SERVICES: 'dental_adjunctive',
+  VISION_ROUTINE_EYE_EXAMS: 'vision_exam',
+  VISION_EYEGLASSES_FRAMES_AND_LENSES: 'vision_eyewear',
+  VISION_CONTACT_LENSES: 'vision_contacts',
+  ROUTINE_HEARING_EXAMS: 'hearing_exam',
+  FITTING_EVALUATION_HEARING_AIDS: 'hearing_fitting',
+  RX_HEARING_AIDS: 'hearing_aid_rx',
+  OTC_HEARING_AIDS: 'hearing_aid_otc',
+  SERVICE_EMERGENCY: 'emergency',
+  SERVICE_URGENT_CARE: 'urgent_care',
+  SERVICE_WORLDWIDE_EMERGENCY: 'worldwide_emergency_care',
+  SERVICE_PRIMARY: 'primary_care',
+  SERVICE_SPECIALIST: 'specialist',
+  SERVICE_OCCUPATIONAL_THERAPY_VISIT: 'occupational_therapy',
+  SERVICE_PHYSICAL_THERAPY_AND_SPEECH_AND_LANGUAGE_THERAPY_VISIT: 'physical_therapy',
+  SERVICE_OUTPATIENT_INDIVIDUAL_THERAPY_VISIT: 'mental_health_individual',
+  SERVICE_OUTPATIENT_GROUP_THERAPY_VISIT: 'mental_health_group',
+  SERVICE_OUTPATIENT_INDIVIDUAL_THERAPY_VISIT_WITH_PSYCHIATRIST: 'mental_health_individual_psych',
+  SERVICE_OUTPATIENT_GROUP_THERAPY_VISIT_WITH_PSYCHIATRIST: 'mental_health_group_psych',
+  SERVICE_OPIOID_TREATMENT_PROGRAM_SERVICES: 'opioid_treatment',
+  TELEHEALTH: 'telehealth_visit',
+  SERVICE_DIAGNOSTIC_TESTS: 'diagnostic_tests',
+  SERVICE_LAB_SERVICES: 'lab',
+  SERVICE_DIAGNOSTIC_RADIOLOGY_SERVICES: 'diagnostic_radiology',
+  SERVICE_OUTPATIENT_XRAYS: 'outpatient_xray',
+  SERVICE_OUTPATIENT_HOSPITAL_SERVICES: 'outpatient_hospital',
+  INPATIENT_HOSPITAL: 'inpatient_hospital',
+  SKILLED_NURSING_FACILITY: 'snf',
+};
+
+// Rx tier label → tier_id (1-5).
+const RX_TIER_LABEL_TO_ID = {
+  COST_SHARE_TIER_PREFERRED_GENERIC: '1',
+  COST_SHARE_TIER_GENERIC: '2',
+  COST_SHARE_TIER_PREFERRED_BRAND: '3',
+  COST_SHARE_TIER_NON_PREFERRED_DRUG: '4',
+  COST_SHARE_TIER_SPECIALTY_TIER: '5',
+};
+
+// "$0.00 copay" → { copay: 0, coinsurance: null }
+// "50% coinsurance" → { copay: null, coinsurance: 50 }
+// "" / null → { copay: null, coinsurance: null }
+function parseTierCost(s) {
+  if (!s || typeof s !== 'string') return { copay: null, coinsurance: null };
+  const m = s.match(/\$([\d,]+(?:\.\d+)?)/);
+  if (m) return { copay: Number(m[1].replace(/,/g, '')), coinsurance: null };
+  const c = s.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (c) return { copay: null, coinsurance: Number(c[1]) };
+  return { copay: null, coinsurance: null };
+}
+
 // ─── DOM fallback ──────────────────────────────────────────────────
 // Last-resort path when the search endpoint 4xx's. Renders the SPA
 // search results, harvests the visible plan cards, then walks each
@@ -541,7 +648,7 @@ function parseDollar(v) {
   return m ? Number(m[0]) : null;
 }
 
-function normalizePlanToBenefits(rawPlan, planFilter) {
+function normalizePlanToBenefits(rawPlan, detailCard, planFilter) {
   const contract = rawPlan.contract_id ?? rawPlan.contractId;
   const planId = rawPlan.plan_id ?? rawPlan.planId;
   const segment = rawPlan.segment_id ?? rawPlan.segmentId ?? '0';
@@ -549,17 +656,26 @@ function normalizePlanToBenefits(rawPlan, planFilter) {
   if (planFilter && `${contract}-${planId}` !== planFilter) return { triple: null, rows: [] };
   const triple = `${contract}-${planId}-${segment}`;
 
+  const seenKeys = new Set();
   const rows = [];
   const push = (benefit_type, tier_id, copay, coinsurance, description) => {
     if (copay == null && coinsurance == null && !description) return;
+    // pbp_benefits unique constraint is (plan_id, benefit_type,
+    // COALESCE(tier_id, '')) — PostgREST's on_conflict can't see the
+    // COALESCE, so we send '' literally to make conflict resolution
+    // work for non-tiered rows.
+    const tier = tier_id == null ? '' : String(tier_id);
+    // Local de-dupe so a benefit_type/tier_id pair never lands in the
+    // batch twice (would 23505 on insert). When a key collides we keep
+    // the first row — search-summary fields are added before detail
+    // overrides, but detail rows for unique services don't collide.
+    const key = `${benefit_type}\t${tier}`;
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
     rows.push({
       plan_id: triple,
       benefit_type,
-      // pbp_benefits unique constraint is (plan_id, benefit_type,
-      // COALESCE(tier_id, '')) — PostgREST's on_conflict can't see the
-      // COALESCE, so we send '' literally to make conflict resolution
-      // work for non-tiered rows.
-      tier_id: tier_id == null ? '' : String(tier_id),
+      tier_id: tier,
       copay: copay != null ? Number(copay) : null,
       coinsurance: coinsurance != null ? Number(coinsurance) : null,
       description: description ?? null,
@@ -666,6 +782,85 @@ function normalizePlanToBenefits(rawPlan, planFilter) {
   // Star rating + plan category metadata for richer downstream display.
   const stars = rawPlan.overall_star_rating?.rating;
   if (stars != null) push('star_rating', null, null, null, `${stars} stars`);
+
+  // ── Detail layer (plan/{year}/{contract}/{plan}/{segment}) ──
+  // ma_benefits[] is the canonical full cost-sharing breakdown — 50+
+  // service rows with min/max copay + coinsurance for IN_NETWORK.
+  // abstract_benefits.initial_coverage.tiers[] is the Rx tier table.
+  if (detailCard) {
+    for (const b of detailCard.ma_benefits ?? []) {
+      const svc = b.service;
+      const benefitType = SERVICE_TO_BENEFIT[svc] ?? `${(b.category || 'other').toLowerCase()}__${(svc || 'unknown').toLowerCase()}`;
+
+      // Most rows have a flat cost_sharing[] with IN_NETWORK and
+      // OUT_OF_NETWORK entries. Inpatient + SNF use tiered_cost_sharing
+      // for day-stage breakdowns.
+      const inNet = (b.cost_sharing ?? []).find((c) => c.network_status === 'IN_NETWORK');
+      if (inNet) {
+        const cMin = inNet.min_copay;
+        const cMax = inNet.max_copay;
+        const coMin = inNet.min_coinsurance;
+        const coMax = inNet.max_coinsurance;
+        const sameCopay = cMin === cMax;
+        const sameCoins = coMin === coMax;
+        if (sameCopay && sameCoins) {
+          push(benefitType, null, cMin, coMin, null);
+        } else {
+          push(benefitType, 'min', cMin, coMin, null);
+          push(benefitType, 'max', cMax, coMax, null);
+        }
+      }
+
+      const tcs = b.tiered_cost_sharing;
+      if (tcs && Array.isArray(tcs.in_network)) {
+        for (const stage of tcs.in_network) {
+          // Day-interval rows are the headline ("days 1-5: $295").
+          // Per-stay rows we keep too tagged with 'per_stay'.
+          const tier =
+            stage.interval_type === 'INTERVAL_TYPE_DAY_INTERVAL' && stage.interval
+              ? `days_${stage.interval}`
+              : stage.interval_type === 'INTERVAL_TYPE_PER_STAY'
+                ? 'per_stay'
+                : `tier_${stage.tier ?? '?'}`;
+          push(benefitType, tier, stage.copay, stage.coinsurance, null);
+        }
+      }
+    }
+
+    // Rx tiers from abstract_benefits.initial_coverage. Use
+    // standard_retail.days_30 as the headline (matches what the v4
+    // quote table renders by default).
+    const rxTiers = detailCard.abstract_benefits?.initial_coverage?.tiers ?? [];
+    for (const t of rxTiers) {
+      const tierId = RX_TIER_LABEL_TO_ID[t.label] ?? String(t.tier_row_order ?? '');
+      const display = t.standard_retail ?? t.preferred_retail ?? null;
+      const cost = parseTierCost(display?.days_30);
+      const desc = display?.days_30 || null;
+      push('rx_tier', tierId, cost.copay, cost.coinsurance, desc);
+      // Also capture 90-day standard retail as a separate tier row so
+      // the downstream UI can show the per-fill jump if needed.
+      const cost90 = parseTierCost(display?.days_90);
+      if (cost90.copay != null || cost90.coinsurance != null) {
+        push('rx_tier', `${tierId}_90`, cost90.copay, cost90.coinsurance, display?.days_90 || null);
+      }
+      // Mail-order standard 30 day for the savvy quote.
+      const mo = t.standard_mail_order ?? t.preferred_mail_order ?? null;
+      const moCost = parseTierCost(mo?.days_30);
+      if (moCost.copay != null || moCost.coinsurance != null) {
+        push('rx_tier', `${tierId}_mail`, moCost.copay, moCost.coinsurance, mo?.days_30 || null);
+      }
+    }
+
+    // Coverage-gap + catastrophic — capture the headline cost-share
+    // for each defined tier. Fields are sparse on most plans so just
+    // the tier string is informational.
+    const cgTiers = detailCard.abstract_benefits?.coverage_gap?.tiers ?? [];
+    for (const t of cgTiers) {
+      const tierId = `${RX_TIER_LABEL_TO_ID[t.label] ?? t.tier_row_order ?? '?'}_gap`;
+      const cost = parseTierCost(t.standard_retail?.days_30);
+      push('rx_tier', tierId, cost.copay, cost.coinsurance, t.standard_retail?.days_30 || null);
+    }
+  }
 
   return { triple, rows };
 }
@@ -825,13 +1020,39 @@ async function main() {
 
       const upsertBatch = [];
       const planTriples = [];
-      for (const raw of plans) {
-        const { triple, rows } = normalizePlanToBenefits(raw, t.planFilter ?? args.plan);
+      for (let pi = 0; pi < plans.length; pi++) {
+        const raw = plans[pi];
+        const planFilter = t.planFilter ?? args.plan;
+        if (planFilter && `${raw.contract_id}-${raw.plan_id}` !== planFilter) continue;
+
+        // ── Fetch the per-plan detail card for full ma_benefits + Rx
+        // tiers + inpatient day-stage + supplemental enums. Throttle
+        // 2s between detail calls to stay polite.
+        let detailCard = null;
+        if (!args.skipDetail) {
+          if (pi > 0) await page.waitForTimeout(PER_PLAN_DELAY_MS);
+          try {
+            detailCard = await fetchPlanDetail(page, {
+              year: raw.contract_year ?? String(YEAR),
+              contract: raw.contract_id,
+              plan: raw.plan_id,
+              segment: raw.segment_id ?? '0',
+              verbose,
+            });
+          } catch (err) {
+            if (verbose) console.warn(`   detail fetch errored for ${raw.contract_id}-${raw.plan_id}:`, err.message);
+          }
+        }
+
+        const { triple, rows } = normalizePlanToBenefits(raw, detailCard, planFilter);
         if (!triple) continue;
         planTriples.push(triple);
         totalPlans += 1;
         totalRows += rows.length;
         for (const r of rows) upsertBatch.push(r);
+        if (verbose) {
+          console.log(`   ${triple} → ${rows.length} rows${detailCard ? ' (with detail)' : ''}`);
+        }
       }
       if (args.write && upsertBatch.length > 0) {
         await sbDeleteForPlans(env, planTriples);
