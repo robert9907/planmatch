@@ -866,33 +866,91 @@ function normalizePlanToBenefits(rawPlan, detailCard, planFilter) {
 }
 
 // ─── county targets ────────────────────────────────────────────────
+//
+// pm_zip_county has (zip, county, state) only — no fips column. We
+// derive county_fips from pm_plans (which carries both county_name and
+// county_fips) and join by normalized county name. One zip per county
+// is enough; medicare.gov keys plan availability by county_fips, not
+// zip, so we don't need to enumerate every zip.
+function normalizeCountyName(s) {
+  return (s ?? '')
+    .toLowerCase()
+    .replace(/\s+co\.?$/i, '')
+    .replace(/\s+county$/i, '')
+    .replace(/\s+parish$/i, '')
+    .trim();
+}
+
+async function fetchAllPaginated(env, query) {
+  // PostgREST default page is 1000 rows; pm_plans for a single state
+  // can have 11k+. Walk by Range header until we have everything.
+  const out = [];
+  const PAGE = 1000;
+  for (let offset = 0; ; offset += PAGE) {
+    const url = `${env.SUPABASE_URL}/rest/v1${query}`;
+    const res = await fetch(url, {
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        Range: `${offset}-${offset + PAGE - 1}`,
+        'Range-Unit': 'items',
+      },
+    });
+    if (!res.ok) throw new Error(`supabase paged GET ${res.status}: ${await res.text()}`);
+    const chunk = await res.json();
+    out.push(...chunk);
+    if (chunk.length < PAGE) break;
+  }
+  return out;
+}
+
 async function resolveTargets({ zip, fips, state, plan, env, verbose }) {
   if (plan) {
     const [contract, pid] = plan.split('-');
     const rows = await sbGet(
       env,
-      `/pm_plans?contract_id=eq.${contract}&plan_id=eq.${pid}&select=contract_id,plan_id,segment_id,state,county_name&limit=1`,
+      `/pm_plans?contract_id=eq.${contract}&plan_id=eq.${pid}&select=contract_id,plan_id,segment_id,state,county_name,county_fips&limit=1`,
     );
     if (!rows.length) throw new Error(`no pm_plans row for ${plan}`);
     const county = rows[0].county_name;
+    const fipsCode = rows[0].county_fips;
     const zc = await sbGet(
       env,
-      `/pm_zip_county?county=eq.${encodeURIComponent(county)}&state=eq.${rows[0].state}&select=zip,fips&limit=1`,
+      `/pm_zip_county?county=eq.${encodeURIComponent(county)}&state=eq.${rows[0].state}&select=zip&limit=1`,
     );
     if (!zc.length) throw new Error(`no pm_zip_county for ${county}, ${rows[0].state}`);
-    if (verbose) console.log(`  resolved ${plan} → ${zc[0].zip}/${zc[0].fips}`);
-    return [{ zip: zc[0].zip, fips: zc[0].fips, planFilter: plan }];
+    if (verbose) console.log(`  resolved ${plan} → ${zc[0].zip}/${fipsCode}`);
+    return [{ zip: zc[0].zip, fips: fipsCode, planFilter: plan }];
   }
   if (zip && fips) return [{ zip, fips, planFilter: null }];
   if (state) {
-    const rows = await sbGet(env, `/pm_zip_county?state=eq.${state}&select=zip,fips&limit=5000`);
-    const seen = new Set();
+    // Step 1: build county_name → county_fips map from pm_plans.
+    const planRows = await fetchAllPaginated(
+      env,
+      `/pm_plans?state=eq.${state}&select=county_name,county_fips`,
+    );
+    const fipsByCounty = new Map();
+    for (const r of planRows) {
+      const key = normalizeCountyName(r.county_name);
+      if (!key || !r.county_fips) continue;
+      if (!fipsByCounty.has(key)) fipsByCounty.set(key, r.county_fips);
+    }
+    if (verbose) console.log(`  state=${state} → ${fipsByCounty.size} counties in pm_plans`);
+
+    // Step 2: pick one zip per county from pm_zip_county.
+    const zipRows = await fetchAllPaginated(
+      env,
+      `/pm_zip_county?state=eq.${state}&select=zip,county`,
+    );
+    const seenCounty = new Set();
     const out = [];
-    for (const r of rows) {
-      const key = `${r.zip}-${r.fips}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ zip: r.zip, fips: r.fips, planFilter: null });
+    for (const r of zipRows) {
+      const key = normalizeCountyName(r.county);
+      if (seenCounty.has(key)) continue;
+      const f = fipsByCounty.get(key);
+      if (!f) continue; // county exists in zip table but no plans → skip
+      seenCounty.add(key);
+      out.push({ zip: r.zip, fips: f, county: r.county, planFilter: null });
     }
     if (verbose) console.log(`  state=${state} → ${out.length} (zip, fips) targets`);
     return out;
