@@ -39,11 +39,15 @@
 // Recommend toggle wires through to the parent (recommendation
 // state lives in the session via Step6QuoteDelivery).
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
 import { useSession } from '@/hooks/useSession';
 import { usePlanBrain } from '@/hooks/usePlanBrain';
+import {
+  useManufacturerAssistance,
+  type AssistanceRow,
+} from '@/hooks/useManufacturerAssistance';
 import { findPlan } from '@/lib/cmsPlans';
 import type {
   PlanBrainData,
@@ -195,6 +199,60 @@ const CSS = `
 .qv4-loading, .qv4-empty { padding: 28px; text-align: center; color: var(--qv4-g600);
   font-size: 13px; background: #fff; border: 1px dashed var(--qv4-g200);
   border-radius: 12px; }
+
+/* ── Assistance indicators ─────────────────────────────────────── */
+.qv4 .ai-icon { display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; margin-left: 4px; border-radius: 50%;
+  background: var(--qv4-amb-bg); color: var(--qv4-amb);
+  font-size: 9px; font-weight: 700; cursor: pointer;
+  border: 1px solid rgba(243,156,18,0.4); font-family: var(--qv4-fb); }
+.qv4 .ai-icon:hover { background: var(--qv4-amb); color: #fff; }
+.qv4 .ai-tag { font-size: 9px; color: var(--qv4-amb); font-weight: 600;
+  margin-left: 4px; font-family: var(--qv4-fb); }
+
+.qv4-help { margin-top: 16px; background: #fff; border: 1px solid var(--qv4-g200);
+  border-radius: 12px; overflow: hidden; }
+.qv4-help-hdr { padding: 12px 16px; display: flex; align-items: center;
+  justify-content: space-between; cursor: pointer; user-select: none;
+  background: linear-gradient(0deg, var(--qv4-amb-bg), #fff); }
+.qv4-help-hdr-l { display: flex; align-items: center; gap: 8px; }
+.qv4-help-icon { width: 24px; height: 24px; border-radius: 50%;
+  background: var(--qv4-amb); color: #fff; display: flex;
+  align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
+.qv4-help-title { font-family: var(--qv4-fd); font-size: 14px; font-weight: 700;
+  color: var(--qv4-navy); }
+.qv4-help-sub { font-size: 11px; color: var(--qv4-g600); margin-top: 1px; }
+.qv4-help-toggle { font-size: 11px; color: var(--qv4-navy); font-weight: 600; }
+.qv4-help-body { padding: 12px 16px 16px; border-top: 1px solid var(--qv4-g200); }
+.qv4-help-section { margin-bottom: 14px; }
+.qv4-help-section:last-child { margin-bottom: 0; }
+.qv4-help-section-h { font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--qv4-navy); margin-bottom: 6px; }
+.qv4-pap-row { padding: 8px 10px; border: 1px solid var(--qv4-g200);
+  border-radius: 8px; margin-bottom: 6px; display: grid;
+  grid-template-columns: 1fr auto; gap: 4px 12px; align-items: start;
+  font-size: 12px; }
+.qv4-pap-row:last-child { margin-bottom: 0; }
+.qv4-pap-name { font-weight: 700; color: var(--qv4-navy); font-family: var(--qv4-fd); }
+.qv4-pap-mfr { font-size: 10px; color: var(--qv4-g600); margin-top: 1px; }
+.qv4-pap-elig { grid-column: 1 / -1; font-size: 11px; color: var(--qv4-g700);
+  margin-top: 4px; line-height: 1.4; }
+.qv4-pap-meta { font-size: 10px; color: var(--qv4-g500); font-family: var(--qv4-fm);
+  text-align: right; white-space: nowrap; }
+.qv4-pap-cta { display: inline-block; font-size: 11px; font-weight: 600;
+  color: var(--qv4-navy); text-decoration: none; padding: 4px 10px;
+  border: 1px solid var(--qv4-g300); border-radius: 5px; margin-right: 4px; }
+.qv4-pap-cta:hover { background: var(--qv4-g50); }
+.qv4-pap-tag { display: inline-block; font-size: 9px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 6px;
+  border-radius: 3px; margin-right: 4px; }
+.qv4-pap-tag.pap { background: var(--qv4-grn-bg); color: var(--qv4-grn); }
+.qv4-pap-tag.copay { background: var(--qv4-sea-dim); color: var(--qv4-navy); }
+.qv4-pap-tag.found { background: var(--qv4-amb-bg); color: var(--qv4-amb); }
+.qv4-pap-tag.no-medicare { background: var(--qv4-red-bg); color: var(--qv4-red); }
+.qv4-help-generic { font-size: 12px; color: var(--qv4-g700); line-height: 1.5; }
+.qv4-help-generic ul { margin: 4px 0 0 18px; padding: 0; }
+.qv4-help-generic li { margin-bottom: 4px; }
 `;
 
 interface Props {
@@ -233,6 +291,12 @@ export function QuoteDeliveryV4({
     medications,
     providers,
   });
+
+  // Manufacturer assistance — fetched once per session, indexed by
+  // medication id. Used to flag drugs that come back not_covered or
+  // tier 4-5 expensive on every plan column so the agent can pivot
+  // to PAP / copay-card / foundation alternatives.
+  const assistance = useManufacturerAssistance(medications);
 
   const currentPlan = useMemo<Plan | null>(
     () => (currentPlanId ? findPlan(currentPlanId) : null),
@@ -298,6 +362,32 @@ export function QuoteDeliveryV4({
   const currentCol = columns.find((c) => c.variant === 'current') ?? null;
   const baseline = currentCol?.plan ?? null;
 
+  // Medications needing manufacturer assistance: any med where every
+  // plan column comes back excluded / not_covered, or tier 4–5 with
+  // monthly >$100 on the lowest-cost plan. Stored as a Set so the
+  // medication row + cell + help section can all read in O(1).
+  const medsNeedingAssistance = useMemo(() => {
+    const out = new Set<string>();
+    for (const med of medications) {
+      let worstNeeds = false;
+      let everyPlanExpensive = true;
+      let hasAnyPlan = false;
+      for (const c of columns) {
+        const info = lookupDrugCost(c.plan, med, data);
+        hasAnyPlan = true;
+        if (!info || info.label === 'Excluded') {
+          worstNeeds = true;
+          continue;
+        }
+        const expensiveTier = info.tier != null && info.tier >= 4 && info.monthlyCost > 100;
+        if (!expensiveTier) everyPlanExpensive = false;
+      }
+      if (!hasAnyPlan) continue;
+      if (worstNeeds || everyPlanExpensive) out.add(med.id);
+    }
+    return out;
+  }, [columns, medications, data]);
+
   return (
     <div className="qv4">
       <style>{CSS}</style>
@@ -345,6 +435,8 @@ export function QuoteDeliveryV4({
                   cols={columns}
                   data={data}
                   baseline={baseline}
+                  needsAssistance={medsNeedingAssistance.has(m.id)}
+                  hasMatchingProgram={!!assistance.byMedicationId[m.id]?.length}
                 />
               ))
             )}
@@ -487,6 +579,13 @@ export function QuoteDeliveryV4({
         </table>
       </div>
 
+      {medsNeedingAssistance.size > 0 && (
+        <AssistanceHelpSection
+          medications={medications.filter((m) => medsNeedingAssistance.has(m.id))}
+          assistanceByMedId={assistance.byMedicationId}
+        />
+      )}
+
       {result && client.county && (
         <div style={{ padding: '4px 0 0', fontSize: 10, color: 'var(--qv4-g500)' }}>
           Plan Brain · population {result.population.toUpperCase()} · utilization {result.utilization} · {client.county}, {client.state}
@@ -547,23 +646,43 @@ function MedicationRow({
   cols,
   data,
   baseline,
+  needsAssistance,
+  hasMatchingProgram,
 }: {
   medication: Medication;
   cols: ColumnPlan[];
   data: PlanBrainData | null;
   baseline: Plan | null;
+  needsAssistance: boolean;
+  hasMatchingProgram: boolean;
 }) {
   const baselineCost = baseline ? lookupDrugCost(baseline, medication, data) : null;
+  function scrollToHelp() {
+    const target = document.getElementById(`qv4-help-${medication.id}`);
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
   return (
     <tr>
       <th className="lc">
         {medication.name}
         {medication.strength ? ` ${medication.strength}` : ''}
+        {needsAssistance && hasMatchingProgram && (
+          <button
+            type="button"
+            className="ai-icon"
+            title="Manufacturer assistance available — click for details"
+            onClick={scrollToHelp}
+            aria-label={`Show assistance options for ${medication.name}`}
+          >
+            i
+          </button>
+        )}
         <br />
         <span className="sub">30-day</span>
       </th>
       {cols.map((c) => {
         const info = lookupDrugCost(c.plan, medication, data);
+        const notCovered = !info || info.label === 'Excluded';
         return (
           <td key={c.plan.id} className={cellCls(c, info?.improvedVs(baselineCost))}>
             {info ? (
@@ -573,7 +692,18 @@ function MedicationRow({
                     {info.tier}
                   </span>
                 )}
-                {info.label}
+                {info.label === 'Excluded' ? (
+                  <>
+                    Not covered
+                    {hasMatchingProgram && (
+                      <span className="ai-tag" onClick={scrollToHelp} style={{ cursor: 'pointer' }}>
+                        · assistance available
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  info.label
+                )}
                 {info.deltaVs(baselineCost) && (
                   <span className={`d ${info.deltaVs(baselineCost)!.sign}`}>
                     {info.deltaVs(baselineCost)!.text}
@@ -585,9 +715,21 @@ function MedicationRow({
                     {info.stepTherapy && <span className="fg">ST</span>}
                   </span>
                 )}
+                {info.tier != null && info.tier >= 4 && info.monthlyCost > 100 && hasMatchingProgram && (
+                  <span className="ai-tag" onClick={scrollToHelp} style={{ cursor: 'pointer' }}>
+                    · assistance
+                  </span>
+                )}
               </>
             ) : (
-              <span style={{ color: 'var(--qv4-g500)' }}>—</span>
+              <>
+                <span style={{ color: 'var(--qv4-g500)' }}>—</span>
+                {notCovered && hasMatchingProgram && (
+                  <span className="ai-tag" onClick={scrollToHelp} style={{ cursor: 'pointer' }}>
+                    · assistance available
+                  </span>
+                )}
+              </>
             )}
           </td>
         );
@@ -1076,4 +1218,166 @@ function whySwitchText(col: ColumnPlan, baseline: Plan | null): string {
   }
   if (col.scored?.providerNetworkStatus === 'all_in') bits.push('in-network');
   return bits.length > 0 ? bits.join(' · ') : '—';
+}
+
+// ─── Assistance help section ─────────────────────────────────────────
+//
+// Renders below the comparison table when one or more medications come
+// back not_covered or tier 4–5 expensive on every plan column. For each
+// such medication, lists the matching pm_manufacturer_assistance rows
+// (PAP / copay card / foundation) and a generic-guidance block covering
+// formulary exceptions, Extra Help / LIS, and the Medicare Prescription
+// Payment Plan (M3P, started 2025) — the three Medicare-side levers
+// that work regardless of manufacturer.
+
+function AssistanceHelpSection({
+  medications,
+  assistanceByMedId,
+}: {
+  medications: Medication[];
+  assistanceByMedId: Record<string, AssistanceRow[]>;
+}) {
+  const [open, setOpen] = useState(true);
+  const totalPrograms = medications.reduce(
+    (acc, m) => acc + (assistanceByMedId[m.id]?.length ?? 0),
+    0,
+  );
+  return (
+    <div className="qv4-help">
+      <div className="qv4-help-hdr" onClick={() => setOpen((v) => !v)}>
+        <div className="qv4-help-hdr-l">
+          <div className="qv4-help-icon">!</div>
+          <div>
+            <div className="qv4-help-title">Medication assistance options</div>
+            <div className="qv4-help-sub">
+              {medications.length} drug{medications.length === 1 ? '' : 's'} need help · {totalPrograms} program{totalPrograms === 1 ? '' : 's'} matched
+            </div>
+          </div>
+        </div>
+        <div className="qv4-help-toggle">{open ? '−' : '+'}</div>
+      </div>
+      {open && (
+        <div className="qv4-help-body">
+          {medications.map((m) => {
+            const programs = assistanceByMedId[m.id] ?? [];
+            return (
+              <div
+                key={m.id}
+                id={`qv4-help-${m.id}`}
+                className="qv4-help-section"
+              >
+                <div className="qv4-help-section-h">
+                  {m.name}
+                  {m.strength ? ` ${m.strength}` : ''}
+                </div>
+                {programs.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--qv4-g600)' }}>
+                    No manufacturer program matched on brand name. Try the generic-options section below or search NeedyMeds / RxAssist.
+                  </div>
+                ) : (
+                  programs.map((p) => <ProgramRow key={p.id} row={p} />)
+                )}
+              </div>
+            );
+          })}
+
+          <div className="qv4-help-section">
+            <div className="qv4-help-section-h">Medicare-side options (work for any drug)</div>
+            <div className="qv4-help-generic">
+              <ul>
+                <li>
+                  <strong>Formulary exception</strong> — prescriber requests the plan
+                  cover a non-formulary drug or move it to a lower tier. Decision in
+                  72 hrs (24 hrs if expedited).
+                </li>
+                <li>
+                  <strong>Extra Help / LIS</strong> — Social Security low-income
+                  subsidy. 2025 thresholds ≤150% FPL ($22,590 individual, $30,660
+                  couple) with asset cap $17,600 / $35,130. Drops Part D copays to
+                  $1.55–$11.20 per fill; full LIS waives the deductible.
+                </li>
+                <li>
+                  <strong>Medicare Prescription Payment Plan (M3P)</strong> — new
+                  in 2025. Spreads the annual $2,000 Part D OOP cap over 12
+                  monthly bills instead of front-loading at the pharmacy.
+                  Available on every Part D plan; enrollment via the plan, not
+                  CMS.
+                </li>
+                <li>
+                  <strong>Generic / therapeutic substitution</strong> — ask the
+                  prescriber whether a tier-1 alternative exists for the same
+                  indication (e.g. losartan for Entresto-resistant cases,
+                  generic atorvastatin for high-cost statins).
+                </li>
+                <li>
+                  <strong>Foundation grants</strong> — disease-fund grants from
+                  PAN Foundation (panfoundation.org), HealthWell
+                  (healthwellfoundation.org), Good Days (mygooddays.org). Open /
+                  closed funds rotate; check before applying.
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProgramRow({ row }: { row: AssistanceRow }) {
+  const tagCls =
+    row.program_type === 'PAP' ? 'pap' : row.program_type === 'copay_card' ? 'copay' : 'found';
+  const tagLabel =
+    row.program_type === 'PAP'
+      ? 'Free drug'
+      : row.program_type === 'copay_card'
+        ? 'Copay card'
+        : 'Foundation';
+  return (
+    <div className="qv4-pap-row">
+      <div>
+        <div className="qv4-pap-name">
+          <span className={`qv4-pap-tag ${tagCls}`}>{tagLabel}</span>
+          {row.program_name}
+          {!row.covers_medicare && (
+            <span className="qv4-pap-tag no-medicare" style={{ marginLeft: 6 }}>
+              Excludes Medicare
+            </span>
+          )}
+        </div>
+        <div className="qv4-pap-mfr">
+          {row.brand_name} · {row.manufacturer}
+        </div>
+      </div>
+      <div className="qv4-pap-meta">
+        {row.income_limit_individual != null && (
+          <>
+            ≤${row.income_limit_individual.toLocaleString()} indiv
+            <br />
+            ≤${(row.income_limit_couple ?? 0).toLocaleString()} couple
+          </>
+        )}
+      </div>
+      {row.eligibility_summary && (
+        <div className="qv4-pap-elig">{row.eligibility_summary}</div>
+      )}
+      <div style={{ gridColumn: '1 / -1', marginTop: 6 }}>
+        {row.application_url && (
+          <a
+            className="qv4-pap-cta"
+            href={row.application_url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Apply ↗
+          </a>
+        )}
+        {row.phone_number && (
+          <a className="qv4-pap-cta" href={`tel:${row.phone_number.replace(/\D/g, '')}`}>
+            ☎ {row.phone_number}
+          </a>
+        )}
+      </div>
+    </div>
+  );
 }
