@@ -1,22 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSession } from '@/hooks/useSession';
 import { StepHeader } from './StepHeader';
 import { findPlan, lookupByHNumber } from '@/lib/cmsPlans';
 import { fetchPlansByIds } from '@/lib/planCatalog';
-import { bulkLookupFormulary } from '@/lib/formularyLookup';
 import { BROKER } from '@/lib/constants';
 import { ComplianceChecklist } from '@/components/compliance/ComplianceChecklist';
 import { SaveSessionButton } from '@/components/sync/SaveSessionButton';
 import { DISCLAIMERS, allComplianceItemIds } from '@/lib/compliance';
-import { buildClientInfoText, buildSunfireRecommendationText } from '@/lib/clipboardFormat';
-import { fipsForCounty } from '@/lib/ncFips';
 import type { Plan } from '@/types/plans';
 import type { SessionMode } from '@/types/session';
 import { QuoteDeliveryV4 } from './QuoteDeliveryV4';
-import { PlanBrainPanel } from './PlanBrainPanel';
-import { useDrugCosts } from '@/hooks/useDrugCosts';
-import { usePlanBrain } from '@/hooks/usePlanBrain';
-import type { PharmacyMode } from '@/lib/drugCosts';
 
 // ─── Display helpers ────────────────────────────────────────────────
 // The PBP structured extract carries a benefit row for many
@@ -117,7 +110,6 @@ function NewQuoteMode() {
   const client = useSession((s) => s.client);
   const medications = useSession((s) => s.medications);
   const providers = useSession((s) => s.providers);
-  const [toastMsg, showToast] = useToast();
 
   // Refetch the finalist set from pm_plans so the side-by-side renders
   // live benefit/premium/star data instead of the stale Plan shape
@@ -195,272 +187,19 @@ function NewQuoteMode() {
     );
   }
 
-  async function handleCopy(plan: Plan) {
-    const text = buildClientInfoText({ client, plan, medications, providers });
-    try {
-      await navigator.clipboard.writeText(text);
-      showToast('Copied to clipboard');
-    } catch {
-      showToast('Copy failed — check browser permissions');
-    }
-  }
-
-  function handleOpenSunfire(plan: Plan) {
-    const fips = fipsForCounty(client.county);
-    if (!client.zip || !fips) {
-      const missing = !client.zip ? 'ZIP' : `FIPS for county "${client.county}"`;
-      showToast(`Need ${missing} to open SunFire`);
-      return;
-    }
-    // Per spec the segment after FIPS is always literal "MAPD" — that's
-    // the SunFire route for Medicare Advantage. The plan id is appended
-    // as a query param; SunFire's hash router ignores unknown params if
-    // the deep-link form changes, so this stays safe to send.
-    const planId = `${plan.contract_id}-${plan.plan_number}`;
-    const url =
-      `https://www.sunfirematrix.com/app/agent/medicareadvocates` +
-      `/#/plans/${client.zip}/${fips}/MAPD?planId=${encodeURIComponent(planId)}`;
-    window.open(url, '_blank', 'noopener');
-  }
-
-  async function handleRecommendCopy({
-    plan,
-    totalRxAnnual,
-    totalAnnualValue,
-    whySwitch,
-  }: {
-    plan: Plan;
-    totalRxAnnual: number;
-    totalAnnualValue: number;
-    whySwitch: string;
-  }) {
-    const text = buildSunfireRecommendationText({
-      client,
-      plan,
-      totalRxAnnual,
-      totalAnnualValue,
-      whySwitch,
-    });
-    try {
-      await navigator.clipboard.writeText(text);
-      showToast('Client info copied for SunFire');
-    } catch {
-      showToast('Copy failed — check browser permissions');
-    }
-  }
-
-  return (
-    <NewQuoteBody
-      finalists={finalists}
-      client={client}
-      medications={medications}
-      providers={providers}
-      recommendation={recommendation}
-      setRecommendation={setRecommendation}
-      handleCopy={handleCopy}
-      handleOpenSunfire={handleOpenSunfire}
-      handleRecommendCopy={handleRecommendCopy}
-      toastMsg={toastMsg}
-    />
-  );
-}
-
-// Body of NewQuoteMode hoisted so PlanBrainPanel and V4TableWithPrime
-// are explicit sibling JSX rather than a render-prop. Same render
-// order — Brain panel first, then V4 table, then everything else —
-// but the explicit composition prevents any conditional path from
-// accidentally suppressing the V4 table.
-function NewQuoteBody({
-  finalists,
-  client,
-  medications,
-  providers,
-  recommendation,
-  setRecommendation,
-  handleCopy,
-  handleOpenSunfire,
-  handleRecommendCopy,
-  toastMsg,
-}: {
-  finalists: Plan[];
-  client: import('@/types/session').Client;
-  medications: import('@/types/session').Medication[];
-  providers: import('@/types/session').Provider[];
-  recommendation: string | null;
-  setRecommendation: (id: string | null) => void;
-  handleCopy: (plan: Plan) => void;
-  handleOpenSunfire: (plan: Plan) => void;
-  handleRecommendCopy: (args: { plan: Plan; totalRxAnnual: number; totalAnnualValue: number; whySwitch: string }) => Promise<void>;
-  toastMsg: string | null;
-}) {
-  // Run Plan Brain over the finalist set — its rank order drives the
-  // V4 table column order so the side-by-side reads top→bottom in
-  // composite-descending order. Brain panel sits ABOVE the V4 table.
-  const { result, loading } = usePlanBrain({
-    plans: finalists,
-    client,
-    medications,
-    providers,
-  });
-  const orderedFinalists = useMemo(() => {
-    if (!result) return finalists;
-    const rank = new Map(result.scored.map((s, i) => [s.plan.id, i]));
-    return [...finalists].sort((a, b) => (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999));
-  }, [finalists, result]);
-
   return (
     <div className="flex flex-col gap-4">
-      <PlanBrainPanel result={result} loading={loading} county={client.county} />
-      <V4TableWithPrime
-        finalists={orderedFinalists}
-        currentPlan={null}
+      <QuoteDeliveryV4
+        finalists={finalists}
+        client={client}
         medications={medications}
         providers={providers}
         recommendation={recommendation}
         onRecommend={setRecommendation}
-        onRecommendCopy={handleRecommendCopy}
-        onCopy={handleCopy}
-        onOpenSunfire={handleOpenSunfire}
-        clientPhone={client.phone}
-        clientFirstName={clientFirstName(client.name)}
-        brokerName={BROKER.name}
       />
       <ClientDeliveryCard finalists={finalists} recommendation={recommendation} />
       <ComplianceChecklist />
       <BrokerActions recommendation={recommendation} />
-      <Toast message={toastMsg} />
-    </div>
-  );
-}
-
-// Primes the per-(plan, rxcui) formulary cache before handing off to the
-// v4 table. Owns a tick so the V4 cell closures re-read the cache after
-// each bulk response lands. Same pattern as Steps 3 & 5.
-function V4TableWithPrime({
-  finalists,
-  currentPlan,
-  medications,
-  providers,
-  recommendation,
-  onRecommend,
-  onRecommendCopy,
-  onCopy,
-  onOpenSunfire,
-  clientPhone,
-  clientFirstName,
-  brokerName,
-}: {
-  finalists: Plan[];
-  currentPlan: Plan | null;
-  medications: import('@/types/session').Medication[];
-  providers: import('@/types/session').Provider[];
-  recommendation: string | null;
-  onRecommend: (id: string | null) => void;
-  onRecommendCopy?: (args: {
-    plan: Plan;
-    totalRxAnnual: number;
-    totalAnnualValue: number;
-    whySwitch: string;
-  }) => void;
-  onCopy: (plan: Plan) => void;
-  onOpenSunfire: (plan: Plan) => void;
-  clientPhone?: string;
-  clientFirstName?: string;
-  brokerName?: string;
-}) {
-  const [formularyTick, setFormularyTick] = useState(0);
-  const [pharmacyMode, setPharmacyMode] = useState<PharmacyMode>('retail');
-  const primeNonce = useMemo(
-    () =>
-      `${finalists.length}:${medications
-        .map((m) => m.rxcui ?? '')
-        .sort()
-        .join(',')}`,
-    [finalists, medications],
-  );
-  useEffect(() => {
-    if (finalists.length === 0 || medications.length === 0) return;
-    let cancelled = false;
-    const contractIds = [...new Set(finalists.map((p) => p.contract_id))];
-    const rxcuis = medications
-      .map((m) => m.rxcui)
-      .filter((s): s is string => typeof s === 'string' && s.length > 0);
-    if (rxcuis.length === 0) return;
-    bulkLookupFormulary(contractIds, rxcuis).then(() => {
-      if (!cancelled) setFormularyTick((t) => t + 1);
-    });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [primeNonce]);
-
-  const drugCosts = useDrugCosts(finalists, medications, pharmacyMode);
-
-  return (
-    <QuoteDeliveryV4
-      finalists={finalists}
-      currentPlan={currentPlan}
-      medications={medications}
-      providers={providers}
-      recommendation={recommendation}
-      onRecommend={onRecommend}
-      onRecommendCopy={onRecommendCopy}
-      onCopy={onCopy}
-      onOpenSunfire={onOpenSunfire}
-      formularyTick={formularyTick}
-      clientPhone={clientPhone}
-      clientFirstName={clientFirstName}
-      brokerName={brokerName}
-      planDrugCosts={drugCosts.byPlanId}
-      pharmacyMode={pharmacyMode}
-      onPharmacyModeChange={setPharmacyMode}
-      drugCostsLoading={drugCosts.loading}
-      drugCostsSource={drugCosts.source}
-      drugCostsError={drugCosts.error}
-    />
-  );
-}
-
-function useToast(): [string | null, (msg: string) => void] {
-  const [msg, setMsg] = useState<string | null>(null);
-  const timerRef = useRef<number | null>(null);
-  function show(next: string) {
-    setMsg(next);
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => setMsg(null), 1800);
-  }
-  useEffect(
-    () => () => {
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    },
-    [],
-  );
-  return [msg, show];
-}
-
-function Toast({ message }: { message: string | null }) {
-  if (!message) return null;
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      style={{
-        position: 'fixed',
-        bottom: 24,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        padding: '10px 16px',
-        borderRadius: 999,
-        background: 'var(--ink)',
-        color: 'var(--wh)',
-        fontSize: 13,
-        fontWeight: 600,
-        boxShadow: '0 6px 20px rgba(0,0,0,0.18)',
-        zIndex: 50,
-      }}
-    >
-      {message}
     </div>
   );
 }
