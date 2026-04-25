@@ -430,11 +430,13 @@ function buildBenefits(rows: BenefitRow[]): PlanBenefits {
   const fitnessProgramMatch = fitness?.benefit_description?.match(/Fitness · ([^·]+)/);
   const fitnessProgram = fitnessProgramMatch ? fitnessProgramMatch[1].trim() : null;
 
-  // Diabetic supplies — not imported from PBP (test strips + monitors
-  // are Part B, preferred-brands data lives in the carrier formulary).
-  // Leave covered=false until a dedicated importer lands; this makes
-  // the Diabetic filter tier eliminate plans, which is the correct
-  // posture when we can't confirm the benefit.
+  // Diabetic supplies — Part B benefit covered universally by every
+  // MA plan (test strips, monitors, lancets). Default covered=true so
+  // the Diabetic filter doesn't zero out the funnel; the preferred-
+  // brand subToggles (OneTouch / Accu-Chek) still cut plans because
+  // we don't have brand data yet. Old behaviour was covered=false for
+  // every plan, which combined with the AND intersection in the Extras
+  // funnel produced 0 finalists whenever Diabetic was enabled.
   return {
     dental: {
       preventive: Boolean(dental),
@@ -458,7 +460,7 @@ function buildBenefits(rows: BenefitRow[]): PlanBenefits {
       allowance_per_month: foodCardMonthly,
       restricted_to_medicaid_eligible: false,
     },
-    diabetic: { covered: false, preferred_brands: [] },
+    diabetic: { covered: true, preferred_brands: [] },
     // PBP-as-source caveat: enabled stays true whether or not we
     // extracted a fitness row — fitness is nearly ubiquitous on MA
     // plans and PBP doesn't expose it in structured form. See the

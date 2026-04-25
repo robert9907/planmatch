@@ -7,7 +7,7 @@
 // phdr + sticky bbar. The user gets the mockup chrome without us
 // re-implementing the tangle of logic that Step6 already handles.
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Step6QuoteDelivery } from '@/components/steps/Step6QuoteDelivery';
 import { useSession } from '@/hooks/useSession';
 
@@ -20,18 +20,22 @@ export function QuotePage({ onBack }: Props) {
   const medications = useSession((s) => s.medications);
   const providers = useSession((s) => s.providers);
   const selectedFinalists = useSession((s) => s.selectedFinalists);
-  const mode = useSession((s) => s.mode);
   const setMode = useSession((s) => s.setMode);
 
-  // The v4 flow always lands on the side-by-side table. LandingPage
-  // flips mode='annual_review' whenever the hydrated client has a
-  // current_plan_id (to enable the CMS-import path elsewhere); that
-  // branch isn't part of the v4 Quote screen. Force new_quote here
-  // so the finalist table renders. Annual Review CMS import stays
-  // accessible via the legacy Step6 ModeToggle rendered inside.
+  // Force new_quote ONCE on first mount — LandingPage flips mode to
+  // annual_review when the hydrated client has a current_plan_id, but
+  // the v4 Quote screen always opens on the side-by-side table.
+  // Critically, after this initial reset the user must be free to
+  // toggle into Annual Review via Step6's ModeToggle without us
+  // immediately reverting. Watching `mode` in the dep array (the old
+  // bug) caused the toggle to flash and re-mount NewQuoteMode every
+  // time the user clicked Annual Review.
+  const initialModeForced = useRef(false);
   useEffect(() => {
-    if (mode !== 'new_quote') setMode('new_quote');
-  }, [mode, setMode]);
+    if (initialModeForced.current) return;
+    initialModeForced.current = true;
+    setMode('new_quote');
+  }, [setMode]);
   return (
     <>
       <div className="scroll">

@@ -250,81 +250,86 @@ function NewQuoteMode() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <PlanBrainSection
-        finalists={finalists}
-        client={client}
-        medications={medications}
-        providers={providers}
-      >
-        {(orderedFinalists) => (
-          <V4TableWithPrime
-            finalists={orderedFinalists}
-            currentPlan={null}
-            medications={medications}
-            providers={providers}
-            recommendation={recommendation}
-            onRecommend={setRecommendation}
-            onRecommendCopy={handleRecommendCopy}
-            onCopy={handleCopy}
-            onOpenSunfire={handleOpenSunfire}
-            clientPhone={client.phone}
-            clientFirstName={clientFirstName(client.name)}
-            brokerName={BROKER.name}
-          />
-        )}
-      </PlanBrainSection>
-      <ClientDeliveryCard finalists={finalists} recommendation={recommendation} />
-      <ComplianceChecklist />
-      <BrokerActions recommendation={recommendation} />
-      <Toast message={toastMsg} />
-    </div>
+    <NewQuoteBody
+      finalists={finalists}
+      client={client}
+      medications={medications}
+      providers={providers}
+      recommendation={recommendation}
+      setRecommendation={setRecommendation}
+      handleCopy={handleCopy}
+      handleOpenSunfire={handleOpenSunfire}
+      handleRecommendCopy={handleRecommendCopy}
+      toastMsg={toastMsg}
+    />
   );
 }
 
-// Plan Brain wrapper — runs the scoring engine over the finalists,
-// renders the summary panel above, and re-orders the finalists by
-// composite descending so the side-by-side V4 table reads top-to-
-// bottom in Brain-rank order. Renders children with the reordered list
-// so the V4 table doesn't need to know about Brain ordering.
-function PlanBrainSection({
+// Body of NewQuoteMode hoisted so PlanBrainPanel and V4TableWithPrime
+// are explicit sibling JSX rather than a render-prop. Same render
+// order — Brain panel first, then V4 table, then everything else —
+// but the explicit composition prevents any conditional path from
+// accidentally suppressing the V4 table.
+function NewQuoteBody({
   finalists,
   client,
   medications,
   providers,
-  children,
+  recommendation,
+  setRecommendation,
+  handleCopy,
+  handleOpenSunfire,
+  handleRecommendCopy,
+  toastMsg,
 }: {
   finalists: Plan[];
   client: import('@/types/session').Client;
   medications: import('@/types/session').Medication[];
   providers: import('@/types/session').Provider[];
-  children: (orderedFinalists: Plan[]) => React.ReactNode;
+  recommendation: string | null;
+  setRecommendation: (id: string | null) => void;
+  handleCopy: (plan: Plan) => void;
+  handleOpenSunfire: (plan: Plan) => void;
+  handleRecommendCopy: (args: { plan: Plan; totalRxAnnual: number; totalAnnualValue: number; whySwitch: string }) => Promise<void>;
+  toastMsg: string | null;
 }) {
+  // Run Plan Brain over the finalist set — its rank order drives the
+  // V4 table column order so the side-by-side reads top→bottom in
+  // composite-descending order. Brain panel sits ABOVE the V4 table.
   const { result, loading } = usePlanBrain({
     plans: finalists,
     client,
     medications,
     providers,
   });
-
-  // Re-order finalists by composite descending. If Brain hasn't
-  // returned yet, render in original order so the table appears
-  // immediately.
-  const ordered = useMemo(() => {
+  const orderedFinalists = useMemo(() => {
     if (!result) return finalists;
     const rank = new Map(result.scored.map((s, i) => [s.plan.id, i]));
     return [...finalists].sort((a, b) => (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999));
   }, [finalists, result]);
 
   return (
-    <>
-      <PlanBrainPanel
-        result={result}
-        loading={loading}
-        county={client.county}
+    <div className="flex flex-col gap-4">
+      <PlanBrainPanel result={result} loading={loading} county={client.county} />
+      <V4TableWithPrime
+        finalists={orderedFinalists}
+        currentPlan={null}
+        medications={medications}
+        providers={providers}
+        recommendation={recommendation}
+        onRecommend={setRecommendation}
+        onRecommendCopy={handleRecommendCopy}
+        onCopy={handleCopy}
+        onOpenSunfire={handleOpenSunfire}
+        clientPhone={client.phone}
+        clientFirstName={clientFirstName(client.name)}
+        brokerName={BROKER.name}
       />
-      {children(ordered)}
-    </>
+      <ClientDeliveryCard finalists={finalists} recommendation={recommendation} />
+      <ComplianceChecklist />
+      <BrokerActions recommendation={recommendation} />
+      <Toast message={toastMsg} />
+    </div>
   );
 }
 
