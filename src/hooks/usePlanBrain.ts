@@ -30,6 +30,11 @@ interface Args {
 
 interface State {
   result: PlanBrainResult | null;
+  /** Raw aggregated Brain data — exposes per-drug, per-medical, and
+   *  per-network rows so a consumer (e.g. the v4 quote table) can
+   *  render exact dollar values instead of just the composite score.
+   *  Null until the first fetch lands. */
+  data: PlanBrainData | null;
   loading: boolean;
   error: string | null;
 }
@@ -106,5 +111,5 @@ export function usePlanBrain(args: Args): State {
     conditionProfile, userPriorities, populationOverride, weightOverride,
   ]);
 
-  return { result, loading, error };
+  return { result, data, loading, error };
 }

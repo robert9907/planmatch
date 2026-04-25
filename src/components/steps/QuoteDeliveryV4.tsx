@@ -1,49 +1,64 @@
-// QuoteDeliveryV4 — sortable agent quote comparison table.
+// QuoteDeliveryV4 — column-per-plan side-by-side comparison table.
 //
-// Wires Plan Brain's ranked output into a flat table. Top 3 picks (by
-// composite, regardless of current sort) stay pinned at the top with a
-// colored left border. Click any column header to sort.
+// Faithful port of the mockup at planmatch-full-flow.html (the
+// `#quote` page, styles `.qt`, `.qh`, `.cb`, `.wb`, `.wh`, `.ti`,
+// `.d.s`, `.d.m`, `.bl`, `.ws`, `.act-cell`, `.abtn`).
 //
-// Weight sliders (Drug / Medical / Extras) above the table recompute
-// the composite from each plan's cached drug/oop/extras axis scores in
-// real time — no re-fetching, no re-running runPlanBrain. Preset chips
-// snap the sliders to common profiles.
+// Columns:
+//   1. Left header — sticky, gray bg, holds row labels and section
+//      headers ("Your Medications", "Plan Costs", "Extra Benefits").
+//   2. Current Plan (gray `cb` bg) — pinned left when the session
+//      knows the client's existing plan id (annual review / hydrated
+//      client). Drops out gracefully when no current plan is known.
+//   3. Best Rx Match (navy `wb` bg) — the highest-composite finalist
+//      from Plan Brain. The "winner column" gets the navy hero
+//      treatment plus a `.wb` background tint on every cell.
+//   4–N. Remaining finalists ranked by composite, capped at 4 plan
+//      columns total (so the table never exceeds the mockup's width).
 //
-// Filter toggles narrow the visible plan pool: Show SNPs, $0 Premium
-// only, Giveback only.
+// Rows mirror the mockup:
+//   • Header card per column (carrier · plan name · H-id · stars).
+//   • "Your Medications" section header → one row per medication
+//     (tier badge + price + delta vs current + PA/ST flags).
+//   • "Total Rx Cost" total row.
+//   • Provider divider row (one per added provider) with the
+//     ●In-Net / ●Out indicator.
+//   • Medical copay rows: PCP / Specialist / Labs / Imaging /
+//     ER / Urgent / Outpatient Surgery / Mental Health / PT-OT /
+//     Inpatient.
+//   • "Plan Costs" section: Premium / MOOP / Rx Deductible.
+//   • "Extra Benefits" section: Dental / OTC / Food Card / Giveback.
+//   • Navy summary bar — Total Annual Value (estimated total annual
+//     cost minus extras value) with savings delta vs the current
+//     plan; "Why switch?" bullet derived from the plan's ribbon +
+//     biggest deltas.
+//   • Action row — Recommend (or Keep Current for the current
+//     column) and Open SunFire per column.
 //
-// Each row exposes a SunFire button that opens the consumer-portal
-// deep link in a new tab.
-//
-// Design tokens follow the brief: navy #0a3040 header, alternating
-// white / #f8fafc rows, DM Sans body, Fraunces for headings.
+// Plan Brain composite score determines column position. The
+// Recommend toggle wires through to the parent (recommendation
+// state lives in the session via Step6QuoteDelivery).
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
+import { useSession } from '@/hooks/useSession';
 import { usePlanBrain } from '@/hooks/usePlanBrain';
+import { findPlan } from '@/lib/cmsPlans';
 import type {
-  PlanBrainResult,
+  PlanBrainData,
   RibbonKey,
   ScoredPlan,
-  WeightProfile,
 } from '@/lib/plan-brain-types';
 
 const SUNFIRE_URL =
   'https://www.sunfirematrix.com/app/consumer/yourmedicare/10447418';
 
-// ─── Presets (Drug / Medical / Extras) ──────────────────────────────
-const PRESETS: { key: PresetKey; label: string; weights: WeightProfile }[] = [
-  { key: 'standard',    label: 'Standard 50/30/20',     weights: { drug: 0.50, oop: 0.30, extras: 0.20 } },
-  { key: 'drugHeavy',   label: 'Drug-Heavy 70/20/10',   weights: { drug: 0.70, oop: 0.20, extras: 0.10 } },
-  { key: 'extrasHeavy', label: 'Extras-Heavy 20/20/60', weights: { drug: 0.20, oop: 0.20, extras: 0.60 } },
-  { key: 'healthy',     label: 'Healthy 30/40/30',      weights: { drug: 0.30, oop: 0.40, extras: 0.30 } },
-];
-type PresetKey = 'standard' | 'drugHeavy' | 'extrasHeavy' | 'healthy';
+const MAX_FINALIST_COLUMNS = 4;
 
 const RIBBON_LABEL: Record<RibbonKey, string> = {
-  BEST_OVERALL:        'Best overall',
-  LOWEST_DRUG_COST:    'Lowest Rx',
+  BEST_OVERALL:        '⭐ Best overall',
+  LOWEST_DRUG_COST:    '⭐ Best Rx Match',
   LOWEST_OOP:          'Lowest OOP',
   BEST_EXTRAS:         'Best extras',
   ALL_DOCS_IN_NETWORK: 'All in-network',
@@ -52,167 +67,135 @@ const RIBBON_LABEL: Record<RibbonKey, string> = {
   ALL_MEDS_COVERED:    'All meds covered',
 };
 
-const RIBBON_TONE: Record<RibbonKey, { bg: string; fg: string }> = {
-  BEST_OVERALL:        { bg: '#0a3040', fg: '#ffffff' },
-  LOWEST_DRUG_COST:    { bg: '#dcfce7', fg: '#166534' },
-  LOWEST_OOP:          { bg: '#cffafe', fg: '#0e7490' },
-  BEST_EXTRAS:         { bg: '#fef3c7', fg: '#92400e' },
-  ALL_DOCS_IN_NETWORK: { bg: '#dbeafe', fg: '#1e40af' },
-  PART_B_SAVINGS:      { bg: '#dcfce7', fg: '#166534' },
-  ZERO_PREMIUM:        { bg: '#dcfce7', fg: '#166534' },
-  ALL_MEDS_COVERED:    { bg: '#dcfce7', fg: '#166534' },
-};
-
-// Scoped CSS — everything sits under `.qv4` so the page-level v4 chrome
-// outside this component (header, sticky bbar, page hero) stays
-// untouched.
+// Scoped CSS — mirrors the mockup variable names but namespaced under
+// `.qv4` so it can't bleed into the rest of the v4 chrome.
 const CSS = `
 .qv4 {
-  font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
-  color: #1f2937; font-size: 13px;
+  --qv4-navy:#0d2f5e; --qv4-navy-lt:#1a4a8a; --qv4-navy-dk:#091f3f;
+  --qv4-sea:#83f0f9;  --qv4-sea-dim:rgba(131,240,249,0.1);
+  --qv4-w:#fff;
+  --qv4-g50:#f8f9fa; --qv4-g100:#f1f3f5; --qv4-g200:#e9ecef;
+  --qv4-g300:#dee2e6; --qv4-g400:#ced4da; --qv4-g500:#adb5bd;
+  --qv4-g600:#868e96; --qv4-g700:#495057; --qv4-g800:#343a40; --qv4-g900:#212529;
+  --qv4-grn:#1a9c55; --qv4-grn-bg:rgba(46,204,113,0.08); --qv4-grn-bdr:rgba(46,204,113,0.2);
+  --qv4-red:#d63031; --qv4-red-bg:rgba(231,76,60,0.06); --qv4-red-bdr:rgba(231,76,60,0.2);
+  --qv4-amb:#e67e22; --qv4-amb-bg:rgba(243,156,18,0.08);
+  --qv4-fb:'Inter',system-ui,sans-serif;
+  --qv4-fm:'JetBrains Mono',monospace;
+  --qv4-fd:'Fraunces',Georgia,serif;
+  font-family: var(--qv4-fb);
+  color: var(--qv4-g900); font-size: 12px;
   -webkit-font-smoothing: antialiased;
 }
 .qv4 *, .qv4 *::before, .qv4 *::after { box-sizing: border-box; }
-.qv4 .qv4-h, .qv4 h1, .qv4 h2, .qv4 h3 { font-family: 'Fraunces', Georgia, serif; }
 
-/* ── summary strip ── */
-.qv4-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 10px; margin-bottom: 14px; }
-.qv4-summary-card { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 10px;
-  padding: 12px 14px; }
-.qv4-summary-label { font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.06em; color: #6b7280; }
-.qv4-summary-value { font-family: 'Fraunces', Georgia, serif; font-size: 22px; font-weight: 700;
-  color: #0a3040; line-height: 1; margin-top: 4px; }
-.qv4-summary-sub { font-size: 11px; color: #6b7280; margin-top: 3px; }
+.qv4-qwrap { overflow-x: auto; padding: 0 0 12px; }
+.qv4 table.qt { border-collapse: collapse; width: 100%; min-width: 1100px; }
+.qv4 .qt th, .qv4 .qt td {
+  padding: 7px 12px; text-align: left; vertical-align: middle;
+  border-bottom: 1px solid var(--qv4-g100); font-size: 12px; white-space: nowrap;
+}
+.qv4 .qt .lc {
+  position: sticky; left: 0; z-index: 5; background: var(--qv4-g50);
+  font-weight: 500; color: var(--qv4-g600); min-width: 160px; white-space: normal;
+}
+.qv4 .qt th.qh {
+  padding: 12px; border-bottom: 1px solid var(--qv4-g200);
+  vertical-align: top; font-weight: 400; min-width: 210px;
+}
+.qv4 .qt th.qh.cb { background: var(--qv4-g200); }
+.qv4 .qt th.qh.wb { background: var(--qv4-navy); color: var(--qv4-w); }
+.qv4 .qt td { font-family: var(--qv4-fm); font-size: 12px; color: var(--qv4-g800); }
+.qv4 .qt td.cb { background: var(--qv4-g100); }
+.qv4 .qt td.wb { background: rgba(131,240,249,0.04); }
+.qv4 .qt td.wh { color: var(--qv4-navy); font-weight: 700; }
 
-/* ── controls panel ── */
-.qv4-controls { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px;
-  padding: 16px; margin-bottom: 14px; display: grid; gap: 14px; }
-.qv4-controls-title { font-family: 'Fraunces', Georgia, serif; font-size: 14px; font-weight: 700;
-  color: #0a3040; margin: 0; }
-.qv4-presets { display: flex; flex-wrap: wrap; gap: 6px; }
-.qv4-preset { padding: 6px 12px; border-radius: 7px; border: 1px solid #d1d5db;
-  background: #ffffff; font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 600;
-  color: #374151; cursor: pointer; transition: all 0.12s; }
-.qv4-preset:hover { background: #f3f4f6; border-color: #0a3040; }
-.qv4-preset.active { background: #0a3040; color: #ffffff; border-color: #0a3040; }
+.qv4 .qt tr.sh td, .qv4 .qt tr.sh th {
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--qv4-navy); padding-top: 12px; padding-bottom: 4px;
+  border-bottom: 2px solid var(--qv4-navy); background: var(--qv4-g50);
+  font-family: var(--qv4-fb);
+}
+.qv4 .qt tr.sh td.cb { background: var(--qv4-g100); }
+.qv4 .qt tr.sh td.wb { background: rgba(131,240,249,0.04); }
 
-.qv4-sliders { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
-  border-top: 1px solid #f1f5f9; padding-top: 12px; }
-.qv4-slider-block { display: flex; flex-direction: column; gap: 4px; }
-.qv4-slider-row { display: flex; justify-content: space-between; align-items: baseline;
-  font-size: 12px; font-weight: 600; color: #374151; }
-.qv4-slider-pct { font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #0a3040; }
-.qv4-slider-block input[type="range"] { width: 100%; accent-color: #0a3040; }
+.qv4 .qt tr.tot td, .qv4 .qt tr.tot th {
+  font-weight: 700; border-bottom: 2px solid var(--qv4-g300); padding: 8px 12px;
+}
+.qv4 .qt tr.tot th { background: var(--qv4-g100); color: var(--qv4-g900); }
 
-.qv4-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-  border-top: 1px solid #f1f5f9; padding-top: 12px; }
-.qv4-filter-label { font-size: 11px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.06em; color: #6b7280; margin-right: 4px; }
-.qv4-toggle { display: inline-flex; align-items: center; gap: 6px;
-  padding: 5px 11px; border-radius: 999px; cursor: pointer;
-  border: 1px solid #d1d5db; background: #ffffff;
-  font-size: 12px; font-weight: 600; color: #374151;
-  transition: all 0.12s; user-select: none; }
-.qv4-toggle:hover { border-color: #0a3040; }
-.qv4-toggle.on { background: #0a3040; color: #ffffff; border-color: #0a3040; }
+.qv4 .qt tr.bl td, .qv4 .qt tr.bl th {
+  background: var(--qv4-navy); color: var(--qv4-w);
+  border-bottom: none; padding: 10px 12px;
+}
+.qv4 .qt tr.ws td {
+  background: var(--qv4-navy); color: rgba(255,255,255,0.6);
+  font-size: 10px; font-weight: 400; font-family: var(--qv4-fb);
+  border-bottom: none; padding: 2px 12px 10px; white-space: normal; max-width: 240px;
+}
+.qv4 .qt tr.ws th {
+  background: var(--qv4-navy); color: rgba(255,255,255,0.5);
+  font-size: 10px; font-weight: 400; border-bottom: none;
+}
 
-/* ── table ── */
-.qv4-table-wrap { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px;
-  overflow-x: auto; }
-.qv4-table { width: 100%; border-collapse: collapse; font-family: 'DM Sans', sans-serif; }
-.qv4-table thead th { background: #0a3040; color: #ffffff;
-  font-family: 'DM Sans', sans-serif;
-  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
-  padding: 12px 12px; text-align: left; cursor: pointer; user-select: none;
-  white-space: nowrap; border-bottom: 1px solid #062130; }
-.qv4-table thead th.numeric { text-align: right; }
-.qv4-table thead th.action { cursor: default; text-align: center; }
-.qv4-table thead th:hover:not(.action) { background: #11475d; }
-.qv4-table thead th.active { background: #11475d; }
-.qv4-table thead th .arrow { color: #83f0f9; margin-left: 4px; }
+.qv4 .ptag2  { font-size: 9px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--qv4-g500); margin-bottom: 2px; }
+.qv4 .wtag2  { font-size: 9px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--qv4-sea); margin-bottom: 2px; }
+.qv4 .pcar2  { font-size: 10px; color: var(--qv4-g500); font-weight: 500; }
+.qv4 .qh.wb .pcar2 { color: rgba(255,255,255,0.5); }
+.qv4 .pn2 { font-family: var(--qv4-fd); font-size: 13px; font-weight: 600;
+  color: var(--qv4-g900); line-height: 1.2; }
+.qv4 .qh.wb .pn2 { color: var(--qv4-w); }
+.qv4 .qh.cb .pn2 { color: var(--qv4-g700); }
+.qv4 .pm2 { display: flex; gap: 5px; margin-top: 3px; align-items: center; }
+.qv4 .pid2 { font-family: var(--qv4-fm); font-size: 9px; color: var(--qv4-g500); }
+.qv4 .qh.wb .pid2 { color: rgba(255,255,255,0.4); }
+.qv4 .star2 { font-size: 9px; font-weight: 600; color: var(--qv4-amb); }
+.qv4 .qh.wb .star2 { color: var(--qv4-sea); }
 
-.qv4-table tbody tr { border-left: 4px solid transparent; background: #ffffff;
-  transition: background 0.12s; }
-.qv4-table tbody tr.alt { background: #f8fafc; }
-.qv4-table tbody tr.top1 { border-left-color: #f59e0b; background: #fffbeb; }
-.qv4-table tbody tr.top2 { border-left-color: #10b981; background: #ecfdf5; }
-.qv4-table tbody tr.top3 { border-left-color: #3b82f6; background: #eff6ff; }
-.qv4-table tbody tr:hover { background: #f1f5f9; }
-.qv4-table tbody tr.top1:hover { background: #fef3c7; }
-.qv4-table tbody tr.top2:hover { background: #d1fae5; }
-.qv4-table tbody tr.top3:hover { background: #dbeafe; }
+.qv4 .ti { display: inline-flex; align-items: center; justify-content: center;
+  width: 17px; height: 17px; border-radius: 3px;
+  font-size: 9px; font-weight: 700; font-family: var(--qv4-fm); margin-right: 3px; }
+.qv4 .ti.t1, .qv4 .ti.t2, .qv4 .ti.t6 { background: #d4edda; color: #155724; }
+.qv4 .ti.t3 { background: #fff3cd; color: #856404; }
+.qv4 .ti.t4, .qv4 .ti.t5 { background: #f8d7da; color: #721c24; }
 
-.qv4-table td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9;
-  vertical-align: middle; font-size: 13px; }
-.qv4-table td.numeric { text-align: right; font-variant-numeric: tabular-nums; }
-.qv4-table td.action { text-align: center; }
-.qv4-table td.plan-cell { min-width: 200px; }
+.qv4 .d { font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px;
+  margin-left: 3px; font-family: var(--qv4-fm); }
+.qv4 .d.s { background: rgba(46,204,113,0.08); color: var(--qv4-grn);
+  border: 1px solid var(--qv4-grn-bdr); }
+.qv4 .d.m { background: rgba(231,76,60,0.05); color: var(--qv4-red);
+  border: 1px solid var(--qv4-red-bdr); }
 
-.qv4-rank-badge { display: inline-flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; border-radius: 50%; font-family: 'JetBrains Mono', monospace;
-  font-size: 11px; font-weight: 700; margin-right: 8px; vertical-align: middle; }
-.qv4-rank-badge.r1 { background: #f59e0b; color: #ffffff; }
-.qv4-rank-badge.r2 { background: #10b981; color: #ffffff; }
-.qv4-rank-badge.r3 { background: #3b82f6; color: #ffffff; }
-.qv4-rank-badge.rN { background: #e5e7eb; color: #475569; }
+.qv4 .prov-in2  { color: var(--qv4-grn); font-weight: 700;
+  font-family: var(--qv4-fb); font-size: 11px; }
+.qv4 .prov-out2 { color: var(--qv4-red); font-weight: 700;
+  font-family: var(--qv4-fb); font-size: 11px; }
+.qv4 .prov-unk2 { color: var(--qv4-g500); font-weight: 600;
+  font-family: var(--qv4-fb); font-size: 11px; }
 
-.qv4-plan-name { font-weight: 700; color: #0a3040; line-height: 1.25; }
-.qv4-plan-id { font-family: 'JetBrains Mono', monospace; font-size: 10px;
-  color: #94a3b8; margin-top: 2px; }
+.qv4 .fl { display: inline-flex; gap: 2px; margin-left: 3px; }
+.qv4 .fg { font-size: 7px; font-weight: 700; padding: 1px 3px; border-radius: 2px;
+  background: var(--qv4-amb-bg); color: #b8860b; font-family: var(--qv4-fm); }
 
-.qv4-rib { display: inline-block; padding: 3px 8px; border-radius: 4px;
-  font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.04em; white-space: nowrap; }
+.qv4 .act-cell { padding: 8px 12px; vertical-align: top; }
+.qv4 .abtn { display: block; width: 100%; padding: 8px; border-radius: 7px;
+  border: none; font-family: var(--qv4-fb); font-size: 11px; font-weight: 600;
+  cursor: pointer; text-align: center; margin-bottom: 4px; }
+.qv4 .abtn.rec  { background: var(--qv4-navy); color: var(--qv4-w); }
+.qv4 .abtn.rec:hover { background: var(--qv4-navy-lt); }
+.qv4 .abtn.rec.sea { background: var(--qv4-sea); color: var(--qv4-navy); }
+.qv4 .abtn.rec.sea:hover { background: #6de8f2; }
+.qv4 .abtn.sec  { background: var(--qv4-g100); color: var(--qv4-g700);
+  border: 1px solid var(--qv4-g200); }
+.qv4 .abtn.sec:hover { background: var(--qv4-g200); }
 
-.qv4-composite { font-family: 'JetBrains Mono', monospace; font-weight: 700;
-  font-size: 14px; color: #0a3040; }
-
-.qv4-cov-bad { color: #b91c1c; font-weight: 700; }
-.qv4-cov-ok  { color: #047857; font-weight: 700; }
-.qv4-prov-in  { color: #047857; font-weight: 600; }
-.qv4-prov-out { color: #b91c1c; font-weight: 600; }
-.qv4-prov-unk { color: #94a3b8; font-weight: 500; }
-
-.qv4-sf-btn { display: inline-flex; align-items: center; gap: 4px;
-  padding: 6px 12px; border-radius: 6px; background: #0a3040; color: #ffffff;
-  border: none; font-family: 'DM Sans', sans-serif; font-size: 11px; font-weight: 600;
-  cursor: pointer; transition: background 0.12s; text-decoration: none;
-  white-space: nowrap; }
-.qv4-sf-btn:hover { background: #11475d; }
-
-.qv4-rec-btn { display: inline-block; margin-top: 4px; padding: 4px 10px;
-  border-radius: 6px; border: 1px solid #d1d5db; background: #ffffff;
-  font-family: 'DM Sans', sans-serif; font-size: 10px; font-weight: 600;
-  color: #374151; cursor: pointer; transition: all 0.12s; }
-.qv4-rec-btn:hover { border-color: #0a3040; }
-.qv4-rec-btn.on { background: #0a3040; color: #ffffff; border-color: #0a3040; }
-
-.qv4-loading, .qv4-empty { padding: 28px; text-align: center; color: #6b7280;
-  font-size: 13px; background: #ffffff; border: 1px dashed #e5e7eb; border-radius: 12px; }
+.qv4 .sub { font-size: 10px; color: var(--qv4-g500); font-weight: 400; }
+.qv4-loading, .qv4-empty { padding: 28px; text-align: center; color: var(--qv4-g600);
+  font-size: 13px; background: #fff; border: 1px dashed var(--qv4-g200);
+  border-radius: 12px; }
 `;
-
-// ─── Sort + row types ───────────────────────────────────────────────
-type SortKey =
-  | 'plan' | 'carrier' | 'ribbon'
-  | 'drugMonthly' | 'drugAnnual' | 'oop'
-  | 'premium' | 'moop' | 'extras' | 'composite'
-  | 'meds' | 'providers' | 'giveback';
-
-interface SortState {
-  key: SortKey;
-  dir: 'asc' | 'desc';
-}
-
-interface Row {
-  plan: Plan;
-  scored: ScoredPlan;
-  composite: number;        // recomputed under current weights
-  rank: number;             // 1-based rank under current weights
-  monthlyDrug: number;      // round(annual / 12)
-  ribbon: RibbonKey | null;
-}
 
 interface Props {
   finalists: Plan[];
@@ -223,6 +206,14 @@ interface Props {
   onRecommend?: (id: string | null) => void;
 }
 
+interface ColumnPlan {
+  plan: Plan;
+  scored: ScoredPlan | null;   // null when this is the current-plan column
+  /** Render flavor — cb (current/gray), wb (winner/navy), or none. */
+  variant: 'current' | 'winner' | 'normal';
+  ribbon: RibbonKey | null;
+}
+
 export function QuoteDeliveryV4({
   finalists,
   client,
@@ -231,46 +222,57 @@ export function QuoteDeliveryV4({
   recommendation,
   onRecommend,
 }: Props) {
-  const [weights, setWeights] = useState<WeightProfile>(PRESETS[0].weights);
-  const [showSnps, setShowSnps] = useState(false);
-  const [zeroPremiumOnly, setZeroPremiumOnly] = useState(false);
-  const [givebackOnly, setGivebackOnly] = useState(false);
-  const [sort, setSort] = useState<SortState>({ key: 'composite', dir: 'desc' });
+  const currentPlanId = useSession((s) => s.currentPlanId);
 
-  // Plan Brain runs once with default weights; we recompute composite
-  // locally from the cached axis scores when the sliders move so sliders
-  // feel instant.
-  const { result, loading } = usePlanBrain({
+  // Plan Brain feeds composite ranking + per-axis scores. data exposes
+  // the raw per-drug / per-network rows so we can render exact dollar
+  // numbers in each cell instead of just the composite.
+  const { result, data, loading } = usePlanBrain({
     plans: finalists,
     client,
     medications,
     providers,
   });
 
-  const presetKey = useMemo(() => detectPreset(weights), [weights]);
-  const rows = useMemo(() => buildRows(result, weights), [result, weights]);
-
-  const filtered = useMemo(
-    () => rows.filter((r) => {
-      if (!showSnps && looksLikeSnp(r.plan)) return false;
-      if (zeroPremiumOnly && r.plan.premium > 0) return false;
-      if (givebackOnly && (r.plan.part_b_giveback ?? 0) <= 0) return false;
-      return true;
-    }),
-    [rows, showSnps, zeroPremiumOnly, givebackOnly],
+  const currentPlan = useMemo<Plan | null>(
+    () => (currentPlanId ? findPlan(currentPlanId) : null),
+    [currentPlanId],
   );
 
-  // Pin top 3 by composite to the top regardless of current sort.
-  const display = useMemo(() => {
-    const top3Ids = new Set(
-      [...filtered].sort((a, b) => b.composite - a.composite).slice(0, 3).map((r) => r.plan.id),
-    );
-    const sorted = sortRows(filtered, sort);
-    const pinned = sorted.filter((r) => top3Ids.has(r.plan.id))
-      .sort((a, b) => a.rank - b.rank);
-    const rest = sorted.filter((r) => !top3Ids.has(r.plan.id));
-    return [...pinned, ...rest];
-  }, [filtered, sort]);
+  // ─── Column ordering ────────────────────────────────────────────
+  // Mockup pattern:
+  //   col 0 (sticky labels)
+  //   col 1 = current plan (gray) — drops out if no current
+  //   col 2 = winner (navy)        — top composite
+  //   col 3..N = next finalists by composite
+  // We cap total *plan* columns at MAX_FINALIST_COLUMNS so the table
+  // never exceeds the mockup's width.
+  const columns = useMemo<ColumnPlan[]>(() => {
+    const cols: ColumnPlan[] = [];
+    if (currentPlan) {
+      const inFinalist = result?.scored.find((s) => s.plan.id === currentPlan.id) ?? null;
+      cols.push({
+        plan: currentPlan,
+        scored: inFinalist,
+        variant: 'current',
+        ribbon: null,
+      });
+    }
+    const ranked = result ? [...result.scored].sort((a, b) => b.composite - a.composite) : [];
+    for (const s of ranked) {
+      if (cols.length >= MAX_FINALIST_COLUMNS) break;
+      // Skip the current plan when it's already pinned left.
+      if (currentPlan && s.plan.id === currentPlan.id) continue;
+      cols.push({
+        plan: s.plan,
+        scored: s,
+        // First non-current column gets the winner treatment.
+        variant: cols.every((c) => c.variant !== 'winner') ? 'winner' : 'normal',
+        ribbon: s.ribbon,
+      });
+    }
+    return cols;
+  }, [currentPlan, result]);
 
   if (loading && !result) {
     return (
@@ -281,404 +283,797 @@ export function QuoteDeliveryV4({
     );
   }
 
-  if (!result || result.scored.length === 0) {
+  if (columns.length === 0) {
     return (
       <div className="qv4">
         <style>{CSS}</style>
         <div className="qv4-empty">
-          No finalists scored yet. Complete steps 2–5 so Plan Brain has plans to rank.
+          No plans to compare yet. Complete steps 2–5 so Plan Brain has finalists to rank.
         </div>
       </div>
     );
   }
 
+  // The current column is the cost benchmark for delta badges.
+  const currentCol = columns.find((c) => c.variant === 'current') ?? null;
+  const baseline = currentCol?.plan ?? null;
+
   return (
     <div className="qv4">
       <style>{CSS}</style>
 
-      <SummaryStrip rows={rows} totalMeds={medications.length} />
-
-      <div className="qv4-controls">
-        <h3 className="qv4-controls-title">Score Weights</h3>
-        <div className="qv4-presets">
-          {PRESETS.map((p) => (
-            <button
-              key={p.key}
-              type="button"
-              className={`qv4-preset${presetKey === p.key ? ' active' : ''}`}
-              onClick={() => setWeights(p.weights)}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-        <div className="qv4-sliders">
-          <SliderBlock
-            label="Drug"
-            value={weights.drug}
-            onChange={(v) => setWeights((w) => updateWeight(w, 'drug', v))}
-          />
-          <SliderBlock
-            label="Medical"
-            value={weights.oop}
-            onChange={(v) => setWeights((w) => updateWeight(w, 'oop', v))}
-          />
-          <SliderBlock
-            label="Extras"
-            value={weights.extras}
-            onChange={(v) => setWeights((w) => updateWeight(w, 'extras', v))}
-          />
-        </div>
-        <div className="qv4-filters">
-          <span className="qv4-filter-label">Filter</span>
-          <FilterToggle on={showSnps} onClick={() => setShowSnps((v) => !v)} label="Show SNPs" />
-          <FilterToggle on={zeroPremiumOnly} onClick={() => setZeroPremiumOnly((v) => !v)} label="$0 Premium Only" />
-          <FilterToggle on={givebackOnly} onClick={() => setGivebackOnly((v) => !v)} label="Giveback Only" />
-          <span style={{ marginLeft: 'auto', fontSize: 11, color: '#6b7280', fontFamily: 'JetBrains Mono, monospace' }}>
-            {filtered.length} / {rows.length} plans
-          </span>
-        </div>
-      </div>
-
-      <div className="qv4-table-wrap">
-        <table className="qv4-table">
+      <div className="qv4-qwrap">
+        <table className="qt">
           <thead>
             <tr>
-              <Header label="Plan Name"    k="plan"        sort={sort} onSort={setSort} />
-              <Header label="Carrier"      k="carrier"     sort={sort} onSort={setSort} />
-              <Header label="Ribbon"       k="ribbon"      sort={sort} onSort={setSort} />
-              <Header label="Mo Drug"      k="drugMonthly" sort={sort} onSort={setSort} numeric />
-              <Header label="Annual Drug"  k="drugAnnual"  sort={sort} onSort={setSort} numeric />
-              <Header label="OOP Est"      k="oop"         sort={sort} onSort={setSort} numeric />
-              <Header label="Premium"      k="premium"     sort={sort} onSort={setSort} numeric />
-              <Header label="MOOP"         k="moop"        sort={sort} onSort={setSort} numeric />
-              <Header label="Extras"       k="extras"      sort={sort} onSort={setSort} numeric />
-              <Header label="Score"        k="composite"   sort={sort} onSort={setSort} numeric />
-              <Header label="Meds"         k="meds"        sort={sort} onSort={setSort} />
-              <Header label="Providers"    k="providers"   sort={sort} onSort={setSort} />
-              <Header label="Giveback"     k="giveback"    sort={sort} onSort={setSort} numeric />
-              <th className="action">Action</th>
+              <th
+                className="lc"
+                style={{
+                  fontFamily: 'var(--qv4-fd)',
+                  fontSize: 15,
+                  fontWeight: 700,
+                  color: 'var(--qv4-navy)',
+                  padding: 12,
+                }}
+              >
+                Quote Comparison
+              </th>
+              {columns.map((c) => (
+                <ColumnHeader key={c.plan.id} col={c} />
+              ))}
             </tr>
           </thead>
           <tbody>
-            {display.map((row, idx) => {
-              const top = row.rank === 1 ? 'top1'
-                : row.rank === 2 ? 'top2'
-                : row.rank === 3 ? 'top3'
-                : (idx % 2 === 1 ? 'alt' : '');
-              return (
-                <tr key={row.plan.id} className={top}>
-                  <td className="plan-cell">
-                    <span className={`qv4-rank-badge ${row.rank === 1 ? 'r1' : row.rank === 2 ? 'r2' : row.rank === 3 ? 'r3' : 'rN'}`}>
-                      {row.rank}
-                    </span>
-                    <span style={{ display: 'inline-block', verticalAlign: 'middle' }}>
-                      <div className="qv4-plan-name">{row.plan.plan_name}</div>
-                      <div className="qv4-plan-id">{row.plan.id}</div>
-                    </span>
+            {/* ── Medications ─────────────────────────────────────── */}
+            <SectionRow label="Your Medications" cols={columns} />
+            {medications.length === 0 ? (
+              <tr>
+                <th className="lc" style={{ fontStyle: 'italic', color: 'var(--qv4-g500)' }}>
+                  No medications added
+                </th>
+                {columns.map((c) => (
+                  <td key={c.plan.id} className={cellCls(c)}>
+                    —
                   </td>
-                  <td>{row.plan.carrier}</td>
-                  <td>{ribbonBadge(row.ribbon)}</td>
-                  <td className="numeric">${row.monthlyDrug.toLocaleString()}</td>
-                  <td className="numeric">${row.scored.totalAnnualDrugCost.toLocaleString()}</td>
-                  <td className="numeric">${row.scored.totalOOPEstimate.toLocaleString()}</td>
-                  <td className="numeric">${row.plan.premium}</td>
-                  <td className="numeric">${row.plan.moop_in_network.toLocaleString()}</td>
-                  <td className="numeric">${row.scored.extrasValue.toLocaleString()}</td>
-                  <td className="numeric"><span className="qv4-composite">{row.composite.toFixed(1)}</span></td>
-                  <td>{medsCoveredCell(row.scored, medications.length)}</td>
-                  <td>{providerCell(row.scored.providerNetworkStatus)}</td>
-                  <td className="numeric">{row.plan.part_b_giveback > 0 ? `$${row.plan.part_b_giveback}/mo` : '—'}</td>
-                  <td className="action">
+                ))}
+              </tr>
+            ) : (
+              medications.map((m) => (
+                <MedicationRow
+                  key={m.id}
+                  medication={m}
+                  cols={columns}
+                  data={data}
+                  baseline={baseline}
+                />
+              ))
+            )}
+            <TotalRxRow cols={columns} medications={medications} data={data} />
+
+            {/* ── Provider divider rows ───────────────────────────── */}
+            {providers.map((pr) => (
+              <ProviderRow key={pr.id} provider={pr} cols={columns} />
+            ))}
+
+            {/* ── Medical copays ──────────────────────────────────── */}
+            {MEDICAL_ROWS.map((row) => (
+              <CopayRow
+                key={row.label}
+                row={row}
+                cols={columns}
+                baseline={baseline}
+              />
+            ))}
+
+            {/* ── Plan Costs ──────────────────────────────────────── */}
+            <SectionRow label="Plan Costs" cols={columns} />
+            <PlanCostRow
+              label="Premium"
+              cols={columns}
+              fmt={(p) => `$${p.premium}/mo`}
+              raw={(p) => p.premium}
+              baseline={baseline}
+              betterIsLower
+              suffix="/mo"
+            />
+            <PlanCostRow
+              label="MOOP"
+              cols={columns}
+              fmt={(p) => `$${p.moop_in_network.toLocaleString()}`}
+              raw={(p) => p.moop_in_network}
+              baseline={baseline}
+              betterIsLower
+            />
+            <PlanCostRow
+              label="Rx Deductible"
+              cols={columns}
+              fmt={(p) => (p.drug_deductible == null ? '—' : `$${p.drug_deductible}`)}
+              raw={(p) => p.drug_deductible ?? 0}
+              baseline={baseline}
+              betterIsLower
+            />
+
+            {/* ── Extra Benefits ──────────────────────────────────── */}
+            <SectionRow label="Extra Benefits" cols={columns} />
+            <PlanCostRow
+              label="Dental"
+              cols={columns}
+              fmt={(p) =>
+                p.benefits.dental.annual_max > 0
+                  ? `$${p.benefits.dental.annual_max.toLocaleString()}/yr`
+                  : '—'
+              }
+              raw={(p) => p.benefits.dental.annual_max}
+              baseline={baseline}
+              betterIsLower={false}
+            />
+            <PlanCostRow
+              label="OTC"
+              cols={columns}
+              fmt={(p) =>
+                p.benefits.otc.allowance_per_quarter > 0
+                  ? `$${p.benefits.otc.allowance_per_quarter}/qtr`
+                  : '—'
+              }
+              raw={(p) => p.benefits.otc.allowance_per_quarter}
+              baseline={baseline}
+              betterIsLower={false}
+              annualMultiplier={4}
+            />
+            <PlanCostRow
+              label="Food Card"
+              cols={columns}
+              fmt={(p) =>
+                p.benefits.food_card.allowance_per_month > 0
+                  ? `$${p.benefits.food_card.allowance_per_month}/mo`
+                  : '—'
+              }
+              raw={(p) => p.benefits.food_card.allowance_per_month}
+              baseline={baseline}
+              betterIsLower={false}
+              annualMultiplier={12}
+            />
+            <PlanCostRow
+              label="Giveback"
+              cols={columns}
+              fmt={(p) =>
+                (p.part_b_giveback ?? 0) > 0 ? `$${p.part_b_giveback}/mo` : '—'
+              }
+              raw={(p) => p.part_b_giveback ?? 0}
+              baseline={baseline}
+              betterIsLower={false}
+              annualMultiplier={12}
+            />
+
+            {/* ── Total Annual Value ──────────────────────────────── */}
+            <TotalAnnualRow cols={columns} baseline={baseline} />
+            <WhySwitchRow cols={columns} baseline={baseline} />
+
+            {/* ── Action row ──────────────────────────────────────── */}
+            <tr>
+              <th className="lc"></th>
+              {columns.map((c) => {
+                const isCurrent = c.variant === 'current';
+                const isRecommended = recommendation === c.plan.id;
+                return (
+                  <td key={c.plan.id} className={`act-cell ${cellClsBare(c)}`}>
+                    {isCurrent ? (
+                      <button type="button" className="abtn sec">Keep Current</button>
+                    ) : (
+                      <button
+                        type="button"
+                        className={`abtn rec${c.variant === 'winner' && !isRecommended ? ' sea' : ''}`}
+                        onClick={() =>
+                          onRecommend?.(isRecommended ? null : c.plan.id)
+                        }
+                      >
+                        {isRecommended ? '✓ Recommended' : c.variant === 'winner' ? '✓ Recommend' : 'Recommend'}
+                      </button>
+                    )}
                     <a
-                      className="qv4-sf-btn"
+                      className="abtn sec"
                       href={SUNFIRE_URL}
                       target="_blank"
                       rel="noopener noreferrer"
+                      style={{ textDecoration: 'none' }}
                     >
-                      SunFire ↗
+                      Open SunFire →
                     </a>
-                    {onRecommend && (
-                      <button
-                        type="button"
-                        className={`qv4-rec-btn${recommendation === row.plan.id ? ' on' : ''}`}
-                        onClick={() => onRecommend(recommendation === row.plan.id ? null : row.plan.id)}
-                      >
-                        {recommendation === row.plan.id ? 'Recommended' : 'Recommend'}
-                      </button>
-                    )}
                   </td>
-                </tr>
-              );
-            })}
-            {display.length === 0 && (
-              <tr>
-                <td colSpan={14} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
-                  No plans match the current filter combination.
-                </td>
-              </tr>
-            )}
+                );
+              })}
+            </tr>
           </tbody>
         </table>
       </div>
 
-      {result.filteredOut.length > 0 && (
-        <div style={{ padding: '10px 4px', fontSize: 11, color: '#6b7280' }}>
-          {result.filteredOut.length} plan{result.filteredOut.length === 1 ? '' : 's'} filtered out by SNP rules.
-        </div>
-      )}
-
-      {client.county && (
-        <div style={{ padding: '4px', fontSize: 10, color: '#94a3b8' }}>
-          Population: {result.population.toUpperCase()} · Utilization: {result.utilization} · {client.county}, {client.state}
+      {result && client.county && (
+        <div style={{ padding: '4px 0 0', fontSize: 10, color: 'var(--qv4-g500)' }}>
+          Plan Brain · population {result.population.toUpperCase()} · utilization {result.utilization} · {client.county}, {client.state}
         </div>
       )}
     </div>
   );
 }
 
-// ─── Subcomponents ──────────────────────────────────────────────────
+// ─── Header ───────────────────────────────────────────────────────────
 
-function SliderBlock({
-  label, value, onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (next: number) => void;
-}) {
-  return (
-    <div className="qv4-slider-block">
-      <div className="qv4-slider-row">
-        <span>{label}</span>
-        <span className="qv4-slider-pct">{Math.round(value * 100)}%</span>
+function ColumnHeader({ col }: { col: ColumnPlan }) {
+  const cls = `qh ${col.variant === 'current' ? 'cb' : col.variant === 'winner' ? 'wb' : ''}`;
+  const tag =
+    col.variant === 'current' ? (
+      <div className="ptag2">Current Plan</div>
+    ) : col.variant === 'winner' ? (
+      <div className="wtag2">{col.ribbon ? RIBBON_LABEL[col.ribbon] : '⭐ Best Rx Match'}</div>
+    ) : col.ribbon ? (
+      <div className="ptag2" style={{ color: 'var(--qv4-amb)' }}>
+        {RIBBON_LABEL[col.ribbon]}
       </div>
-      <input
-        type="range"
-        min={0}
-        max={100}
-        value={Math.round(value * 100)}
-        onChange={(e) => onChange(Number(e.target.value) / 100)}
-      />
-    </div>
-  );
-}
-
-function FilterToggle({
-  on, onClick, label,
-}: {
-  on: boolean;
-  onClick: () => void;
-  label: string;
-}) {
+    ) : null;
   return (
-    <button
-      type="button"
-      className={`qv4-toggle${on ? ' on' : ''}`}
-      onClick={onClick}
-      aria-pressed={on}
-    >
-      <span aria-hidden>{on ? '✓' : '○'}</span>
-      {label}
-    </button>
-  );
-}
-
-function Header({
-  label, k, sort, onSort, numeric,
-}: {
-  label: string;
-  k: SortKey;
-  sort: SortState;
-  onSort: (next: SortState) => void;
-  numeric?: boolean;
-}) {
-  const active = sort.key === k;
-  const arrow = active ? (sort.dir === 'desc' ? '↓' : '↑') : '';
-  return (
-    <th
-      className={`${numeric ? 'numeric' : ''}${active ? ' active' : ''}`}
-      onClick={() => {
-        if (active) onSort({ key: k, dir: sort.dir === 'asc' ? 'desc' : 'asc' });
-        else onSort({ key: k, dir: numeric ? 'desc' : 'asc' });
-      }}
-    >
-      {label}
-      {arrow ? <span className="arrow">{arrow}</span> : null}
+    <th className={cls}>
+      {tag}
+      <div className="pcar2" style={{ marginTop: tag ? 0 : 8 }}>
+        {col.plan.carrier}
+      </div>
+      <div className="pn2">{col.plan.plan_name}</div>
+      <div className="pm2">
+        <span className="pid2">
+          {col.plan.contract_id}-{col.plan.plan_number}
+        </span>
+        <span className="star2">{col.plan.star_rating}★</span>
+      </div>
     </th>
   );
 }
 
-function SummaryStrip({ rows, totalMeds }: { rows: Row[]; totalMeds: number }) {
-  if (rows.length === 0) return null;
-  const top = [...rows].sort((a, b) => b.composite - a.composite)[0];
-  const lowestRx = rows.reduce(
-    (acc, r) => (r.scored.totalAnnualDrugCost < acc.scored.totalAnnualDrugCost ? r : acc),
-    rows[0],
-  );
-  const bestExtras = rows.reduce(
-    (acc, r) => (r.scored.extrasValue > acc.scored.extrasValue ? r : acc),
-    rows[0],
-  );
+// ─── Section divider row ──────────────────────────────────────────────
+
+function SectionRow({ label, cols }: { label: string; cols: ColumnPlan[] }) {
   return (
-    <div className="qv4-summary">
-      <div className="qv4-summary-card">
-        <div className="qv4-summary-label">Plans scored</div>
-        <div className="qv4-summary-value">{rows.length}</div>
-        <div className="qv4-summary-sub">{totalMeds} med{totalMeds === 1 ? '' : 's'} factored in</div>
-      </div>
-      <div className="qv4-summary-card">
-        <div className="qv4-summary-label">Top score</div>
-        <div className="qv4-summary-value">{top.composite.toFixed(1)}</div>
-        <div className="qv4-summary-sub">{top.plan.carrier}</div>
-      </div>
-      <div className="qv4-summary-card">
-        <div className="qv4-summary-label">Lowest annual Rx</div>
-        <div className="qv4-summary-value">${lowestRx.scored.totalAnnualDrugCost.toLocaleString()}</div>
-        <div className="qv4-summary-sub">{lowestRx.plan.carrier}</div>
-      </div>
-      <div className="qv4-summary-card">
-        <div className="qv4-summary-label">Best extras</div>
-        <div className="qv4-summary-value">${bestExtras.scored.extrasValue.toLocaleString()}</div>
-        <div className="qv4-summary-sub">{bestExtras.plan.carrier}</div>
-      </div>
-    </div>
+    <tr className="sh">
+      <th className="lc">{label}</th>
+      {cols.map((c) => (
+        <td key={c.plan.id} className={cellClsBare(c)}></td>
+      ))}
+    </tr>
   );
 }
 
-// ─── helpers ────────────────────────────────────────────────────────
+// ─── Medication row ───────────────────────────────────────────────────
 
-function buildRows(
-  result: PlanBrainResult | null,
-  weights: WeightProfile,
-): Row[] {
-  if (!result) return [];
-  const recomputed = result.scored.map((s) => {
-    const composite =
-      s.drugScore * weights.drug +
-      s.oopScore * weights.oop +
-      s.extrasScore * weights.extras +
-      s.providerBoost;
-    return { scored: s, composite };
-  });
-  recomputed.sort((a, b) => b.composite - a.composite);
-  return recomputed.map((r, i) => ({
-    plan: r.scored.plan,
-    scored: r.scored,
-    composite: Math.round(r.composite * 100) / 100,
-    rank: i + 1,
-    monthlyDrug: Math.round(r.scored.totalAnnualDrugCost / 12),
-    ribbon: r.scored.ribbon,
-  }));
+function MedicationRow({
+  medication,
+  cols,
+  data,
+  baseline,
+}: {
+  medication: Medication;
+  cols: ColumnPlan[];
+  data: PlanBrainData | null;
+  baseline: Plan | null;
+}) {
+  const baselineCost = baseline ? lookupDrugCost(baseline, medication, data) : null;
+  return (
+    <tr>
+      <th className="lc">
+        {medication.name}
+        {medication.strength ? ` ${medication.strength}` : ''}
+        <br />
+        <span className="sub">30-day</span>
+      </th>
+      {cols.map((c) => {
+        const info = lookupDrugCost(c.plan, medication, data);
+        return (
+          <td key={c.plan.id} className={cellCls(c, info?.improvedVs(baselineCost))}>
+            {info ? (
+              <>
+                {info.tier && (
+                  <span className={`ti t${info.tier}`}>
+                    {info.tier}
+                  </span>
+                )}
+                {info.label}
+                {info.deltaVs(baselineCost) && (
+                  <span className={`d ${info.deltaVs(baselineCost)!.sign}`}>
+                    {info.deltaVs(baselineCost)!.text}
+                  </span>
+                )}
+                {(info.priorAuth || info.stepTherapy) && (
+                  <span className="fl">
+                    {info.priorAuth && <span className="fg">PA</span>}
+                    {info.stepTherapy && <span className="fg">ST</span>}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span style={{ color: 'var(--qv4-g500)' }}>—</span>
+            )}
+          </td>
+        );
+      })}
+    </tr>
+  );
 }
 
-function detectPreset(w: WeightProfile): PresetKey | null {
-  for (const p of PRESETS) {
-    if (
-      Math.abs(p.weights.drug - w.drug) < 0.005 &&
-      Math.abs(p.weights.oop - w.oop) < 0.005 &&
-      Math.abs(p.weights.extras - w.extras) < 0.005
-    ) return p.key;
+// ─── Total Rx row ─────────────────────────────────────────────────────
+
+function TotalRxRow({
+  cols,
+  medications,
+  data,
+}: {
+  cols: ColumnPlan[];
+  medications: Medication[];
+  data: PlanBrainData | null;
+}) {
+  const totals = cols.map((c) => totalAnnualRx(c.plan, medications, data));
+  const baselineTotal = cols.find((c) => c.variant === 'current')
+    ? totals[cols.findIndex((c) => c.variant === 'current')]
+    : null;
+  return (
+    <tr className="tot">
+      <th className="lc">Total Rx Cost</th>
+      {cols.map((c, i) => {
+        const annual = totals[i];
+        const monthly = Math.round(annual / 12);
+        const delta =
+          baselineTotal != null && c.variant !== 'current'
+            ? annual - baselineTotal
+            : 0;
+        const variantCls = cellClsBare(c);
+        return (
+          <td
+            key={c.plan.id}
+            className={variantCls}
+            style={c.variant === 'winner' ? { color: 'var(--qv4-navy)' } : undefined}
+          >
+            ${monthly}/mo · ${annual.toLocaleString()}/yr
+            {delta !== 0 && (
+              <span className={`d ${delta < 0 ? 's' : 'm'}`}>
+                {delta < 0 ? '−' : '+'}${Math.abs(delta).toLocaleString()}
+              </span>
+            )}
+          </td>
+        );
+      })}
+    </tr>
+  );
+}
+
+// ─── Provider divider row ─────────────────────────────────────────────
+
+function ProviderRow({
+  provider,
+  cols,
+}: {
+  provider: Provider;
+  cols: ColumnPlan[];
+}) {
+  return (
+    <tr>
+      <th
+        className="lc"
+        style={{
+          fontWeight: 600,
+          color: 'var(--qv4-g800)',
+          padding: '9px 12px',
+          borderBottom: '2px solid var(--qv4-g200)',
+        }}
+      >
+        {provider.name}
+        {provider.specialty && (
+          <>
+            <br />
+            <span className="sub">{provider.specialty}</span>
+          </>
+        )}
+      </th>
+      {cols.map((c) => {
+        const override = provider.manualOverrides?.[c.plan.carrier];
+        const raw = provider.networkStatus?.[c.plan.id] ?? 'unknown';
+        const status: 'in' | 'out' | 'unknown' =
+          override?.status === 'in' ? 'in' : raw;
+        return (
+          <td
+            key={c.plan.id}
+            className={cellClsBare(c)}
+            style={{ borderBottom: '2px solid var(--qv4-g200)' }}
+          >
+            <span
+              className={
+                status === 'in'
+                  ? 'prov-in2'
+                  : status === 'out'
+                    ? 'prov-out2'
+                    : 'prov-unk2'
+              }
+            >
+              {status === 'in' ? '● In-Net' : status === 'out' ? '● Out' : '● ?'}
+            </span>
+          </td>
+        );
+      })}
+    </tr>
+  );
+}
+
+// ─── Medical copay row ────────────────────────────────────────────────
+
+interface MedicalRowDef {
+  label: string;
+  pick: (plan: Plan) => { copay: number | null; coinsurance: number | null; description: string | null };
+  /** Format extras (e.g. "/day · 5d" for inpatient). */
+  suffix?: string;
+}
+
+const MEDICAL_ROWS: MedicalRowDef[] = [
+  { label: 'PCP', pick: (p) => p.benefits.medical.primary_care },
+  { label: 'Specialist', pick: (p) => p.benefits.medical.specialist },
+  { label: 'Labs', pick: (p) => p.benefits.medical.lab_services },
+  { label: 'Imaging / MRI', pick: (p) => p.benefits.medical.diagnostic_radiology },
+  { label: 'ER', pick: (p) => p.benefits.medical.emergency },
+  { label: 'Urgent Care', pick: (p) => p.benefits.medical.urgent_care },
+  { label: 'Outpatient Surgery', pick: (p) => p.benefits.medical.outpatient_surgery_hospital },
+  { label: 'Mental Health', pick: (p) => p.benefits.medical.mental_health_individual },
+  { label: 'PT / OT', pick: (p) => p.benefits.medical.physical_therapy },
+  { label: 'Inpatient', pick: (p) => p.benefits.medical.inpatient, suffix: '/day' },
+];
+
+function CopayRow({
+  row,
+  cols,
+  baseline,
+}: {
+  row: MedicalRowDef;
+  cols: ColumnPlan[];
+  baseline: Plan | null;
+}) {
+  const baseVal = baseline ? copayCash(row.pick(baseline)) : null;
+  return (
+    <tr>
+      <th className="lc">
+        {row.label}
+        {row.suffix ? (
+          <>
+            <br />
+            <span className="sub">per day</span>
+          </>
+        ) : null}
+      </th>
+      {cols.map((c) => {
+        const cs = row.pick(c.plan);
+        const val = copayCash(cs);
+        const formatted = formatCostShare(cs, row.suffix);
+        const delta =
+          val != null && baseVal != null && c.variant !== 'current' && val !== baseVal
+            ? val - baseVal
+            : null;
+        const better = delta != null && delta < 0;
+        const variantCls = cellCls(c, better);
+        return (
+          <td key={c.plan.id} className={variantCls}>
+            {formatted}
+            {delta != null && delta !== 0 && (
+              <span className={`d ${delta < 0 ? 's' : 'm'}`}>
+                {delta < 0 ? '−' : '+'}${Math.abs(delta)}
+              </span>
+            )}
+          </td>
+        );
+      })}
+    </tr>
+  );
+}
+
+// ─── Plan-level numeric row (Premium / MOOP / Dental / OTC / Food / Giveback) ─
+
+function PlanCostRow({
+  label,
+  cols,
+  fmt,
+  raw,
+  baseline,
+  betterIsLower,
+  annualMultiplier,
+  suffix: _suffix,
+}: {
+  label: string;
+  cols: ColumnPlan[];
+  fmt: (p: Plan) => string;
+  raw: (p: Plan) => number;
+  baseline: Plan | null;
+  betterIsLower: boolean;
+  annualMultiplier?: number;
+  suffix?: string;
+}) {
+  const baseVal = baseline ? raw(baseline) : null;
+  return (
+    <tr>
+      <th className="lc">{label}</th>
+      {cols.map((c) => {
+        const v = raw(c.plan);
+        const delta =
+          baseVal != null && c.variant !== 'current' && v !== baseVal ? v - baseVal : null;
+        const better =
+          delta != null
+            ? betterIsLower
+              ? delta < 0
+              : delta > 0
+            : false;
+        const variantCls = cellCls(c, better);
+        const annualDelta =
+          delta != null && annualMultiplier ? delta * annualMultiplier : delta;
+        const sign = better ? 's' : 'm';
+        const text =
+          annualDelta != null && annualDelta !== 0
+            ? `${annualDelta < 0 ? '−' : '+'}$${Math.abs(annualDelta).toLocaleString()}`
+            : '';
+        return (
+          <td key={c.plan.id} className={variantCls}>
+            {fmt(c.plan)}
+            {text && <span className={`d ${sign}`}>{text}</span>}
+          </td>
+        );
+      })}
+    </tr>
+  );
+}
+
+// ─── Total Annual Value summary bar ───────────────────────────────────
+
+function TotalAnnualRow({ cols, baseline }: { cols: ColumnPlan[]; baseline: Plan | null }) {
+  const baseTotal = baseline ? estimatedAnnualValue(cols.find((c) => c.plan.id === baseline.id)) : null;
+  return (
+    <tr className="bl">
+      <th
+        style={{
+          background: 'var(--qv4-navy)',
+          color: 'var(--qv4-w)',
+          fontFamily: 'var(--qv4-fd)',
+          fontSize: 13,
+        }}
+      >
+        Total Annual Value
+      </th>
+      {cols.map((c) => {
+        const total = estimatedAnnualValue(c);
+        const isWinner = c.variant === 'winner';
+        const isCurrent = c.variant === 'current';
+        const savings =
+          baseTotal != null && !isCurrent ? baseTotal - total : 0;
+        const color = isCurrent
+          ? 'var(--qv4-w)'
+          : isWinner
+            ? 'var(--qv4-sea)'
+            : 'rgba(255,255,255,0.6)';
+        return (
+          <td
+            key={c.plan.id}
+            style={{
+              background: 'var(--qv4-navy)',
+              color,
+              fontFamily: 'var(--qv4-fm)',
+              fontSize: 15,
+              fontWeight: 700,
+            }}
+          >
+            {total < 0 ? '−' : ''}${Math.abs(total).toLocaleString()}/yr
+            {!isCurrent && savings > 0 && (
+              <span className="d s" style={{ fontSize: 9, marginLeft: 4 }}>
+                saves ${savings.toLocaleString()}
+              </span>
+            )}
+          </td>
+        );
+      })}
+    </tr>
+  );
+}
+
+function WhySwitchRow({ cols, baseline }: { cols: ColumnPlan[]; baseline: Plan | null }) {
+  return (
+    <tr className="ws">
+      <th>Why switch?</th>
+      {cols.map((c) => {
+        const text = whySwitchText(c, baseline);
+        return (
+          <td key={c.plan.id}>{text}</td>
+        );
+      })}
+    </tr>
+  );
+}
+
+// ─── helpers ──────────────────────────────────────────────────────────
+
+function cellCls(c: ColumnPlan, betterThanBaseline?: boolean | null): string {
+  const base =
+    c.variant === 'current' ? 'cb' : c.variant === 'winner' ? 'wb' : '';
+  // `.wh` is the highlight that the mockup applies to a winner cell
+  // when that cell beats the current plan — bolds + recolors to navy.
+  if (c.variant === 'winner' && betterThanBaseline) return `${base} wh`;
+  return base;
+}
+
+function cellClsBare(c: ColumnPlan): string {
+  return c.variant === 'current' ? 'cb' : c.variant === 'winner' ? 'wb' : '';
+}
+
+interface DrugInfo {
+  tier: number | null;
+  label: string;
+  priorAuth: boolean;
+  stepTherapy: boolean;
+  monthlyCost: number;
+  annualCost: number;
+  improvedVs: (other: DrugInfo | null) => boolean;
+  deltaVs: (other: DrugInfo | null) => { sign: 's' | 'm'; text: string } | null;
+}
+
+function lookupDrugCost(
+  plan: Plan,
+  med: Medication,
+  data: PlanBrainData | null,
+): DrugInfo | null {
+  if (!med.rxcui) return null;
+  const tripleId = plan.id;
+  const contractPlan = `${plan.contract_id}-${plan.plan_number}`;
+
+  const ndc = data?.ndcByRxcui[med.rxcui]?.ndc;
+  const cached = ndc ? data?.drugCostCache[tripleId]?.[ndc] : undefined;
+  const formulary = data?.formularyByContractPlan[contractPlan]?.[med.rxcui];
+
+  let tier: number | null = cached?.tier ?? formulary?.tier ?? null;
+  if (tier == null) {
+    // Fallback to plan's seed formulary if Plan Brain data hasn't loaded.
+    const seedTier = plan.formulary[med.rxcui];
+    if (typeof seedTier === 'number') tier = seedTier;
   }
+  if (tier == null) {
+    // Excluded vs not-listed.
+    const seedTier = plan.formulary[med.rxcui];
+    if (seedTier === 'excluded') {
+      return makeDrugInfo({ tier: null, label: 'Excluded', monthly: 0, annual: 0, pa: false, st: false });
+    }
+  }
+
+  const annualFromCache = cached?.estimated_yearly_total ?? null;
+  const monthlyFromFormulary = formulary?.copay ?? null;
+  const monthlyFromTierBenefits = tier ? tierCopayFromPlan(plan, tier) : null;
+
+  const monthly =
+    annualFromCache != null
+      ? Math.round(annualFromCache / 12)
+      : monthlyFromFormulary ?? monthlyFromTierBenefits ?? 0;
+  const annual = annualFromCache != null ? Math.round(annualFromCache) : monthly * 12;
+
+  const label = formatDrugLabel(monthly, formulary?.coinsurance);
+  return makeDrugInfo({
+    tier,
+    label,
+    monthly,
+    annual,
+    pa: formulary?.prior_auth === true,
+    st: formulary?.step_therapy === true,
+  });
+}
+
+function makeDrugInfo(args: {
+  tier: number | null;
+  label: string;
+  monthly: number;
+  annual: number;
+  pa: boolean;
+  st: boolean;
+}): DrugInfo {
+  return {
+    tier: args.tier,
+    label: args.label,
+    priorAuth: args.pa,
+    stepTherapy: args.st,
+    monthlyCost: args.monthly,
+    annualCost: args.annual,
+    improvedVs: (other) => !!other && args.monthly < other.monthlyCost,
+    deltaVs: (other) => {
+      if (!other) return null;
+      const diff = args.monthly - other.monthlyCost;
+      if (diff === 0) return null;
+      return {
+        sign: diff < 0 ? 's' : 'm',
+        text: `${diff < 0 ? '−' : '+'}$${Math.abs(diff)}`,
+      };
+    },
+  };
+}
+
+function tierCopayFromPlan(plan: Plan, tier: number): number | null {
+  const map: Record<number, keyof Plan['benefits']['rx_tiers']> = {
+    1: 'tier_1', 2: 'tier_2', 3: 'tier_3', 4: 'tier_4', 5: 'tier_5',
+  };
+  const key = map[tier];
+  if (!key) return null;
+  const cs = plan.benefits.rx_tiers[key];
+  return cs.copay ?? null;
+}
+
+function formatDrugLabel(monthly: number, coinsurance: number | null | undefined): string {
+  if (coinsurance != null && (monthly === 0 || monthly == null)) return `${coinsurance}%`;
+  return `$${monthly}`;
+}
+
+function totalAnnualRx(
+  plan: Plan,
+  medications: Medication[],
+  data: PlanBrainData | null,
+): number {
+  let total = 0;
+  for (const m of medications) {
+    const info = lookupDrugCost(plan, m, data);
+    if (info) total += info.annualCost;
+  }
+  return total;
+}
+
+function copayCash(cs: { copay: number | null; coinsurance: number | null }): number | null {
+  if (cs.copay != null) return cs.copay;
   return null;
 }
 
-// Update one axis to `value` and rescale the other two so the three
-// weights still sum to 1.0. When the other two are both zero, split the
-// remainder evenly so the user can still raise them by sliding.
-function updateWeight(
-  w: WeightProfile,
-  axis: keyof WeightProfile,
-  value: number,
-): WeightProfile {
-  const clamped = Math.min(1, Math.max(0, value));
-  const others: (keyof WeightProfile)[] = (['drug', 'oop', 'extras'] as const).filter(
-    (k) => k !== axis,
-  );
-  const next: WeightProfile = { ...w, [axis]: clamped };
-  const otherSum = others.reduce((acc, k) => acc + w[k], 0);
-  const rest = Math.max(0, 1 - clamped);
-  if (otherSum <= 0) {
-    others.forEach((k) => { next[k] = rest / 2; });
-  } else {
-    others.forEach((k) => { next[k] = (w[k] / otherSum) * rest; });
+function formatCostShare(
+  cs: { copay: number | null; coinsurance: number | null; description: string | null },
+  suffix?: string,
+): string {
+  if (cs.copay != null) {
+    if (suffix === '/day') return `$${cs.copay}/day · 5d`;
+    return `$${cs.copay}`;
   }
-  return next;
+  if (cs.coinsurance != null) return `${cs.coinsurance}%`;
+  return '—';
 }
 
-function looksLikeSnp(plan: Plan): boolean {
-  const blob = `${plan.plan_name ?? ''} ${plan.plan_type ?? ''}`.toUpperCase();
-  if (/\bD-?SNP\b/.test(blob) || /\bC-?SNP\b/.test(blob) || /\bI-?SNP\b/.test(blob)) return true;
-  return plan.plan_type === 'DSNP';
-}
-
-function sortRows(rows: Row[], sort: SortState): Row[] {
-  const arr = [...rows];
-  arr.sort((a, b) => {
-    const va = pickSortValue(a, sort.key);
-    const vb = pickSortValue(b, sort.key);
-    if (typeof va === 'string' && typeof vb === 'string') {
-      return sort.dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
-    }
-    const na = typeof va === 'number' ? va : 0;
-    const nb = typeof vb === 'number' ? vb : 0;
-    return sort.dir === 'asc' ? na - nb : nb - na;
-  });
-  return arr;
-}
-
-function pickSortValue(r: Row, key: SortKey): number | string {
-  switch (key) {
-    case 'plan':        return r.plan.plan_name;
-    case 'carrier':     return r.plan.carrier;
-    case 'ribbon':      return r.ribbon ? RIBBON_LABEL[r.ribbon] : '~';
-    case 'drugMonthly': return r.monthlyDrug;
-    case 'drugAnnual':  return r.scored.totalAnnualDrugCost;
-    case 'oop':         return r.scored.totalOOPEstimate;
-    case 'premium':     return r.plan.premium;
-    case 'moop':        return r.plan.moop_in_network;
-    case 'extras':      return r.scored.extrasValue;
-    case 'composite':   return r.composite;
-    case 'meds':        return -r.scored.uncoveredDrugRxcuis.length;
-    case 'providers':   return providerSortValue(r.scored.providerNetworkStatus);
-    case 'giveback':    return r.plan.part_b_giveback ?? 0;
+function estimatedAnnualValue(col: ColumnPlan | undefined): number {
+  if (!col) return 0;
+  const plan = col.plan;
+  const scored = col.scored;
+  // Convention: negative value = net annual cost (premium + medical +
+  // drugs - extras). Positive after sign-flip would mean the extras
+  // exceed the cost; the mockup expresses this as e.g. "−$3,917/yr"
+  // for a plan whose net cost is $3,917.
+  if (scored) {
+    const cost = scored.totalOOPEstimate + plan.premium * 12;
+    const extras = scored.extrasValue;
+    return -(cost - extras);
   }
+  // Current-plan column with no Plan Brain row — fall back to a rough
+  // premium + dental + OTC + food estimate so the bar isn't blank.
+  const extras =
+    plan.benefits.dental.annual_max +
+    plan.benefits.otc.allowance_per_quarter * 4 +
+    plan.benefits.food_card.allowance_per_month * 12 +
+    (plan.part_b_giveback ?? 0) * 12;
+  return -(plan.premium * 12 - extras);
 }
 
-function providerSortValue(status: ScoredPlan['providerNetworkStatus']): number {
-  switch (status) {
-    case 'all_in':  return 3;
-    case 'partial': return 2;
-    case 'unknown': return 1;
-    case 'all_out': return 0;
+function whySwitchText(col: ColumnPlan, baseline: Plan | null): string {
+  if (col.variant === 'current') return 'Current plan';
+  const bits: string[] = [];
+  if (col.scored?.ribbon) bits.push(RIBBON_LABEL[col.scored.ribbon].replace(/^⭐ /, ''));
+  if (baseline) {
+    const moopDiff = baseline.moop_in_network - col.plan.moop_in_network;
+    if (moopDiff > 500) bits.push(`$${(moopDiff / 1000).toFixed(1)}K lower MOOP`);
+    const otcDiff =
+      col.plan.benefits.otc.allowance_per_quarter -
+      baseline.benefits.otc.allowance_per_quarter;
+    if (otcDiff > 0) bits.push(`$${otcDiff * 4}/yr OTC`);
+    const foodDiff =
+      col.plan.benefits.food_card.allowance_per_month -
+      baseline.benefits.food_card.allowance_per_month;
+    if (foodDiff > 0) bits.push(`$${foodDiff * 12}/yr food`);
+    const dentalDiff =
+      col.plan.benefits.dental.annual_max - baseline.benefits.dental.annual_max;
+    if (dentalDiff > 0) bits.push(`+$${dentalDiff} dental`);
   }
-}
-
-function ribbonBadge(rk: RibbonKey | null) {
-  if (!rk) return <span style={{ color: '#94a3b8' }}>—</span>;
-  const tone = RIBBON_TONE[rk];
-  return (
-    <span className="qv4-rib" style={{ background: tone.bg, color: tone.fg }}>
-      {RIBBON_LABEL[rk]}
-    </span>
-  );
-}
-
-function medsCoveredCell(s: ScoredPlan, totalMeds: number) {
-  if (totalMeds === 0) return <span style={{ color: '#94a3b8' }}>—</span>;
-  const uncovered = s.uncoveredDrugRxcuis.length;
-  const covered = totalMeds - uncovered;
-  return (
-    <span className={uncovered === 0 ? 'qv4-cov-ok' : 'qv4-cov-bad'}>
-      {covered}/{totalMeds}
-    </span>
-  );
-}
-
-function providerCell(status: ScoredPlan['providerNetworkStatus']) {
-  switch (status) {
-    case 'all_in':  return <span className="qv4-prov-in">All in</span>;
-    case 'partial': return <span className="qv4-prov-out">Partial</span>;
-    case 'all_out': return <span className="qv4-prov-out">All out</span>;
-    case 'unknown': return <span className="qv4-prov-unk">—</span>;
-  }
+  if (col.scored?.providerNetworkStatus === 'all_in') bits.push('in-network');
+  return bits.length > 0 ? bits.join(' · ') : '—';
 }
