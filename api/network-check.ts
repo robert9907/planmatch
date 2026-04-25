@@ -82,7 +82,15 @@ interface CacheRow {
 }
 
 interface Triple {
-  triple: string;         // "H5253-189-000"
+  /** Original id as the caller passed it (e.g. "H5521-241-0"). Echo
+   *  this back in the response so the caller's lookup-by-id works
+   *  without re-normalizing. */
+  inputId: string;
+  /** Normalized triple used for the cache key (e.g. "H5521-241-000").
+   *  pm_provider_network_cache rows store segment_id as "0" / "2" not
+   *  "000" / "002", so we always normalize to 3-digit segment when
+   *  building the lookup key. */
+  triple: string;
   contract: string;
   plan: string;
   segment: string;        // normalized "000" | "001" | ...
@@ -95,6 +103,7 @@ function splitTriple(id: string): Triple | null {
   const seg = (parts[2] ?? '0').replace(/^0+/, '') || '0';
   const segPad = seg === '0' ? '000' : seg.padStart(3, '0');
   return {
+    inputId: id,
     triple: `${parts[0]}-${parts[1]}-${segPad}`,
     contract: parts[0],
     plan: parts[1],
@@ -128,6 +137,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // ─── Cache read ────────────────────────────────────────────────────
   const contractPlans = [...new Set(triples.map((t) => t.contractPlan))];
   let cacheRows: CacheRow[] = [];
+  let cacheError: string | null = null;
   try {
     const { data, error } = await sb
       .from('pm_provider_network_cache')
@@ -137,8 +147,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (error) throw error;
     cacheRows = (data ?? []) as CacheRow[];
   } catch (err) {
-    console.warn('[network-check] cache read error:', (err as Error).message);
+    cacheError = (err as Error).message;
+    console.warn('[network-check] cache read error:', cacheError);
   }
+
+  // Raw-response logging — surfaces exactly what Supabase returned so
+  // a future column-name drift (covered → in_network, plan_id format
+  // change) is visible in the function logs without having to redeploy
+  // a probe script.
+  console.info('[network-check] cache query', {
+    npi,
+    contract_plans_in: contractPlans,
+    rows_returned: cacheRows.length,
+    sample: cacheRows.slice(0, 3),
+    error: cacheError,
+  });
 
   const cacheBy = new Map<string, CacheRow>();
   for (const r of cacheRows) {
@@ -148,11 +171,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // ─── Build result rows from cache; collect misses ──────────────────
+  // Important: response `plan_id` echoes back the caller's INPUT id
+  // (e.g. "H5521-241-0") not the normalized triple ("H5521-241-000").
+  // The agent-side caller indexes the response by plan.id, so the
+  // round-trip key has to match what they sent — otherwise every
+  // lookup misses and every carrier renders "Unknown".
   const results: ResultRow[] = triples.map((t) => {
     const hit = cacheBy.get(t.triple);
     if (hit) {
       return {
-        plan_id: t.triple,
+        plan_id: t.inputId,
         contract_id: t.contract,
         plan_number: t.plan,
         segment_id: t.segment,
@@ -162,7 +190,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       };
     }
     return {
-      plan_id: t.triple,
+      plan_id: t.inputId,
       contract_id: t.contract,
       plan_number: t.plan,
       segment_id: t.segment,
@@ -189,11 +217,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         liveBy.set(`${row.contract_id}-${row.plan_id}-${segPad}`, row.covered);
       }
 
-      // Apply live results to miss rows.
+      // Apply live results to miss rows. Look up by the normalized
+      // triple (contract-plan-segPad) — the live extractor emits the
+      // same shape, while r.plan_id now carries the caller's original
+      // input form which won't match.
       const upserts: Array<{ plan_id: string; segment_id: string; npi: string; covered: boolean | null }> = [];
       for (const r of results) {
         if (r.from !== 'miss') continue;
-        const cov = liveBy.get(r.plan_id);
+        const normalizedTriple = `${r.contract_id}-${r.plan_number}-${r.segment_id}`;
+        const cov = liveBy.get(normalizedTriple);
         if (typeof cov === 'undefined') continue;
         r.covered = cov;
         r.status = cov === true ? 'in' : cov === false ? 'out' : 'unknown';
