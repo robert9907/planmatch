@@ -113,6 +113,7 @@ function NewQuoteMode() {
   const finalistIds = useSession((s) => s.selectedFinalists);
   const recommendation = useSession((s) => s.recommendation);
   const setRecommendation = useSession((s) => s.setRecommendation);
+  const setGivebackPlanEnrolled = useSession((s) => s.setGivebackPlanEnrolled);
   const client = useSession((s) => s.client);
   const medications = useSession((s) => s.medications);
   const providers = useSession((s) => s.providers);
@@ -124,6 +125,18 @@ function NewQuoteMode() {
   // by id when /api/plans errors, so Rob can still demo offline.
   const [finalists, setFinalists] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Derive the giveback flag from the recommended plan whenever either
+  // the recommendation or the loaded finalist data changes. Clears to
+  // false when no recommendation is set.
+  useEffect(() => {
+    if (!recommendation) {
+      setGivebackPlanEnrolled(false);
+      return;
+    }
+    const rec = finalists.find((p) => p.id === recommendation);
+    setGivebackPlanEnrolled((rec?.part_b_giveback ?? 0) > 0);
+  }, [recommendation, finalists, setGivebackPlanEnrolled]);
 
   useEffect(() => {
     if (finalistIds.length === 0) {

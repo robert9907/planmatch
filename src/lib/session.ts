@@ -62,6 +62,7 @@ function initialState(): SessionState & { benefitFilters: BenefitFilterState } {
     disclaimersConfirmed: [],
     currentPlanId: null,
     selectedFinalists: [],
+    givebackPlanEnrolled: false,
     benefitFilters: emptyBenefitFilters(),
   };
 }
@@ -83,6 +84,7 @@ interface SessionStore extends SessionState {
   resetBenefitFilters: () => void;
   setSelectedFinalists: (ids: string[]) => void;
   setRecommendation: (id: string | null) => void;
+  setGivebackPlanEnrolled: (enrolled: boolean) => void;
   toggleComplianceItem: (id: string) => void;
   confirmDisclaimer: (id: string) => void;
   resetSession: () => void;
@@ -178,6 +180,8 @@ export const useSession = create<SessionStore>()(
       setSelectedFinalists: (ids) => set({ selectedFinalists: ids }),
 
       setRecommendation: (id) => set({ recommendation: id }),
+
+      setGivebackPlanEnrolled: (enrolled) => set({ givebackPlanEnrolled: enrolled }),
 
       toggleComplianceItem: (id) =>
         set((state) => ({

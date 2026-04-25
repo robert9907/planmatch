@@ -16,6 +16,7 @@ export function SaveSessionButton() {
   const disclaimersConfirmed = useSession((s) => s.disclaimersConfirmed);
   const notes = useSession((s) => s.notes);
   const selectedFinalists = useSession((s) => s.selectedFinalists);
+  const givebackPlanEnrolled = useSession((s) => s.givebackPlanEnrolled);
 
   const [status, setStatus] = useState<AgentBaseSyncStatus>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +47,7 @@ export function SaveSessionButton() {
       disclaimersConfirmed,
       notes,
       expectedDisclaimerIds: DISCLAIMERS.map((d) => d.id),
+      givebackPlanEnrolled,
     });
 
     try {

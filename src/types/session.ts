@@ -80,4 +80,11 @@ export interface SessionState {
    */
   currentPlanId: string | null;
   selectedFinalists: string[];
+  /**
+   * True when the recommended plan (or current plan in annual_review mode)
+   * has Part B premium giveback > $0/mo. Surfaces an "RE-EVALUATE AT AEP"
+   * badge on the Quote screen and feeds the Landing Needs-Attention list
+   * during AEP (Oct 15 – Dec 7). Persists to AgentBase via agentbase-sync.
+   */
+  givebackPlanEnrolled: boolean;
 }

@@ -33,6 +33,14 @@ export interface AgentBaseSyncPayload {
     confirmed_disclaimer_ids: string[];
   };
   notes: SessionNote[];
+  /**
+   * True when the recommended plan has Part B premium giveback > $0/mo.
+   * AgentBase keys its AEP review queue on this flag — it shows up in
+   * the Landing Needs-Attention list during Oct 15 – Dec 7 with a
+   * "re-evaluate giveback" reminder. Persisted alongside the session
+   * record on the AgentBase side.
+   */
+  giveback_plan_enrolled: boolean;
   status: 'pending';
   source: 'planmatch';
   schema_version: 1;
@@ -59,6 +67,7 @@ export function buildSyncPayload(input: {
   disclaimersConfirmed: string[];
   notes: SessionNote[];
   expectedDisclaimerIds: string[];
+  givebackPlanEnrolled: boolean;
 }): AgentBaseSyncPayload {
   return {
     client: {
@@ -90,6 +99,7 @@ export function buildSyncPayload(input: {
       confirmed_disclaimer_ids: input.disclaimersConfirmed,
     },
     notes: input.notes,
+    giveback_plan_enrolled: input.givebackPlanEnrolled,
     status: 'pending',
     source: 'planmatch',
     schema_version: 1,

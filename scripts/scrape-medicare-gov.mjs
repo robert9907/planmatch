@@ -69,6 +69,7 @@ function parseArgs(argv) {
     state: null,
     plan: null,
     planType: 'PLAN_TYPE_MAPD',
+    targetsFile: null,
     verbose: false,
     forceDom: false,
     skipDetail: false,
@@ -82,6 +83,7 @@ function parseArgs(argv) {
       case '--state': out.state = (next ?? '').toUpperCase(); i++; break;
       case '--plan': out.plan = next; i++; break;
       case '--plan-type': out.planType = next; i++; break;
+      case '--targets-file': out.targetsFile = next; i++; break;
       case '--limit': out.limit = Number(next); i++; break;
       case '--dry-run': out.dryRun = true; break;
       case '--write': out.write = true; break;
@@ -905,7 +907,22 @@ async function fetchAllPaginated(env, query) {
   return out;
 }
 
-async function resolveTargets({ zip, fips, state, plan, env, verbose }) {
+async function resolveTargets({ zip, fips, state, plan, env, verbose, targetsFile }) {
+  if (targetsFile) {
+    // Each line is "zip/fips" — used by retry passes (e.g. failed
+    // + un-attempted counties from a prior --state run).
+    const text = fs.readFileSync(targetsFile, 'utf8');
+    const out = [];
+    for (const raw of text.split('\n')) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const m = line.match(/^(\d{5})[\s/,]+(\d{5})$/);
+      if (!m) continue;
+      out.push({ zip: m[1], fips: m[2], planFilter: null });
+    }
+    if (verbose) console.log(`  targetsFile=${targetsFile} → ${out.length} (zip, fips) targets`);
+    return out;
+  }
   if (plan) {
     const [contract, pid] = plan.split('-');
     const rows = await sbGet(

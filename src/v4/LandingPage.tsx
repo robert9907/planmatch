@@ -231,17 +231,34 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
           )}
         </div>
 
-        {/* Needs Attention — empty state until clients.needs_review ships */}
+        {/* Needs Attention */}
         <div className="card">
           <div className="chdr">
             <div className="cht">Needs Attention</div>
-            <div className="chact">pending schema</div>
+            <div className="chact">{isAepWindow() ? 'AEP active' : 'pending schema'}</div>
           </div>
-          <div style={{ padding: '14px 16px', fontSize: 12, color: 'var(--v4-g500)', lineHeight: 1.5 }}>
-            Needs-attention alerts (tier change, network drop, follow-up)
-            light up here once the <code style={{ fontFamily: 'var(--v4-fm)', fontSize: 11 }}>clients.needs_review</code>
-            {' '}column lands in AgentBase. No invented alerts until then.
-          </div>
+          {isAepWindow() ? (
+            <div style={{ padding: '14px 16px', fontSize: 12, color: 'var(--v4-g700)', lineHeight: 1.5 }}>
+              <div style={{ fontWeight: 600, color: 'var(--v4-g900)', marginBottom: 4 }}>
+                Giveback plan — re-evaluate at AEP
+              </div>
+              <div style={{ color: 'var(--v4-g500)' }}>
+                Clients enrolled in Part B giveback plans (
+                <code style={{ fontFamily: 'var(--v4-fm)', fontSize: 11 }}>giveback_plan_enrolled</code>
+                ) surface here during Oct 15 – Dec 7. The flag rides through
+                agentbase-sync; AgentBase needs to expose it back via
+                /api/agentbase-clients before the list can populate. Until then
+                the agent should manually review last-quarter giveback enrollments.
+              </div>
+            </div>
+          ) : (
+            <div style={{ padding: '14px 16px', fontSize: 12, color: 'var(--v4-g500)', lineHeight: 1.5 }}>
+              Needs-attention alerts (tier change, network drop, follow-up)
+              light up here once the <code style={{ fontFamily: 'var(--v4-fm)', fontSize: 11 }}>clients.needs_review</code>
+              {' '}column lands in AgentBase. Giveback re-evaluation reminders
+              activate automatically during AEP (Oct 15 – Dec 7).
+            </div>
+          )}
           <div className="chdr" style={{ marginTop: 4, borderTop: '1px solid var(--v4-g100)' }}>
             <div className="cht">Quick Start</div>
           </div>
@@ -390,6 +407,16 @@ function relativeTime(iso: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+
+// True when today falls inside the current AEP window (Oct 15 – Dec 7).
+// Used to flip the Needs Attention card into "review giveback enrollments"
+// mode without waiting for AgentBase schema changes.
+function isAepWindow(now: Date = new Date()): boolean {
+  const yr = now.getFullYear();
+  const start = new Date(yr, 9, 15);
+  const end = new Date(yr, 11, 7, 23, 59, 59);
+  return now >= start && now <= end;
+}
 
 function aepStatus(): { daysLeft: number | null; windowCopy: string } {
   // 2027 AEP runs Oct 15 – Dec 7 2026. Before it opens: countdown.
