@@ -338,27 +338,9 @@ export function QuoteDeliveryV4({
     return cols;
   }, [currentPlan, result]);
 
-  if (loading && !result) {
-    return (
-      <div className="qv4">
-        <style>{CSS}</style>
-        <div className="qv4-loading">Plan Brain scoring plans…</div>
-      </div>
-    );
-  }
-
-  if (columns.length === 0) {
-    return (
-      <div className="qv4">
-        <style>{CSS}</style>
-        <div className="qv4-empty">
-          No plans to compare yet. Complete steps 2–5 so Plan Brain has finalists to rank.
-        </div>
-      </div>
-    );
-  }
-
   // The current column is the cost benchmark for delta badges.
+  // (Computed before any early return to keep hook order stable —
+  // see Rules of Hooks; useMemo below MUST run on every render.)
   const currentCol = columns.find((c) => c.variant === 'current') ?? null;
   const baseline = currentCol?.plan ?? null;
 
@@ -366,6 +348,7 @@ export function QuoteDeliveryV4({
   // plan column comes back excluded / not_covered, or tier 4–5 with
   // monthly >$100 on the lowest-cost plan. Stored as a Set so the
   // medication row + cell + help section can all read in O(1).
+  // Must be called before any early return — hooks order is fixed.
   const medsNeedingAssistance = useMemo(() => {
     const out = new Set<string>();
     for (const med of medications) {
@@ -387,6 +370,26 @@ export function QuoteDeliveryV4({
     }
     return out;
   }, [columns, medications, data]);
+
+  if (loading && !result) {
+    return (
+      <div className="qv4">
+        <style>{CSS}</style>
+        <div className="qv4-loading">Plan Brain scoring plans…</div>
+      </div>
+    );
+  }
+
+  if (columns.length === 0) {
+    return (
+      <div className="qv4">
+        <style>{CSS}</style>
+        <div className="qv4-empty">
+          No plans to compare yet. Complete steps 2–5 so Plan Brain has finalists to rank.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="qv4">
