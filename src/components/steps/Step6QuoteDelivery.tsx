@@ -13,7 +13,9 @@ import { fipsForCounty } from '@/lib/ncFips';
 import type { Plan } from '@/types/plans';
 import type { SessionMode } from '@/types/session';
 import { QuoteDeliveryV4 } from './QuoteDeliveryV4';
+import { PlanBrainPanel } from './PlanBrainPanel';
 import { useDrugCosts } from '@/hooks/useDrugCosts';
+import { usePlanBrain } from '@/hooks/usePlanBrain';
 import type { PharmacyMode } from '@/lib/drugCosts';
 
 // ─── Display helpers ────────────────────────────────────────────────
@@ -236,25 +238,80 @@ function NewQuoteMode() {
 
   return (
     <div className="flex flex-col gap-4">
-      <V4TableWithPrime
+      <PlanBrainSection
         finalists={finalists}
-        currentPlan={null}
+        client={client}
         medications={medications}
         providers={providers}
-        recommendation={recommendation}
-        onRecommend={setRecommendation}
-        onRecommendCopy={handleRecommendCopy}
-        onCopy={handleCopy}
-        onOpenSunfire={handleOpenSunfire}
-        clientPhone={client.phone}
-        clientFirstName={clientFirstName(client.name)}
-        brokerName={BROKER.name}
-      />
+      >
+        {(orderedFinalists) => (
+          <V4TableWithPrime
+            finalists={orderedFinalists}
+            currentPlan={null}
+            medications={medications}
+            providers={providers}
+            recommendation={recommendation}
+            onRecommend={setRecommendation}
+            onRecommendCopy={handleRecommendCopy}
+            onCopy={handleCopy}
+            onOpenSunfire={handleOpenSunfire}
+            clientPhone={client.phone}
+            clientFirstName={clientFirstName(client.name)}
+            brokerName={BROKER.name}
+          />
+        )}
+      </PlanBrainSection>
       <ClientDeliveryCard finalists={finalists} recommendation={recommendation} />
       <ComplianceChecklist />
       <BrokerActions recommendation={recommendation} />
       <Toast message={toastMsg} />
     </div>
+  );
+}
+
+// Plan Brain wrapper — runs the scoring engine over the finalists,
+// renders the summary panel above, and re-orders the finalists by
+// composite descending so the side-by-side V4 table reads top-to-
+// bottom in Brain-rank order. Renders children with the reordered list
+// so the V4 table doesn't need to know about Brain ordering.
+function PlanBrainSection({
+  finalists,
+  client,
+  medications,
+  providers,
+  children,
+}: {
+  finalists: Plan[];
+  client: import('@/types/session').Client;
+  medications: import('@/types/session').Medication[];
+  providers: import('@/types/session').Provider[];
+  children: (orderedFinalists: Plan[]) => React.ReactNode;
+}) {
+  const { result, loading } = usePlanBrain({
+    plans: finalists,
+    client,
+    medications,
+    providers,
+  });
+
+  // Re-order finalists by composite descending. If Brain hasn't
+  // returned yet, render in original order so the table appears
+  // immediately.
+  const ordered = useMemo(() => {
+    if (!result) return finalists;
+    const rank = new Map(result.scored.map((s, i) => [s.plan.id, i]));
+    return [...finalists].sort((a, b) => (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999));
+  }, [finalists, result]);
+
+  return (
+    <>
+      <PlanBrainPanel
+        result={result}
+        loading={loading}
+        county={client.county}
+      />
+      {children(ordered)}
+    </>
   );
 }
 
