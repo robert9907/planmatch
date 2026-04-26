@@ -44,7 +44,13 @@ export function ProvidersPage({ capture, onBack, onContinue }: Props) {
 
   useEffect(() => {
     abortRef.current?.abort();
-    if (query.trim().length < 2) { setResults([]); setSearching(false); return; }
+    // 3-character minimum (was 2) — matches the consumer side and
+    // avoids hammering NPPES with single-letter queries that return
+    // 5,000-row pages and time out. 300ms debounce (was 350) — keeps
+    // type-ahead snappy. "Dr. Klein" / "Kombiz" surface results
+    // immediately once they cross the threshold instead of waiting
+    // for a full name.
+    if (query.trim().length < 3) { setResults([]); setSearching(false); return; }
     const ctl = new AbortController();
     abortRef.current = ctl;
     setSearching(true); setError(null);
@@ -57,7 +63,7 @@ export function ProvidersPage({ capture, onBack, onContinue }: Props) {
       } finally {
         if (!ctl.signal.aborted) setSearching(false);
       }
-    }, 350);
+    }, 300);
     return () => { window.clearTimeout(t); ctl.abort(); };
   }, [query, client.state]);
 
@@ -175,7 +181,10 @@ export function ProvidersPage({ capture, onBack, onContinue }: Props) {
               NPI error: {error}
             </div>
           )}
-          {results.length > 0 && (
+          {/* Result panel — shown while in-flight even if results
+              are empty, so the agent gets immediate feedback when
+              typing crosses the 3-char threshold. */}
+          {(results.length > 0 || searching) && (
             <div className="card" style={{ marginBottom: 16 }}>
               {results.slice(0, 8).map((p) => (
                 <button key={p.npi} type="button" onClick={() => onSelectProvider(p)} className="sr">
@@ -191,7 +200,16 @@ export function ProvidersPage({ capture, onBack, onContinue }: Props) {
                   </div>
                 </button>
               ))}
-              {searching && <div style={{ padding: 10, fontSize: 11, color: 'var(--v4-g500)' }}>searching…</div>}
+              {searching && (
+                <div style={{ padding: 10, fontSize: 11, color: 'var(--v4-g500)' }}>
+                  {results.length === 0 ? 'searching NPPES…' : 'searching…'}
+                </div>
+              )}
+              {!searching && results.length === 0 && query.trim().length >= 3 && (
+                <div style={{ padding: 10, fontSize: 11, color: 'var(--v4-g500)' }}>
+                  No NPPES matches for "{query}". Try a partial last name or state filter.
+                </div>
+              )}
             </div>
           )}
 
