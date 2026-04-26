@@ -75,14 +75,27 @@ const RIBBON_LABEL: Record<RibbonKey, string> = {
 // `.qv4` so it can't bleed into the rest of the v4 chrome.
 const CSS = `
 .qv4 {
-  --qv4-navy:#0d2f5e; --qv4-navy-lt:#1a4a8a; --qv4-navy-dk:#091f3f;
+  /* Column-header accents — match the V4 mockup spec. */
+  --qv4-navy:#0c447c;        /* Best Rx Match header */
+  --qv4-teal:#0f6e56;        /* Lowest OOP header */
+  --qv4-leaf:#3b6d11;        /* Part B Giveback / Healthy header */
+  --qv4-summary-navy:#1a2744; /* Total Annual Value bar */
+  --qv4-navy-lt:#1a4a8a; --qv4-navy-dk:#091f3f;
   --qv4-sea:#83f0f9;  --qv4-sea-dim:rgba(131,240,249,0.1);
   --qv4-w:#fff;
+  /* Column body backgrounds — persist through every cell in that column. */
+  --qv4-current-bg:#f5f4f0;  /* Current Plan column body */
+  --qv4-bestrx-bg:#e6f1fb;   /* Best Rx Match column body */
+  --qv4-oop-bg:#e1f5ee;      /* Lowest OOP column body */
+  --qv4-leaf-bg:#eaf3de;     /* Part B Giveback column body */
+  /* Delta badges — savings / more-expensive. */
+  --qv4-delta-save-bg:#eaf3de; --qv4-delta-save:#3b6d11; --qv4-delta-save-bdr:rgba(59,109,17,0.25);
+  --qv4-delta-more-bg:#fcebeb; --qv4-delta-more:#a32d2d; --qv4-delta-more-bdr:rgba(163,45,45,0.25);
   --qv4-g50:#f8f9fa; --qv4-g100:#f1f3f5; --qv4-g200:#e9ecef;
   --qv4-g300:#dee2e6; --qv4-g400:#ced4da; --qv4-g500:#adb5bd;
   --qv4-g600:#868e96; --qv4-g700:#495057; --qv4-g800:#343a40; --qv4-g900:#212529;
-  --qv4-grn:#1a9c55; --qv4-grn-bg:rgba(46,204,113,0.08); --qv4-grn-bdr:rgba(46,204,113,0.2);
-  --qv4-red:#d63031; --qv4-red-bg:rgba(231,76,60,0.06); --qv4-red-bdr:rgba(231,76,60,0.2);
+  --qv4-grn:#3b6d11; --qv4-grn-bg:#eaf3de; --qv4-grn-bdr:rgba(59,109,17,0.25);
+  --qv4-red:#a32d2d; --qv4-red-bg:#fcebeb; --qv4-red-bdr:rgba(163,45,45,0.25);
   --qv4-amb:#e67e22; --qv4-amb-bg:rgba(243,156,18,0.08);
   --qv4-fb:'Inter',system-ui,sans-serif;
   --qv4-fm:'JetBrains Mono',monospace;
@@ -107,12 +120,23 @@ const CSS = `
   padding: 12px; border-bottom: 1px solid var(--qv4-g200);
   vertical-align: top; font-weight: 400; min-width: 210px;
 }
-.qv4 .qt th.qh.cb { background: var(--qv4-g200); }
-.qv4 .qt th.qh.wb { background: var(--qv4-navy); color: var(--qv4-w); }
+/* Column header backgrounds — gray current, navy best Rx, teal OOP, leaf giveback. */
+.qv4 .qt th.qh.cb { background: var(--qv4-g200); color: var(--qv4-g800); }
+.qv4 .qt th.qh.bb { background: var(--qv4-navy); color: var(--qv4-w); }
+.qv4 .qt th.qh.tb { background: var(--qv4-teal); color: var(--qv4-w); }
+.qv4 .qt th.qh.lb { background: var(--qv4-leaf); color: var(--qv4-w); }
+
 .qv4 .qt td { font-family: var(--qv4-fm); font-size: 12px; color: var(--qv4-g800); }
-.qv4 .qt td.cb { background: var(--qv4-g100); }
-.qv4 .qt td.wb { background: rgba(131,240,249,0.04); }
-.qv4 .qt td.wh { color: var(--qv4-navy); font-weight: 700; }
+/* Column body backgrounds — persist through every section row. */
+.qv4 .qt td.cb { background: var(--qv4-current-bg); }
+.qv4 .qt td.bb { background: var(--qv4-bestrx-bg); }
+.qv4 .qt td.tb { background: var(--qv4-oop-bg); }
+.qv4 .qt td.lb { background: var(--qv4-leaf-bg); }
+/* .wh = "this cell beats current" — bolds the value. */
+.qv4 .qt td.wh { font-weight: 700; }
+.qv4 .qt td.bb.wh { color: var(--qv4-navy); }
+.qv4 .qt td.tb.wh { color: var(--qv4-teal); }
+.qv4 .qt td.lb.wh { color: var(--qv4-leaf); }
 
 .qv4 .qt tr.sh td, .qv4 .qt tr.sh th {
   font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
@@ -120,43 +144,52 @@ const CSS = `
   border-bottom: 2px solid var(--qv4-navy); background: var(--qv4-g50);
   font-family: var(--qv4-fb);
 }
-.qv4 .qt tr.sh td.cb { background: var(--qv4-g100); }
-.qv4 .qt tr.sh td.wb { background: rgba(131,240,249,0.04); }
+/* Section dividers keep the column tint. */
+.qv4 .qt tr.sh td.cb { background: var(--qv4-current-bg); }
+.qv4 .qt tr.sh td.bb { background: var(--qv4-bestrx-bg); }
+.qv4 .qt tr.sh td.tb { background: var(--qv4-oop-bg); }
+.qv4 .qt tr.sh td.lb { background: var(--qv4-leaf-bg); }
 
 .qv4 .qt tr.tot td, .qv4 .qt tr.tot th {
   font-weight: 700; border-bottom: 2px solid var(--qv4-g300); padding: 8px 12px;
 }
 .qv4 .qt tr.tot th { background: var(--qv4-g100); color: var(--qv4-g900); }
 
+/* Total Inpatient Cost — bold subtotal sitting under "Inpatient per day". */
+.qv4 .qt tr.tip td, .qv4 .qt tr.tip th {
+  font-weight: 700; border-bottom: 1.5px solid var(--qv4-g400); padding: 7px 12px;
+}
+.qv4 .qt tr.tip th { color: var(--qv4-g900); }
+
 .qv4 .qt tr.bl td, .qv4 .qt tr.bl th {
-  background: var(--qv4-navy); color: var(--qv4-w);
+  background: var(--qv4-summary-navy); color: var(--qv4-w);
   border-bottom: none; padding: 10px 12px;
 }
 .qv4 .qt tr.ws td {
-  background: var(--qv4-navy); color: rgba(255,255,255,0.6);
+  background: var(--qv4-summary-navy); color: rgba(255,255,255,0.6);
   font-size: 10px; font-weight: 400; font-family: var(--qv4-fb);
   border-bottom: none; padding: 2px 12px 10px; white-space: normal; max-width: 240px;
 }
 .qv4 .qt tr.ws th {
-  background: var(--qv4-navy); color: rgba(255,255,255,0.5);
+  background: var(--qv4-summary-navy); color: rgba(255,255,255,0.5);
   font-size: 10px; font-weight: 400; border-bottom: none;
 }
 
 .qv4 .ptag2  { font-size: 9px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--qv4-g500); margin-bottom: 2px; }
 .qv4 .wtag2  { font-size: 9px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--qv4-sea); margin-bottom: 2px; }
+  letter-spacing: 0.06em; color: rgba(255,255,255,0.85); margin-bottom: 2px; }
 .qv4 .pcar2  { font-size: 10px; color: var(--qv4-g500); font-weight: 500; }
-.qv4 .qh.wb .pcar2 { color: rgba(255,255,255,0.5); }
+.qv4 .qh.bb .pcar2, .qv4 .qh.tb .pcar2, .qv4 .qh.lb .pcar2 { color: rgba(255,255,255,0.6); }
 .qv4 .pn2 { font-family: var(--qv4-fd); font-size: 13px; font-weight: 600;
   color: var(--qv4-g900); line-height: 1.2; }
-.qv4 .qh.wb .pn2 { color: var(--qv4-w); }
+.qv4 .qh.bb .pn2, .qv4 .qh.tb .pn2, .qv4 .qh.lb .pn2 { color: var(--qv4-w); }
 .qv4 .qh.cb .pn2 { color: var(--qv4-g700); }
 .qv4 .pm2 { display: flex; gap: 5px; margin-top: 3px; align-items: center; }
 .qv4 .pid2 { font-family: var(--qv4-fm); font-size: 9px; color: var(--qv4-g500); }
-.qv4 .qh.wb .pid2 { color: rgba(255,255,255,0.4); }
+.qv4 .qh.bb .pid2, .qv4 .qh.tb .pid2, .qv4 .qh.lb .pid2 { color: rgba(255,255,255,0.5); }
 .qv4 .star2 { font-size: 9px; font-weight: 600; color: var(--qv4-amb); }
-.qv4 .qh.wb .star2 { color: var(--qv4-sea); }
+.qv4 .qh.bb .star2, .qv4 .qh.tb .star2, .qv4 .qh.lb .star2 { color: var(--qv4-sea); }
 
 .qv4 .ti { display: inline-flex; align-items: center; justify-content: center;
   width: 17px; height: 17px; border-radius: 3px;
@@ -187,13 +220,22 @@ const CSS = `
 .qv4 .abtn { display: block; width: 100%; padding: 8px; border-radius: 7px;
   border: none; font-family: var(--qv4-fb); font-size: 11px; font-weight: 600;
   cursor: pointer; text-align: center; margin-bottom: 4px; }
-.qv4 .abtn.rec  { background: var(--qv4-navy); color: var(--qv4-w); }
-.qv4 .abtn.rec:hover { background: var(--qv4-navy-lt); }
-.qv4 .abtn.rec.sea { background: var(--qv4-sea); color: var(--qv4-navy); }
-.qv4 .abtn.rec.sea:hover { background: #6de8f2; }
+.qv4 .abtn.rec  { background: var(--qv4-teal); color: var(--qv4-w); }
+.qv4 .abtn.rec:hover { background: #0a5945; }
+.qv4 .abtn.rec.on { background: var(--qv4-leaf); }
 .qv4 .abtn.sec  { background: var(--qv4-g100); color: var(--qv4-g700);
-  border: 1px solid var(--qv4-g200); }
+  border: 1px solid var(--qv4-g200); text-decoration: none; display: block; }
 .qv4 .abtn.sec:hover { background: var(--qv4-g200); }
+
+/* Pharmacy fill-type toggle above the table. */
+.qv4-pharm-toggle { display: inline-flex; align-items: center; gap: 0;
+  border: 1px solid var(--qv4-g300); border-radius: 7px; overflow: hidden;
+  background: #fff; margin-bottom: 12px; font-family: var(--qv4-fb); }
+.qv4-pharm-toggle button { padding: 6px 14px; border: none; background: transparent;
+  font-size: 11px; font-weight: 600; color: var(--qv4-g600); cursor: pointer; }
+.qv4-pharm-toggle button.on { background: var(--qv4-navy); color: var(--qv4-w); }
+.qv4-pharm-label { font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--qv4-g500); margin-right: 8px; }
 
 .qv4 .sub { font-size: 10px; color: var(--qv4-g500); font-weight: 400; }
 .qv4-loading, .qv4-empty { padding: 28px; text-align: center; color: var(--qv4-g600);
@@ -264,13 +306,26 @@ interface Props {
   onRecommend?: (id: string | null) => void;
 }
 
+/**
+ * Column visual treatment. Maps directly to a CSS class pair for the
+ * header (`qh.<v>`) and body cells (`td.<v>`):
+ *
+ *   current   → cb  gray   (#f5f4f0)  Current Plan benchmark
+ *   best_rx   → bb  navy   (#0c447c)  LOWEST_DRUG_COST / BEST_OVERALL ribbon
+ *   lowest_oop→ tb  teal   (#0f6e56)  LOWEST_OOP ribbon
+ *   giveback  → lb  leaf   (#3b6d11)  PART_B_SAVINGS ribbon
+ *   normal    → ''  white  (no special background) — backfill column
+ */
+type ColumnVariant = 'current' | 'best_rx' | 'lowest_oop' | 'giveback' | 'normal';
+
 interface ColumnPlan {
   plan: Plan;
   scored: ScoredPlan | null;   // null when this is the current-plan column
-  /** Render flavor — cb (current/gray), wb (winner/navy), or none. */
-  variant: 'current' | 'winner' | 'normal';
+  variant: ColumnVariant;
   ribbon: RibbonKey | null;
 }
+
+type PharmacyFill = 'retail_30' | 'mail_90';
 
 export function QuoteDeliveryV4({
   finalists,
@@ -298,42 +353,104 @@ export function QuoteDeliveryV4({
   // to PAP / copay-card / foundation alternatives.
   const assistance = useManufacturerAssistance(medications);
 
+  // Pharmacy fill-type toggle. Drug cost cache stores per-NDC
+  // estimated_yearly_total at scrape time; until per-fill-type costs
+  // are cached separately, mail_90 displays as a 3× monthly value
+  // with a clear "est." note (most plans deliver mail-order at a
+  // small discount vs 3× retail; we can't promise a specific number
+  // without the per-plan mail-order pricing rows).
+  const [pharmacyFill, setPharmacyFill] = useState<PharmacyFill>('retail_30');
+
   const currentPlan = useMemo<Plan | null>(
     () => (currentPlanId ? findPlan(currentPlanId) : null),
     [currentPlanId],
   );
 
   // ─── Column ordering ────────────────────────────────────────────
-  // Mockup pattern:
+  // V4 mockup:
   //   col 0 (sticky labels)
-  //   col 1 = current plan (gray) — drops out if no current
-  //   col 2 = winner (navy)        — top composite
-  //   col 3..N = next finalists by composite
-  // We cap total *plan* columns at MAX_FINALIST_COLUMNS so the table
-  // never exceeds the mockup's width.
+  //   col 1 = current plan (gray) — pinned left when session has currentPlanId
+  //   col 2 = Best Rx Match (navy)  — LOWEST_DRUG_COST / BEST_OVERALL ribbon
+  //   col 3 = Lowest OOP (teal)     — LOWEST_OOP ribbon
+  //   col 4 = Part B Giveback (leaf)— PART_B_SAVINGS ribbon
+  //   any unfilled slot backfills with the next-highest composite
+  //
+  // Cap at MAX_FINALIST_COLUMNS plan columns total so the table never
+  // overflows the mockup's width.
   const columns = useMemo<ColumnPlan[]>(() => {
     const cols: ColumnPlan[] = [];
+    const used = new Set<string>();
+
     if (currentPlan) {
       const inFinalist = result?.scored.find((s) => s.plan.id === currentPlan.id) ?? null;
-      cols.push({
-        plan: currentPlan,
-        scored: inFinalist,
-        variant: 'current',
-        ribbon: null,
-      });
+      cols.push({ plan: currentPlan, scored: inFinalist, variant: 'current', ribbon: null });
+      used.add(currentPlan.id);
     }
+
     const ranked = result ? [...result.scored].sort((a, b) => b.composite - a.composite) : [];
+    const pickByRibbon = (...ribbons: RibbonKey[]): ScoredPlan | null => {
+      for (const r of ribbons) {
+        const hit = ranked.find((s) => s.ribbon === r && !used.has(s.plan.id));
+        if (hit) return hit;
+      }
+      return null;
+    };
+
+    // Slot 2 — Best Rx Match. Prefer LOWEST_DRUG_COST; fall back to
+    // BEST_OVERALL or first un-used composite.
+    const bestRx =
+      pickByRibbon('LOWEST_DRUG_COST', 'BEST_OVERALL') ??
+      ranked.find((s) => !used.has(s.plan.id)) ??
+      null;
+    if (bestRx) {
+      cols.push({ plan: bestRx.plan, scored: bestRx, variant: 'best_rx', ribbon: bestRx.ribbon });
+      used.add(bestRx.plan.id);
+    }
+
+    // Slot 3 — Lowest OOP. Prefer LOWEST_OOP; fall back to plan with
+    // smallest totalOOPEstimate among un-used.
+    let lowestOop = pickByRibbon('LOWEST_OOP');
+    if (!lowestOop) {
+      lowestOop = ranked
+        .filter((s) => !used.has(s.plan.id))
+        .reduce<ScoredPlan | null>(
+          (best, s) =>
+            best == null || s.totalOOPEstimate < best.totalOOPEstimate ? s : best,
+          null,
+        );
+    }
+    if (lowestOop && cols.length < MAX_FINALIST_COLUMNS) {
+      cols.push({ plan: lowestOop.plan, scored: lowestOop, variant: 'lowest_oop', ribbon: lowestOop.ribbon });
+      used.add(lowestOop.plan.id);
+    }
+
+    // Slot 4 — Part B Giveback / Healthy. Prefer PART_B_SAVINGS; fall
+    // back to plan with the highest part_b_giveback among un-used. If
+    // no plan has a giveback >0, leave the slot empty rather than fake
+    // a third column.
+    let giveback = pickByRibbon('PART_B_SAVINGS');
+    if (!giveback) {
+      const candidate = ranked
+        .filter((s) => !used.has(s.plan.id) && (s.plan.part_b_giveback ?? 0) > 0)
+        .reduce<ScoredPlan | null>(
+          (best, s) =>
+            best == null || (s.plan.part_b_giveback ?? 0) > (best.plan.part_b_giveback ?? 0) ? s : best,
+          null,
+        );
+      giveback = candidate;
+    }
+    if (giveback && cols.length < MAX_FINALIST_COLUMNS) {
+      cols.push({ plan: giveback.plan, scored: giveback, variant: 'giveback', ribbon: giveback.ribbon });
+      used.add(giveback.plan.id);
+    }
+
+    // Backfill — any remaining plan columns up to MAX_FINALIST_COLUMNS
+    // get the neutral 'normal' variant.
     for (const s of ranked) {
       if (cols.length >= MAX_FINALIST_COLUMNS) break;
-      // Skip the current plan when it's already pinned left.
-      if (currentPlan && s.plan.id === currentPlan.id) continue;
-      cols.push({
-        plan: s.plan,
-        scored: s,
-        // First non-current column gets the winner treatment.
-        variant: cols.every((c) => c.variant !== 'winner') ? 'winner' : 'normal',
-        ribbon: s.ribbon,
-      });
+      if (used.has(s.plan.id)) continue;
+      cols.push({ plan: s.plan, scored: s, variant: 'normal', ribbon: s.ribbon });
+      used.add(s.plan.id);
     }
     return cols;
   }, [currentPlan, result]);
@@ -395,6 +512,33 @@ export function QuoteDeliveryV4({
     <div className="qv4">
       <style>{CSS}</style>
 
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span className="qv4-pharm-label">Pharmacy</span>
+        <div className="qv4-pharm-toggle" role="tablist" aria-label="Pharmacy fill type">
+          <button
+            type="button"
+            className={pharmacyFill === 'retail_30' ? 'on' : ''}
+            aria-pressed={pharmacyFill === 'retail_30'}
+            onClick={() => setPharmacyFill('retail_30')}
+          >
+            30-day retail
+          </button>
+          <button
+            type="button"
+            className={pharmacyFill === 'mail_90' ? 'on' : ''}
+            aria-pressed={pharmacyFill === 'mail_90'}
+            onClick={() => setPharmacyFill('mail_90')}
+          >
+            90-day mail
+          </button>
+        </div>
+        {pharmacyFill === 'mail_90' && (
+          <span style={{ fontSize: 10, color: 'var(--qv4-g500)', marginLeft: 8 }}>
+            est. — per-plan mail-order pricing pending
+          </span>
+        )}
+      </div>
+
       <div className="qv4-qwrap">
         <table className="qt">
           <thead>
@@ -440,10 +584,16 @@ export function QuoteDeliveryV4({
                   baseline={baseline}
                   needsAssistance={medsNeedingAssistance.has(m.id)}
                   hasMatchingProgram={!!assistance.byMedicationId[m.id]?.length}
+                  pharmacyFill={pharmacyFill}
                 />
               ))
             )}
-            <TotalRxRow cols={columns} medications={medications} data={data} />
+            <TotalRxRow
+              cols={columns}
+              medications={medications}
+              data={data}
+              pharmacyFill={pharmacyFill}
+            />
 
             {/* ── Provider divider rows ───────────────────────────── */}
             {providers.map((pr) => (
@@ -459,6 +609,8 @@ export function QuoteDeliveryV4({
                 baseline={baseline}
               />
             ))}
+            <CopayRow row={INPATIENT_ROW} cols={columns} baseline={baseline} />
+            <TotalInpatientCostRow cols={columns} baseline={baseline} />
 
             {/* ── Plan Costs ──────────────────────────────────────── */}
             <SectionRow label="Plan Costs" cols={columns} />
@@ -487,6 +639,17 @@ export function QuoteDeliveryV4({
               baseline={baseline}
               betterIsLower
             />
+            <PlanCostRow
+              label="Part B Giveback"
+              cols={columns}
+              fmt={(p) =>
+                (p.part_b_giveback ?? 0) > 0 ? `$${p.part_b_giveback}/mo` : '—'
+              }
+              raw={(p) => p.part_b_giveback ?? 0}
+              baseline={baseline}
+              betterIsLower={false}
+              annualMultiplier={12}
+            />
 
             {/* ── Extra Benefits ──────────────────────────────────── */}
             <SectionRow label="Extra Benefits" cols={columns} />
@@ -499,6 +662,30 @@ export function QuoteDeliveryV4({
                   : '—'
               }
               raw={(p) => p.benefits.dental.annual_max}
+              baseline={baseline}
+              betterIsLower={false}
+            />
+            <PlanCostRow
+              label="Vision"
+              cols={columns}
+              fmt={(p) =>
+                p.benefits.vision.eyewear_allowance_year > 0
+                  ? `$${p.benefits.vision.eyewear_allowance_year}/yr`
+                  : p.benefits.vision.exam ? 'Exam only' : '—'
+              }
+              raw={(p) => p.benefits.vision.eyewear_allowance_year}
+              baseline={baseline}
+              betterIsLower={false}
+            />
+            <PlanCostRow
+              label="Hearing"
+              cols={columns}
+              fmt={(p) =>
+                p.benefits.hearing.aid_allowance_year > 0
+                  ? `$${p.benefits.hearing.aid_allowance_year.toLocaleString()}/yr`
+                  : p.benefits.hearing.exam ? 'Exam only' : '—'
+              }
+              raw={(p) => p.benefits.hearing.aid_allowance_year}
               baseline={baseline}
               betterIsLower={false}
             />
@@ -529,15 +716,17 @@ export function QuoteDeliveryV4({
               annualMultiplier={12}
             />
             <PlanCostRow
-              label="Giveback"
+              label="Fitness"
               cols={columns}
               fmt={(p) =>
-                (p.part_b_giveback ?? 0) > 0 ? `$${p.part_b_giveback}/mo` : '—'
+                p.benefits.fitness.enabled
+                  ? p.benefits.fitness.program ?? 'Included'
+                  : '—'
               }
-              raw={(p) => p.part_b_giveback ?? 0}
+              raw={(p) => (p.benefits.fitness.enabled ? 1 : 0)}
               baseline={baseline}
               betterIsLower={false}
-              annualMultiplier={12}
+              suppressDelta
             />
 
             {/* ── Total Annual Value ──────────────────────────────── */}
@@ -557,12 +746,12 @@ export function QuoteDeliveryV4({
                     ) : (
                       <button
                         type="button"
-                        className={`abtn rec${c.variant === 'winner' && !isRecommended ? ' sea' : ''}`}
+                        className={`abtn rec${c.variant === 'best_rx' && !isRecommended ? ' sea' : ''}`}
                         onClick={() =>
                           onRecommend?.(isRecommended ? null : c.plan.id)
                         }
                       >
-                        {isRecommended ? '✓ Recommended' : c.variant === 'winner' ? '✓ Recommend' : 'Recommend'}
+                        {isRecommended ? '✓ Recommended' : c.variant === 'best_rx' ? '✓ Recommend' : 'Recommend'}
                       </button>
                     )}
                     <a
@@ -601,29 +790,28 @@ export function QuoteDeliveryV4({
 // ─── Header ───────────────────────────────────────────────────────────
 
 function ColumnHeader({ col }: { col: ColumnPlan }) {
-  const cls = `qh ${col.variant === 'current' ? 'cb' : col.variant === 'winner' ? 'wb' : ''}`;
-  const tag =
-    col.variant === 'current' ? (
-      <div className="ptag2">Current Plan</div>
-    ) : col.variant === 'winner' ? (
-      <div className="wtag2">{col.ribbon ? RIBBON_LABEL[col.ribbon] : '⭐ Best Rx Match'}</div>
-    ) : col.ribbon ? (
-      <div className="ptag2" style={{ color: 'var(--qv4-amb)' }}>
-        {RIBBON_LABEL[col.ribbon]}
-      </div>
-    ) : null;
+  const cls = `qh ${cellClsBare(col)}`;
+  // Per-variant ribbon label. Falls back to the plan's actual Brain
+  // ribbon for the 'normal' backfill column.
+  const tagText =
+    col.variant === 'current' ? 'Current Plan' :
+    col.variant === 'best_rx' ? '⭐ Best Rx Match' :
+    col.variant === 'lowest_oop' ? '⭐ Lowest OOP' :
+    col.variant === 'giveback' ? '⭐ Part B Giveback' :
+    col.ribbon ? RIBBON_LABEL[col.ribbon] : null;
+  const tagCls = col.variant === 'current' ? 'ptag2' : 'wtag2';
   return (
     <th className={cls}>
-      {tag}
-      <div className="pcar2" style={{ marginTop: tag ? 0 : 8 }}>
-        {col.plan.carrier}
+      {tagText && <div className={tagCls}>{tagText}</div>}
+      <div className="pcar2" style={{ marginTop: tagText ? 0 : 8 }}>
+        {col.plan.carrier ?? '—'}
       </div>
-      <div className="pn2">{col.plan.plan_name}</div>
+      <div className="pn2">{col.plan.plan_name ?? '—'}</div>
       <div className="pm2">
         <span className="pid2">
           {col.plan.contract_id}-{col.plan.plan_number}
         </span>
-        <span className="star2">{col.plan.star_rating}★</span>
+        <span className="star2">{col.plan.star_rating ?? 0}★</span>
       </div>
     </th>
   );
@@ -651,6 +839,7 @@ function MedicationRow({
   baseline,
   needsAssistance,
   hasMatchingProgram,
+  pharmacyFill,
 }: {
   medication: Medication;
   cols: ColumnPlan[];
@@ -658,8 +847,9 @@ function MedicationRow({
   baseline: Plan | null;
   needsAssistance: boolean;
   hasMatchingProgram: boolean;
+  pharmacyFill: PharmacyFill;
 }) {
-  const baselineCost = baseline ? lookupDrugCost(baseline, medication, data) : null;
+  const baselineCost = baseline ? lookupDrugCost(baseline, medication, data, pharmacyFill) : null;
   function scrollToHelp() {
     const target = document.getElementById(`qv4-help-${medication.id}`);
     if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -681,10 +871,10 @@ function MedicationRow({
           </button>
         )}
         <br />
-        <span className="sub">30-day</span>
+        <span className="sub">{pharmacyFill === 'mail_90' ? '90-day mail' : '30-day retail'}</span>
       </th>
       {cols.map((c) => {
-        const info = lookupDrugCost(c.plan, medication, data);
+        const info = lookupDrugCost(c.plan, medication, data, pharmacyFill);
         const notCovered = !info || info.label === 'Excluded';
         return (
           <td key={c.plan.id} className={cellCls(c, info?.improvedVs(baselineCost))}>
@@ -747,12 +937,14 @@ function TotalRxRow({
   cols,
   medications,
   data,
+  pharmacyFill,
 }: {
   cols: ColumnPlan[];
   medications: Medication[];
   data: PlanBrainData | null;
+  pharmacyFill: PharmacyFill;
 }) {
-  const totals = cols.map((c) => totalAnnualRx(c.plan, medications, data));
+  const totals = cols.map((c) => totalAnnualRx(c.plan, medications, data, pharmacyFill));
   const baselineTotal = cols.find((c) => c.variant === 'current')
     ? totals[cols.findIndex((c) => c.variant === 'current')]
     : null;
@@ -771,7 +963,7 @@ function TotalRxRow({
           <td
             key={c.plan.id}
             className={variantCls}
-            style={c.variant === 'winner' ? { color: 'var(--qv4-navy)' } : undefined}
+            style={c.variant === 'best_rx' ? { color: 'var(--qv4-navy)' } : undefined}
           >
             ${monthly}/mo · ${annual.toLocaleString()}/yr
             {delta !== 0 && (
@@ -862,8 +1054,23 @@ const MEDICAL_ROWS: MedicalRowDef[] = [
   { label: 'Outpatient Surgery', pick: (p) => p.benefits.medical.outpatient_surgery_hospital },
   { label: 'Mental Health', pick: (p) => p.benefits.medical.mental_health_individual },
   { label: 'PT / OT', pick: (p) => p.benefits.medical.physical_therapy },
-  { label: 'Inpatient', pick: (p) => p.benefits.medical.inpatient, suffix: '/day' },
 ];
+// Inpatient is rendered as its own pair (per-day row + total stay row)
+// so the total cost can show daily × days with delta badges.
+const INPATIENT_ROW: MedicalRowDef = {
+  label: 'Inpatient',
+  pick: (p) => p.benefits.medical.inpatient,
+  suffix: '/day',
+};
+// Default 5-day acute admission. Real per-plan inpatient days live in
+// pbp_benefits.tiered_cost_sharing day-stage rows (see scrape-medicare-gov.mjs
+// PLAN_DETAIL_URL_FN extraction). Until that field is plumbed onto the
+// agent-side Plan type, every column uses the same default — which still
+// produces meaningful daily × days totals for comparison.
+const DEFAULT_INPATIENT_DAYS = 5;
+function inpatientDaysFor(_plan: Plan): number {
+  return DEFAULT_INPATIENT_DAYS;
+}
 
 function CopayRow({
   row,
@@ -921,6 +1128,7 @@ function PlanCostRow({
   baseline,
   betterIsLower,
   annualMultiplier,
+  suppressDelta,
   suffix: _suffix,
 }: {
   label: string;
@@ -930,6 +1138,9 @@ function PlanCostRow({
   baseline: Plan | null;
   betterIsLower: boolean;
   annualMultiplier?: number;
+  /** Suppress delta badges entirely — for non-numeric rows like Fitness
+   *  where +$1 vs −$0 is meaningless. */
+  suppressDelta?: boolean;
   suffix?: string;
 }) {
   const baseVal = baseline ? raw(baseline) : null;
@@ -939,7 +1150,9 @@ function PlanCostRow({
       {cols.map((c) => {
         const v = raw(c.plan);
         const delta =
-          baseVal != null && c.variant !== 'current' && v !== baseVal ? v - baseVal : null;
+          !suppressDelta && baseVal != null && c.variant !== 'current' && v !== baseVal
+            ? v - baseVal
+            : null;
         const better =
           delta != null
             ? betterIsLower
@@ -965,6 +1178,58 @@ function PlanCostRow({
   );
 }
 
+// ─── Total Inpatient Cost ────────────────────────────────────────────
+//
+// Sits directly below the "Inpatient per day" copay row. Shows
+// daily_copay × days for each plan with delta badges vs the current
+// plan. Bold + heavier bottom border to read as a section subtotal.
+// `inpatient_days` defaults to 5 (acute admission baseline) — see
+// inpatientDaysFor() for the per-plan extension point.
+
+function TotalInpatientCostRow({ cols, baseline }: { cols: ColumnPlan[]; baseline: Plan | null }) {
+  const baseDaily = baseline ? copayCash(baseline.benefits.medical.inpatient) : null;
+  const baseDays = baseline ? inpatientDaysFor(baseline) : null;
+  const baseTotal = baseDaily != null && baseDays != null ? baseDaily * baseDays : null;
+  return (
+    <tr className="tip">
+      <th className="lc">
+        Total inpatient cost
+        <br />
+        <span className="sub">
+          {baseDays ?? DEFAULT_INPATIENT_DAYS}-day hospital stay
+        </span>
+      </th>
+      {cols.map((c) => {
+        const daily = copayCash(c.plan.benefits.medical.inpatient);
+        const days = inpatientDaysFor(c.plan);
+        const total = daily != null ? daily * days : null;
+        const delta =
+          total != null && baseTotal != null && c.variant !== 'current' && total !== baseTotal
+            ? total - baseTotal
+            : null;
+        const better = delta != null && delta < 0;
+        const variantCls = cellCls(c, better);
+        return (
+          <td key={c.plan.id} className={variantCls}>
+            {total == null ? (
+              <span style={{ color: 'var(--qv4-g500)' }}>—</span>
+            ) : (
+              <>
+                ${total.toLocaleString()}
+                {delta != null && (
+                  <span className={`d ${better ? 's' : 'm'}`}>
+                    {delta < 0 ? '−' : '+'}${Math.abs(delta).toLocaleString()}
+                  </span>
+                )}
+              </>
+            )}
+          </td>
+        );
+      })}
+    </tr>
+  );
+}
+
 // ─── Total Annual Value summary bar ───────────────────────────────────
 
 function TotalAnnualRow({ cols, baseline }: { cols: ColumnPlan[]; baseline: Plan | null }) {
@@ -983,7 +1248,7 @@ function TotalAnnualRow({ cols, baseline }: { cols: ColumnPlan[]; baseline: Plan
       </th>
       {cols.map((c) => {
         const total = estimatedAnnualValue(c);
-        const isWinner = c.variant === 'winner';
+        const isWinner = c.variant === 'best_rx';
         const isCurrent = c.variant === 'current';
         const savings =
           baseTotal != null && !isCurrent ? baseTotal - total : 0;
@@ -1032,17 +1297,24 @@ function WhySwitchRow({ cols, baseline }: { cols: ColumnPlan[]; baseline: Plan |
 
 // ─── helpers ──────────────────────────────────────────────────────────
 
-function cellCls(c: ColumnPlan, betterThanBaseline?: boolean | null): string {
-  const base =
-    c.variant === 'current' ? 'cb' : c.variant === 'winner' ? 'wb' : '';
-  // `.wh` is the highlight that the mockup applies to a winner cell
-  // when that cell beats the current plan — bolds + recolors to navy.
-  if (c.variant === 'winner' && betterThanBaseline) return `${base} wh`;
-  return base;
+function cellClsBare(c: ColumnPlan): string {
+  switch (c.variant) {
+    case 'current':    return 'cb';
+    case 'best_rx':    return 'bb';
+    case 'lowest_oop': return 'tb';
+    case 'giveback':   return 'lb';
+    default:           return '';
+  }
 }
 
-function cellClsBare(c: ColumnPlan): string {
-  return c.variant === 'current' ? 'cb' : c.variant === 'winner' ? 'wb' : '';
+function cellCls(c: ColumnPlan, betterThanBaseline?: boolean | null): string {
+  const base = cellClsBare(c);
+  // `.wh` highlights a non-current cell that beats the current plan —
+  // bolds the value and recolors it to the column's accent.
+  if (betterThanBaseline && c.variant !== 'current' && c.variant !== 'normal') {
+    return `${base} wh`;
+  }
+  return base;
 }
 
 interface DrugInfo {
@@ -1060,6 +1332,7 @@ function lookupDrugCost(
   plan: Plan,
   med: Medication,
   data: PlanBrainData | null,
+  pharmacyFill: PharmacyFill = 'retail_30',
 ): DrugInfo | null {
   if (!med.rxcui) return null;
   const tripleId = plan.id;
@@ -1093,11 +1366,18 @@ function lookupDrugCost(
       : monthlyFromFormulary ?? monthlyFromTierBenefits ?? 0;
   const annual = annualFromCache != null ? Math.round(annualFromCache) : monthly * 12;
 
-  const label = formatDrugLabel(monthly, formulary?.coinsurance);
+  // Mail-order 90-day pricing — until per-fill-type rows are cached
+  // separately we display a 3× monthly value (the per-fill cost the
+  // client would pay at the mail-order pharmacy). The annual total
+  // stays the same — this is purely a display-side adjustment, since
+  // 12 × monthly == 4 × (3 × monthly) from a year-cost POV.
+  const display90 = pharmacyFill === 'mail_90' ? monthly * 3 : monthly;
+  const label = formatDrugLabel(display90, formulary?.coinsurance);
+
   return makeDrugInfo({
     tier,
     label,
-    monthly,
+    monthly: display90,
     annual,
     pa: formulary?.prior_auth === true,
     st: formulary?.step_therapy === true,
@@ -1151,10 +1431,11 @@ function totalAnnualRx(
   plan: Plan,
   medications: Medication[],
   data: PlanBrainData | null,
+  pharmacyFill: PharmacyFill = 'retail_30',
 ): number {
   let total = 0;
   for (const m of medications) {
-    const info = lookupDrugCost(plan, m, data);
+    const info = lookupDrugCost(plan, m, data, pharmacyFill);
     if (info) total += info.annualCost;
   }
   return total;
