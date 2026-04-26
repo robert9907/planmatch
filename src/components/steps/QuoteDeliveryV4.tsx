@@ -55,6 +55,7 @@ import {
   type AssistanceRow,
 } from '@/hooks/useManufacturerAssistance';
 import { findPlan } from '@/lib/cmsPlans';
+import { CurrentPlanPicker } from '@/components/picker/CurrentPlanPicker';
 import type {
   PlanBrainData,
   RibbonKey,
@@ -206,6 +207,7 @@ export function QuoteDeliveryV4({
 }: Props) {
   const currentPlanId = useSession((s) => s.currentPlanId);
   const [pharmacyFill, setPharmacyFill] = useState<PharmacyFill>('retail_30');
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // Plan Brain — composite ranking + per-axis scores + ribbons.
   const { result, data: brainData, loading } = usePlanBrain({
@@ -567,6 +569,45 @@ export function QuoteDeliveryV4({
 
   return (
     <div style={{ fontFamily: FONT.body, color: COL.ink }}>
+      {/* Current-plan picker — small link when no current plan; opens
+          an inline panel with CurrentPlanPicker. Once a plan is set,
+          the picker shows the selected plan with a Change button and
+          the gray benchmark column appears in the table below. */}
+      {!currentPlan && !pickerOpen && (
+        <div style={{ marginBottom: 12, fontSize: 12, color: COL.inkSub }}>
+          <button
+            type="button"
+            onClick={() => setPickerOpen(true)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              color: COL.navyHeader,
+              fontWeight: 600,
+              fontSize: 12,
+              cursor: 'pointer',
+              fontFamily: FONT.body,
+              textDecoration: 'underline',
+              textUnderlineOffset: 2,
+            }}
+          >
+            + Add current plan to compare
+          </button>
+          <span style={{ marginLeft: 8, fontSize: 11, color: COL.inkSub }}>
+            sets the gray benchmark column · deltas calculate against it
+          </span>
+        </div>
+      )}
+      {(currentPlan || pickerOpen) && (
+        <div style={{ marginBottom: 12, padding: 10, border: `1px solid ${COL.rule}`, borderRadius: 8, background: '#fff' }}>
+          <CurrentPlanPicker
+            autoFocus={pickerOpen && !currentPlan}
+            onSelected={() => setPickerOpen(false)}
+            hint="Once selected, the leftmost gray column anchors all delta badges."
+          />
+        </div>
+      )}
+
       <div style={{ marginBottom: 12, fontSize: 12, color: COL.inkSub }}>
         <strong style={{ marginRight: 8, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Pharmacy</strong>
         <button type="button" onClick={() => setPharmacyFill('retail_30')} style={pharmBtnStyle(pharmacyFill === 'retail_30')}>30-day retail</button>

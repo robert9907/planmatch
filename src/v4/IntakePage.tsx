@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useSession } from '@/hooks/useSession';
+import { CurrentPlanPicker } from '@/components/picker/CurrentPlanPicker';
 import type { PlanType, StateCode } from '@/types/session';
 
 const STATE_OPTIONS: StateCode[] = ['NC', 'TX', 'GA'];
@@ -173,6 +174,20 @@ export function IntakePage({ onContinue, onBack }: Props) {
                 ))}
               </div>
             </div>
+
+            {/* Current plan benchmark — optional. When set, the v4
+                Quote table pins this plan as the leftmost gray
+                column and computes deltas against it. Hidden until
+                the agent has picked a county + plan type so the
+                eligible-plan list is meaningful. */}
+            {client.county && client.planType && (
+              <div className="form-group">
+                <label className="form-label">Client's current plan <span style={{ fontWeight: 400, color: '#6b7280' }}>(optional · for comparison)</span></label>
+                <CurrentPlanPicker
+                  hint="Search by plan name or H-number. Leave blank for a fresh quote."
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>
