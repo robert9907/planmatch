@@ -1,30 +1,30 @@
 // networkCheck — provider network status per plan.
 //
-// Real lookup against /api/network-check, which:
-//   1. reads pm_provider_network_cache (per-plan covered booleans
-//      populated by the consumer-side Medicare.gov writer);
-//   2. on cache miss, calls Medicare.gov /plans/search with
-//      ?providers=<NPI> and writes the parsed results back to the
-//      cache;
-//   3. returns per-plan { status, from, covered } so the agent UI
-//      can show in/out/unknown plus where the answer came from.
+// Reads pm_provider_network_cache directly from the browser using the
+// anon-keyed Supabase client. This mirrors the consumer repo's working
+// implementation in apps/web/src/hooks/useProviderNetworkStatus.ts —
+// same Supabase project (plan-match-prod, rpcbrkmvalvdmroqzpaq), same
+// table, same query shape, same RLS public-read access. The two repos
+// share the same network data source.
 //
-// Both single (`checkNetwork`) and batch (`checkNetworkBatch`)
-// helpers are exposed; the batch path is preferred from the
-// Providers page because one round trip handles every finalist
-// plan for a single NPI.
+// Plan id keying: pm_provider_network_cache stores plan_id as the
+// "<contract>-<plan>" pair (e.g. "H5521-241"). The agent's Plan.id
+// triple ("H5521-241-0") is reduced to the contract-plan form before
+// querying. There's no segment_id in the lookup key — the cache rolls
+// up across segments (a (npi, contract-plan) pair has one covered
+// boolean regardless of which county/segment).
 //
-// Diagnostic logging stays on a `[network-check]` tag. The logged
-// `source` field is now meaningful: 'cache' / 'live' / 'directory'
-// reflect real data; 'fallback_unknown' is reserved for cases where
-// neither the cache nor the live call could answer (network error,
-// unparseable response, missing zip/fips). The hash mock is gone.
+// What this REPLACES: the previous version round-tripped through
+// /api/network-check, which normalized triple ids on the way in but
+// echoed them back in a different form on the way out — every lookup
+// missed → every carrier showed "Unknown". Direct browser-side reads
+// match the consumer repo and remove that translation layer entirely.
 
 import type { Plan } from '@/types/plans';
-import { fipsForCounty } from './ncFips';
+import { supabaseBrowser } from './supabaseBrowser';
 
 export type NetworkStatus = 'in' | 'out' | 'unknown';
-export type NetworkSource = 'cache' | 'live' | 'directory' | 'fallback_unknown';
+export type NetworkSource = 'cache' | 'fallback_unknown';
 
 export interface NetworkCheckResult {
   plan_id: string;
@@ -36,104 +36,96 @@ export interface NetworkCheckResult {
   note: string;
 }
 
-interface BatchResultRow {
-  plan_id: string;
-  contract_id: string;
-  plan_number: string;
-  segment_id: string;
-  status: NetworkStatus;
-  from: 'cache' | 'live' | 'miss';
+interface CacheRow {
+  plan_id: string;        // "<contract>-<plan>", e.g. "H5521-241"
+  npi: string;
   covered: boolean | null;
 }
 
-interface BatchResponse {
-  source: 'cache' | 'live' | 'mixed' | 'empty';
-  results: BatchResultRow[];
-  stats: { cacheHits: number; liveHits: number; misses: number; total: number };
-  fhir_diagnostic?: unknown;
-}
-
 interface BatchContext {
+  // Kept for backwards-compatibility with existing call sites that
+  // thread zip/county through; the direct cache read doesn't use
+  // them but a future live-refresh path might.
   zip?: string | null;
   fips?: string | null;
-  planType?: string;
-  year?: number;
-  /** When omitted, the helper derives FIPS from the NC table. */
   county?: string | null;
 }
 
+/**
+ * Read network status for one NPI across many plans. Returns a Map
+ * keyed on the agent-side plan.id (the original triple form) so
+ * callers can do `map.get(plan.id)` without re-normalizing.
+ */
 export async function checkNetworkBatch(
   npi: string,
   plans: Plan[],
-  ctx: BatchContext = {},
+  _ctx: BatchContext = {},
 ): Promise<Map<string, NetworkCheckResult>> {
   const out = new Map<string, NetworkCheckResult>();
-  if (plans.length === 0) return out;
+  if (plans.length === 0 || !npi) return out;
 
-  const fips = ctx.fips ?? fipsForCounty(ctx.county);
-  const planIds = plans.map((p) => p.id);
+  // Cache rows are keyed on contract-plan; build the in-list and a
+  // map from contract-plan back to every plan.id that resolves there
+  // (one contract-plan can appear in multiple counties → multiple
+  // Plan rows in the agent's eligible set, but they all share the
+  // same network status for this NPI).
+  const contractPlans = new Set<string>();
+  const planIdsByContractPlan = new Map<string, Plan[]>();
+  for (const p of plans) {
+    const cp = `${p.contract_id}-${p.plan_number}`;
+    contractPlans.add(cp);
+    const list = planIdsByContractPlan.get(cp);
+    if (list) list.push(p);
+    else planIdsByContractPlan.set(cp, [p]);
+  }
 
-  let body: BatchResponse | null = null;
+  let rows: CacheRow[] = [];
   try {
-    const resp = await fetch('/api/network-check', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        npi,
-        plan_ids: planIds,
-        zip: ctx.zip ?? undefined,
-        fips: fips ?? undefined,
-        plan_type: ctx.planType ?? 'PLAN_TYPE_MAPD',
-        year: ctx.year ?? new Date().getFullYear(),
-      }),
-    });
-    if (!resp.ok) {
-      const sample = await resp.text();
-      throw new Error(`api/network-check ${resp.status}: ${sample.slice(0, 200)}`);
-    }
-    body = (await resp.json()) as BatchResponse;
+    const { data, error } = await supabaseBrowser()
+      .from('pm_provider_network_cache')
+      .select('plan_id, npi, covered')
+      .eq('npi', npi)
+      .in('plan_id', [...contractPlans]);
+    if (error) throw error;
+    rows = (data ?? []) as unknown as CacheRow[];
   } catch (err) {
-    console.warn('[network-check] batch call failed:', (err as Error).message);
+    console.warn('[network-check] cache read failed:', (err as Error).message);
   }
 
-  // Always log the call summary so Rob can correlate UI status to
-  // upstream cache vs. live behavior.
-  if (body) {
-    console.info('[network-check] batch', {
-      npi,
-      plan_count: planIds.length,
-      source: body.source,
-      stats: body.stats,
-    });
-    if (body.fhir_diagnostic) {
-      console.info('[network-check] live diagnostic:', body.fhir_diagnostic);
-    }
+  console.info('[network-check] cache query', {
+    npi,
+    contract_plans_in: [...contractPlans],
+    rows_returned: rows.length,
+    sample: rows.slice(0, 3),
+  });
+
+  // Index covered booleans by contract-plan. If multiple cache rows
+  // exist for the same (contract-plan, npi) — possible if one provider
+  // has multiple location_ids — "any in-network wins" matches the
+  // consumer hook's treatment of a single covered=true as in-network.
+  const coveredByCp = new Map<string, boolean>();
+  for (const r of rows) {
+    const prior = coveredByCp.get(r.plan_id);
+    if (prior === true) continue;            // already in-network — sticky
+    if (r.covered === true) coveredByCp.set(r.plan_id, true);
+    else if (r.covered === false) coveredByCp.set(r.plan_id, false);
   }
 
-  const byPlanId = new Map<string, BatchResultRow>();
-  for (const r of body?.results ?? []) byPlanId.set(r.plan_id, r);
-
-  for (const plan of plans) {
-    const row = byPlanId.get(plan.id);
-    if (!row) {
-      out.set(plan.id, fallbackResult(plan, 'no_response'));
-      continue;
+  // Fan out: every Plan that maps to the contract-plan gets the same
+  // status. Plans with no cache row stay 'unknown' (cache is the
+  // source of truth — a missing row means the consumer-side scraper
+  // hasn't covered that plan yet).
+  for (const [cp, planList] of planIdsByContractPlan) {
+    const covered = coveredByCp.get(cp);
+    for (const plan of planList) {
+      if (covered === true) {
+        out.set(plan.id, makeResult(plan, 'in', 'cache'));
+      } else if (covered === false) {
+        out.set(plan.id, makeResult(plan, 'out', 'cache'));
+      } else {
+        out.set(plan.id, makeResult(plan, 'unknown', 'fallback_unknown'));
+      }
     }
-    const source: NetworkSource =
-      row.from === 'cache' ? 'cache' : row.from === 'live' ? 'live' : 'fallback_unknown';
-    out.set(plan.id, {
-      plan_id: plan.id,
-      carrier: plan.carrier,
-      status: row.status,
-      source,
-      checked_at: Date.now(),
-      note:
-        source === 'fallback_unknown'
-          ? 'Cache miss; live Medicare.gov fetch could not answer (likely missing zip/fips or upstream error). Use the per-carrier "I verified this is wrong" override on the Providers page after confirming with the carrier.'
-          : source === 'cache'
-            ? 'Read from pm_provider_network_cache (Medicare.gov directory data, populated by the consumer-side writer).'
-            : 'Fetched live from Medicare.gov plans/search and written back to pm_provider_network_cache.',
-    });
   }
   return out;
 }
@@ -144,7 +136,7 @@ export async function checkNetwork(
   ctx: BatchContext = {},
 ): Promise<NetworkCheckResult> {
   const map = await checkNetworkBatch(npi, [plan], ctx);
-  return map.get(plan.id) ?? fallbackResult(plan, 'no_response');
+  return map.get(plan.id) ?? makeResult(plan, 'unknown', 'fallback_unknown');
 }
 
 export async function checkNetworkAcross(
@@ -153,16 +145,23 @@ export async function checkNetworkAcross(
   ctx: BatchContext = {},
 ): Promise<NetworkCheckResult[]> {
   const map = await checkNetworkBatch(npi, plans, ctx);
-  return plans.map((p) => map.get(p.id) ?? fallbackResult(p, 'no_response'));
+  return plans.map((p) => map.get(p.id) ?? makeResult(p, 'unknown', 'fallback_unknown'));
 }
 
-function fallbackResult(plan: Plan, reason: string): NetworkCheckResult {
+function makeResult(plan: Plan, status: NetworkStatus, source: NetworkSource): NetworkCheckResult {
   return {
     plan_id: plan.id,
     carrier: plan.carrier,
-    status: 'unknown',
-    source: 'fallback_unknown',
+    status,
+    source,
     checked_at: Date.now(),
-    note: `Network status unavailable (${reason}). Use the per-carrier override after confirming with the carrier.`,
+    note:
+      source === 'fallback_unknown'
+        ? "No cache row for this (NPI, plan) yet. Use the per-carrier 'I verified this is wrong' override on the Providers page if you've confirmed with the carrier."
+        : status === 'in'
+          ? 'In-network per pm_provider_network_cache (Medicare.gov directory data, populated by the consumer-side scraper).'
+          : status === 'out'
+            ? 'Out-of-network per pm_provider_network_cache. Use the per-carrier override if the carrier has confirmed otherwise.'
+            : 'Unknown — cache row exists but covered field is null.',
   };
 }
