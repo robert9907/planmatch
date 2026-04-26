@@ -99,50 +99,95 @@ export function finalistIdsFromSnapshot(plans: Plan[], snapshot: FunnelSnapshot)
   return plans.filter((p) => !dead.has(p.id)).map((p) => p.id);
 }
 
+// Pass-by-default semantics. The principle: missing benefit data
+// should never eliminate a plan. api/plans.ts coerces null/missing
+// max_coverage and coverage_amount values to 0 (planCatalog.ts does
+// the same), so 0 is indistinguishable from "no row in
+// pm_plan_benefits for this category". Treating 0 as failure was the
+// previous bug — Hearing toggle on "Any" returned 1/33 because most
+// plans land at 0 (the file's max_coverage is often blank for
+// hearing/dental/vision when the SoB carries the dollar amount).
+//
+// Rules per the V4 spec:
+//   • tier === 'any' (or undefined / 'basic') → no value threshold;
+//     plan passes regardless of dollar amount. Sub-toggle
+//     requirements (e.g. comprehensive dental, OneTouch diabetic)
+//     still apply because those are categorical not numeric.
+//   • tier === 'enhanced' or 'premium' → enforce the minimum dollar
+//     value, but ONLY when the value is > 0. A 0 value is treated as
+//     missing data and passes. Only an explicit value below the tier
+//     threshold (e.g. $1,200 dental when the user picked $1,500+)
+//     fails the filter.
+//   • Categorical flags (dental.preventive, vision.exam,
+//     diabetic.covered, fitness.enabled) used to be hard
+//     requirements. They're now treated as informational only — MAPD
+//     plans almost universally include preventive dental + a vision
+//     exam + a fitness program, so the data layer's failure to
+//     populate the flag shouldn't cascade into a filter cut.
 function passesBenefit(plan: Plan, key: BenefitKey, f: import('@/types/plans').BenefitFilter): boolean {
   const b = plan.benefits;
+  const noThreshold = f.tier === 'any' || !f.tier;
+
   switch (key) {
-    case 'dental':
-      if (!b.dental.preventive && !b.dental.comprehensive) return false;
-      if (f.tier === 'premium' && b.dental.annual_max < 2500) return false;
-      if (f.tier === 'enhanced' && b.dental.annual_max < 1500) return false;
+    case 'dental': {
+      if (!noThreshold && b.dental.annual_max > 0) {
+        if (f.tier === 'premium' && b.dental.annual_max < 2500) return false;
+        if (f.tier === 'enhanced' && b.dental.annual_max < 1500) return false;
+      }
       if (f.subToggles?.comprehensive && !b.dental.comprehensive) return false;
       return true;
-    case 'vision':
-      if (!b.vision.exam) return false;
-      if (f.tier === 'premium' && b.vision.eyewear_allowance_year < 350) return false;
-      if (f.tier === 'enhanced' && b.vision.eyewear_allowance_year < 250) return false;
+    }
+    case 'vision': {
+      if (!noThreshold && b.vision.eyewear_allowance_year > 0) {
+        if (f.tier === 'premium' && b.vision.eyewear_allowance_year < 350) return false;
+        if (f.tier === 'enhanced' && b.vision.eyewear_allowance_year < 250) return false;
+      }
       return true;
-    case 'hearing':
-      if (b.hearing.aid_allowance_year < 500) return false;
-      if (f.tier === 'premium' && b.hearing.aid_allowance_year < 2000) return false;
-      if (f.tier === 'enhanced' && b.hearing.aid_allowance_year < 1500) return false;
+    }
+    case 'hearing': {
+      if (!noThreshold && b.hearing.aid_allowance_year > 0) {
+        if (f.tier === 'premium' && b.hearing.aid_allowance_year < 2000) return false;
+        if (f.tier === 'enhanced' && b.hearing.aid_allowance_year < 1500) return false;
+      }
       return true;
-    case 'transportation':
-      if (b.transportation.rides_per_year < 12) return false;
-      if (f.tier === 'premium' && b.transportation.rides_per_year < 36) return false;
-      if (f.tier === 'enhanced' && b.transportation.rides_per_year < 24) return false;
+    }
+    case 'transportation': {
+      if (!noThreshold && b.transportation.rides_per_year > 0) {
+        if (f.tier === 'premium' && b.transportation.rides_per_year < 36) return false;
+        if (f.tier === 'enhanced' && b.transportation.rides_per_year < 24) return false;
+      }
       return true;
-    case 'otc':
-      if (b.otc.allowance_per_quarter < 50) return false;
-      if (f.tier === 'premium' && b.otc.allowance_per_quarter < 200) return false;
-      if (f.tier === 'enhanced' && b.otc.allowance_per_quarter < 150) return false;
+    }
+    case 'otc': {
+      if (!noThreshold && b.otc.allowance_per_quarter > 0) {
+        if (f.tier === 'premium' && b.otc.allowance_per_quarter < 200) return false;
+        if (f.tier === 'enhanced' && b.otc.allowance_per_quarter < 150) return false;
+      }
       return true;
-    case 'food_card':
-      if (b.food_card.allowance_per_month <= 0) return false;
-      if (f.tier === 'premium' && b.food_card.allowance_per_month < 150) return false;
-      if (f.tier === 'enhanced' && b.food_card.allowance_per_month < 100) return false;
+    }
+    case 'food_card': {
+      if (!noThreshold && b.food_card.allowance_per_month > 0) {
+        if (f.tier === 'premium' && b.food_card.allowance_per_month < 150) return false;
+        if (f.tier === 'enhanced' && b.food_card.allowance_per_month < 100) return false;
+      }
       return true;
-    case 'diabetic':
-      if (!b.diabetic.covered) return false;
-      if (f.subToggles?.onetouch && !b.diabetic.preferred_brands.includes('OneTouch')) return false;
-      if (f.subToggles?.accuchek && !b.diabetic.preferred_brands.includes('Accu-Chek')) return false;
+    }
+    case 'diabetic': {
+      // Sub-toggle preferred-brand checks fire on every tier, but only
+      // when the brand list is non-empty. An empty list is missing
+      // data, not "no preferred brands."
+      const brands = b.diabetic.preferred_brands;
+      if (f.subToggles?.onetouch && brands.length > 0 && !brands.includes('OneTouch')) return false;
+      if (f.subToggles?.accuchek && brands.length > 0 && !brands.includes('Accu-Chek')) return false;
       return true;
-    case 'fitness':
-      if (!b.fitness.enabled) return false;
-      if (f.subToggles?.silversneakers && b.fitness.program !== 'SilverSneakers') return false;
-      if (f.subToggles?.renew_active && b.fitness.program !== 'Renew Active') return false;
+    }
+    case 'fitness': {
+      // Program sub-toggle only matters when fitness.program is set.
+      // Missing program string = pass (don't punish unfileded data).
+      if (f.subToggles?.silversneakers && b.fitness.program && b.fitness.program !== 'SilverSneakers') return false;
+      if (f.subToggles?.renew_active && b.fitness.program && b.fitness.program !== 'Renew Active') return false;
       return true;
+    }
   }
 }
 
