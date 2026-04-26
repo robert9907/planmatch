@@ -615,6 +615,8 @@ export function QuoteDeliveryV4({
                   fontWeight: 700,
                   color: 'var(--qv4-navy)',
                   padding: 12,
+                  width: 200,
+                  minWidth: 200,
                 }}
               >
                 Quote Comparison
@@ -866,7 +868,16 @@ function ColumnHeader({ col }: { col: ColumnPlan }) {
     col.ribbon ? RIBBON_LABEL[col.ribbon] : null;
   const tagCls = col.variant === 'current' ? 'ptag2' : 'wtag2';
   return (
-    <th className={cls}>
+    // Explicit width on every plan-column <th>. With table-layout:
+    // fixed the colgroup is authoritative, but some browser-reflow
+    // paths (especially on initial paint before the colgroup is
+    // parsed, or when the table is re-rendered with a different
+    // column count) can fall back to natural sizing — and a cell
+    // with a long ribbon label can collapse adjacent cells. Setting
+    // width + minWidth inline on every header cell guarantees no
+    // single column (lookin' at Lowest OOP) gets squeezed to a
+    // sliver when its neighbors render first.
+    <th className={cls} style={{ width: 180, minWidth: 180 }}>
       {tagText && <div className={tagCls}>{tagText}</div>}
       <div className="pcar2" style={{ marginTop: tagText ? 0 : 8 }}>
         {col.plan.carrier ?? '—'}
@@ -1312,6 +1323,7 @@ function TotalAnnualRow({ cols, baseline }: { cols: ColumnPlan[]; baseline: Plan
   return (
     <tr className="bl">
       <th
+        className="lc"
         style={{
           background: 'var(--qv4-navy)',
           color: 'var(--qv4-w)',
@@ -1359,7 +1371,7 @@ function TotalAnnualRow({ cols, baseline }: { cols: ColumnPlan[]; baseline: Plan
 function WhySwitchRow({ cols, baseline }: { cols: ColumnPlan[]; baseline: Plan | null }) {
   return (
     <tr className="ws">
-      <th>Why switch?</th>
+      <th className="lc">Why switch?</th>
       {cols.map((c) => {
         const text = whySwitchText(c, baseline);
         return (
