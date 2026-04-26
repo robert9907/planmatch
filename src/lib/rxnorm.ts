@@ -3,6 +3,14 @@ export interface RxNormDrug {
   name: string;
   synonym?: string;
   tty?: string;
+  /** Parsed brand/strength/form fields from the server response. Used
+   *  for the agent search row display: "Brand · strength · form" when
+   *  brand_name is present, "generic · strength · form" otherwise. */
+  brand_name?: string;
+  generic_name?: string;
+  strength?: string;
+  dose_form?: string;
+  is_brand?: boolean;
 }
 
 // Talks to our /api/rxnorm-search proxy. The proxy fans out to two
@@ -66,10 +74,32 @@ function normalize(raw: unknown): RxNormDrug | null {
   const rxcui = typeof r.rxcui === 'string' ? r.rxcui : String(r.rxcui ?? '');
   const name = typeof r.name === 'string' ? r.name : '';
   if (!rxcui || !name) return null;
+  const str = (k: string): string | undefined => (typeof r[k] === 'string' ? (r[k] as string) : undefined);
   return {
     rxcui,
     name,
-    synonym: typeof r.synonym === 'string' ? r.synonym : undefined,
-    tty: typeof r.tty === 'string' ? r.tty : undefined,
+    synonym: str('synonym'),
+    tty: str('tty'),
+    brand_name: str('brand_name'),
+    generic_name: str('generic_name'),
+    strength: str('strength'),
+    dose_form: str('dose_form'),
+    is_brand: typeof r.is_brand === 'boolean' ? r.is_brand : undefined,
   };
+}
+
+/**
+ * Display label for a search-result row. "Brand · Strength · Form"
+ * when the concept carries a brand_name; otherwise
+ * "generic · strength · form" with sensible fallbacks. Used by the
+ * agent MedsPage search dropdown.
+ */
+export function displayLabel(d: RxNormDrug): string {
+  const parts: string[] = [];
+  if (d.brand_name) parts.push(d.brand_name);
+  else if (d.generic_name) parts.push(d.generic_name);
+  else parts.push(d.name);
+  if (d.strength) parts.push(d.strength);
+  if (d.dose_form) parts.push(d.dose_form);
+  return parts.join(' · ');
 }

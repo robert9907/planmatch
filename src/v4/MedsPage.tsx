@@ -15,7 +15,7 @@ import { useSession } from '@/hooks/useSession';
 import { CaptureButton } from '@/components/capture/CaptureButton';
 import { CapturePanel } from '@/components/capture/CapturePanel';
 import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
-import { searchDrug, type RxNormDrug } from '@/lib/rxnorm';
+import { searchDrug, displayLabel, type RxNormDrug } from '@/lib/rxnorm';
 import { fetchPlansForClient } from '@/lib/planCatalog';
 import { bulkLookupFormulary, getCachedFormulary } from '@/lib/formularyLookup';
 import type { Plan, FormularyTier } from '@/types/plans';
@@ -108,7 +108,12 @@ export function MedsPage({ capture, onBack, onContinue }: Props) {
   }, [eligiblePlans, medications, formularyTick]);
 
   function onSelectDrug(d: RxNormDrug) {
-    addMedication({ rxcui: d.rxcui, name: d.name, source: 'manual' });
+    // Store the human-readable display label as the medication name
+    // ("Ozempic · 0.25 MG · Pen Injector") so subsequent screens
+    // (Quote, AgentBase sync) show what the agent actually picked
+    // rather than the raw RxNorm SCD/SBD canonical string.
+    const name = displayLabel(d) || d.name;
+    addMedication({ rxcui: d.rxcui, name, source: 'manual' });
     setQuery(''); setResults([]);
   }
 
@@ -157,8 +162,15 @@ export function MedsPage({ capture, onBack, onContinue }: Props) {
                   style={{ alignItems: 'flex-start' }}
                 >
                   <div className="sri">
-                    <div className="srn">{d.name}</div>
-                    <div className="srd">rxcui {d.rxcui}{d.tty ? ` · ${d.tty}` : ''}</div>
+                    <div className="srn">
+                      {displayLabel(d)}
+                      {d.is_brand && (
+                        <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: '#e6f1fb', color: '#0c447c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                          Brand
+                        </span>
+                      )}
+                    </div>
+                    <div className="srd">rxcui {d.rxcui}{d.tty ? ` · ${d.tty}` : ''}{d.brand_name && d.generic_name ? ` · ${d.generic_name}` : ''}</div>
                   </div>
                 </button>
               ))}

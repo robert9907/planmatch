@@ -45,6 +45,15 @@ interface RxNormDrug {
   name: string;
   synonym?: string;
   tty?: string;
+  /** Parsed from `name` — present when the RxNorm name carries the
+   *  bracketed brand (SBD: "...Oral Tablet [Lipitor]") or the concept
+   *  is a pure BN. Lets the client render "Brand · strength · form"
+   *  display labels without re-parsing. */
+  brand_name?: string;
+  generic_name?: string;
+  strength?: string;       // "20 MG", "10 MG/ML", "0.25 MG"
+  dose_form?: string;      // "Oral Tablet", "Pen Injector"
+  is_brand?: boolean;      // tty in {BN, SBD, SBDF, SBDG, BPCK}
 }
 
 interface ApproxCandidate {
@@ -106,7 +115,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!c.rxcui || !c.name) continue;
       const rxcui = String(c.rxcui);
       if (byRxcui.has(rxcui)) continue;
-      byRxcui.set(rxcui, { rxcui, name: String(c.name) });
+      byRxcui.set(rxcui, enrich({ rxcui, name: String(c.name) }));
     }
     const approxDrugs = [...byRxcui.values()];
 
@@ -153,12 +162,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           for (const c of group?.conceptProperties ?? []) {
             if (!c?.rxcui || !c?.name) continue;
             const rxcui = String(c.rxcui);
-            const typed: RxNormDrug = {
+            const typed = enrich({
               rxcui,
               name: String(c.name),
               synonym: c.synonym ? String(c.synonym) : undefined,
               tty: tty ? String(tty) : c.tty ? String(c.tty) : undefined,
-            };
+            });
             // Upgrade: drugs.json carries the canonical name + tty.
             // Overwrite the approx entry so the ranker sees the tty
             // bucket and the real form (capsule/tablet/etc).
@@ -333,6 +342,67 @@ function isExtendedRelease(name: string): boolean {
   );
 }
 
+// Parse the RxNorm canonical name into brand_name / generic_name /
+// strength / dose_form components so the client can render
+// "Ozempic · 0.25 MG · Pen Injector" without doing the regex itself.
+//
+// Examples:
+//   SCD "atorvastatin 20 MG Oral Tablet"
+//        → generic_name "atorvastatin", strength "20 MG", dose_form "Oral Tablet"
+//   SBD "atorvastatin 20 MG Oral Tablet [Lipitor]"
+//        → ... + brand_name "Lipitor"
+//   BN  "Lipitor"
+//        → brand_name "Lipitor"
+//   IN  "atorvastatin"
+//        → generic_name "atorvastatin"
+//   SBDF "Ozempic Pen Injector"
+//        → brand_name "Ozempic", dose_form "Pen Injector"
+function enrich(drug: RxNormDrug): RxNormDrug {
+  const tty = drug.tty;
+  const isBrand = tty === 'BN' || tty === 'SBD' || tty === 'SBDF' ||
+                  tty === 'SBDG' || tty === 'BPCK';
+
+  // Pull bracketed brand if the name carries one: "...Tablet [Lipitor]".
+  const bracketMatch = drug.name.match(/\[([^\]]+)\]\s*$/);
+  const bracketBrand = bracketMatch?.[1]?.trim();
+  const nameNoBracket = bracketMatch ? drug.name.slice(0, bracketMatch.index).trim() : drug.name;
+
+  // Strength like "20 MG", "0.25 MG", "10 MG/ML", "100 UNT/ML".
+  const strengthMatch = nameNoBracket.match(/(\d+(?:\.\d+)?\s*(?:MG|MCG|G|ML|%|UNT|UNIT|IU)(?:\s*\/\s*\d*\s*(?:MG|MCG|G|ML|UNT|UNIT|IU)?)?)/i);
+  const strength = strengthMatch?.[1]?.replace(/\s+/g, ' ').trim();
+
+  // Dose form — anything after the strength typically through end of name.
+  // Common forms: "Oral Tablet", "Oral Capsule", "Pen Injector",
+  // "Oral Solution", "Patch", "Inhaler", "Injection".
+  const doseFormMatch = nameNoBracket.match(
+    /\b(Oral Tablet|Oral Capsule|Chewable Tablet|Oral Solution|Oral Suspension|Oral Powder|Pen Injector|Prefilled Syringe|Injection|Auto-Injector|Inhaler|Inhalation Aerosol|Inhalation Powder|Patch|Topical Cream|Topical Gel|Topical Ointment|Topical Spray|Eye Drops|Ophthalmic Solution|Subcutaneous Solution)\b/i,
+  );
+  const dose_form = doseFormMatch?.[1];
+
+  // Generic name = leading word(s) before the strength/dose-form when
+  // not a pure brand concept. For "atorvastatin 20 MG Oral Tablet" →
+  // "atorvastatin". For "amlodipine / atorvastatin 10 MG..." →
+  // "amlodipine / atorvastatin" (keep the combo).
+  let generic_name: string | undefined;
+  if (!isBrand || tty === 'SBD' || tty === 'SBDF') {
+    const leadMatch = nameNoBracket.match(/^([A-Za-z][A-Za-z\s\-/,]*?)(?=\s*\d|\s*Oral|\s*\[|$)/);
+    const lead = leadMatch?.[1]?.trim();
+    if (lead && lead.length > 1) generic_name = lead;
+  }
+
+  // Brand name precedence: bracketed > pure-BN name > undefined.
+  const brand_name = bracketBrand ?? (tty === 'BN' ? nameNoBracket : undefined);
+
+  return {
+    ...drug,
+    brand_name,
+    generic_name,
+    strength,
+    dose_form,
+    is_brand: isBrand,
+  };
+}
+
 function rank(drugs: RxNormDrug[], query: string): RxNormDrug[] {
   const lq = query.toLowerCase();
   // When the user includes a strength in the query ("Jardiance 25 MG",
@@ -344,7 +414,27 @@ function rank(drugs: RxNormDrug[], query: string): RxNormDrug[] {
   const qStrength = strengthFor(query);
   const hasQueryStrength = Number.isFinite(qStrength);
 
+  // "Exact brand match" — when the user typed a brand name verbatim
+  // ("Ozempic", "Eliquis"), surface SBD/BN concepts whose brand_name
+  // matches before SCD generics. Without this, a search for "Ozempic"
+  // returns "semaglutide 0.25 MG..." (SCD) at the top, which is correct
+  // RxNorm-wise but counterintuitive to a broker who typed the brand.
+  const queryIsBrandLike = (drug: RxNormDrug): boolean => {
+    if (!drug.brand_name) return false;
+    return drug.brand_name.toLowerCase() === lq ||
+           drug.brand_name.toLowerCase().startsWith(lq);
+  };
+
   return [...drugs].sort((a, b) => {
+    // Exact brand match: if the user typed "Ozempic" and a concept has
+    // brand_name "Ozempic", float every such concept above generics.
+    // Per the V4 search spec: "exact brand match first, then SCD, then
+    // others". Within the brand-match group the rest of the sort still
+    // applies (form, strength, etc.).
+    const ba = queryIsBrandLike(a) ? 0 : 1;
+    const bb = queryIsBrandLike(b) ? 0 : 1;
+    if (ba !== bb) return ba - bb;
+
     const ca = isCombination(a.name) ? 1 : 0;
     const cb = isCombination(b.name) ? 1 : 0;
     if (ca !== cb) return ca - cb;
