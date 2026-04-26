@@ -410,9 +410,7 @@ export function QuoteDeliveryV4({
     {
       label: 'Dental',
       values: columns.map((c) =>
-        c.plan.benefits.dental.annual_max > 0
-          ? `$${c.plan.benefits.dental.annual_max.toLocaleString()}/yr`
-          : '—',
+        formatExtra(c.plan.benefits.dental.annual_max, '/yr', c.plan.benefits.dental.description),
       ),
       numbers: columns.map((c) => c.plan.benefits.dental.annual_max),
       betterIsHigher: true,
@@ -420,9 +418,12 @@ export function QuoteDeliveryV4({
     {
       label: 'Vision',
       values: columns.map((c) =>
-        c.plan.benefits.vision.eyewear_allowance_year > 0
-          ? `$${c.plan.benefits.vision.eyewear_allowance_year}/yr`
-          : c.plan.benefits.vision.exam ? 'Exam only' : '—',
+        formatExtra(
+          c.plan.benefits.vision.eyewear_allowance_year,
+          '/yr',
+          c.plan.benefits.vision.description,
+          c.plan.benefits.vision.exam ? 'Exam only' : null,
+        ),
       ),
       numbers: columns.map((c) => c.plan.benefits.vision.eyewear_allowance_year),
       betterIsHigher: true,
@@ -430,9 +431,12 @@ export function QuoteDeliveryV4({
     {
       label: 'Hearing',
       values: columns.map((c) =>
-        c.plan.benefits.hearing.aid_allowance_year > 0
-          ? `$${c.plan.benefits.hearing.aid_allowance_year.toLocaleString()}/yr`
-          : c.plan.benefits.hearing.exam ? 'Exam only' : '—',
+        formatExtra(
+          c.plan.benefits.hearing.aid_allowance_year,
+          '/yr',
+          c.plan.benefits.hearing.description,
+          c.plan.benefits.hearing.exam ? 'Exam only' : null,
+        ),
       ),
       numbers: columns.map((c) => c.plan.benefits.hearing.aid_allowance_year),
       betterIsHigher: true,
@@ -440,9 +444,7 @@ export function QuoteDeliveryV4({
     {
       label: 'OTC',
       values: columns.map((c) =>
-        c.plan.benefits.otc.allowance_per_quarter > 0
-          ? `$${c.plan.benefits.otc.allowance_per_quarter}/qtr`
-          : '—',
+        formatExtra(c.plan.benefits.otc.allowance_per_quarter, '/qtr', c.plan.benefits.otc.description),
       ),
       numbers: columns.map((c) => c.plan.benefits.otc.allowance_per_quarter),
       betterIsHigher: true,
@@ -450,9 +452,7 @@ export function QuoteDeliveryV4({
     {
       label: 'Food Card',
       values: columns.map((c) =>
-        c.plan.benefits.food_card.allowance_per_month > 0
-          ? `$${c.plan.benefits.food_card.allowance_per_month}/mo`
-          : '—',
+        formatExtra(c.plan.benefits.food_card.allowance_per_month, '/mo', c.plan.benefits.food_card.description),
       ),
       numbers: columns.map((c) => c.plan.benefits.food_card.allowance_per_month),
       betterIsHigher: true,
@@ -1337,6 +1337,38 @@ const MEDICAL_DEFS: MedicalDef[] = [
   { label: 'PT / OT',            pick: (p) => p.benefits.medical.physical_therapy },
   { label: 'Inpatient',          pick: (p) => p.benefits.medical.inpatient },
 ];
+
+// formatExtra — three-state display for extras (Dental, Vision,
+// Hearing, OTC, Food Card).
+//
+//   1. Real dollar amount > 0 → "$X{suffix}".
+//   2. amount === 0 BUT a non-empty pm_plan_benefits.benefit_description
+//      is set → extract the most useful slug from the description
+//      ("$45 copay" → "$45 copay"; "Preventive dental" → "Covered").
+//      The plan clearly DOES cover the benefit; rendering '—' would
+//      be a worse compliance signal than "Covered".
+//   3. amount === 0 AND no description AND no preset (e.g. "Exam
+//      only" passed in for vision/hearing) → '—'.
+function formatExtra(
+  amount: number,
+  suffix: string,
+  description: string | null | undefined,
+  preset: string | null = null,
+): string {
+  if (amount > 0) return `$${amount.toLocaleString()}${suffix}`;
+  if (description) {
+    // Pull "$45 copay" / "$1,500 annual" patterns when present.
+    const copayMatch = description.match(/\$([\d,]+)\s*(copay|annual|\/yr|maximum|max)/i);
+    if (copayMatch) {
+      const word = copayMatch[2].toLowerCase();
+      if (word.startsWith('copay')) return `$${copayMatch[1]} copay`;
+      return `$${copayMatch[1]}`;
+    }
+    return 'Covered';
+  }
+  if (preset) return preset;
+  return '—';
+}
 
 function copayCash(cs: { copay: number | null; coinsurance: number | null }): number | null {
   return cs.copay ?? null;

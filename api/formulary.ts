@@ -129,7 +129,7 @@ async function relatedRxcuis(
 // pickBestRow still prefers the exact user rxcui when rows exist for it
 // — the broader tier-3 set is only consulted when nothing tighter
 // matches, so the "covered / not covered" badge stays honest.
-async function expandRxcui(rxcui: string): Promise<string[]> {
+export async function expandRxcui(rxcui: string): Promise<string[]> {
   const cached = expansionCache.get(rxcui);
   if (cached) return cached;
 

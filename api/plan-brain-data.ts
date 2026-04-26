@@ -20,6 +20,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { supabase } from './_lib/supabase.js';
+import { expandRxcui } from './formulary.js';
 
 interface BenefitRow {
   plan_id: string;
@@ -98,6 +99,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const sb = supabase();
 
+    // ─── rxcui expansion (compliance-critical) ───────────────────────
+    // pm_formulary keys on the EXACT clinical-drug rxcui CMS files.
+    // The Plan Match search picks one rxcui per medication (often the
+    // top-ranked SCD/SBD), but H1914 may file the SAME atorvastatin
+    // 80 MG tablet under rxcui 617310 while the search returned 617318.
+    // Without expansion the lookup misses, the cell renders "Not
+    // covered" for a Tier 1 generic, and the broker sees noise.
+    //
+    // expandRxcui (in api/formulary.ts) walks RxNav's /related.json
+    // endpoint to build the candidate set: self → all sibling
+    // SCD/SBD/GPCK/BPCK rxcuis → for each ingredient found, every
+    // clinical drug under it. Memoized at the function-instance level
+    // so popular drugs (atorvastatin, lisinopril, metformin) only pay
+    // the RxNav cost on first request.
+    //
+    // We build:
+    //   • expandedSet  — the union of all candidate rxcuis to query
+    //   • expansionMap — rxcui → all_candidates so result rows can be
+    //                    indexed back to the ORIGINAL input rxcui that
+    //                    QuoteDeliveryV4 looks up by.
+    const expansionMap = new Map<string, string[]>();
+    const expandedSet = new Set<string>();
+    if (rxcuis.length > 0) {
+      const expansions = await Promise.all(rxcuis.map(expandRxcui));
+      for (let i = 0; i < rxcuis.length; i++) {
+        const rx = rxcuis[i];
+        const candidates = expansions[i].length > 0 ? expansions[i] : [rx];
+        expansionMap.set(rx, candidates);
+        for (const c of candidates) expandedSet.add(c);
+      }
+    }
+    const expandedRxcuiList = [...expandedSet];
+
     // Run the five queries in parallel — none of them depend on each
     // other's results.
     const [benefitsRes, drugCacheRes, formularyRes, ndcRes, networkRes] = await Promise.all([
@@ -112,13 +146,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             .select('plan_id, segment_id, ndc, tier, full_cost, covered, estimated_yearly_total')
             .in('plan_id', contractPlans)
         : Promise.resolve({ data: [], error: null }),
-      rxcuis.length > 0
+      // Query the EXPANDED rxcui set, not just the originals. The
+      // index step below maps each returned row back to whichever
+      // original rxcui claims it.
+      expandedRxcuiList.length > 0
         ? sb
             .from('pm_formulary')
             .select('contract_id, plan_id, rxcui, tier, copay, coinsurance, prior_auth, step_therapy')
             .in('contract_id', contracts)
             .in('plan_id', planNumbers)
-            .in('rxcui', rxcuis)
+            .in('rxcui', expandedRxcuiList)
         : Promise.resolve({ data: [], error: null }),
       rxcuis.length > 0
         ? sb
@@ -156,10 +193,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       (drugCostCache[matched] ||= {})[r.ndc] = r;
     }
 
+    // Index formulary rows back to the ORIGINAL input rxcuis. Each
+    // returned row may satisfy multiple inputs (e.g. atorvastatin
+    // 80 MG SCD 617318 expansion includes 617310, and a different med
+    // search hit might have started with 617310 directly — both
+    // inputs claim the result).
+    //
+    // For each original rxcui, prefer the row that matches it
+    // exactly; otherwise take the first expansion-match. This keeps
+    // tier accuracy highest when CMS files multiple strengths and
+    // we want the user's specific dose to win when present.
     const formularyByContractPlan: Record<string, Record<string, FormularyRow>> = {};
+    const reverseMap = new Map<string, string[]>(); // candidate rxcui → originals that claim it
+    for (const [orig, candidates] of expansionMap) {
+      for (const cand of candidates) {
+        const list = reverseMap.get(cand) ?? [];
+        list.push(orig);
+        reverseMap.set(cand, list);
+      }
+    }
     for (const r of (formularyRes.data ?? []) as FormularyRow[]) {
       const key = `${r.contract_id}-${r.plan_id}`;
-      (formularyByContractPlan[key] ||= {})[r.rxcui] = r;
+      const originals = reverseMap.get(r.rxcui) ?? [r.rxcui];
+      const slot = (formularyByContractPlan[key] ||= {});
+      for (const orig of originals) {
+        const existing = slot[orig];
+        // Prefer exact-match rows (orig === returned rxcui) over
+        // expansion siblings. Without this, an arbitrary expansion
+        // sibling could overwrite a real exact hit.
+        if (!existing || (orig === r.rxcui && existing.rxcui !== orig)) {
+          slot[orig] = r;
+        }
+      }
     }
 
     const ndcByRxcui: Record<string, NdcRow> = {};

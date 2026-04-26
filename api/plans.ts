@@ -53,12 +53,12 @@ interface CostShare {
 }
 
 interface PlanBenefits {
-  dental: { preventive: boolean; comprehensive: boolean; annual_max: number };
-  vision: { exam: boolean; eyewear_allowance_year: number };
-  hearing: { aid_allowance_year: number; exam: boolean };
-  transportation: { rides_per_year: number; distance_miles: number };
-  otc: { allowance_per_quarter: number };
-  food_card: { allowance_per_month: number; restricted_to_medicaid_eligible: boolean };
+  dental: { preventive: boolean; comprehensive: boolean; annual_max: number; description: string | null };
+  vision: { exam: boolean; eyewear_allowance_year: number; description: string | null };
+  hearing: { aid_allowance_year: number; exam: boolean; description: string | null };
+  transportation: { rides_per_year: number; distance_miles: number; description: string | null };
+  otc: { allowance_per_quarter: number; description: string | null };
+  food_card: { allowance_per_month: number; restricted_to_medicaid_eligible: boolean; description: string | null };
   diabetic: { covered: boolean; preferred_brands: string[] };
   fitness: { enabled: boolean; program: string | null };
   medical: {
@@ -467,23 +467,31 @@ function buildBenefits(rows: BenefitRow[]): PlanBenefits {
       preventive: Boolean(dental),
       comprehensive: dentalMax > 0,
       annual_max: dentalMax,
+      description: dental?.benefit_description ?? null,
     },
     vision: {
       exam: Boolean(vision),
       eyewear_allowance_year: visionEyewear,
+      description: vision?.benefit_description ?? null,
     },
     hearing: {
       aid_allowance_year: hearingAllowance,
       exam: Boolean(hearing),
+      description: hearing?.benefit_description ?? null,
     },
     transportation: {
       rides_per_year: ridesProxy,
       distance_miles: 0,
+      description: transport?.benefit_description ?? null,
     },
-    otc: { allowance_per_quarter: otcQuarterly },
+    otc: {
+      allowance_per_quarter: otcQuarterly,
+      description: otc?.benefit_description ?? null,
+    },
     food_card: {
       allowance_per_month: foodCardMonthly,
       restricted_to_medicaid_eligible: false,
+      description: foodCard?.benefit_description ?? null,
     },
     diabetic: { covered: true, preferred_brands: [] },
     // PBP-as-source caveat: enabled stays true whether or not we

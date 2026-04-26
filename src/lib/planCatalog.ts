@@ -129,26 +129,32 @@ function fillBenefits(partial: Partial<PlanBenefits>): PlanBenefits {
       preventive: partial.dental?.preventive ?? false,
       comprehensive: partial.dental?.comprehensive ?? false,
       annual_max: partial.dental?.annual_max ?? 0,
+      description: partial.dental?.description ?? null,
     },
     vision: {
       exam: partial.vision?.exam ?? false,
       eyewear_allowance_year: partial.vision?.eyewear_allowance_year ?? 0,
+      description: partial.vision?.description ?? null,
     },
     hearing: {
       aid_allowance_year: partial.hearing?.aid_allowance_year ?? 0,
       exam: partial.hearing?.exam ?? false,
+      description: partial.hearing?.description ?? null,
     },
     transportation: {
       rides_per_year: partial.transportation?.rides_per_year ?? 0,
       distance_miles: partial.transportation?.distance_miles ?? 0,
+      description: partial.transportation?.description ?? null,
     },
     otc: {
       allowance_per_quarter: partial.otc?.allowance_per_quarter ?? 0,
+      description: partial.otc?.description ?? null,
     },
     food_card: {
       allowance_per_month: partial.food_card?.allowance_per_month ?? 0,
       restricted_to_medicaid_eligible:
         partial.food_card?.restricted_to_medicaid_eligible ?? false,
+      description: partial.food_card?.description ?? null,
     },
     diabetic: {
       covered: partial.diabetic?.covered ?? false,

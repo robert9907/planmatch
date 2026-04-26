@@ -2,34 +2,47 @@ import type { PlanType, StateCode } from './session';
 
 export type FormularyTier = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 'excluded';
 
+// Each benefit carries an optional description from
+// pm_plan_benefits.benefit_description. Surfaces dental copay /
+// coverage details when the structured dollar fields are null —
+// e.g. "Preventive + comprehensive dental · $45 copay" — so the
+// UI can render meaningful copy instead of "—" on plans that
+// clearly DO cover the benefit but didn't file an annual cap.
+
 export interface DentalBenefit {
   preventive: boolean;
   comprehensive: boolean;
   annual_max: number;
+  description?: string | null;
 }
 
 export interface VisionBenefit {
   exam: boolean;
   eyewear_allowance_year: number;
+  description?: string | null;
 }
 
 export interface HearingBenefit {
   aid_allowance_year: number;
   exam: boolean;
+  description?: string | null;
 }
 
 export interface TransportationBenefit {
   rides_per_year: number;
   distance_miles: number;
+  description?: string | null;
 }
 
 export interface OtcBenefit {
   allowance_per_quarter: number;
+  description?: string | null;
 }
 
 export interface FoodCardBenefit {
   allowance_per_month: number;
   restricted_to_medicaid_eligible: boolean;
+  description?: string | null;
 }
 
 export interface DiabeticBenefit {
