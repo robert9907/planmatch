@@ -271,7 +271,7 @@ function ClientDeliveryCard({
         }}
       >
         <div style={{ fontSize: 11, color: 'var(--i2)', fontWeight: 600 }}>
-          {recommended.carrier.toUpperCase()}
+          {(recommended.carrier ?? '').toUpperCase()}
         </div>
         <div className="font-lora" style={{ fontSize: 18, marginTop: 2 }}>
           {recommended.plan_name}

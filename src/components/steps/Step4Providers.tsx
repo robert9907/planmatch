@@ -419,7 +419,7 @@ function NetworkBadge({ plan, status }: { plan: Plan; status: NetworkStatus }) {
         whiteSpace: 'nowrap',
       }}
     >
-      {plan.carrier.split(/\s+/)[0]}: {meta.label}
+      {(plan.carrier ?? '').split(/\s+/)[0] || '—'}: {meta.label}
     </span>
   );
 }

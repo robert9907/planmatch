@@ -414,7 +414,11 @@ function computeExtrasValue({
   userPriorities: string[];
 }): { value: number; lines: string[] } {
   const conditionKeys = conditionProfile ? CONDITION_KEY_EXTRAS[conditionProfile] ?? [] : [];
-  const userSet = new Set(userPriorities.map((s) => s.toLowerCase()));
+  const userSet = new Set(
+    userPriorities
+      .filter((s): s is string => typeof s === 'string' && s.length > 0)
+      .map((s) => s.toLowerCase()),
+  );
   const conditionSet = new Set(conditionKeys);
 
   // Walk benefits; sum each present extra at its dollar value with the

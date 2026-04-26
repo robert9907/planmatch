@@ -69,12 +69,19 @@ export function useManufacturerAssistance(medications: Medication[]): State {
   const byMedicationId = useMemo<Record<string, AssistanceRow[]>>(() => {
     const out: Record<string, AssistanceRow[]> = {};
     for (const med of medications) {
-      const haystack = med.name.toLowerCase();
+      // Photo-OCR / AgentBase hydration paths can produce a Medication
+      // with a null name even though the TS type says string. A single
+      // null here used to crash the QuoteDeliveryV4 quote screen with
+      // "Cannot read properties of null (reading 'toLowerCase')" inside
+      // this useMemo. Coerce defensively.
+      const haystack = (med.name ?? '').toLowerCase();
+      if (!haystack) continue;
       const matches: AssistanceRow[] = [];
       for (const row of rows) {
-        const brand = row.brand_name.toLowerCase();
-        const drug = row.drug_name.toLowerCase();
-        if (matchesWord(haystack, brand) || matchesWord(haystack, drug)) {
+        const brand = (row.brand_name ?? '').toLowerCase();
+        const drug = (row.drug_name ?? '').toLowerCase();
+        if ((brand && matchesWord(haystack, brand)) ||
+            (drug && matchesWord(haystack, drug))) {
           matches.push(row);
         }
       }

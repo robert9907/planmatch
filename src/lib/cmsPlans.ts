@@ -467,6 +467,7 @@ export function findPlan(id: string): Plan | null {
 }
 
 export function formularyTierFor(plan: Plan, drugName: string): FormularyTier | null {
+  if (!drugName) return null;
   const key = drugName.trim().toLowerCase().split(/\s+/)[0];
   if (!key) return null;
   return plan.formulary[key] ?? null;

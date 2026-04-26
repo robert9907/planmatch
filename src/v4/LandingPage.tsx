@@ -317,7 +317,12 @@ function RecentRow({ c, onPick }: { c: AgentBaseClient; onPick: () => void }) {
     c.current_plan_id ? { cls: 'e' as const, text: 'Enrolled' }
     : c.year ? { cls: 'p' as const, text: 'Pending' }
     : { cls: 'p' as const, text: 'New' };
-  const initials = (c.first_name[0] ?? '').toUpperCase() + (c.last_name[0] ?? '').toUpperCase();
+  // c.first_name / c.last_name are typed `string` but AgentBase
+  // hydration occasionally yields null for legacy rows. `null[0]`
+  // throws and blanks the landing page; the optional-chain guards both.
+  const initials =
+    (c.first_name?.[0] ?? '').toUpperCase() +
+    (c.last_name?.[0] ?? '').toUpperCase();
   return (
     <button type="button" className="sr" onClick={onPick}>
       <div className="sra">{initials || '—'}</div>
