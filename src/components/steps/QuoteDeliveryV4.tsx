@@ -57,9 +57,11 @@ import {
 import { findPlan } from '@/lib/cmsPlans';
 import { CurrentPlanPicker } from '@/components/picker/CurrentPlanPicker';
 import {
-  extractBenefitValue,
-  formatBenefitDisplay,
-  type BenefitPeriod,
+  formatDental,
+  formatVision,
+  formatHearing,
+  formatOtc,
+  formatFoodCard,
 } from '@/lib/extractBenefitValue';
 import type {
   PlanBrainData,
@@ -443,7 +445,7 @@ export function QuoteDeliveryV4({
     {
       label: 'Dental',
       values: columns.map((c) =>
-        formatExtra('dental', c.plan.benefits.dental.annual_max, '/yr', c.plan.benefits.dental.description),
+        formatDental(c.plan.benefits.dental.annual_max, c.plan.benefits.dental.description),
       ),
       numbers: columns.map((c) => c.plan.benefits.dental.annual_max),
       betterIsHigher: true,
@@ -451,12 +453,10 @@ export function QuoteDeliveryV4({
     {
       label: 'Vision',
       values: columns.map((c) =>
-        formatExtra(
-          'vision',
+        formatVision(
           c.plan.benefits.vision.eyewear_allowance_year,
-          '/yr',
+          c.plan.benefits.vision.exam,
           c.plan.benefits.vision.description,
-          c.plan.benefits.vision.exam ? 'Exam only' : null,
         ),
       ),
       numbers: columns.map((c) => c.plan.benefits.vision.eyewear_allowance_year),
@@ -465,12 +465,10 @@ export function QuoteDeliveryV4({
     {
       label: 'Hearing',
       values: columns.map((c) =>
-        formatExtra(
-          'hearing',
+        formatHearing(
           c.plan.benefits.hearing.aid_allowance_year,
-          '/yr',
+          c.plan.benefits.hearing.exam,
           c.plan.benefits.hearing.description,
-          c.plan.benefits.hearing.exam ? 'Exam only' : null,
         ),
       ),
       numbers: columns.map((c) => c.plan.benefits.hearing.aid_allowance_year),
@@ -479,7 +477,7 @@ export function QuoteDeliveryV4({
     {
       label: 'OTC',
       values: columns.map((c) =>
-        formatExtra('otc', c.plan.benefits.otc.allowance_per_quarter, '/qtr', c.plan.benefits.otc.description),
+        formatOtc(c.plan.benefits.otc.allowance_per_quarter, c.plan.benefits.otc.description),
       ),
       numbers: columns.map((c) => c.plan.benefits.otc.allowance_per_quarter),
       betterIsHigher: true,
@@ -487,7 +485,7 @@ export function QuoteDeliveryV4({
     {
       label: 'Food Card',
       values: columns.map((c) =>
-        formatExtra('food_card', c.plan.benefits.food_card.allowance_per_month, '/mo', c.plan.benefits.food_card.description),
+        formatFoodCard(c.plan.benefits.food_card.allowance_per_month, c.plan.benefits.food_card.description),
       ),
       numbers: columns.map((c) => c.plan.benefits.food_card.allowance_per_month),
       betterIsHigher: true,
@@ -673,7 +671,11 @@ export function QuoteDeliveryV4({
   }
 
   const N = columns.length;
-  const minWidth = 200 + N * 180;
+  // Label column 180px (down from 200) gives plan columns 190px each
+  // (up from 180) — extras like "Exam + $50 eyewear" no longer
+  // truncate. LABEL_W / PLAN_W are module-level (see below the
+  // component) so the style atoms reference the same numbers.
+  const minWidth = LABEL_W + N * PLAN_W;
   const colSpanFull = 1 + N;
 
   return (
@@ -738,8 +740,8 @@ export function QuoteDeliveryV4({
             <tr>
               <th
                 style={{
-                  width: 200,
-                  minWidth: 200,
+                  width: LABEL_W,
+                  minWidth: LABEL_W,
                   padding: 14,
                   textAlign: 'left',
                   fontFamily: FONT.serif,
@@ -758,8 +760,8 @@ export function QuoteDeliveryV4({
                   <th
                     key={col.id}
                     style={{
-                      width: 180,
-                      minWidth: 180,
+                      width: PLAN_W,
+                      minWidth: PLAN_W,
                       padding: 14,
                       textAlign: 'left',
                       verticalAlign: 'top',
@@ -1018,7 +1020,7 @@ export function QuoteDeliveryV4({
             <tr>
               <th
                 style={{
-                  width: 200,
+                  width: LABEL_W,
                   padding: '12px 14px',
                   textAlign: 'left',
                   background: COL.summaryNavy,
@@ -1059,7 +1061,7 @@ export function QuoteDeliveryV4({
                     key={col.id}
                     title={tooltip}
                     style={{
-                      width: 180,
+                      width: PLAN_W,
                       padding: '12px 14px',
                       background: COL.summaryNavy,
                       color: isCurrent ? COL.white : COL.summaryGreen,
@@ -1114,7 +1116,7 @@ export function QuoteDeliveryV4({
 
             {/* Action row — Recommend + Open SunFire */}
             <tr>
-              <th style={{ width: 200, padding: 12, background: COL.panelBg, borderBottom: 'none' }}></th>
+              <th style={{ width: LABEL_W, padding: 12, background: COL.panelBg, borderBottom: 'none' }}></th>
               {columns.map((col) => {
                 const isCurrent = col.variant === 'current';
                 const isRec = recommendation === col.id;
@@ -1122,7 +1124,7 @@ export function QuoteDeliveryV4({
                   <td
                     key={col.id}
                     style={{
-                      width: 180,
+                      width: PLAN_W,
                       padding: 12,
                       background: COL.panelBg,
                       verticalAlign: 'top',
@@ -1456,51 +1458,6 @@ const MEDICAL_DEFS: MedicalDef[] = [
   { label: 'Inpatient',          pick: (p) => p.benefits.medical.inpatient },
 ];
 
-// formatExtra — display string per V4 spec for dental/vision/
-// hearing/OTC/food_card. Combines structured Plan.benefits.*
-// dollar values with parsed extractBenefitValue() output from the
-// pm_plan_benefits.benefit_description text.
-//
-// Rules per the V4 task spec:
-//   • Real structured dollar amount     → "$X/yr"
-//   • parsed amount + level             → "$2,500/yr · comprehensive"
-//   • parsed copay only                 → "$45 copay" (with level if known)
-//   • level only (no $)                 → "Preventive only" / "Exam only"
-//   • description only (no parse)       → raw description
-//   • truly empty                       → preset (e.g. "Exam only")
-//                                         or '—'
-//
-// Per the user's directive: NEVER render generic "Covered." If a
-// plan has the benefit but we can't parse a value, show the raw
-// description text — at least the broker sees what CMS filed.
-function formatExtra(
-  benefitType: string,
-  structuredAmount: number,
-  suffix: string,
-  description: string | null | undefined,
-  preset: string | null = null,
-): string {
-  const parsed = extractBenefitValue(description, benefitType);
-  // Period inference from the suffix passed in by the row config.
-  const fallbackPeriod: BenefitPeriod | undefined =
-    suffix === '/yr' ? 'year' :
-    suffix === '/qtr' ? 'quarter' :
-    suffix === '/mo' ? 'month' : undefined;
-  // If the structured amount > 0, use it as the headline amount.
-  // (The Plan.benefits.dental.annual_max etc. are the
-  // ground-truth structured fields; the description is supplementary.)
-  if (structuredAmount > 0) {
-    const display = formatBenefitDisplay(parsed, structuredAmount, fallbackPeriod);
-    return display;
-  }
-  // No structured amount — try to display from the parsed
-  // description. formatBenefitDisplay handles all the variants.
-  const fromParse = formatBenefitDisplay(parsed);
-  if (fromParse !== '—') return fromParse;
-  if (preset) return preset;
-  return '—';
-}
-
 function copayCash(cs: { copay: number | null; coinsurance: number | null }): number | null {
   return cs.copay ?? null;
 }
@@ -1627,9 +1584,14 @@ function Flag({ children }: { children: React.ReactNode }) {
 }
 
 // ─── Style atoms ───────────────────────────────────────────────────
+// Module-level mirrors of the in-component LABEL_W / PLAN_W so the
+// style helpers don't have to be threaded through props. If the
+// component-level values change, update these too.
+const LABEL_W = 180;
+const PLAN_W = 190;
 
 const labelCellStyle: React.CSSProperties = {
-  width: 200,
+  width: LABEL_W,
   padding: '8px 14px',
   textAlign: 'left',
   fontSize: 12,
@@ -1643,7 +1605,7 @@ const labelCellStyle: React.CSSProperties = {
 
 function cellStyle(bg: string | undefined): React.CSSProperties {
   return {
-    width: 180,
+    width: PLAN_W,
     padding: '8px 14px',
     textAlign: 'left',
     fontSize: 12,
