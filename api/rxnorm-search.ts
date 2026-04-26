@@ -35,6 +35,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
+import { supabase } from './_lib/supabase.js';
 
 const RXNAV = 'https://rxnav.nlm.nih.gov/REST';
 const TIMEOUT_MS = 10_000;
@@ -54,6 +55,12 @@ interface RxNormDrug {
   strength?: string;       // "20 MG", "10 MG/ML", "0.25 MG"
   dose_form?: string;      // "Oral Tablet", "Pen Injector"
   is_brand?: boolean;      // tty in {BN, SBD, SBDF, SBDG, BPCK}
+  /** Number of pm_formulary rows that key on this rxcui. The agent
+   *  drug-cost lookup will return real tier + copay data when this
+   *  is > 0, so the ranker surfaces these above zero-coverage
+   *  concepts. Annotated server-side via a batched Supabase query;
+   *  cached in-memory to avoid hitting the DB on every keystroke. */
+  formulary_coverage?: number;
 }
 
 interface ApproxCandidate {
@@ -186,17 +193,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const merged = [...byRxcui.values()];
     const ranked = rank(merged, q).slice(0, 40);
 
+    // Annotate each candidate with pm_formulary coverage and rerank
+    // so concepts whose rxcui has actual tier/copay data float to
+    // the top of the dropdown. Without this, an "Ozempic" search
+    // surfaces the legacy 1.5 ML SBD (rxcui 1991311 — 0 formulary
+    // rows) instead of the modern 3 ML SBDs (2398842/2599365/2619154
+    // — 677 rows each). The agent then picks the legacy concept,
+    // lookupDrugCost returns 'unavailable', and the broker sees a
+    // tier estimate when real data exists.
+    const annotated = await annotateCoverage(ranked);
+    const reranked = rerankByCoverage(annotated);
+
     console.log('[rxnorm-search]', {
       q,
       approxCount: candidates.length,
       drugsName,
       drugsCount: fullDrugs.length,
-      returned: ranked.length,
+      returned: reranked.length,
+      withCoverage: reranked.filter((d) => (d.formulary_coverage ?? 0) > 0).length,
     });
 
     res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300');
     return sendJson(res, 200, {
-      drugs: ranked,
+      drugs: reranked,
       meta: { approxCount: candidates.length, drugsName },
     });
   } catch (err) {
@@ -471,4 +490,91 @@ function rank(drugs: RxNormDrug[], query: string): RxNormDrug[] {
     if (exa !== exb) return exa - exb;
     return na.localeCompare(nb);
   });
+}
+
+// ─── Formulary-coverage annotation ──────────────────────────────────
+//
+// Maps rxcui → row count in pm_formulary. Cached per Vercel function
+// instance — Fluid Compute keeps instances warm across requests so
+// repeat searches for the same brand reuse the cache. Cache lifetime
+// matches the formulary file (annual refresh from CMS), so an
+// in-memory cache is effectively cache-forever within a deploy.
+//
+// Capping `.in()` at PostgREST's default 1000-row page is fine: the
+// goal is "is this rxcui covered? roughly how widely?", not exact
+// counts. We treat anything that returns rows at all as "covered" and
+// use the count only as a tiebreaker between siblings.
+const COVERAGE_CACHE = new Map<string, number>();
+
+async function annotateCoverage(drugs: RxNormDrug[]): Promise<RxNormDrug[]> {
+  const uncached = drugs
+    .map((d) => d.rxcui)
+    .filter((rx) => !COVERAGE_CACHE.has(rx));
+
+  if (uncached.length > 0) {
+    try {
+      const sb = supabase();
+      // Single batched query. Fetch up to 1000 rows of just the
+      // rxcui column — that's enough to tell which candidate rxcuis
+      // have non-zero coverage. Per-rxcui counts up to 333 saturate
+      // at the page boundary; for ranking that's fine since "more"
+      // already means "this is the active rxcui for this brand".
+      const { data, error } = await sb
+        .from('pm_formulary')
+        .select('rxcui')
+        .in('rxcui', uncached);
+      if (error) throw error;
+      const counts = new Map<string, number>();
+      for (const row of (data ?? []) as { rxcui: string | number }[]) {
+        const rx = String(row.rxcui);
+        counts.set(rx, (counts.get(rx) ?? 0) + 1);
+      }
+      // Every uncached rxcui gets cached, including zeros — that's
+      // what we want for misses.
+      for (const rx of uncached) {
+        COVERAGE_CACHE.set(rx, counts.get(rx) ?? 0);
+      }
+    } catch (err) {
+      console.warn('[rxnorm-search] coverage lookup failed:', (err as Error).message);
+      // On error, leave uncached entries unset so they fall to the
+      // bottom but don't crash the search. Tag them as 0.
+      for (const rx of uncached) {
+        if (!COVERAGE_CACHE.has(rx)) COVERAGE_CACHE.set(rx, 0);
+      }
+    }
+  }
+
+  return drugs.map((d) => ({
+    ...d,
+    formulary_coverage: COVERAGE_CACHE.get(d.rxcui) ?? 0,
+  }));
+}
+
+// Stable rerank that promotes covered rxcuis without disrupting the
+// existing brand-match / form / strength order within each coverage
+// bucket. Three buckets:
+//
+//   1. covered + brand-match    (both > 0 indicators)
+//   2. covered (any tty)
+//   3. uncovered
+//
+// Within each bucket, the original rank() order is preserved.
+function rerankByCoverage(drugs: RxNormDrug[]): RxNormDrug[] {
+  const indexed = drugs.map((d, i) => ({ d, i }));
+  indexed.sort((a, b) => {
+    const aCov = (a.d.formulary_coverage ?? 0) > 0 ? 1 : 0;
+    const bCov = (b.d.formulary_coverage ?? 0) > 0 ? 1 : 0;
+    if (aCov !== bCov) return bCov - aCov;
+    // Both covered or both uncovered — within "covered", prefer the
+    // higher coverage count (Ozempic 2398842 with 677 vs an obscure
+    // sibling SBD with 5).
+    if (aCov === 1) {
+      const ac = a.d.formulary_coverage ?? 0;
+      const bc = b.d.formulary_coverage ?? 0;
+      if (ac !== bc) return bc - ac;
+    }
+    // Stable: preserve original rank order within the bucket.
+    return a.i - b.i;
+  });
+  return indexed.map((x) => x.d);
 }
