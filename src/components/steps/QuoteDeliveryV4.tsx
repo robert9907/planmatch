@@ -44,6 +44,7 @@ import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
 import { useSession } from '@/hooks/useSession';
 import { usePlanBrain } from '@/hooks/usePlanBrain';
+import { useDrugCosts, lookupPlanCost, type DrugCostMap } from '@/hooks/useDrugCosts';
 import {
   useManufacturerAssistance,
   type AssistanceRow,
@@ -106,15 +107,18 @@ const CSS = `
 }
 .qv4 *, .qv4 *::before, .qv4 *::after { box-sizing: border-box; }
 
-.qv4-qwrap { overflow-x: auto; padding: 0 0 12px; -webkit-overflow-scrolling: touch; }
-/* table-layout: fixed + a <colgroup> below force every column to honor
- * its assigned width even when content is wider than the cell. min-width
- * keeps the table scrollable horizontally rather than collapsing columns
- * to unreadable widths on narrower viewports. */
+.qv4-qwrap { overflow-x: auto; padding: 0 0 12px; -webkit-overflow-scrolling: touch;
+  /* min-height keeps the wrapper from collapsing while data loads */
+  min-height: 200px; }
+/* table-layout: fixed + the <colgroup> below force every plan column
+ * to honor its assigned width — fixed pixel widths so the layout
+ * doesn't collapse on narrow viewports and Lowest OOP / Giveback
+ * don't get squeezed to slivers. The min-width of the table itself
+ * is computed inline from numColumns × 180 + 200 so the wrapper's
+ * overflow-x: auto kicks in when the viewport is narrower. */
 .qv4 table.qt {
   border-collapse: collapse;
   width: 100%;
-  min-width: 1200px;
   table-layout: fixed;
 }
 .qv4 .qt th, .qv4 .qt td {
@@ -124,12 +128,12 @@ const CSS = `
 }
 .qv4 .qt .lc {
   position: sticky; left: 0; z-index: 5; background: var(--qv4-g50);
-  font-weight: 500; color: var(--qv4-g600); min-width: 200px; white-space: normal;
+  font-weight: 500; color: var(--qv4-g600); white-space: normal;
   overflow: visible;
 }
 .qv4 .qt th.qh {
   padding: 12px; border-bottom: 1px solid var(--qv4-g200);
-  vertical-align: top; font-weight: 400; min-width: 220px;
+  vertical-align: top; font-weight: 400;
   white-space: normal; overflow: hidden;
 }
 /* Column header backgrounds — gray current, navy best Rx, teal OOP, leaf giveback. */
@@ -206,13 +210,15 @@ const CSS = `
 .qv4 .ti { display: inline-flex; align-items: center; justify-content: center;
   width: 17px; height: 17px; border-radius: 3px;
   font-size: 9px; font-weight: 700; font-family: var(--qv4-fm); margin-right: 3px; }
-/* Per V4 spec: T1 green, T2 teal, T3 blue, T4 amber, T5 coral, T6 red. */
-.qv4 .ti.t1 { background: #dcfce7; color: #166534; }   /* green */
-.qv4 .ti.t2 { background: #ccfbf1; color: #115e59; }   /* teal */
-.qv4 .ti.t3 { background: #dbeafe; color: #1e40af; }   /* blue */
-.qv4 .ti.t4 { background: #fef3c7; color: #92400e; }   /* amber */
-.qv4 .ti.t5 { background: #ffe4e6; color: #9f1239; }   /* coral */
-.qv4 .ti.t6 { background: #fee2e2; color: #991b1b; }   /* red */
+/* Per V4 spec: T1 green, T2 teal, T3 blue, T4 amber, T5 coral, T6 red.
+   Hex tokens reuse the same palette as the column backgrounds so the
+   badge feels native to the table rather than a separate component. */
+.qv4 .ti.t1 { background: #eaf3de; color: #3b6d11; }   /* green */
+.qv4 .ti.t2 { background: #e1f5ee; color: #0f6e56; }   /* teal */
+.qv4 .ti.t3 { background: #e6f1fb; color: #0c447c; }   /* blue */
+.qv4 .ti.t4 { background: #faeeda; color: #854f0b; }   /* amber */
+.qv4 .ti.t5 { background: #faece7; color: #993c1d; }   /* coral */
+.qv4 .ti.t6 { background: #fcebeb; color: #a32d2d; }   /* red */
 
 .qv4 .d { font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px;
   margin-left: 3px; font-family: var(--qv4-fm); }
@@ -376,6 +382,18 @@ export function QuoteDeliveryV4({
   // small discount vs 3× retail; we can't promise a specific number
   // without the per-plan mail-order pricing rows).
   const [pharmacyFill, setPharmacyFill] = useState<PharmacyFill>('retail_30');
+
+  // Live-prime drug costs by hitting /api/drug-costs for the visible
+  // finalists. Without this, lookupDrugCost reads pm_drug_cost_cache
+  // through usePlanBrain, which is empty for any (plan, NDC) pair the
+  // consumer-side scraper hasn't visited — and every cell renders $0.
+  // useDrugCosts triggers the Medicare.gov fetch + cache write, then
+  // exposes per-plan totals via byPlanId.
+  const drugCosts = useDrugCosts(
+    finalists,
+    medications,
+    pharmacyFill === 'mail_90' ? 'mail' : 'retail',
+  );
 
   const currentPlan = useMemo<Plan | null>(
     () => (currentPlanId ? findPlan(currentPlanId) : null),
@@ -571,15 +589,20 @@ export function QuoteDeliveryV4({
       </div>
 
       <div className="qv4-qwrap">
-        <table className="qt">
-          {/* table-layout:fixed + colgroup forces equal widths even
-              when a header card or cell wraps to two lines. 22% for
-              the sticky label column, the remainder split equally
-              across plan columns. */}
+        {/*
+          Fixed pixel widths via colgroup + table min-width make the
+          column layout deterministic regardless of cell content
+          length. 200px label + 180px × N plan columns → wrapper
+          scrolls horizontally when the viewport is narrower.
+        */}
+        <table
+          className="qt"
+          style={{ minWidth: `${200 + columns.length * 180}px` }}
+        >
           <colgroup>
-            <col style={{ width: '22%' }} />
+            <col style={{ width: 200 }} />
             {columns.map((c) => (
-              <col key={c.plan.id} style={{ width: `${78 / columns.length}%` }} />
+              <col key={c.plan.id} style={{ width: 180 }} />
             ))}
           </colgroup>
           <thead>
@@ -634,6 +657,7 @@ export function QuoteDeliveryV4({
               medications={medications}
               data={data}
               pharmacyFill={pharmacyFill}
+              drugCosts={drugCosts}
             />
 
             {/* ── Provider divider rows ───────────────────────────── */}
@@ -979,13 +1003,23 @@ function TotalRxRow({
   medications,
   data,
   pharmacyFill,
+  drugCosts,
 }: {
   cols: ColumnPlan[];
   medications: Medication[];
   data: PlanBrainData | null;
   pharmacyFill: PharmacyFill;
+  drugCosts: DrugCostMap;
 }) {
-  const totals = cols.map((c) => totalAnnualRx(c.plan, medications, data, pharmacyFill));
+  // Prefer the live /api/drug-costs total when available — that's the
+  // authoritative Medicare.gov Plan Finder number for the client's
+  // exact prescription set. Fall back to summing per-drug cells when
+  // the live fetch hasn't responded or returned null.
+  const totals = cols.map((c) => {
+    const live = lookupPlanCost(drugCosts, c.plan);
+    if (live?.annual_cost != null) return Math.round(live.annual_cost);
+    return totalAnnualRx(c.plan, medications, data, pharmacyFill);
+  });
   const baselineTotal = cols.find((c) => c.variant === 'current')
     ? totals[cols.findIndex((c) => c.variant === 'current')]
     : null;
