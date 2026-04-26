@@ -61,6 +61,7 @@ function initialState(): SessionState & { benefitFilters: BenefitFilterState } {
     complianceChecked: [],
     disclaimersConfirmed: [],
     currentPlanId: null,
+    noCurrentPlan: false,
     selectedFinalists: [],
     givebackPlanEnrolled: false,
     benefitFilters: emptyBenefitFilters(),
@@ -80,6 +81,7 @@ interface SessionStore extends SessionState {
   addNote: (type: NoteType, body: string, opts?: { carrier?: string; scenario?: string }) => void;
   removeNote: (id: string) => void;
   setCurrentPlanId: (id: string | null) => void;
+  setNoCurrentPlan: (flag: boolean) => void;
   setBenefitFilter: (key: BenefitKey, patch: Partial<import('@/types/plans').BenefitFilter>) => void;
   resetBenefitFilters: () => void;
   setSelectedFinalists: (ids: string[]) => void;
@@ -165,7 +167,17 @@ export const useSession = create<SessionStore>()(
       removeNote: (id) =>
         set((state) => ({ notes: state.notes.filter((n) => n.id !== id) })),
 
-      setCurrentPlanId: (id) => set({ currentPlanId: id }),
+      setCurrentPlanId: (id) =>
+        // Selecting a real plan implicitly clears the "new to
+        // Medicare" flag (the broker just told us what plan the
+        // client is on). Setting to null leaves noCurrentPlan
+        // alone — the broker may be clearing the picker on the
+        // way to clicking "New to Medicare".
+        set((s) => ({ currentPlanId: id, noCurrentPlan: id ? false : s.noCurrentPlan })),
+      setNoCurrentPlan: (flag) =>
+        // Marking "new to Medicare" clears any previously-picked
+        // plan so the two states stay mutually exclusive.
+        set((s) => ({ noCurrentPlan: flag, currentPlanId: flag ? null : s.currentPlanId })),
 
       setBenefitFilter: (key, patch) =>
         set((state) => ({

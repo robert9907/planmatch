@@ -88,6 +88,15 @@ export interface SessionState {
    * H-number. Null in new-quote mode.
    */
   currentPlanId: string | null;
+  /**
+   * Explicit "no current plan" marker. Distinguishes between
+   *   (a) currentPlanId === null && noCurrentPlan === false → unselected (block Continue)
+   *   (b) currentPlanId === null && noCurrentPlan === true  → new to Medicare
+   *   (c) currentPlanId !== null                            → has a current plan
+   * The Quote page reads (c) to render the gray benchmark column;
+   * (b) renders a "No current plan to compare" note instead.
+   */
+  noCurrentPlan: boolean;
   selectedFinalists: string[];
   /**
    * True when the recommended plan (or current plan in annual_review mode)

@@ -28,6 +28,8 @@ interface Props {
 export function IntakePage({ onContinue, onBack }: Props) {
   const client = useSession((s) => s.client);
   const updateClient = useSession((s) => s.updateClient);
+  const currentPlanId = useSession((s) => s.currentPlanId);
+  const noCurrentPlan = useSession((s) => s.noCurrentPlan);
   const age = dobToAge(client.dob);
 
   const [zipLoading, setZipLoading] = useState(false);
@@ -62,7 +64,19 @@ export function IntakePage({ onContinue, onBack }: Props) {
     return () => { window.clearTimeout(t); ctl.abort(); };
   }, [client.zip]);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  const canContinue = Boolean(client.name && client.zip && client.state && client.planType);
+  // Current-plan gate is REQUIRED on the agent flow. The Quote
+  // page's gray benchmark column anchors every delta badge — without
+  // it, deltas read against the leftmost candidate (Best Rx Match)
+  // which buries the comparison. Either:
+  //   • currentPlanId set (client has a plan), or
+  //   • noCurrentPlan === true (explicit "new to Medicare" toggle)
+  // unblocks Continue. The picker shows a "New to Medicare · no
+  // current plan to compare" button as the second option so the
+  // broker has a clean exit when the client is fresh.
+  const currentPlanResolved = Boolean(currentPlanId) || noCurrentPlan;
+  const canContinue = Boolean(
+    client.name && client.zip && client.state && client.planType && currentPlanResolved,
+  );
 
   return (
     <>
@@ -175,16 +189,25 @@ export function IntakePage({ onContinue, onBack }: Props) {
               </div>
             </div>
 
-            {/* Current plan benchmark — optional. When set, the v4
-                Quote table pins this plan as the leftmost gray
-                column and computes deltas against it. Hidden until
-                the agent has picked a county + plan type so the
+            {/* Current plan benchmark — REQUIRED. The Quote page's
+                gray benchmark column anchors every delta badge;
+                without it, comparisons are meaningless. The picker
+                shows a "New to Medicare · no current plan" button
+                as the second option for fresh-to-Medicare clients.
+                Hidden until county + plan type are picked so the
                 eligible-plan list is meaningful. */}
             {client.county && client.planType && (
               <div className="form-group">
-                <label className="form-label">Client's current plan <span style={{ fontWeight: 400, color: '#6b7280' }}>(optional · for comparison)</span></label>
+                <label className="form-label">
+                  Client's current plan *
+                  {!currentPlanResolved && (
+                    <span style={{ fontWeight: 400, color: '#a32d2d', marginLeft: 8 }}>
+                      required to continue
+                    </span>
+                  )}
+                </label>
                 <CurrentPlanPicker
-                  hint="Search by plan name or H-number. Leave blank for a fresh quote."
+                  hint="Search by plan name or H-number, or click 'New to Medicare' below."
                 />
               </div>
             )}

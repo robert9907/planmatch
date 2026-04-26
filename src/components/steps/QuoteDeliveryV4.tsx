@@ -56,6 +56,11 @@ import {
 } from '@/hooks/useManufacturerAssistance';
 import { findPlan } from '@/lib/cmsPlans';
 import { CurrentPlanPicker } from '@/components/picker/CurrentPlanPicker';
+import {
+  extractBenefitValue,
+  formatBenefitDisplay,
+  type BenefitPeriod,
+} from '@/lib/extractBenefitValue';
 import type {
   PlanBrainData,
   RibbonKey,
@@ -238,13 +243,21 @@ export function QuoteDeliveryV4({
     [currentPlanId],
   );
 
-  // ── Column selection: ribbon-driven ───────────────────────────────
-  // 1. Current plan (if session has one) → 'current' (gray)
+  // ── Column selection: ribbon-driven, coverage-filtered ────────────
+  // 1. Current plan (if session has one) → 'current' (gray).
+  //    Always rendered — it's the benchmark, even if no formulary data.
   // 2. LOWEST_DRUG_COST or BEST_OVERALL ribbon → 'best_rx' (navy)
   // 3. LOWEST_OOP ribbon → 'lowest_oop' (teal)
   // 4. PART_B_SAVINGS ribbon → 'giveback' (leaf)
   // 5. Backfill remaining slots up to MAX_FINALIST_COLUMNS=4 with
   //    'normal' variant by composite descending.
+  //
+  // Comparison columns 2-5 are pre-filtered to plans whose formulary
+  // has coverage for at least one of the client's medications. A
+  // column where every drug row would render '—' is useless for
+  // comparison — drop it and pick the next-best Plan Brain result.
+  // Wellcare H1914-011 is the canonical case: present in pm_plans
+  // and pm_plan_benefits but missing from pm_formulary entirely.
   const columns = useMemo<ColumnDef[]>(() => {
     const cols: ColumnDef[] = [];
     const used = new Set<string>();
@@ -255,7 +268,27 @@ export function QuoteDeliveryV4({
       used.add(currentPlan.id);
     }
 
-    const ranked = result ? [...result.scored].sort((a, b) => b.composite - a.composite) : [];
+    // Coverage check — does the plan have ANY pm_formulary rows for
+    // ANY of the medications (after expansion)? When meds are empty
+    // OR brainData hasn't loaded yet, default to "yes" so the
+    // initial render isn't blank.
+    const planHasCoverage = (plan: Plan): boolean => {
+      if (medications.length === 0) return true;
+      if (!brainData) return true;
+      const cp = `${plan.contract_id}-${plan.plan_number}`;
+      const slot = brainData.formularyByContractPlan[cp];
+      if (!slot) return false;
+      return medications.some((m) => !!m.rxcui && !!slot[m.rxcui]);
+    };
+
+    const allRanked = result ? [...result.scored].sort((a, b) => b.composite - a.composite) : [];
+    // Prefer covered plans for comparison columns. If NONE are
+    // covered (data gap across the entire finalist set) fall back
+    // to the unfiltered list so the table doesn't render with zero
+    // comparison columns.
+    const coveredRanked = allRanked.filter((s) => planHasCoverage(s.plan));
+    const ranked = coveredRanked.length > 0 ? coveredRanked : allRanked;
+
     const pickByRibbon = (...ribbons: RibbonKey[]): ScoredPlan | null => {
       for (const r of ribbons) {
         const hit = ranked.find((s) => s.ribbon === r && !used.has(s.plan.id));
@@ -314,7 +347,7 @@ export function QuoteDeliveryV4({
       used.add(s.plan.id);
     }
     return cols;
-  }, [currentPlan, result]);
+  }, [currentPlan, result, brainData, medications]);
 
   // ── Per-row data (computed once per render) ───────────────────────
   // Baseline column for delta badges:
@@ -410,7 +443,7 @@ export function QuoteDeliveryV4({
     {
       label: 'Dental',
       values: columns.map((c) =>
-        formatExtra(c.plan.benefits.dental.annual_max, '/yr', c.plan.benefits.dental.description),
+        formatExtra('dental', c.plan.benefits.dental.annual_max, '/yr', c.plan.benefits.dental.description),
       ),
       numbers: columns.map((c) => c.plan.benefits.dental.annual_max),
       betterIsHigher: true,
@@ -419,6 +452,7 @@ export function QuoteDeliveryV4({
       label: 'Vision',
       values: columns.map((c) =>
         formatExtra(
+          'vision',
           c.plan.benefits.vision.eyewear_allowance_year,
           '/yr',
           c.plan.benefits.vision.description,
@@ -432,6 +466,7 @@ export function QuoteDeliveryV4({
       label: 'Hearing',
       values: columns.map((c) =>
         formatExtra(
+          'hearing',
           c.plan.benefits.hearing.aid_allowance_year,
           '/yr',
           c.plan.benefits.hearing.description,
@@ -444,7 +479,7 @@ export function QuoteDeliveryV4({
     {
       label: 'OTC',
       values: columns.map((c) =>
-        formatExtra(c.plan.benefits.otc.allowance_per_quarter, '/qtr', c.plan.benefits.otc.description),
+        formatExtra('otc', c.plan.benefits.otc.allowance_per_quarter, '/qtr', c.plan.benefits.otc.description),
       ),
       numbers: columns.map((c) => c.plan.benefits.otc.allowance_per_quarter),
       betterIsHigher: true,
@@ -452,7 +487,7 @@ export function QuoteDeliveryV4({
     {
       label: 'Food Card',
       values: columns.map((c) =>
-        formatExtra(c.plan.benefits.food_card.allowance_per_month, '/mo', c.plan.benefits.food_card.description),
+        formatExtra('food_card', c.plan.benefits.food_card.allowance_per_month, '/mo', c.plan.benefits.food_card.description),
       ),
       numbers: columns.map((c) => c.plan.benefits.food_card.allowance_per_month),
       betterIsHigher: true,
@@ -504,26 +539,60 @@ export function QuoteDeliveryV4({
     [rxTotalAnnual],
   );
 
-  // Total Annual Value — net cost (premium + medical + rx − extras).
-  const annualNet = useMemo<(number | null)[]>(() => {
+  // ── Total Annual Value — accurate component breakdown ────────────
+  //
+  // Per the V4 spec, the total renders as:
+  //   total = Rx + Premium − Giveback − Dental − Vision − Hearing
+  //                       − OTC − Food − Fitness
+  //
+  // Negative total = net annual cost (the broker's intuitive "this
+  // plan costs $X/yr"); positive would mean extras exceed costs.
+  // Each component is parsed from the plan benefits via
+  // extractBenefitValue so descriptions like "$2,500/yr · comprehensive"
+  // contribute their dollar value rather than registering as 0.
+  //
+  // Stored as a structured breakdown so the UI tooltip can show the
+  // math: "Rx $564 + Premium $0 − Giveback $1,212 + Dental $0 +
+  //        OTC $480 + Food $600 = −$432/yr".
+  interface ValueBreakdown {
+    total: number;        // signed: negative = net cost, positive = net savings
+    rx: number;           // annual
+    premium: number;      // annual
+    giveback: number;     // annual credit (positive number, subtracted)
+    dental: number;
+    vision: number;
+    hearing: number;
+    otc: number;
+    food: number;
+  }
+
+  const annualBreakdown = useMemo<ValueBreakdown[]>(() => {
     return columns.map((c, i) => {
-      const scored = c.scored;
-      const rxAnnual = rxTotalAnnual[i] ?? 0;
-      const premium = c.plan.premium * 12;
-      if (scored) {
-        const medical = scored.annualMedicalCost - premium;
-        const extras = scored.extrasValue;
-        return -(premium + medical + rxAnnual - extras);
-      }
-      // Current-plan column without a scored row — rough estimate.
-      const extras =
-        c.plan.benefits.dental.annual_max +
-        c.plan.benefits.otc.allowance_per_quarter * 4 +
-        c.plan.benefits.food_card.allowance_per_month * 12 +
-        (c.plan.part_b_giveback ?? 0) * 12;
-      return -(premium + rxAnnual - extras);
+      const rx = rxTotalAnnual[i] ?? 0;
+      const premium = (c.plan.premium ?? 0) * 12;
+      const giveback = (c.plan.part_b_giveback ?? 0) * 12;
+      // Dental — annual_max if positive, else 0 (no annual cap).
+      // Description-based values aren't summed here (a $45 copay
+      // isn't an annualized benefit value).
+      const dental = c.plan.benefits.dental.annual_max > 0 ? c.plan.benefits.dental.annual_max : 0;
+      const vision = c.plan.benefits.vision.eyewear_allowance_year > 0 ? c.plan.benefits.vision.eyewear_allowance_year : 0;
+      const hearing = c.plan.benefits.hearing.aid_allowance_year > 0 ? c.plan.benefits.hearing.aid_allowance_year : 0;
+      const otc = c.plan.benefits.otc.allowance_per_quarter > 0 ? c.plan.benefits.otc.allowance_per_quarter * 4 : 0;
+      const food = c.plan.benefits.food_card.allowance_per_month > 0 ? c.plan.benefits.food_card.allowance_per_month * 12 : 0;
+      // total: cost − value. Negative number = net annual cost.
+      const cost = rx + premium;
+      const value = giveback + dental + vision + hearing + otc + food;
+      const total = -(cost - value);
+      return { total, rx, premium, giveback, dental, vision, hearing, otc, food };
     });
   }, [columns, rxTotalAnnual]);
+
+  // Backwards-compat surface for the existing render: array of total
+  // numbers keyed by column index.
+  const annualNet = useMemo<(number | null)[]>(
+    () => annualBreakdown.map((b) => b.total),
+    [annualBreakdown],
+  );
 
   const savingsVsBaseline = useMemo<(number | null)[]>(() => {
     const base = annualNet[baseIdx];
@@ -535,12 +604,25 @@ export function QuoteDeliveryV4({
 
   const whySwitch = useMemo<string[]>(() => {
     const baselinePlan = columns[baseIdx]?.plan ?? null;
+    const baseTotal = annualBreakdown[baseIdx]?.total ?? null;
     return columns.map((c, i) => {
       if (i === baseIdx) {
         return c.variant === 'current' ? 'Current plan' : 'Lead column · benchmark';
       }
       const bits: string[] = [];
-      if (c.scored?.ribbon) bits.push(RIBBON_LABEL[c.scored.ribbon]?.replace(/^[⭐✓]\s*/, '') ?? '');
+      // Lead with the savings dollar — the most decision-relevant
+      // signal. annualBreakdown.total is signed, more-negative = more
+      // expensive; `(this − base)` gives the dollar value the
+      // alternative saves vs the benchmark (positive = saves).
+      const savings =
+        baseTotal != null && annualBreakdown[i]?.total != null
+          ? annualBreakdown[i].total - baseTotal
+          : null;
+      if (savings != null && savings > 50) {
+        bits.push(`Saves $${Math.round(savings).toLocaleString()}/yr vs current plan`);
+      } else if (savings != null && savings < -50) {
+        bits.push(`Costs $${Math.round(-savings).toLocaleString()} more/yr`);
+      }
       if (baselinePlan) {
         const moopDiff = baselinePlan.moop_in_network - c.plan.moop_in_network;
         if (moopDiff > 500) bits.push(`$${(moopDiff / 1000).toFixed(1)}K lower MOOP`);
@@ -548,11 +630,13 @@ export function QuoteDeliveryV4({
         if (otcDiff > 0) bits.push(`+$${otcDiff * 4}/yr OTC`);
         const foodDiff = c.plan.benefits.food_card.allowance_per_month - baselinePlan.benefits.food_card.allowance_per_month;
         if (foodDiff > 0) bits.push(`+$${foodDiff * 12}/yr food`);
+        const dentalDiff = c.plan.benefits.dental.annual_max - baselinePlan.benefits.dental.annual_max;
+        if (dentalDiff > 500) bits.push(`+$${dentalDiff} dental`);
       }
       if (c.scored?.providerNetworkStatus === 'all_in') bits.push('in-network');
       return bits.filter(Boolean).join(' · ') || '—';
     });
-  }, [columns, annualNet]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [columns, annualBreakdown]);
 
   // Medications needing assistance — used to gate the help section.
   const medsNeedingAssistance = useMemo(() => {
@@ -951,9 +1035,29 @@ export function QuoteDeliveryV4({
                 const isCurrent = col.variant === 'current';
                 const annual = annualNet[ci] ?? 0;
                 const savings = savingsVsBaseline[ci] ?? 0;
+                const b = annualBreakdown[ci];
+                // Component-by-component math, hover-revealed:
+                //   "Rx $564 + Premium $0 − Giveback $1,212 + Dental $0
+                //    + OTC $480 + Food $600 = $432/yr cost"
+                // Cost components rendered with "+", credit components
+                // (giveback / extras) with "−" since they reduce net cost.
+                const tooltipParts: string[] = [];
+                if (b) {
+                  tooltipParts.push(`Rx $${b.rx.toLocaleString()}`);
+                  tooltipParts.push(`+ Premium $${b.premium.toLocaleString()}`);
+                  if (b.giveback > 0) tooltipParts.push(`− Giveback $${b.giveback.toLocaleString()}`);
+                  if (b.dental > 0)   tooltipParts.push(`− Dental $${b.dental.toLocaleString()}`);
+                  if (b.vision > 0)   tooltipParts.push(`− Vision $${b.vision.toLocaleString()}`);
+                  if (b.hearing > 0)  tooltipParts.push(`− Hearing $${b.hearing.toLocaleString()}`);
+                  if (b.otc > 0)      tooltipParts.push(`− OTC $${b.otc.toLocaleString()}`);
+                  if (b.food > 0)     tooltipParts.push(`− Food $${b.food.toLocaleString()}`);
+                  tooltipParts.push(`= $${Math.abs(annual).toLocaleString()}/yr ${annual < 0 ? 'cost' : 'value'}`);
+                }
+                const tooltip = tooltipParts.join(' ');
                 return (
                   <td
                     key={col.id}
+                    title={tooltip}
                     style={{
                       width: 180,
                       padding: '12px 14px',
@@ -963,11 +1067,12 @@ export function QuoteDeliveryV4({
                       fontSize: 15,
                       fontWeight: 700,
                       borderBottom: 'none',
+                      cursor: tooltip ? 'help' : 'default',
                     }}
                   >
                     {annual < 0 ? '−' : ''}${Math.abs(annual).toLocaleString()}/yr
                     {!isCurrent && savings > 0 && (
-                      <span style={{ fontSize: 9, marginLeft: 6, opacity: 0.85 }}>saves ${savings.toLocaleString()}</span>
+                      <span style={{ fontSize: 9, marginLeft: 6, opacity: 0.85 }}>saves ${Math.round(savings).toLocaleString()}</span>
                     )}
                   </td>
                 );
@@ -1351,34 +1456,47 @@ const MEDICAL_DEFS: MedicalDef[] = [
   { label: 'Inpatient',          pick: (p) => p.benefits.medical.inpatient },
 ];
 
-// formatExtra — three-state display for extras (Dental, Vision,
-// Hearing, OTC, Food Card).
+// formatExtra — display string per V4 spec for dental/vision/
+// hearing/OTC/food_card. Combines structured Plan.benefits.*
+// dollar values with parsed extractBenefitValue() output from the
+// pm_plan_benefits.benefit_description text.
 //
-//   1. Real dollar amount > 0 → "$X{suffix}".
-//   2. amount === 0 BUT a non-empty pm_plan_benefits.benefit_description
-//      is set → extract the most useful slug from the description
-//      ("$45 copay" → "$45 copay"; "Preventive dental" → "Covered").
-//      The plan clearly DOES cover the benefit; rendering '—' would
-//      be a worse compliance signal than "Covered".
-//   3. amount === 0 AND no description AND no preset (e.g. "Exam
-//      only" passed in for vision/hearing) → '—'.
+// Rules per the V4 task spec:
+//   • Real structured dollar amount     → "$X/yr"
+//   • parsed amount + level             → "$2,500/yr · comprehensive"
+//   • parsed copay only                 → "$45 copay" (with level if known)
+//   • level only (no $)                 → "Preventive only" / "Exam only"
+//   • description only (no parse)       → raw description
+//   • truly empty                       → preset (e.g. "Exam only")
+//                                         or '—'
+//
+// Per the user's directive: NEVER render generic "Covered." If a
+// plan has the benefit but we can't parse a value, show the raw
+// description text — at least the broker sees what CMS filed.
 function formatExtra(
-  amount: number,
+  benefitType: string,
+  structuredAmount: number,
   suffix: string,
   description: string | null | undefined,
   preset: string | null = null,
 ): string {
-  if (amount > 0) return `$${amount.toLocaleString()}${suffix}`;
-  if (description) {
-    // Pull "$45 copay" / "$1,500 annual" patterns when present.
-    const copayMatch = description.match(/\$([\d,]+)\s*(copay|annual|\/yr|maximum|max)/i);
-    if (copayMatch) {
-      const word = copayMatch[2].toLowerCase();
-      if (word.startsWith('copay')) return `$${copayMatch[1]} copay`;
-      return `$${copayMatch[1]}`;
-    }
-    return 'Covered';
+  const parsed = extractBenefitValue(description, benefitType);
+  // Period inference from the suffix passed in by the row config.
+  const fallbackPeriod: BenefitPeriod | undefined =
+    suffix === '/yr' ? 'year' :
+    suffix === '/qtr' ? 'quarter' :
+    suffix === '/mo' ? 'month' : undefined;
+  // If the structured amount > 0, use it as the headline amount.
+  // (The Plan.benefits.dental.annual_max etc. are the
+  // ground-truth structured fields; the description is supplementary.)
+  if (structuredAmount > 0) {
+    const display = formatBenefitDisplay(parsed, structuredAmount, fallbackPeriod);
+    return display;
   }
+  // No structured amount — try to display from the parsed
+  // description. formatBenefitDisplay handles all the variants.
+  const fromParse = formatBenefitDisplay(parsed);
+  if (fromParse !== '—') return fromParse;
   if (preset) return preset;
   return '—';
 }

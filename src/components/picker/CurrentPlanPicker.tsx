@@ -35,7 +35,9 @@ interface Props {
 export function CurrentPlanPicker({ autoFocus, onSelected, hint }: Props) {
   const client = useSession((s) => s.client);
   const currentPlanId = useSession((s) => s.currentPlanId);
+  const noCurrentPlan = useSession((s) => s.noCurrentPlan);
   const setCurrentPlanId = useSession((s) => s.setCurrentPlanId);
+  const setNoCurrentPlan = useSession((s) => s.setNoCurrentPlan);
 
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(false);
@@ -141,29 +143,91 @@ export function CurrentPlanPicker({ autoFocus, onSelected, hint }: Props) {
             Change
           </button>
         </div>
-      ) : (
-        <input
-          autoFocus={autoFocus}
-          type="text"
-          placeholder={
-            client.county
-              ? `Search plans in ${client.county}, ${client.state} — name or H-number…`
-              : 'Set county on the Intake page first…'
-          }
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          disabled={!client.county || !client.state}
+      ) : noCurrentPlan ? (
+        <div
           style={{
-            width: '100%',
-            padding: '8px 12px',
-            borderRadius: 8,
+            padding: 10,
             border: '1px solid #d1d5db',
-            fontSize: 13,
-            fontFamily: 'inherit',
-            outline: 'none',
-            background: client.county ? '#fff' : '#f3f4f6',
+            borderRadius: 8,
+            background: '#f5f4f0',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            marginBottom: 8,
           }}
-        />
+        >
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>
+              Current plan
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#1f2937', marginTop: 2 }}>
+              New to Medicare · no current plan
+            </div>
+            <div style={{ fontSize: 11, color: '#6b7280' }}>
+              Quote screen will skip the benchmark column.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setNoCurrentPlan(false)}
+            style={{
+              padding: '4px 10px',
+              borderRadius: 5,
+              border: '1px solid #d1d5db',
+              background: '#fff',
+              color: '#374151',
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Change
+          </button>
+        </div>
+      ) : (
+        <>
+          <input
+            autoFocus={autoFocus}
+            type="text"
+            placeholder={
+              client.county
+                ? `Search plans in ${client.county}, ${client.state} — name or H-number…`
+                : 'Set county on the Intake page first…'
+            }
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            disabled={!client.county || !client.state}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              borderRadius: 8,
+              border: '1px solid #d1d5db',
+              fontSize: 13,
+              fontFamily: 'inherit',
+              outline: 'none',
+              background: client.county ? '#fff' : '#f3f4f6',
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => setNoCurrentPlan(true)}
+            style={{
+              marginTop: 6,
+              padding: '6px 12px',
+              borderRadius: 6,
+              border: '1px dashed #9ca3af',
+              background: '#fff',
+              color: '#374151',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+            }}
+          >
+            New to Medicare · no current plan to compare
+          </button>
+        </>
       )}
 
       {hint && !selected && (
