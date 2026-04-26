@@ -106,19 +106,31 @@ const CSS = `
 }
 .qv4 *, .qv4 *::before, .qv4 *::after { box-sizing: border-box; }
 
-.qv4-qwrap { overflow-x: auto; padding: 0 0 12px; }
-.qv4 table.qt { border-collapse: collapse; width: 100%; min-width: 1100px; }
+.qv4-qwrap { overflow-x: auto; padding: 0 0 12px; -webkit-overflow-scrolling: touch; }
+/* table-layout: fixed + a <colgroup> below force every column to honor
+ * its assigned width even when content is wider than the cell. min-width
+ * keeps the table scrollable horizontally rather than collapsing columns
+ * to unreadable widths on narrower viewports. */
+.qv4 table.qt {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 1200px;
+  table-layout: fixed;
+}
 .qv4 .qt th, .qv4 .qt td {
   padding: 7px 12px; text-align: left; vertical-align: middle;
-  border-bottom: 1px solid var(--qv4-g100); font-size: 12px; white-space: nowrap;
+  border-bottom: 1px solid var(--qv4-g100); font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .qv4 .qt .lc {
   position: sticky; left: 0; z-index: 5; background: var(--qv4-g50);
-  font-weight: 500; color: var(--qv4-g600); min-width: 160px; white-space: normal;
+  font-weight: 500; color: var(--qv4-g600); min-width: 200px; white-space: normal;
+  overflow: visible;
 }
 .qv4 .qt th.qh {
   padding: 12px; border-bottom: 1px solid var(--qv4-g200);
-  vertical-align: top; font-weight: 400; min-width: 210px;
+  vertical-align: top; font-weight: 400; min-width: 220px;
+  white-space: normal; overflow: hidden;
 }
 /* Column header backgrounds — gray current, navy best Rx, teal OOP, leaf giveback. */
 .qv4 .qt th.qh.cb { background: var(--qv4-g200); color: var(--qv4-g800); }
@@ -194,9 +206,13 @@ const CSS = `
 .qv4 .ti { display: inline-flex; align-items: center; justify-content: center;
   width: 17px; height: 17px; border-radius: 3px;
   font-size: 9px; font-weight: 700; font-family: var(--qv4-fm); margin-right: 3px; }
-.qv4 .ti.t1, .qv4 .ti.t2, .qv4 .ti.t6 { background: #d4edda; color: #155724; }
-.qv4 .ti.t3 { background: #fff3cd; color: #856404; }
-.qv4 .ti.t4, .qv4 .ti.t5 { background: #f8d7da; color: #721c24; }
+/* Per V4 spec: T1 green, T2 teal, T3 blue, T4 amber, T5 coral, T6 red. */
+.qv4 .ti.t1 { background: #dcfce7; color: #166534; }   /* green */
+.qv4 .ti.t2 { background: #ccfbf1; color: #115e59; }   /* teal */
+.qv4 .ti.t3 { background: #dbeafe; color: #1e40af; }   /* blue */
+.qv4 .ti.t4 { background: #fef3c7; color: #92400e; }   /* amber */
+.qv4 .ti.t5 { background: #ffe4e6; color: #9f1239; }   /* coral */
+.qv4 .ti.t6 { background: #fee2e2; color: #991b1b; }   /* red */
 
 .qv4 .d { font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px;
   margin-left: 3px; font-family: var(--qv4-fm); }
@@ -455,11 +471,26 @@ export function QuoteDeliveryV4({
     return cols;
   }, [currentPlan, result]);
 
-  // The current column is the cost benchmark for delta badges.
-  // (Computed before any early return to keep hook order stable —
-  // see Rules of Hooks; useMemo below MUST run on every render.)
+  // Cost benchmark for delta badges. When the session has a current
+  // plan we use that (the agent is comparing alternatives against
+  // what the client is on today). When there's no current plan —
+  // first quote, or "Test Test" with no AgentBase history — fall
+  // back to the leftmost plan column (typically Best Rx Match) so
+  // columns 2..N can still show "+/- $X" vs the lead. Without this
+  // fallback, every delta is suppressed and the table reads as a
+  // bare grid of numbers.
+  // Computed before any early return to keep hook order stable.
   const currentCol = columns.find((c) => c.variant === 'current') ?? null;
-  const baseline = currentCol?.plan ?? null;
+  const baseline =
+    currentCol?.plan ??
+    columns.find((c) => c.variant !== 'current')?.plan ??
+    null;
+  // (baselineIsCurrent flag is intentionally not threaded through the
+  // row components — when there's no current column, the baseline
+  // plan is itself the leftmost column. Its delta vs itself is 0 so
+  // no badge renders, and every other column compares against it
+  // naturally. If we ever want a "vs lead" subtitle we can revive
+  // the flag.)
 
   // Medications needing manufacturer assistance: any med where every
   // plan column comes back excluded / not_covered, or tier 4–5 with
@@ -541,6 +572,16 @@ export function QuoteDeliveryV4({
 
       <div className="qv4-qwrap">
         <table className="qt">
+          {/* table-layout:fixed + colgroup forces equal widths even
+              when a header card or cell wraps to two lines. 22% for
+              the sticky label column, the remainder split equally
+              across plan columns. */}
+          <colgroup>
+            <col style={{ width: '22%' }} />
+            {columns.map((c) => (
+              <col key={c.plan.id} style={{ width: `${78 / columns.length}%` }} />
+            ))}
+          </colgroup>
           <thead>
             <tr>
               <th
@@ -1352,6 +1393,7 @@ function lookupDrugCost(
     // Excluded vs not-listed.
     const seedTier = plan.formulary[med.rxcui];
     if (seedTier === 'excluded') {
+      logDrugLookup(plan, med, { source: 'excluded', monthly: 0, ndc, tier: null });
       return makeDrugInfo({ tier: null, label: 'Excluded', monthly: 0, annual: 0, pa: false, st: false });
     }
   }
@@ -1365,6 +1407,26 @@ function lookupDrugCost(
       ? Math.round(annualFromCache / 12)
       : monthlyFromFormulary ?? monthlyFromTierBenefits ?? 0;
   const annual = annualFromCache != null ? Math.round(annualFromCache) : monthly * 12;
+
+  // Diagnostic — surfaces which lookup path produced the cell value.
+  // Throttled to once per (plan, rxcui) pair to keep console
+  // readable. When every drug shows $0 in production, this log tells
+  // us whether the cause is (a) no NDC bridge, (b) no cache row,
+  // (c) no formulary copay, or (d) no pbp_benefits tier copay —
+  // each has a different fix path.
+  logDrugLookup(plan, med, {
+    source:
+      annualFromCache != null
+        ? 'drug_cost_cache'
+        : monthlyFromFormulary != null
+          ? 'pm_formulary.copay'
+          : monthlyFromTierBenefits != null
+            ? 'pbp_benefits.tier_copay'
+            : 'fallback_zero',
+    monthly,
+    ndc,
+    tier,
+  });
 
   // Mail-order 90-day pricing — until per-fill-type rows are cached
   // separately we display a 3× monthly value (the per-fill cost the
@@ -1410,6 +1472,38 @@ function makeDrugInfo(args: {
       };
     },
   };
+}
+
+// Throttled diagnostic — emits one console.info per (plan, rxcui) pair
+// so the dev console isn't spammed when the table re-renders. Resets
+// when the page reloads. Logs:
+//   plan_id  – agent-side triple id
+//   rxcui    – RxNorm concept the lookup was for
+//   ndc      – bridge from pm_drug_ndc, undefined when bridge is missing
+//   tier     – formulary tier (cache → formulary → seed → null)
+//   source   – which path produced `monthly`. fallback_zero means every
+//              source returned null and the cell will render $0; that's
+//              the failure mode users see when the drug-cost cache is
+//              cold for these (plan, NDC) pairs.
+const drugLookupLogged = new Set<string>();
+function logDrugLookup(
+  plan: Plan,
+  med: Medication,
+  info: { source: string; monthly: number; ndc: string | undefined; tier: number | null },
+): void {
+  const key = `${plan.id}::${med.rxcui ?? ''}`;
+  if (drugLookupLogged.has(key)) return;
+  drugLookupLogged.add(key);
+  if (typeof console === 'undefined') return;
+  console.info('[lookupDrugCost]', {
+    plan_id: plan.id,
+    rxcui: med.rxcui,
+    med: med.name,
+    ndc: info.ndc,
+    tier: info.tier,
+    monthly: info.monthly,
+    source: info.source,
+  });
 }
 
 function tierCopayFromPlan(plan: Plan, tier: number): number | null {
