@@ -1147,13 +1147,19 @@ interface DrugInfo {
 // last fallback when neither cache nor formulary nor plan tier copay
 // is populated. These come from CMS landscape averages 2025-2026
 // (preferred mail/retail, 30-day fill).
+//
+// Tier 6 is intentionally NOT in the estimate map — its meaning is
+// carrier-specific (Wellcare uses "Select Care · $0", others use
+// "Excluded Generics", others use "Specialty Tier 2"). Without a
+// universal default the tier-6 path falls through to the plan-level
+// rx_tiers.tier_6 copay (which IS populated from pm_plan_benefits),
+// which is the only honest source.
 const TIER_ESTIMATE_USD: Record<number, number | null> = {
   1: 5,    // generic preferred
   2: 20,   // generic non-preferred
   3: 47,   // brand preferred
   4: null, // coinsurance tier — handled separately
   5: null, // coinsurance tier
-  6: null, // not covered
 };
 
 function lookupDrugCost(
@@ -1178,7 +1184,13 @@ function lookupDrugCost(
       return notCovered();
     }
   }
-  if (tier === 6) return notCovered();
+  // NOTE: tier 6 is NOT excluded by default. Wellcare (and several
+  // other carriers) file preferred generics at tier 6 with $0 copay
+  // and quantity limits — the previous `if (tier === 6) return
+  // notCovered()` here actively misrepresented real coverage. The
+  // only path to "Not covered" is the seed formulary marker
+  // 'excluded' (handled above) — every numeric tier 1-8 falls
+  // through to the cost-share lookup below.
 
   // Path 1 — cache hit. Real per-NDC, per-plan annual price.
   if (cached?.estimated_yearly_total != null) {
@@ -1305,10 +1317,11 @@ function notCovered(): DrugInfo {
 function tierCopay(plan: Plan, tier: number): number | null {
   const map: Record<number, keyof Plan['benefits']['rx_tiers']> = {
     1: 'tier_1', 2: 'tier_2', 3: 'tier_3', 4: 'tier_4', 5: 'tier_5',
+    6: 'tier_6', 7: 'tier_7', 8: 'tier_8',
   };
   const key = map[tier];
   if (!key) return null;
-  return plan.benefits.rx_tiers[key].copay ?? null;
+  return plan.benefits.rx_tiers[key]?.copay ?? null;
 }
 
 function providerStatusFor(prov: Provider, plan: Plan): 'in' | 'out' | 'unknown' {

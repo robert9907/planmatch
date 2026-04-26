@@ -86,6 +86,9 @@ interface PlanBenefits {
     tier_3: CostShare;
     tier_4: CostShare;
     tier_5: CostShare;
+    tier_6?: CostShare;
+    tier_7?: CostShare;
+    tier_8?: CostShare;
   };
 }
 
@@ -527,6 +530,9 @@ function buildBenefits(rows: BenefitRow[]): PlanBenefits {
       tier_3: costShareFor(rows, 'rx_tier_3'),
       tier_4: costShareFor(rows, 'rx_tier_4'),
       tier_5: costShareFor(rows, 'rx_tier_5'),
+      tier_6: costShareFor(rows, 'rx_tier_6'),
+      tier_7: costShareFor(rows, 'rx_tier_7'),
+      tier_8: costShareFor(rows, 'rx_tier_8'),
     },
   };
 }

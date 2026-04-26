@@ -96,6 +96,14 @@ export interface RxTierCopays {
   tier_3: CostShare;
   tier_4: CostShare;
   tier_5: CostShare;
+  // Tier 6+ are valid CMS coverage tiers (carrier-specific buckets:
+  // "Select Care", "Excluded Generics with QL", "Specialty Tier 2").
+  // Wellcare H1914 files atorvastatin/metformin/lisinopril at tier 6
+  // with $0 copay — treating tier 6 as "excluded" misrepresents real
+  // coverage. Optional so seed plans don't have to populate.
+  tier_6?: CostShare;
+  tier_7?: CostShare;
+  tier_8?: CostShare;
 }
 
 export interface PlanBenefits {
