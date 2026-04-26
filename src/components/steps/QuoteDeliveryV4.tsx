@@ -1,40 +1,71 @@
-// QuoteDeliveryV4 — static-first rebuild.
+// QuoteDeliveryV4 — column-per-plan side-by-side comparison table.
 //
-// Per Rob's directive (2026-04-26): wipe the previous implementation
-// and rebuild the layout from scratch using hardcoded sample data
-// matching the V4 mockup (planmatch-full-flow.html, Marina Burgess
-// scenario). The previous version had Plan Brain integration,
-// useDrugCosts live priming, useManufacturerAssistance, ribbon-driven
-// column selection, and per-carrier override handling — all of which
-// will be re-wired in a follow-up once the layout is verified visually.
+// Layout: pixel-perfect rebuild from e812a28 (no <colgroup>, fixed
+// pixel widths inline on the <thead> row, every body cell carries
+// its column's background inline). Layout/CSS unchanged from the
+// static commit — this commit wires real data sources behind the
+// existing visual.
 //
-// Layout rules (taken verbatim from the rebuild brief):
+// Data sources:
+//   • Plan Brain (usePlanBrain) — composite ranking + ribbons.
+//     Drives column-variant assignment:
+//       LOWEST_DRUG_COST / BEST_OVERALL → 'best_rx' (navy)
+//       LOWEST_OOP                       → 'lowest_oop' (teal)
+//       PART_B_SAVINGS                   → 'giveback' (leaf)
+//   • useDrugCosts — primes /api/drug-costs and writes through to
+//     pm_drug_cost_cache. Used for the Total Rx Cost row.
+//   • PlanBrainData.drugCostCache + ndcByRxcui + formularyByContractPlan
+//     — per-drug per-plan cost lookup (lookupDrugCost helper).
+//   • Plan.benefits.medical — per-plan medical copays.
+//   • Plan.benefits.{dental,vision,hearing,otc,food_card,fitness} +
+//     part_b_giveback — extras + plan costs rows.
+//   • Provider.networkStatus + manualOverrides — per-(provider,plan)
+//     network status with the agent's override layer winning.
+//   • useManufacturerAssistance — PAP help section under the table.
 //
+// Baseline for delta badges:
+//   • If session.currentPlanId is set → that's column 1, gray.
+//   • Otherwise the first plan column (Best Rx) is the baseline; its
+//     delta vs itself is 0 so no badge renders, every other column
+//     compares against it.
+//
+// Layout rules preserved verbatim from the rebuild brief:
 //   • <div style={{ overflowX: 'auto' }}> wrapping a <table> with
-//     borderCollapse + tableLayout: 'fixed' + minWidth: 920px.
-//   • NO <colgroup>, no percentages. Column widths are set inline on
+//     borderCollapse + tableLayout: 'fixed' + minWidth = 200 + N×180.
+//   • NO <colgroup>, no percentages. Column widths set inline on
 //     the first <th>/<td>s of <thead>; with table-layout: fixed those
 //     widths apply to every row.
-//   • Every <tr> emits exactly 1 <th> + columns.length <td> elements
-//     (section headers use colspan to span the full row).
-//   • Background colors are applied INLINE on every <td> in a colored
-//     column — not via class selectors — so re-renders or hydration
-//     order can't strip a column's tint.
-//   • Header cells: navy / teal / leaf with white text.
-//   • Fonts: Fraunces for plan names + section titles, JetBrains Mono
-//     for dollar amounts, Inter for body.
-//   • Delta badges inline on every cell that differs from column 1.
-//   • Total Annual Value is a navy strip with all <td>s navy and
-//     dollar values rendered in green.
-//   • Section headers use a single <td colspan={1 + N}> with
-//     uppercase + letter-spacing.
-//
-// The Props signature is preserved so Step6QuoteDelivery still
-// compiles. The static body intentionally ignores those props for
-// this commit — wiring is the next step.
+//   • Every <tr> emits exactly 1 <th> + columns.length <td>s
+//     (section headers use colspan).
+//   • Background colors INLINE on every <td> — not via class.
+//   • Header cells navy / teal / leaf with white text.
+//   • Fonts: Fraunces serif for plan names + section titles,
+//     JetBrains Mono for dollar amounts, Inter for body.
+//   • Delta badges inline on every cell that differs from baseline.
+//   • Total Annual Value navy strip with green dollar amounts.
 
+import { useMemo, useState } from 'react';
 import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
+import { useSession } from '@/hooks/useSession';
+import { usePlanBrain } from '@/hooks/usePlanBrain';
+import { useDrugCosts, lookupPlanCost } from '@/hooks/useDrugCosts';
+import {
+  useManufacturerAssistance,
+  type AssistanceRow,
+} from '@/hooks/useManufacturerAssistance';
+import { findPlan } from '@/lib/cmsPlans';
+import type {
+  PlanBrainData,
+  RibbonKey,
+  ScoredPlan,
+} from '@/lib/plan-brain-types';
+
+const SUNFIRE_URL = 'https://www.sunfirematrix.com/app/consumer/yourmedicare/10447418';
+const MAX_FINALIST_COLUMNS = 4;
+const DEFAULT_INPATIENT_DAYS = 5;
+
+type PharmacyFill = 'retail_30' | 'mail_90';
 
 // ─── Color tokens ──────────────────────────────────────────────────
 const COL = {
@@ -75,7 +106,7 @@ const TIER_BADGE: Record<number, { bg: string; fg: string }> = {
 };
 
 // ─── Column variants ───────────────────────────────────────────────
-type ColumnVariant = 'current' | 'best_rx' | 'lowest_oop' | 'giveback';
+type ColumnVariant = 'current' | 'best_rx' | 'lowest_oop' | 'giveback' | 'normal';
 
 interface ColumnDef {
   id: string;
@@ -86,6 +117,11 @@ interface ColumnDef {
   hNumber: string;
   star: number;
   starColor?: string;
+  /** Real Plan reference — added when wiring data so subsequent
+   *  per-row computations (med costs, copays, etc.) can pull from
+   *  plan.benefits + lookup tables. */
+  plan: Plan;
+  scored: ScoredPlan | null;
 }
 
 interface ColumnStyle {
@@ -105,168 +141,49 @@ function styleFor(variant: ColumnVariant): ColumnStyle {
       return { headerBg: COL.tealHeader, headerFg: COL.white, bodyBg: COL.tealBody, bodyFg: COL.ink };
     case 'giveback':
       return { headerBg: COL.leafHeader, headerFg: COL.white, bodyBg: COL.leafBody, bodyFg: COL.ink };
+    case 'normal':
+      return { headerBg: '#f3f4f6', headerFg: COL.ink, bodyBg: undefined, bodyFg: COL.ink };
   }
 }
 
-// ─── Hardcoded sample data (Marina Burgess scenario from mockup) ────
-const COLUMNS: ColumnDef[] = [
-  {
-    id: 'H1036-308',
-    variant: 'current',
-    ribbon: null,
-    carrier: 'Humana',
-    planName: 'Gold Plus HMO',
-    hNumber: 'H1036-308',
-    star: 4.5,
-    starColor: '#3b6d11',
-  },
-  {
-    id: 'H9725-014',
-    variant: 'best_rx',
-    ribbon: '⭐ Best Rx Match',
-    carrier: 'HealthSpring',
-    planName: 'Preferred Select (HMO)',
-    hNumber: 'H9725-014',
-    star: 4,
-  },
-  {
-    id: 'H9725-009',
-    variant: 'lowest_oop',
-    ribbon: '⭐ Lowest OOP',
-    carrier: 'HealthSpring',
-    planName: 'Preferred (HMO)',
-    hNumber: 'H9725-009',
-    star: 4,
-  },
-  {
-    id: 'H3146-021',
-    variant: 'giveback',
-    ribbon: '⭐ Part B Giveback',
-    carrier: 'Aetna Medicare',
-    planName: 'Signature Care (HMO)',
-    hNumber: 'H3146-021',
-    star: 4,
-  },
-];
+const RIBBON_LABEL: Record<string, string> = {
+  BEST_OVERALL:        '⭐ Best Overall',
+  LOWEST_DRUG_COST:    '⭐ Best Rx Match',
+  LOWEST_OOP:          '⭐ Lowest OOP',
+  BEST_EXTRAS:         '⭐ Best Extras',
+  ALL_DOCS_IN_NETWORK: '✓ All in-network',
+  PART_B_SAVINGS:      '⭐ Part B Giveback',
+  ZERO_PREMIUM:        '$0 Premium',
+  ALL_MEDS_COVERED:    '✓ All meds covered',
+};
 
-// Per-cell row data — index into COLUMNS for the value/delta rendering.
-// Format: [ <current>, <best_rx>, <lowest_oop>, <giveback> ]
-type Row4Display = [string, string, string, string];
-type Row4Num = [number | null, number | null, number | null, number | null];
-type TierRow = [number | null, number | null, number | null, number | null];
+// ─── Per-render row shapes ─────────────────────────────────────────
+// Each row's arrays are length === columns.length (1..MAX_FINALIST_COLUMNS).
 
 interface MedRow {
+  id: string;
   name: string;
   fillNote: string;
-  tiers: TierRow;
-  values: Row4Display;   // formatted display values
-  monthly: Row4Num;      // numeric monthly cost (null = not covered)
-  paStFlags?: Array<{ pa?: boolean; st?: boolean } | null>;
+  tiers: (number | null)[];
+  values: string[];
+  monthly: (number | null)[];
+  paStFlags: Array<{ pa?: boolean; st?: boolean } | null>;
 }
-
-const MEDS: MedRow[] = [
-  {
-    name: 'Metformin 500 MG', fillNote: '30-day',
-    tiers: [6, 1, 1, 1],
-    values: ['$0', '$0', '$0', '$0'],
-    monthly: [0, 0, 0, 0],
-  },
-  {
-    name: 'Gabapentin 300 MG', fillNote: '30-day',
-    tiers: [2, 1, 1, 1],
-    values: ['$5', '$0', '$4', '$0'],
-    monthly: [5, 0, 4, 0],
-  },
-  {
-    name: 'Lisinopril 10 MG', fillNote: '30-day',
-    tiers: [6, 1, 1, 1],
-    values: ['$0', '$0', '$0', '$0'],
-    monthly: [0, 0, 0, 0],
-  },
-  {
-    name: 'Atorvastatin 20 MG', fillNote: '30-day',
-    tiers: [6, 1, 1, 1],
-    values: ['$0', '$0', '$0', '$0'],
-    monthly: [0, 0, 0, 0],
-  },
-  {
-    name: 'Eliquis 5 MG', fillNote: '30-day',
-    tiers: [3, 3, 3, 3],
-    values: ['$47', '$47', '$47', '24%'],
-    monthly: [47, 47, 47, null],
-    paStFlags: [{ pa: true }, null, null, { pa: true, st: true }],
-  },
-  {
-    name: 'Jardiance 25 MG', fillNote: '30-day',
-    tiers: [3, 3, 3, 3],
-    values: ['$47', '$47', '$47', '24%'],
-    monthly: [47, 47, 47, null],
-  },
-];
-
-const RX_TOTAL_MONTHLY: Row4Num = [99, 94, 98, 114];
-const RX_TOTAL_ANNUAL:  Row4Num = [1188, 1128, 1176, 1368];
 
 interface ProviderRow {
+  id: string;
   name: string;
   specialty: string;
-  status: ['in' | 'out' | 'unknown', 'in' | 'out' | 'unknown', 'in' | 'out' | 'unknown', 'in' | 'out' | 'unknown'];
+  status: Array<'in' | 'out' | 'unknown'>;
 }
-const PROVIDERS: ProviderRow[] = [
-  { name: 'Dr. Klein, DO', specialty: 'Internal Medicine', status: ['in', 'in', 'in', 'in'] },
-];
 
 interface CopayRow {
   label: string;
-  values: Row4Display;
-  numbers: Row4Num;    // for delta calc
-  suffix?: string;     // e.g. "/day"
-  bold?: boolean;
+  values: string[];
+  numbers: (number | null)[];
+  suffix?: string;
+  betterIsHigher?: boolean;
 }
-
-const COPAYS: CopayRow[] = [
-  { label: 'PCP',                values: ['$0', '$0', '$0', '$0'],          numbers: [0, 0, 0, 0] },
-  { label: 'Specialist',         values: ['$45', '$15', '$15', '$10'],      numbers: [45, 15, 15, 10] },
-  { label: 'Labs',               values: ['$20', '$0', '$0', '$0'],         numbers: [20, 0, 0, 0] },
-  { label: 'Imaging / MRI',      values: ['$250', '$200', '$200', '$260'],  numbers: [250, 200, 200, 260] },
-  { label: 'ER',                 values: ['$115', '$150', '$150', '$130'],  numbers: [115, 150, 150, 130] },
-  { label: 'Urgent Care',        values: ['$40', '$65', '$65', '$50'],      numbers: [40, 65, 65, 50] },
-  { label: 'Outpatient Surgery', values: ['$250', '$200', '$200', '$250'],  numbers: [250, 200, 200, 250] },
-  { label: 'Mental Health',      values: ['$40', '$30', '$30', '$25'],      numbers: [40, 30, 30, 25] },
-  { label: 'PT / OT',            values: ['$40', '$30', '$30', '$25'],      numbers: [40, 30, 30, 25] },
-  { label: 'Inpatient',          values: ['$375/day', '$275/day', '$250/day', '$382/day'],
-                                 numbers: [375, 275, 250, 382], suffix: '/day' },
-];
-
-const INPATIENT_DAYS = 5;
-const INPATIENT_TOTAL: Row4Num = [1875, 1375, 1250, 1910];   // daily × 5
-
-const PLAN_COSTS: CopayRow[] = [
-  { label: 'Premium',         values: ['$0/mo', '$0/mo', '$0/mo', '$0/mo'], numbers: [0, 0, 0, 0] },
-  { label: 'MOOP',            values: ['$9,250', '$3,200', '$3,550', '$6,350'], numbers: [9250, 3200, 3550, 6350] },
-  { label: 'Rx Deductible',   values: ['$450', '$295', '$295', '$615'],     numbers: [450, 295, 295, 615] },
-  { label: 'Part B Giveback', values: ['$1/mo', '$5/mo', '$0/mo', '$0/mo'], numbers: [1, 5, 0, 0] },
-];
-
-const EXTRAS: Array<CopayRow & { betterIsHigher?: boolean }> = [
-  { label: 'Dental',    values: ['$2,000/yr', '$1,500/yr', '$1,500/yr', '$2,500/yr'], numbers: [2000, 1500, 1500, 2500], betterIsHigher: true },
-  { label: 'Vision',    values: ['$200/yr', '$300/yr', '$300/yr', '$250/yr'],         numbers: [200, 300, 300, 250],     betterIsHigher: true },
-  { label: 'Hearing',   values: ['$1,500/yr', '$2,000/yr', '$2,000/yr', '$1,200/yr'], numbers: [1500, 2000, 2000, 1200], betterIsHigher: true },
-  { label: 'OTC',       values: ['$0/qtr', '$405/qtr', '$120/qtr', '$90/qtr'],        numbers: [0, 405, 120, 90],        betterIsHigher: true },
-  { label: 'Food Card', values: ['$0/mo', '$75/mo', '$50/mo', '$0/mo'],               numbers: [0, 75, 50, 0],           betterIsHigher: true },
-  { label: 'Fitness',   values: ['SilverSneakers', 'Renew Active', 'SilverSneakers', 'SilverSneakers'], numbers: [1, 1, 1, 1] },
-];
-
-const ANNUAL_NET: Row4Num = [-2074, -3917, -2759, -3127];
-const SAVINGS_VS_CURRENT: Row4Num = [0, 1843, 685, 1053];
-const WHY_SWITCH: Row4Display = [
-  'Current plan',
-  'Lowest Rx · $6K lower MOOP · $1,620 OTC · $900 food · 24 trips · in-network',
-  'Low Rx · $5.7K lower MOOP · $480 OTC · $600 food · in-network',
-  'Best specialist $10 · dental $2,500 · higher Rx deductible',
-];
-
-const SUNFIRE_URL = 'https://www.sunfirematrix.com/app/consumer/yourmedicare/10447418';
 
 // ─── Component ─────────────────────────────────────────────────────
 
@@ -280,24 +197,381 @@ interface Props {
 }
 
 export function QuoteDeliveryV4({
+  finalists,
+  client,
+  medications,
+  providers,
   recommendation,
   onRecommend,
 }: Props) {
-  // Layout-first commit: hardcoded sample data, props intentionally
-  // ignored. Re-wiring in the follow-up.
-  void 0;
+  const currentPlanId = useSession((s) => s.currentPlanId);
+  const [pharmacyFill, setPharmacyFill] = useState<PharmacyFill>('retail_30');
 
-  const N = COLUMNS.length;
+  // Plan Brain — composite ranking + per-axis scores + ribbons.
+  const { result, data: brainData, loading } = usePlanBrain({
+    plans: finalists,
+    client,
+    medications,
+    providers,
+  });
+
+  // Live drug-cost prime — hits /api/drug-costs and writes back to
+  // pm_drug_cost_cache. byPlanId.<plan.id>.annual_cost is the
+  // authoritative Total Rx Cost for the client's full prescription set.
+  const drugCosts = useDrugCosts(
+    finalists,
+    medications,
+    pharmacyFill === 'mail_90' ? 'mail' : 'retail',
+  );
+
+  // Manufacturer assistance — drives the help section under the table.
+  const assistance = useManufacturerAssistance(medications);
+
+  const currentPlan = useMemo<Plan | null>(
+    () => (currentPlanId ? findPlan(currentPlanId) : null),
+    [currentPlanId],
+  );
+
+  // ── Column selection: ribbon-driven ───────────────────────────────
+  // 1. Current plan (if session has one) → 'current' (gray)
+  // 2. LOWEST_DRUG_COST or BEST_OVERALL ribbon → 'best_rx' (navy)
+  // 3. LOWEST_OOP ribbon → 'lowest_oop' (teal)
+  // 4. PART_B_SAVINGS ribbon → 'giveback' (leaf)
+  // 5. Backfill remaining slots up to MAX_FINALIST_COLUMNS=4 with
+  //    'normal' variant by composite descending.
+  const columns = useMemo<ColumnDef[]>(() => {
+    const cols: ColumnDef[] = [];
+    const used = new Set<string>();
+
+    if (currentPlan) {
+      const inFinalist = result?.scored.find((s) => s.plan.id === currentPlan.id) ?? null;
+      cols.push(makeCol(currentPlan, inFinalist, 'current'));
+      used.add(currentPlan.id);
+    }
+
+    const ranked = result ? [...result.scored].sort((a, b) => b.composite - a.composite) : [];
+    const pickByRibbon = (...ribbons: RibbonKey[]): ScoredPlan | null => {
+      for (const r of ribbons) {
+        const hit = ranked.find((s) => s.ribbon === r && !used.has(s.plan.id));
+        if (hit) return hit;
+      }
+      return null;
+    };
+
+    // Best Rx
+    const bestRx =
+      pickByRibbon('LOWEST_DRUG_COST', 'BEST_OVERALL') ??
+      ranked.find((s) => !used.has(s.plan.id)) ??
+      null;
+    if (bestRx && cols.length < MAX_FINALIST_COLUMNS) {
+      cols.push(makeCol(bestRx.plan, bestRx, 'best_rx'));
+      used.add(bestRx.plan.id);
+    }
+
+    // Lowest OOP
+    let lowestOop = pickByRibbon('LOWEST_OOP');
+    if (!lowestOop) {
+      lowestOop = ranked
+        .filter((s) => !used.has(s.plan.id))
+        .reduce<ScoredPlan | null>(
+          (best, s) =>
+            best == null || s.totalOOPEstimate < best.totalOOPEstimate ? s : best,
+          null,
+        );
+    }
+    if (lowestOop && cols.length < MAX_FINALIST_COLUMNS) {
+      cols.push(makeCol(lowestOop.plan, lowestOop, 'lowest_oop'));
+      used.add(lowestOop.plan.id);
+    }
+
+    // Part B Giveback
+    let giveback = pickByRibbon('PART_B_SAVINGS');
+    if (!giveback) {
+      giveback = ranked
+        .filter((s) => !used.has(s.plan.id) && (s.plan.part_b_giveback ?? 0) > 0)
+        .reduce<ScoredPlan | null>(
+          (best, s) =>
+            best == null || (s.plan.part_b_giveback ?? 0) > (best.plan.part_b_giveback ?? 0) ? s : best,
+          null,
+        );
+    }
+    if (giveback && cols.length < MAX_FINALIST_COLUMNS) {
+      cols.push(makeCol(giveback.plan, giveback, 'giveback'));
+      used.add(giveback.plan.id);
+    }
+
+    // Backfill normal columns
+    for (const s of ranked) {
+      if (cols.length >= MAX_FINALIST_COLUMNS) break;
+      if (used.has(s.plan.id)) continue;
+      cols.push(makeCol(s.plan, s, 'normal'));
+      used.add(s.plan.id);
+    }
+    return cols;
+  }, [currentPlan, result]);
+
+  // ── Per-row data (computed once per render) ───────────────────────
+  // Baseline column for delta badges:
+  //   • If session has a current plan → that's the leftmost column.
+  //   • Otherwise the first plan column (typically Best Rx) is the
+  //     baseline; its delta vs itself is 0 so it shows no badge.
+  const baseIdx = 0;
+
+  const medRows = useMemo<MedRow[]>(() => {
+    return medications.map((med) => {
+      const lookups = columns.map((c) => lookupDrugCost(c.plan, med, brainData, pharmacyFill));
+      return {
+        id: med.id,
+        name: med.name,
+        fillNote: pharmacyFill === 'mail_90' ? '90-day mail' : '30-day retail',
+        tiers: lookups.map((d) => d?.tier ?? null),
+        values: lookups.map((d) => d?.label ?? '—'),
+        monthly: lookups.map((d) => (d ? (typeof d.monthly === 'number' ? d.monthly : null) : null)),
+        paStFlags: lookups.map((d) => (d ? { pa: d.pa, st: d.st } : null)),
+      };
+    });
+  }, [medications, columns, brainData, pharmacyFill]);
+
+  const providerRows = useMemo<ProviderRow[]>(() => {
+    return providers.map((pr) => ({
+      id: pr.id,
+      name: pr.name,
+      specialty: pr.specialty ?? '',
+      status: columns.map((c) => providerStatusFor(pr, c.plan)),
+    }));
+  }, [providers, columns]);
+
+  const copayRows = useMemo<CopayRow[]>(() => {
+    return MEDICAL_DEFS.slice(0, MEDICAL_DEFS.length - 1).map((def) => ({
+      label: def.label,
+      values: columns.map((c) => formatCostShare(def.pick(c.plan))),
+      numbers: columns.map((c) => copayCash(def.pick(c.plan))),
+    }));
+  }, [columns]);
+
+  // Inpatient row (separate so we can render Total Inpatient Cost
+  // immediately after).
+  const inpatientRow = useMemo<CopayRow>(() => {
+    const def = MEDICAL_DEFS[MEDICAL_DEFS.length - 1];
+    return {
+      label: def.label,
+      values: columns.map((c) => {
+        const cash = copayCash(def.pick(c.plan));
+        return cash != null ? `$${cash}/day` : formatCostShare(def.pick(c.plan));
+      }),
+      numbers: columns.map((c) => copayCash(def.pick(c.plan))),
+      suffix: '/day',
+    };
+  }, [columns]);
+
+  const inpatientTotal = useMemo<(number | null)[]>(
+    () => inpatientRow.numbers.map((n) => (n != null ? n * DEFAULT_INPATIENT_DAYS : null)),
+    [inpatientRow],
+  );
+
+  const planCostRows = useMemo<CopayRow[]>(() => [
+    {
+      label: 'Premium',
+      values: columns.map((c) => `$${c.plan.premium}/mo`),
+      numbers: columns.map((c) => c.plan.premium),
+    },
+    {
+      label: 'MOOP',
+      values: columns.map((c) => `$${c.plan.moop_in_network.toLocaleString()}`),
+      numbers: columns.map((c) => c.plan.moop_in_network),
+    },
+    {
+      label: 'Rx Deductible',
+      values: columns.map((c) =>
+        c.plan.drug_deductible == null ? '—' : `$${c.plan.drug_deductible}`,
+      ),
+      numbers: columns.map((c) => c.plan.drug_deductible),
+    },
+    {
+      label: 'Part B Giveback',
+      values: columns.map((c) =>
+        (c.plan.part_b_giveback ?? 0) > 0 ? `$${c.plan.part_b_giveback}/mo` : '—',
+      ),
+      numbers: columns.map((c) => c.plan.part_b_giveback ?? 0),
+      betterIsHigher: true,
+    },
+  ], [columns]);
+
+  const extraRows = useMemo<CopayRow[]>(() => [
+    {
+      label: 'Dental',
+      values: columns.map((c) =>
+        c.plan.benefits.dental.annual_max > 0
+          ? `$${c.plan.benefits.dental.annual_max.toLocaleString()}/yr`
+          : '—',
+      ),
+      numbers: columns.map((c) => c.plan.benefits.dental.annual_max),
+      betterIsHigher: true,
+    },
+    {
+      label: 'Vision',
+      values: columns.map((c) =>
+        c.plan.benefits.vision.eyewear_allowance_year > 0
+          ? `$${c.plan.benefits.vision.eyewear_allowance_year}/yr`
+          : c.plan.benefits.vision.exam ? 'Exam only' : '—',
+      ),
+      numbers: columns.map((c) => c.plan.benefits.vision.eyewear_allowance_year),
+      betterIsHigher: true,
+    },
+    {
+      label: 'Hearing',
+      values: columns.map((c) =>
+        c.plan.benefits.hearing.aid_allowance_year > 0
+          ? `$${c.plan.benefits.hearing.aid_allowance_year.toLocaleString()}/yr`
+          : c.plan.benefits.hearing.exam ? 'Exam only' : '—',
+      ),
+      numbers: columns.map((c) => c.plan.benefits.hearing.aid_allowance_year),
+      betterIsHigher: true,
+    },
+    {
+      label: 'OTC',
+      values: columns.map((c) =>
+        c.plan.benefits.otc.allowance_per_quarter > 0
+          ? `$${c.plan.benefits.otc.allowance_per_quarter}/qtr`
+          : '—',
+      ),
+      numbers: columns.map((c) => c.plan.benefits.otc.allowance_per_quarter),
+      betterIsHigher: true,
+    },
+    {
+      label: 'Food Card',
+      values: columns.map((c) =>
+        c.plan.benefits.food_card.allowance_per_month > 0
+          ? `$${c.plan.benefits.food_card.allowance_per_month}/mo`
+          : '—',
+      ),
+      numbers: columns.map((c) => c.plan.benefits.food_card.allowance_per_month),
+      betterIsHigher: true,
+    },
+    {
+      label: 'Fitness',
+      values: columns.map((c) =>
+        c.plan.benefits.fitness.enabled
+          ? c.plan.benefits.fitness.program ?? 'Included'
+          : '—',
+      ),
+      numbers: columns.map((c) => (c.plan.benefits.fitness.enabled ? 1 : 0)),
+    },
+  ], [columns]);
+
+  // Total Rx Cost — prefer live /api/drug-costs total when available.
+  const rxTotalAnnual = useMemo<(number | null)[]>(() => {
+    return columns.map((c) => {
+      const live = lookupPlanCost(drugCosts, c.plan);
+      if (live?.annual_cost != null) return Math.round(live.annual_cost);
+      // Fallback: sum per-drug cells.
+      let sum = 0;
+      let any = false;
+      for (const med of medications) {
+        const d = lookupDrugCost(c.plan, med, brainData, pharmacyFill);
+        if (!d) continue;
+        any = true;
+        sum += d.annual ?? 0;
+      }
+      return any ? sum : null;
+    });
+  }, [columns, drugCosts, medications, brainData, pharmacyFill]);
+
+  const rxTotalMonthly = useMemo<(number | null)[]>(
+    () => rxTotalAnnual.map((a) => (a != null ? Math.round(a / 12) : null)),
+    [rxTotalAnnual],
+  );
+
+  // Total Annual Value — net cost (premium + medical + rx − extras).
+  const annualNet = useMemo<(number | null)[]>(() => {
+    return columns.map((c, i) => {
+      const scored = c.scored;
+      const rxAnnual = rxTotalAnnual[i] ?? 0;
+      const premium = c.plan.premium * 12;
+      if (scored) {
+        const medical = scored.annualMedicalCost - premium;
+        const extras = scored.extrasValue;
+        return -(premium + medical + rxAnnual - extras);
+      }
+      // Current-plan column without a scored row — rough estimate.
+      const extras =
+        c.plan.benefits.dental.annual_max +
+        c.plan.benefits.otc.allowance_per_quarter * 4 +
+        c.plan.benefits.food_card.allowance_per_month * 12 +
+        (c.plan.part_b_giveback ?? 0) * 12;
+      return -(premium + rxAnnual - extras);
+    });
+  }, [columns, rxTotalAnnual]);
+
+  const savingsVsBaseline = useMemo<(number | null)[]>(() => {
+    const base = annualNet[baseIdx];
+    if (base == null) return columns.map(() => null);
+    return annualNet.map((v, i) =>
+      i === baseIdx || v == null ? null : base - v,
+    );
+  }, [annualNet, columns]);
+
+  const whySwitch = useMemo<string[]>(() => {
+    const baselinePlan = columns[baseIdx]?.plan ?? null;
+    return columns.map((c, i) => {
+      if (i === baseIdx) {
+        return c.variant === 'current' ? 'Current plan' : 'Lead column · benchmark';
+      }
+      const bits: string[] = [];
+      if (c.scored?.ribbon) bits.push(RIBBON_LABEL[c.scored.ribbon]?.replace(/^[⭐✓]\s*/, '') ?? '');
+      if (baselinePlan) {
+        const moopDiff = baselinePlan.moop_in_network - c.plan.moop_in_network;
+        if (moopDiff > 500) bits.push(`$${(moopDiff / 1000).toFixed(1)}K lower MOOP`);
+        const otcDiff = c.plan.benefits.otc.allowance_per_quarter - baselinePlan.benefits.otc.allowance_per_quarter;
+        if (otcDiff > 0) bits.push(`+$${otcDiff * 4}/yr OTC`);
+        const foodDiff = c.plan.benefits.food_card.allowance_per_month - baselinePlan.benefits.food_card.allowance_per_month;
+        if (foodDiff > 0) bits.push(`+$${foodDiff * 12}/yr food`);
+      }
+      if (c.scored?.providerNetworkStatus === 'all_in') bits.push('in-network');
+      return bits.filter(Boolean).join(' · ') || '—';
+    });
+  }, [columns, annualNet]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Medications needing assistance — used to gate the help section.
+  const medsNeedingAssistance = useMemo(() => {
+    const out = new Set<string>();
+    for (const r of medRows) {
+      const allUncovered = r.values.every((v) => v === '—' || v === 'Excluded');
+      const allExpensive =
+        r.tiers.length > 0 &&
+        r.tiers.every((t, i) => t != null && t >= 4 && (r.monthly[i] ?? 0) > 100);
+      if (allUncovered || allExpensive) out.add(r.id);
+    }
+    return out;
+  }, [medRows]);
+
+  // ── Early returns (after every hook, per Rules of Hooks) ──────────
+  if (loading && !result) {
+    return (
+      <div style={{ padding: 28, textAlign: 'center', color: COL.inkSub, fontSize: 13, background: '#fff', border: `1px dashed ${COL.rule}`, borderRadius: 12 }}>
+        Plan Brain scoring plans…
+      </div>
+    );
+  }
+  if (columns.length === 0) {
+    return (
+      <div style={{ padding: 28, textAlign: 'center', color: COL.inkSub, fontSize: 13, background: '#fff', border: `1px dashed ${COL.rule}`, borderRadius: 12 }}>
+        No plans to compare yet. Complete steps 2–5 so Plan Brain has finalists to rank.
+      </div>
+    );
+  }
+
+  const N = columns.length;
   const minWidth = 200 + N * 180;
   const colSpanFull = 1 + N;
 
   return (
     <div style={{ fontFamily: FONT.body, color: COL.ink }}>
-      {/* Pharmacy toggle (visual-only in the static commit) */}
       <div style={{ marginBottom: 12, fontSize: 12, color: COL.inkSub }}>
         <strong style={{ marginRight: 8, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Pharmacy</strong>
-        <span style={pharmBtnStyle(true)}>30-day retail</span>
-        <span style={pharmBtnStyle(false)}>90-day mail</span>
+        <button type="button" onClick={() => setPharmacyFill('retail_30')} style={pharmBtnStyle(pharmacyFill === 'retail_30')}>30-day retail</button>
+        <button type="button" onClick={() => setPharmacyFill('mail_90')} style={pharmBtnStyle(pharmacyFill === 'mail_90')}>90-day mail</button>
+        {drugCosts.loading && <span style={{ marginLeft: 8, fontSize: 10, color: COL.inkSub }}>fetching live costs…</span>}
       </div>
 
       <div style={{ overflowX: 'auto' }}>
@@ -328,7 +602,7 @@ export function QuoteDeliveryV4({
               >
                 Quote Comparison
               </th>
-              {COLUMNS.map((col) => {
+              {columns.map((col) => {
                 const s = styleFor(col.variant);
                 return (
                   <th
@@ -392,13 +666,13 @@ export function QuoteDeliveryV4({
           <tbody>
             <SectionHeader colSpan={colSpanFull} label="Your Medications" />
 
-            {MEDS.map((m, mi) => (
+            {medRows.map((m, mi) => (
               <tr key={`med-${mi}`}>
                 <th style={labelCellStyle}>
                   <div>{m.name}</div>
                   <div style={{ fontSize: 10, color: COL.inkSub, fontWeight: 400 }}>{m.fillNote}</div>
                 </th>
-                {COLUMNS.map((col, ci) => {
+                {columns.map((col, ci) => {
                   const s = styleFor(col.variant);
                   const tier = m.tiers[ci];
                   const flags = m.paStFlags?.[ci];
@@ -428,11 +702,11 @@ export function QuoteDeliveryV4({
               <th style={{ ...labelCellStyle, fontWeight: 700, borderTop: `1.5px solid ${COL.rule}` }}>
                 Total Rx Cost
               </th>
-              {COLUMNS.map((col, ci) => {
+              {columns.map((col, ci) => {
                 const s = styleFor(col.variant);
-                const annual = RX_TOTAL_ANNUAL[ci] as number;
-                const monthly = RX_TOTAL_MONTHLY[ci] as number;
-                const baseAnnual = RX_TOTAL_ANNUAL[0] as number;
+                const annual = rxTotalAnnual[ci] ?? 0;
+                const monthly = rxTotalMonthly[ci] ?? 0;
+                const baseAnnual = rxTotalAnnual[baseIdx] ?? 0;
                 const delta = ci === 0 ? null : annual - baseAnnual;
                 return (
                   <td key={col.id} style={{ ...cellStyle(s.bodyBg), fontWeight: 700, borderTop: `1.5px solid ${COL.rule}` }}>
@@ -445,13 +719,13 @@ export function QuoteDeliveryV4({
 
             <SectionHeader colSpan={colSpanFull} label="Providers" />
 
-            {PROVIDERS.map((pr, pi) => (
+            {providerRows.map((pr, pi) => (
               <tr key={`prov-${pi}`}>
                 <th style={labelCellStyle}>
                   <div style={{ fontWeight: 600 }}>{pr.name}</div>
                   <div style={{ fontSize: 10, color: COL.inkSub, fontWeight: 400 }}>{pr.specialty}</div>
                 </th>
-                {COLUMNS.map((col, ci) => {
+                {columns.map((col, ci) => {
                   const s = styleFor(col.variant);
                   const status = pr.status[ci];
                   const dot = status === 'in' ? '●' : status === 'out' ? '●' : '●';
@@ -470,20 +744,20 @@ export function QuoteDeliveryV4({
 
             <SectionHeader colSpan={colSpanFull} label="Medical Copays" />
 
-            {COPAYS.map((row, ri) => (
-              <CopayRowEl key={`cp-${ri}`} row={row} />
+            {copayRows.map((row, ri) => (
+              <CopayRowEl key={`cp-${ri}`} row={row} columns={columns} />
             ))}
 
             {/* Total inpatient cost — bold subtotal directly under Inpatient/day */}
             <tr>
               <th style={{ ...labelCellStyle, fontWeight: 700, borderBottom: `1.5px solid ${COL.ruleStrong}` }}>
                 <div>Total inpatient cost</div>
-                <div style={{ fontSize: 10, color: COL.inkSub, fontWeight: 400 }}>{INPATIENT_DAYS}-day hospital stay</div>
+                <div style={{ fontSize: 10, color: COL.inkSub, fontWeight: 400 }}>{DEFAULT_INPATIENT_DAYS}-day hospital stay</div>
               </th>
-              {COLUMNS.map((col, ci) => {
+              {columns.map((col, ci) => {
                 const s = styleFor(col.variant);
-                const total = INPATIENT_TOTAL[ci] as number;
-                const base = INPATIENT_TOTAL[0] as number;
+                const total = inpatientTotal[ci] ?? 0;
+                const base = inpatientTotal[baseIdx] ?? 0;
                 const delta = ci === 0 ? null : total - base;
                 return (
                   <td
@@ -503,14 +777,14 @@ export function QuoteDeliveryV4({
 
             <SectionHeader colSpan={colSpanFull} label="Plan Costs" />
 
-            {PLAN_COSTS.map((row, ri) => (
-              <CopayRowEl key={`pc-${ri}`} row={row} />
+            {planCostRows.map((row, ri) => (
+              <CopayRowEl key={`pc-${ri}`} row={row} columns={columns} />
             ))}
 
             <SectionHeader colSpan={colSpanFull} label="Extra Benefits" />
 
-            {EXTRAS.map((row, ri) => (
-              <CopayRowEl key={`ex-${ri}`} row={row} betterIsHigher={row.betterIsHigher} />
+            {extraRows.map((row, ri) => (
+              <CopayRowEl key={`ex-${ri}`} row={row} columns={columns} betterIsHigher={row.betterIsHigher} />
             ))}
 
             {/* Total Annual Value navy bar */}
@@ -530,10 +804,10 @@ export function QuoteDeliveryV4({
               >
                 Total Annual Value
               </th>
-              {COLUMNS.map((col, ci) => {
+              {columns.map((col, ci) => {
                 const isCurrent = col.variant === 'current';
-                const annual = ANNUAL_NET[ci] as number;
-                const savings = SAVINGS_VS_CURRENT[ci] as number;
+                const annual = annualNet[ci] ?? 0;
+                const savings = savingsVsBaseline[ci] ?? 0;
                 return (
                   <td
                     key={col.id}
@@ -572,7 +846,7 @@ export function QuoteDeliveryV4({
               >
                 Why switch?
               </th>
-              {COLUMNS.map((col, ci) => (
+              {columns.map((col, ci) => (
                 <td
                   key={col.id}
                   style={{
@@ -585,7 +859,7 @@ export function QuoteDeliveryV4({
                     whiteSpace: 'normal',
                   }}
                 >
-                  {WHY_SWITCH[ci]}
+                  {whySwitch[ci]}
                 </td>
               ))}
             </tr>
@@ -593,7 +867,7 @@ export function QuoteDeliveryV4({
             {/* Action row — Recommend + Open SunFire */}
             <tr>
               <th style={{ width: 200, padding: 12, background: COL.panelBg, borderBottom: 'none' }}></th>
-              {COLUMNS.map((col) => {
+              {columns.map((col) => {
                 const isCurrent = col.variant === 'current';
                 const isRec = recommendation === col.id;
                 return (
@@ -633,11 +907,150 @@ export function QuoteDeliveryV4({
           </tbody>
         </table>
       </div>
+
+      {medsNeedingAssistance.size > 0 && (
+        <AssistanceHelpSection
+          medications={medications.filter((m) => medsNeedingAssistance.has(m.id))}
+          assistanceByMedId={assistance.byMedicationId}
+        />
+      )}
+
+      {result && client.county && (
+        <div style={{ padding: '6px 0 0', fontSize: 10, color: COL.inkSub }}>
+          Plan Brain · population {result.population.toUpperCase()} · utilization {result.utilization} · {client.county}, {client.state}
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── Subcomponents + helpers ───────────────────────────────────────
+
+// ─── Data helpers ──────────────────────────────────────────────────
+
+function makeCol(plan: Plan, scored: ScoredPlan | null, variant: ColumnVariant): ColumnDef {
+  const ribbon = scored?.ribbon ? RIBBON_LABEL[scored.ribbon] ?? null : null;
+  const star = plan.star_rating ?? 0;
+  return {
+    id: plan.id,
+    variant,
+    ribbon,
+    carrier: plan.carrier ?? '—',
+    planName: plan.plan_name ?? '—',
+    hNumber: `${plan.contract_id}-${plan.plan_number}`,
+    star,
+    starColor: star >= 4.5 ? '#3b6d11' : undefined,
+    plan,
+    scored,
+  };
+}
+
+interface DrugInfo {
+  tier: number | null;
+  label: string;          // formatted display ($X or X% or "Excluded" or "—")
+  monthly: number | null;
+  annual: number | null;
+  pa: boolean;
+  st: boolean;
+}
+
+function lookupDrugCost(
+  plan: Plan,
+  med: Medication,
+  data: PlanBrainData | null,
+  pharmacyFill: PharmacyFill,
+): DrugInfo | null {
+  if (!med.rxcui) return null;
+  const tripleId = plan.id;
+  const contractPlan = `${plan.contract_id}-${plan.plan_number}`;
+
+  const ndc = data?.ndcByRxcui[med.rxcui]?.ndc;
+  const cached = ndc ? data?.drugCostCache[tripleId]?.[ndc] : undefined;
+  const formulary = data?.formularyByContractPlan[contractPlan]?.[med.rxcui];
+
+  // Tier resolution: cache → formulary → seed → null
+  let tier: number | null = cached?.tier ?? formulary?.tier ?? null;
+  if (tier == null) {
+    const seedTier = plan.formulary[med.rxcui];
+    if (typeof seedTier === 'number') tier = seedTier;
+    else if (seedTier === 'excluded') {
+      return { tier: null, label: 'Excluded', monthly: null, annual: null, pa: false, st: false };
+    }
+  }
+
+  const annualFromCache = cached?.estimated_yearly_total ?? null;
+  const monthlyFromFormulary = formulary?.copay ?? null;
+  const monthlyFromTier = tier ? tierCopay(plan, tier) : null;
+
+  const monthlyBase =
+    annualFromCache != null
+      ? Math.round(annualFromCache / 12)
+      : monthlyFromFormulary ?? monthlyFromTier ?? 0;
+  const monthly = pharmacyFill === 'mail_90' ? monthlyBase * 3 : monthlyBase;
+  const annual = annualFromCache != null ? Math.round(annualFromCache) : monthlyBase * 12;
+
+  const label =
+    formulary?.coinsurance != null && (monthlyBase === 0 || monthlyBase == null)
+      ? `${formulary.coinsurance}%`
+      : `$${monthly}`;
+
+  return {
+    tier,
+    label,
+    monthly,
+    annual,
+    pa: formulary?.prior_auth === true,
+    st: formulary?.step_therapy === true,
+  };
+}
+
+function tierCopay(plan: Plan, tier: number): number | null {
+  const map: Record<number, keyof Plan['benefits']['rx_tiers']> = {
+    1: 'tier_1', 2: 'tier_2', 3: 'tier_3', 4: 'tier_4', 5: 'tier_5',
+  };
+  const key = map[tier];
+  if (!key) return null;
+  return plan.benefits.rx_tiers[key].copay ?? null;
+}
+
+function providerStatusFor(prov: Provider, plan: Plan): 'in' | 'out' | 'unknown' {
+  const override = prov.manualOverrides?.[plan.carrier];
+  if (override?.status === 'in') return 'in';
+  const raw = prov.networkStatus?.[plan.id];
+  if (raw === 'in') return 'in';
+  if (raw === 'out') return 'out';
+  return 'unknown';
+}
+
+interface MedicalDef {
+  label: string;
+  pick: (plan: Plan) => { copay: number | null; coinsurance: number | null; description: string | null };
+}
+
+const MEDICAL_DEFS: MedicalDef[] = [
+  { label: 'PCP',                pick: (p) => p.benefits.medical.primary_care },
+  { label: 'Specialist',         pick: (p) => p.benefits.medical.specialist },
+  { label: 'Labs',               pick: (p) => p.benefits.medical.lab_services },
+  { label: 'Imaging / MRI',      pick: (p) => p.benefits.medical.diagnostic_radiology },
+  { label: 'ER',                 pick: (p) => p.benefits.medical.emergency },
+  { label: 'Urgent Care',        pick: (p) => p.benefits.medical.urgent_care },
+  { label: 'Outpatient Surgery', pick: (p) => p.benefits.medical.outpatient_surgery_hospital },
+  { label: 'Mental Health',      pick: (p) => p.benefits.medical.mental_health_individual },
+  { label: 'PT / OT',            pick: (p) => p.benefits.medical.physical_therapy },
+  { label: 'Inpatient',          pick: (p) => p.benefits.medical.inpatient },
+];
+
+function copayCash(cs: { copay: number | null; coinsurance: number | null }): number | null {
+  return cs.copay ?? null;
+}
+
+function formatCostShare(cs: { copay: number | null; coinsurance: number | null }): string {
+  if (cs.copay != null) return `$${cs.copay}`;
+  if (cs.coinsurance != null) return `${cs.coinsurance}%`;
+  return '—';
+}
+
+// ─── Subcomponents ────────────────────────────────────────────────
 
 function SectionHeader({ colSpan, label }: { colSpan: number; label: string }) {
   return (
@@ -662,11 +1075,11 @@ function SectionHeader({ colSpan, label }: { colSpan: number; label: string }) {
   );
 }
 
-function CopayRowEl({ row, betterIsHigher }: { row: CopayRow; betterIsHigher?: boolean }) {
+function CopayRowEl({ row, columns, betterIsHigher }: { row: CopayRow; columns: ColumnDef[]; betterIsHigher?: boolean }) {
   return (
     <tr>
       <th style={labelCellStyle}>{row.label}</th>
-      {COLUMNS.map((col, ci) => {
+      {columns.map((col, ci) => {
         const s = styleFor(col.variant);
         const v = row.values[ci];
         const num = row.numbers[ci];
@@ -836,3 +1249,110 @@ const btnSunfireStyle: React.CSSProperties = {
   border: '1px solid #d1d5db',
   boxSizing: 'border-box',
 };
+
+// ─── Assistance help section ─────────────────────────────────────────
+
+function AssistanceHelpSection({
+  medications,
+  assistanceByMedId,
+}: {
+  medications: Medication[];
+  assistanceByMedId: Record<string, AssistanceRow[]>;
+}) {
+  const [open, setOpen] = useState(true);
+  const totalPrograms = medications.reduce(
+    (acc, m) => acc + (assistanceByMedId[m.id]?.length ?? 0),
+    0,
+  );
+  return (
+    <div style={{ marginTop: 16, background: '#fff', border: `1px solid ${COL.rule}`, borderRadius: 12, overflow: 'hidden', fontFamily: FONT.body }}>
+      <div
+        style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', background: 'linear-gradient(0deg, #fef3c7, #fff)' }}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 24, height: 24, borderRadius: '50%', background: '#e67e22', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700 }}>!</div>
+          <div>
+            <div style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: COL.navyHeader }}>
+              Medication assistance options
+            </div>
+            <div style={{ fontSize: 11, color: COL.inkSub }}>
+              {medications.length} drug{medications.length === 1 ? '' : 's'} need help · {totalPrograms} program{totalPrograms === 1 ? '' : 's'} matched
+            </div>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: COL.navyHeader, fontWeight: 600 }}>{open ? '−' : '+'}</div>
+      </div>
+      {open && (
+        <div style={{ padding: '12px 16px 16px', borderTop: `1px solid ${COL.rule}` }}>
+          {medications.map((m) => {
+            const programs = assistanceByMedId[m.id] ?? [];
+            return (
+              <div key={m.id} id={`qv4-help-${m.id}`} style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: COL.navyHeader, marginBottom: 6 }}>
+                  {m.name}{m.strength ? ` ${m.strength}` : ''}
+                </div>
+                {programs.length === 0 ? (
+                  <div style={{ fontSize: 12, color: COL.inkSub }}>
+                    No manufacturer program matched on brand name. Try the generic-options below or search NeedyMeds / RxAssist.
+                  </div>
+                ) : (
+                  programs.map((p) => <ProgramRow key={p.id} row={p} />)
+                )}
+              </div>
+            );
+          })}
+          <div style={{ fontSize: 12, color: COL.inkSub, lineHeight: 1.5 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: COL.navyHeader, marginBottom: 6 }}>
+              Medicare-side options (work for any drug)
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              <li><strong>Formulary exception</strong> — prescriber requests coverage / lower tier (72hr / 24hr expedited).</li>
+              <li><strong>Extra Help / LIS</strong> — Social Security low-income subsidy; drops Part D copays to $1.55–$11.20.</li>
+              <li><strong>Medicare Prescription Payment Plan (M3P)</strong> — spreads the $2,000 OOP cap over 12 months.</li>
+              <li><strong>Generic / therapeutic substitution</strong> — ask the prescriber for a tier-1 alternative.</li>
+              <li><strong>Foundation grants</strong> — PAN, HealthWell, Good Days disease funds.</li>
+            </ul>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProgramRow({ row }: { row: AssistanceRow }) {
+  const tagBg = row.program_type === 'PAP' ? '#eaf3de' : row.program_type === 'copay_card' ? '#e6f1fb' : '#faeeda';
+  const tagFg = row.program_type === 'PAP' ? '#3b6d11' : row.program_type === 'copay_card' ? '#0c447c' : '#854f0b';
+  const tagLabel = row.program_type === 'PAP' ? 'Free drug' : row.program_type === 'copay_card' ? 'Copay card' : 'Foundation';
+  return (
+    <div style={{ padding: '8px 10px', border: `1px solid ${COL.rule}`, borderRadius: 8, marginBottom: 6, fontSize: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', padding: '2px 6px', borderRadius: 3, background: tagBg, color: tagFg }}>
+          {tagLabel}
+        </span>
+        <span style={{ fontFamily: FONT.serif, fontWeight: 700, color: COL.navyHeader }}>{row.program_name}</span>
+        {!row.covers_medicare && (
+          <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', padding: '2px 6px', borderRadius: 3, background: COL.moreBg, color: COL.moreText }}>
+            Excludes Medicare
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 10, color: COL.inkSub, marginTop: 2 }}>{row.brand_name} · {row.manufacturer}</div>
+      {row.eligibility_summary && (
+        <div style={{ fontSize: 11, color: COL.inkSub, marginTop: 4, lineHeight: 1.4 }}>{row.eligibility_summary}</div>
+      )}
+      <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {row.application_url && (
+          <a href={row.application_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, fontWeight: 600, color: COL.navyHeader, textDecoration: 'none', padding: '4px 10px', border: `1px solid ${COL.rule}`, borderRadius: 5 }}>
+            Apply ↗
+          </a>
+        )}
+        {row.phone_number && (
+          <a href={`tel:${row.phone_number.replace(/\D/g, '')}`} style={{ fontSize: 11, fontWeight: 600, color: COL.navyHeader, textDecoration: 'none', padding: '4px 10px', border: `1px solid ${COL.rule}`, borderRadius: 5 }}>
+            ☎ {row.phone_number}
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
