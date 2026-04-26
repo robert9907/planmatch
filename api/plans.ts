@@ -124,6 +124,28 @@ interface BenefitRow {
   max_coverage: number | null;
 }
 
+interface PbpBenefitRow {
+  plan_id: string; // already concatenated "H5296-003-0"
+  benefit_type: string;
+  copay: number | null;
+  coinsurance: number | null;
+  tier_id: string | null;
+}
+
+// pbp_benefits carries categories that the structured importer does
+// NOT write into pm_plan_benefits (mental_health_individual,
+// mental_health_group, physical_therapy). The Quote table renders
+// these as their own rows. Fall back to pbp_benefits when
+// pm_plan_benefits has no row for the category.
+const PBP_FALLBACK_TYPES = [
+  'mental_health_individual',
+  'mental_health_group',
+  'physical_therapy',
+] as const;
+type PbpFallbackType = (typeof PBP_FALLBACK_TYPES)[number];
+
+type PbpFallbackMap = Map<string, Partial<Record<PbpFallbackType, CostShare>>>;
+
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 2000;
 
@@ -304,10 +326,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       benefitsByTriple.set(key, list);
     }
 
+    // ─── Step 3b: fetch pbp_benefits fallback for MH/PT ─────────────
+    // pm_plan_benefits is empty for mental_health_individual,
+    // mental_health_group, and physical_therapy across the catalog. The
+    // Medicare.gov detail scraper writes these into pbp_benefits with
+    // plan_id already in "H5296-003-0" format. Pull only the categories
+    // we actually need so the row count stays small.
+    const tripleKeys = [...byTriple.keys()];
+    const { data: pbpRows, error: pbpErr } = await sb
+      .from('pbp_benefits')
+      .select('plan_id, benefit_type, copay, coinsurance, tier_id')
+      .in('plan_id', tripleKeys)
+      .in('benefit_type', PBP_FALLBACK_TYPES as unknown as string[]);
+    if (pbpErr) throw pbpErr;
+    const pbpFallback = buildPbpFallback((pbpRows ?? []) as PbpBenefitRow[]);
+
     // ─── Step 4: shape into Plan[] ──────────────────────────────────
     const plans: Plan[] = [];
     for (const [key, { row, counties }] of byTriple) {
-      const benefits = buildBenefits(benefitsByTriple.get(key) ?? []);
+      const benefits = buildBenefits(
+        benefitsByTriple.get(key) ?? [],
+        pbpFallback.get(key),
+      );
       const partBGiveback = pickBenefitNumber(
         benefitsByTriple.get(key) ?? [],
         'partb_giveback',
@@ -377,28 +417,78 @@ function pickBenefitNumber(
 //   outpatient_surgery_hospital   →  outpatient_surgery (748 rows)
 //
 // physical_therapy and mental_health_individual have NO rows in
-// pm_plan_benefits at all — those services will continue to render
-// '—' until a future PBP extractor pass populates them.
+// pm_plan_benefits at all — those categories fall back to
+// pbp_benefits via the PBP_FALLBACK_TYPES path in buildBenefits.
 const CATEGORY_ALIAS: Record<string, string> = {
   lab_services: 'lab',
   diagnostic_radiology: 'imaging',
   outpatient_surgery_hospital: 'outpatient_surgery',
 };
 
-function costShareFor(rows: BenefitRow[], category: string): CostShare {
+function costShareFor(
+  rows: BenefitRow[],
+  category: string,
+  pbpFallback?: Partial<Record<PbpFallbackType, CostShare>>,
+): CostShare {
   const aliasedCategory = CATEGORY_ALIAS[category] ?? category;
   const hit =
     rows.find((r) => r.benefit_category === aliasedCategory) ??
     rows.find((r) => r.benefit_category === category);
-  if (!hit) return { copay: null, coinsurance: null, description: null };
-  return {
-    copay: toNum(hit.copay),
-    coinsurance: toNum(hit.coinsurance),
-    description: hit.benefit_description ?? null,
-  };
+  if (hit) {
+    return {
+      copay: toNum(hit.copay),
+      coinsurance: toNum(hit.coinsurance),
+      description: hit.benefit_description ?? null,
+    };
+  }
+  // pbp_benefits fallback for the categories the structured importer
+  // never populates (mental_health_*, physical_therapy). Treated as a
+  // last resort so a future pm_plan_benefits row would still win.
+  if (pbpFallback && (PBP_FALLBACK_TYPES as readonly string[]).includes(category)) {
+    const cs = pbpFallback[category as PbpFallbackType];
+    if (cs) return cs;
+  }
+  return { copay: null, coinsurance: null, description: null };
 }
 
-function buildBenefits(rows: BenefitRow[]): PlanBenefits {
+// pbp_benefits files mental_health_individual at tier_id "min"/"max"
+// for plans that report a copay range; non-tiered plans use "". We
+// quote the lower end (the broker's "as low as" number) and tag the
+// description with the range so the UI can surface it.
+function buildPbpFallback(rows: PbpBenefitRow[]): PbpFallbackMap {
+  const grouped = new Map<string, Map<PbpFallbackType, PbpBenefitRow[]>>();
+  for (const r of rows) {
+    if (!(PBP_FALLBACK_TYPES as readonly string[]).includes(r.benefit_type)) continue;
+    const byType = grouped.get(r.plan_id) ?? new Map<PbpFallbackType, PbpBenefitRow[]>();
+    const list = byType.get(r.benefit_type as PbpFallbackType) ?? [];
+    list.push(r);
+    byType.set(r.benefit_type as PbpFallbackType, list);
+    grouped.set(r.plan_id, byType);
+  }
+  const out: PbpFallbackMap = new Map();
+  for (const [planId, byType] of grouped) {
+    const slot: Partial<Record<PbpFallbackType, CostShare>> = {};
+    for (const [bt, list] of byType) {
+      const min = list.find((r) => r.tier_id === 'min') ?? list[0];
+      const max = list.find((r) => r.tier_id === 'max');
+      const minCopay = toNum(min.copay);
+      const minCoins = toNum(min.coinsurance);
+      const maxCopay = toNum(max?.copay);
+      const description =
+        max && minCopay != null && maxCopay != null && minCopay !== maxCopay
+          ? `$${minCopay}–$${maxCopay} copay`
+          : null;
+      slot[bt] = { copay: minCopay, coinsurance: minCoins, description };
+    }
+    out.set(planId, slot);
+  }
+  return out;
+}
+
+function buildBenefits(
+  rows: BenefitRow[],
+  pbpFallback?: Partial<Record<PbpFallbackType, CostShare>>,
+): PlanBenefits {
   // Dental, vision, hearing — single-row categories from b16/b17/b18.
   // max_coverage = annual benefit maximum; coverage_amount usually
   // duplicates it. Preventive vs comprehensive isn't split out in the
@@ -519,9 +609,9 @@ function buildBenefits(rows: BenefitRow[]): PlanBenefits {
       xray: costShareFor(rows, 'xray'),
       diagnostic_radiology: costShareFor(rows, 'diagnostic_radiology'),
       therapeutic_radiology: costShareFor(rows, 'therapeutic_radiology'),
-      mental_health_individual: costShareFor(rows, 'mental_health_individual'),
-      mental_health_group: costShareFor(rows, 'mental_health_group'),
-      physical_therapy: costShareFor(rows, 'physical_therapy'),
+      mental_health_individual: costShareFor(rows, 'mental_health_individual', pbpFallback),
+      mental_health_group: costShareFor(rows, 'mental_health_group', pbpFallback),
+      physical_therapy: costShareFor(rows, 'physical_therapy', pbpFallback),
       telehealth: costShareFor(rows, 'telehealth'),
     },
     rx_tiers: {
