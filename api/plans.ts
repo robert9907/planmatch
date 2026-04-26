@@ -144,7 +144,19 @@ const PBP_FALLBACK_TYPES = [
 ] as const;
 type PbpFallbackType = (typeof PBP_FALLBACK_TYPES)[number];
 
-type PbpFallbackMap = Map<string, Partial<Record<PbpFallbackType, CostShare>>>;
+// dental_annual_max is also extracted from medicare.gov (filed at
+// ma_benefits.plan_limits_details under limit_type=COVERAGE,
+// limit_period=EVERY_YEAR) and stored in pbp_benefits with the dollar
+// amount in the `copay` slot. Tracked separately because the value
+// feeds Plan.benefits.dental.annual_max — a scalar, not a CostShare.
+const PBP_DENTAL_MAX_TYPE = 'dental_annual_max';
+
+interface PbpFallback {
+  costShares: Partial<Record<PbpFallbackType, CostShare>>;
+  dentalAnnualMax?: number;
+}
+
+type PbpFallbackMap = Map<string, PbpFallback>;
 
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 2000;
@@ -333,11 +345,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // plan_id already in "H5296-003-0" format. Pull only the categories
     // we actually need so the row count stays small.
     const tripleKeys = [...byTriple.keys()];
+    const pbpTypes = [...PBP_FALLBACK_TYPES, PBP_DENTAL_MAX_TYPE];
     const { data: pbpRows, error: pbpErr } = await sb
       .from('pbp_benefits')
       .select('plan_id, benefit_type, copay, coinsurance, tier_id')
       .in('plan_id', tripleKeys)
-      .in('benefit_type', PBP_FALLBACK_TYPES as unknown as string[]);
+      .in('benefit_type', pbpTypes);
     if (pbpErr) throw pbpErr;
     const pbpFallback = buildPbpFallback((pbpRows ?? []) as PbpBenefitRow[]);
 
@@ -428,7 +441,7 @@ const CATEGORY_ALIAS: Record<string, string> = {
 function costShareFor(
   rows: BenefitRow[],
   category: string,
-  pbpFallback?: Partial<Record<PbpFallbackType, CostShare>>,
+  pbpFallback?: PbpFallback,
 ): CostShare {
   const aliasedCategory = CATEGORY_ALIAS[category] ?? category;
   const hit =
@@ -445,7 +458,7 @@ function costShareFor(
   // never populates (mental_health_*, physical_therapy). Treated as a
   // last resort so a future pm_plan_benefits row would still win.
   if (pbpFallback && (PBP_FALLBACK_TYPES as readonly string[]).includes(category)) {
-    const cs = pbpFallback[category as PbpFallbackType];
+    const cs = pbpFallback.costShares[category as PbpFallbackType];
     if (cs) return cs;
   }
   return { copay: null, coinsurance: null, description: null };
@@ -456,46 +469,67 @@ function costShareFor(
 // quote the lower end (the broker's "as low as" number) and tag the
 // description with the range so the UI can surface it.
 function buildPbpFallback(rows: PbpBenefitRow[]): PbpFallbackMap {
-  const grouped = new Map<string, Map<PbpFallbackType, PbpBenefitRow[]>>();
+  // Group cost-share fallback rows (mental_health_*, physical_therapy)
+  // by plan + benefit_type so we can resolve min/max tier ranges.
+  const csGrouped = new Map<string, Map<PbpFallbackType, PbpBenefitRow[]>>();
+  // dental_annual_max is a single value per plan (the scraper emits one
+  // row); collect it separately.
+  const dentalMaxByPlan = new Map<string, number>();
+
   for (const r of rows) {
-    if (!(PBP_FALLBACK_TYPES as readonly string[]).includes(r.benefit_type)) continue;
-    const byType = grouped.get(r.plan_id) ?? new Map<PbpFallbackType, PbpBenefitRow[]>();
-    const list = byType.get(r.benefit_type as PbpFallbackType) ?? [];
-    list.push(r);
-    byType.set(r.benefit_type as PbpFallbackType, list);
-    grouped.set(r.plan_id, byType);
-  }
-  const out: PbpFallbackMap = new Map();
-  for (const [planId, byType] of grouped) {
-    const slot: Partial<Record<PbpFallbackType, CostShare>> = {};
-    for (const [bt, list] of byType) {
-      const min = list.find((r) => r.tier_id === 'min') ?? list[0];
-      const max = list.find((r) => r.tier_id === 'max');
-      const minCopay = toNum(min.copay);
-      const minCoins = toNum(min.coinsurance);
-      const maxCopay = toNum(max?.copay);
-      const description =
-        max && minCopay != null && maxCopay != null && minCopay !== maxCopay
-          ? `$${minCopay}–$${maxCopay} copay`
-          : null;
-      slot[bt] = { copay: minCopay, coinsurance: minCoins, description };
+    if ((PBP_FALLBACK_TYPES as readonly string[]).includes(r.benefit_type)) {
+      const byType = csGrouped.get(r.plan_id) ?? new Map<PbpFallbackType, PbpBenefitRow[]>();
+      const list = byType.get(r.benefit_type as PbpFallbackType) ?? [];
+      list.push(r);
+      byType.set(r.benefit_type as PbpFallbackType, list);
+      csGrouped.set(r.plan_id, byType);
+    } else if (r.benefit_type === PBP_DENTAL_MAX_TYPE) {
+      const v = toNum(r.copay);
+      if (v != null && v > 0) dentalMaxByPlan.set(r.plan_id, v);
     }
-    out.set(planId, slot);
+  }
+
+  const out: PbpFallbackMap = new Map();
+  const planIds = new Set([...csGrouped.keys(), ...dentalMaxByPlan.keys()]);
+  for (const planId of planIds) {
+    const costShares: Partial<Record<PbpFallbackType, CostShare>> = {};
+    const byType = csGrouped.get(planId);
+    if (byType) {
+      for (const [bt, list] of byType) {
+        const min = list.find((r) => r.tier_id === 'min') ?? list[0];
+        const max = list.find((r) => r.tier_id === 'max');
+        const minCopay = toNum(min.copay);
+        const minCoins = toNum(min.coinsurance);
+        const maxCopay = toNum(max?.copay);
+        const description =
+          max && minCopay != null && maxCopay != null && minCopay !== maxCopay
+            ? `$${minCopay}–$${maxCopay} copay`
+            : null;
+        costShares[bt] = { copay: minCopay, coinsurance: minCoins, description };
+      }
+    }
+    out.set(planId, {
+      costShares,
+      dentalAnnualMax: dentalMaxByPlan.get(planId),
+    });
   }
   return out;
 }
 
 function buildBenefits(
   rows: BenefitRow[],
-  pbpFallback?: Partial<Record<PbpFallbackType, CostShare>>,
+  pbpFallback?: PbpFallback,
 ): PlanBenefits {
   // Dental, vision, hearing — single-row categories from b16/b17/b18.
   // max_coverage = annual benefit maximum; coverage_amount usually
   // duplicates it. Preventive vs comprehensive isn't split out in the
   // PBP extract, so we treat presence of a row with max_coverage > 0
-  // as comprehensive.
+  // as comprehensive. When pm_plan_benefits has no annual cap (the
+  // structured importer doesn't populate it), fall back to the
+  // medicare.gov scraper's dental_annual_max value in pbp_benefits.
   const dental = rows.find((r) => r.benefit_category === 'dental');
-  const dentalMax = toNum(dental?.max_coverage ?? dental?.coverage_amount) ?? 0;
+  const pmDentalMax = toNum(dental?.max_coverage ?? dental?.coverage_amount) ?? 0;
+  const dentalMax = pmDentalMax > 0 ? pmDentalMax : (pbpFallback?.dentalAnnualMax ?? 0);
 
   const vision = rows.find((r) => r.benefit_category === 'vision');
   const visionEyewear = toNum(vision?.max_coverage ?? vision?.coverage_amount) ?? 0;
@@ -560,7 +594,11 @@ function buildBenefits(
       preventive: Boolean(dental),
       comprehensive: dentalMax > 0,
       annual_max: dentalMax,
-      description: dental?.benefit_description ?? null,
+      description:
+        dental?.benefit_description ??
+        (pbpFallback?.dentalAnnualMax
+          ? `$${pbpFallback.dentalAnnualMax}/yr dental allowance`
+          : null),
     },
     vision: {
       exam: Boolean(vision),

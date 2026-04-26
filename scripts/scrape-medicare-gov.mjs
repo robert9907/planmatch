@@ -830,6 +830,35 @@ function normalizePlanToBenefits(rawPlan, detailCard, planFilter) {
       }
     }
 
+    // Dental annual max — the in-network annual dental allowance is
+    // filed at ma_benefits[].plan_limits_details[] under
+    //   limit_type   = BENEFIT_LIMIT_TYPE_COVERAGE
+    //   limit_period = BENEFIT_LIMIT_PERIOD_EVERY_YEAR
+    // The same dollar value (e.g. $2,500) repeats across every dental
+    // service row because the pool is shared. We take MAX across all
+    // BENEFIT_PREVENTIVE_DENTAL + BENEFIT_COMPREHENSIVE_DENTAL rows.
+    // When IN_NETWORK COVERAGE is missing but OON_COVERAGE is present
+    // (Humana files comprehensive that way — relies on the preventive
+    // IN row to imply the in-network pool), fall back to OON. Verified
+    // 2026-04-26: H1036-335-2 → $2,500, H5253-105-0 → $1,000,
+    // H5521-236-0 → $1,000, H5253-079-0 → none (rider-only plan).
+    let dentalIn = 0;
+    let dentalOon = 0;
+    for (const b of detailCard.ma_benefits ?? []) {
+      if (b.category !== 'BENEFIT_PREVENTIVE_DENTAL' && b.category !== 'BENEFIT_COMPREHENSIVE_DENTAL') continue;
+      for (const pl of b.plan_limits_details ?? []) {
+        if (pl.limit_period !== 'BENEFIT_LIMIT_PERIOD_EVERY_YEAR') continue;
+        const v = Number(pl.limit_value);
+        if (!Number.isFinite(v)) continue;
+        if (pl.limit_type === 'BENEFIT_LIMIT_TYPE_COVERAGE') dentalIn = Math.max(dentalIn, v);
+        else if (pl.limit_type === 'BENEFIT_LIMIT_TYPE_OON_COVERAGE') dentalOon = Math.max(dentalOon, v);
+      }
+    }
+    const dentalAnnualMax = dentalIn > 0 ? dentalIn : dentalOon;
+    if (dentalAnnualMax > 0) {
+      push('dental_annual_max', null, dentalAnnualMax, null, `$${dentalAnnualMax}/yr dental allowance`);
+    }
+
     // Rx tiers from abstract_benefits.initial_coverage. Use
     // standard_retail.days_30 as the headline (matches what the v4
     // quote table renders by default).
