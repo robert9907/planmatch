@@ -168,6 +168,10 @@ interface MedRow {
   tiers: (number | null)[];
   values: string[];
   monthly: (number | null)[];
+  /** Per-cell provenance — drives the rendering between actual,
+   *  estimate (with asterisk + tooltip), unavailable (em dash),
+   *  and excluded. Length matches columns.length. */
+  sources: ('cache' | 'formulary' | 'tier_estimate' | 'unavailable' | 'excluded' | 'no_rxcui')[];
   paStFlags: Array<{ pa?: boolean; st?: boolean } | null>;
 }
 
@@ -329,6 +333,9 @@ export function QuoteDeliveryV4({
         tiers: lookups.map((d) => d?.tier ?? null),
         values: lookups.map((d) => d?.label ?? '—'),
         monthly: lookups.map((d) => (d ? (typeof d.monthly === 'number' ? d.monthly : null) : null)),
+        sources: lookups.map((d) =>
+          !d ? 'no_rxcui' : d.source,
+        ),
         paStFlags: lookups.map((d) => (d ? { pa: d.pa, st: d.st } : null)),
       };
     });
@@ -464,18 +471,31 @@ export function QuoteDeliveryV4({
   // Total Rx Cost — prefer live /api/drug-costs total when available.
   const rxTotalAnnual = useMemo<(number | null)[]>(() => {
     return columns.map((c) => {
+      // Path 1 — live /api/drug-costs total. Authoritative.
       const live = lookupPlanCost(drugCosts, c.plan);
       if (live?.annual_cost != null) return Math.round(live.annual_cost);
-      // Fallback: sum per-drug cells.
+
+      // Path 2 — sum per-drug cells, but ONLY if every drug has a
+      // computable annual. If any drug is 'unavailable' or returns
+      // null, we can't honestly produce a total — return null and
+      // let the cell render '—'. Per the compliance directive:
+      // never silently treat missing data as $0.
       let sum = 0;
-      let any = false;
+      let usable = true;
       for (const med of medications) {
+        if (!med.rxcui) {
+          usable = false;
+          break;
+        }
         const d = lookupDrugCost(c.plan, med, brainData, pharmacyFill);
-        if (!d) continue;
-        any = true;
-        sum += d.annual ?? 0;
+        if (!d || d.source === 'unavailable' || d.annual == null) {
+          usable = false;
+          break;
+        }
+        sum += d.annual;
       }
-      return any ? sum : null;
+      if (!usable) return null;
+      return medications.length === 0 ? 0 : sum;
     });
   }, [columns, drugCosts, medications, brainData, pharmacyFill]);
 
@@ -538,11 +558,16 @@ export function QuoteDeliveryV4({
   const medsNeedingAssistance = useMemo(() => {
     const out = new Set<string>();
     for (const r of medRows) {
-      const allUncovered = r.values.every((v) => v === '—' || v === 'Excluded');
+      // Excluded on every plan column → manufacturer assistance is
+      // the agent's only path. Don't trigger on 'unavailable' (data
+      // gap) — that's a different problem and we shouldn't surface
+      // PAP options for a drug we don't actually know is uncovered.
+      const allExcluded =
+        r.sources.length > 0 && r.sources.every((s) => s === 'excluded');
       const allExpensive =
         r.tiers.length > 0 &&
         r.tiers.every((t, i) => t != null && t >= 4 && (r.monthly[i] ?? 0) > 100);
-      if (allUncovered || allExpensive) out.add(r.id);
+      if (allExcluded || allExpensive) out.add(r.id);
     }
     return out;
   }, [medRows]);
@@ -717,17 +742,52 @@ export function QuoteDeliveryV4({
                   const s = styleFor(col.variant);
                   const tier = m.tiers[ci];
                   const flags = m.paStFlags?.[ci];
+                  const source = m.sources[ci];
                   const monthlyHere = m.monthly[ci];
                   const monthlyBase = m.monthly[0];
+                  // Only compute delta when BOTH cells carry real
+                  // data. Comparing an estimate against a real number
+                  // would mislead — the cells are not commensurate.
+                  const sourceBase = m.sources[0];
+                  const isRealHere = source === 'cache' || source === 'formulary';
+                  const isRealBase = sourceBase === 'cache' || sourceBase === 'formulary';
                   const delta =
-                    ci === 0 || monthlyHere == null || monthlyBase == null || monthlyHere === monthlyBase
+                    ci === 0 || !isRealHere || !isRealBase || monthlyHere == null || monthlyBase == null || monthlyHere === monthlyBase
                       ? null
                       : monthlyHere - monthlyBase;
+                  const tooltipFor = (src: typeof source): string => {
+                    switch (src) {
+                      case 'unavailable':
+                        return 'Cost data not available for this plan. Verify with the carrier before quoting.';
+                      case 'tier_estimate':
+                        return 'Estimated from formulary tier — actual copay may differ. Verify with the carrier.';
+                      case 'no_rxcui':
+                        return 'Drug RxNorm code not resolved — re-add the medication from the search.';
+                      case 'excluded':
+                        return 'Tier 6 / excluded — drug is not covered by this plan.';
+                      case 'cache':
+                        return 'Actual price from Medicare.gov Plan Finder cache.';
+                      case 'formulary':
+                        return 'Actual cost from plan formulary file.';
+                    }
+                  };
                   return (
                     <td key={col.id} style={cellStyle(s.bodyBg)}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
-                        {tier != null && <TierBadge tier={tier} />}
-                        <span style={{ fontFamily: FONT.mono, fontSize: 12, color: s.bodyFg }}>{m.values[ci]}</span>
+                      <div
+                        style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}
+                        title={tooltipFor(source)}
+                      >
+                        {tier != null && source !== 'unavailable' && <TierBadge tier={tier} />}
+                        <span
+                          style={{
+                            fontFamily: FONT.mono,
+                            fontSize: 12,
+                            color: source === 'unavailable' ? COL.inkSub : source === 'tier_estimate' ? '#6b7280' : s.bodyFg,
+                            fontStyle: source === 'tier_estimate' ? 'italic' : 'normal',
+                          }}
+                        >
+                          {m.values[ci]}
+                        </span>
                         {delta != null && <DeltaBadge value={delta} />}
                         {flags?.pa && <Flag>PA</Flag>}
                         {flags?.st && <Flag>ST</Flag>}
@@ -738,21 +798,63 @@ export function QuoteDeliveryV4({
               </tr>
             ))}
 
-            {/* Total Rx Cost */}
+            {/* Total Rx Cost — honest about gaps. Per-column counts
+                of unavailable / estimated drugs are shown beside the
+                total so the broker knows which numbers are firm. */}
             <tr>
               <th style={{ ...labelCellStyle, fontWeight: 700, borderTop: `1.5px solid ${COL.rule}` }}>
                 Total Rx Cost
               </th>
               {columns.map((col, ci) => {
                 const s = styleFor(col.variant);
-                const annual = rxTotalAnnual[ci] ?? 0;
-                const monthly = rxTotalMonthly[ci] ?? 0;
-                const baseAnnual = rxTotalAnnual[baseIdx] ?? 0;
-                const delta = ci === 0 ? null : annual - baseAnnual;
+                const annualRaw = rxTotalAnnual[ci];
+                const monthlyRaw = rxTotalMonthly[ci];
+                const baseAnnual = rxTotalAnnual[baseIdx];
+
+                // Per-cell flags: how many drugs in this plan column
+                // are estimates vs unavailable?
+                let unavailable = 0;
+                let estimates = 0;
+                for (const row of medRows) {
+                  const src = row.sources[ci];
+                  if (src === 'unavailable' || src === 'no_rxcui') unavailable += 1;
+                  else if (src === 'tier_estimate') estimates += 1;
+                }
+
+                const isComplete = unavailable === 0 && annualRaw != null;
+                const realBase = baseAnnual != null && (medRows.every((r) => {
+                  const sb = r.sources[baseIdx];
+                  return sb !== 'unavailable' && sb !== 'no_rxcui';
+                }));
+                const delta =
+                  ci === 0 || !isComplete || !realBase || annualRaw == null || baseAnnual == null
+                    ? null
+                    : annualRaw - baseAnnual;
+
                 return (
                   <td key={col.id} style={{ ...cellStyle(s.bodyBg), fontWeight: 700, borderTop: `1.5px solid ${COL.rule}` }}>
-                    <span style={{ fontFamily: FONT.mono, fontSize: 12 }}>${monthly}/mo · ${annual.toLocaleString()}/yr</span>
-                    {delta != null && delta !== 0 && <DeltaBadge value={delta} />}
+                    {annualRaw == null ? (
+                      <span style={{ fontFamily: FONT.mono, fontSize: 12, color: COL.inkSub }} title="Not enough data to compute a total — see per-drug rows.">
+                        —
+                      </span>
+                    ) : (
+                      <>
+                        <span style={{ fontFamily: FONT.mono, fontSize: 12 }}>
+                          ${monthlyRaw ?? 0}/mo · ${annualRaw.toLocaleString()}/yr
+                        </span>
+                        {delta != null && delta !== 0 && <DeltaBadge value={delta} />}
+                      </>
+                    )}
+                    {(unavailable > 0 || estimates > 0) && (
+                      <div
+                        style={{ fontSize: 9, color: COL.inkSub, fontWeight: 500, marginTop: 2, fontFamily: FONT.body }}
+                        title="Some drug costs are estimated from tier or unavailable. Verify with the carrier before quoting."
+                      >
+                        {unavailable > 0 && `${unavailable} unavailable`}
+                        {unavailable > 0 && estimates > 0 && ' · '}
+                        {estimates > 0 && `${estimates} est.`}
+                      </div>
+                    )}
                   </td>
                 );
               })}
@@ -956,6 +1058,21 @@ export function QuoteDeliveryV4({
         />
       )}
 
+      {/* Cost-data provenance footnote. Surfaces "*" when any drug
+          cell is a tier estimate, so the broker knows which numbers
+          are firm vs derived. Compliance: a $47 estimate is not the
+          same as a $47 actual price. */}
+      {medRows.some((r) => r.sources.some((s) => s === 'tier_estimate')) && (
+        <div style={{ padding: '6px 0 0', fontSize: 10, color: COL.inkSub, fontStyle: 'italic' }}>
+          * <strong>est.</strong> = estimated from formulary tier · actual copay may differ · verify with the carrier before quoting
+        </div>
+      )}
+      {medRows.some((r) => r.sources.some((s) => s === 'unavailable' || s === 'no_rxcui')) && (
+        <div style={{ padding: '4px 0 0', fontSize: 10, color: COL.inkSub }}>
+          <strong>—</strong> = cost data not available for this (plan, drug) pair · verify with the carrier before quoting
+        </div>
+      )}
+
       {result && client.county && (
         <div style={{ padding: '6px 0 0', fontSize: 10, color: COL.inkSub }}>
           Plan Brain · population {result.population.toUpperCase()} · utilization {result.utilization} · {client.county}, {client.state}
@@ -986,14 +1103,58 @@ function makeCol(plan: Plan, scored: ScoredPlan | null, variant: ColumnVariant):
   };
 }
 
+// Compliance-critical: drug-cost data must be honest. NEVER default
+// to $0 when data is missing — a $0 display means "this plan charges
+// nothing", and showing it for a drug that actually costs $47/mo
+// could trigger a CMS complaint against the broker's NPN.
+//
+// Three display states:
+//   • cache         — actual price from pm_drug_cost_cache. Display
+//                     "$X" normally.
+//   • formulary     — actual per-fill copay/coinsurance from
+//                     pm_formulary, OR the plan's tier copay from
+//                     pbp_benefits.rx_tiers (the structured PBP
+//                     extract). Both are real numbers, just not
+//                     drug-NDC-specific. Display "$X" normally.
+//   • tier_estimate — formulary row exists with a tier but no copay,
+//                     and no plan-level tier copay either. Fall back
+//                     to industry-typical tier copays so the agent
+//                     gets a number, but flag is_estimate so the UI
+//                     renders "est. $X" with an asterisk.
+//   • excluded      — Tier 6 OR seed formulary marker 'excluded'.
+//                     Display "Not covered".
+//   • unavailable   — no rxcui, no NDC bridge, no formulary row, no
+//                     tier hint. Display "—" with a tooltip
+//                     explaining the data gap. Drug-cost totals
+//                     ignore unavailable rows AND surface a count so
+//                     the broker knows how much of the total was
+//                     unknowable.
+
+type CostSource = 'cache' | 'formulary' | 'tier_estimate' | 'unavailable' | 'excluded';
+
 interface DrugInfo {
   tier: number | null;
-  label: string;          // formatted display ($X or X% or "Excluded" or "—")
+  label: string;
   monthly: number | null;
   annual: number | null;
+  source: CostSource;
+  is_estimate: boolean;
   pa: boolean;
   st: boolean;
 }
+
+// Industry-typical tier copays for MAPD plans, used only as the very
+// last fallback when neither cache nor formulary nor plan tier copay
+// is populated. These come from CMS landscape averages 2025-2026
+// (preferred mail/retail, 30-day fill).
+const TIER_ESTIMATE_USD: Record<number, number | null> = {
+  1: 5,    // generic preferred
+  2: 20,   // generic non-preferred
+  3: 47,   // brand preferred
+  4: null, // coinsurance tier — handled separately
+  5: null, // coinsurance tier
+  6: null, // not covered
+};
 
 function lookupDrugCost(
   plan: Plan,
@@ -1009,39 +1170,135 @@ function lookupDrugCost(
   const cached = ndc ? data?.drugCostCache[tripleId]?.[ndc] : undefined;
   const formulary = data?.formularyByContractPlan[contractPlan]?.[med.rxcui];
 
-  // Tier resolution: cache → formulary → seed → null
   let tier: number | null = cached?.tier ?? formulary?.tier ?? null;
   if (tier == null) {
     const seedTier = plan.formulary[med.rxcui];
     if (typeof seedTier === 'number') tier = seedTier;
     else if (seedTier === 'excluded') {
-      return { tier: null, label: 'Excluded', monthly: null, annual: null, pa: false, st: false };
+      return notCovered();
+    }
+  }
+  if (tier === 6) return notCovered();
+
+  // Path 1 — cache hit. Real per-NDC, per-plan annual price.
+  if (cached?.estimated_yearly_total != null) {
+    const annual = Math.round(cached.estimated_yearly_total);
+    const monthlyBase = Math.round(annual / 12);
+    const monthly = pharmacyFill === 'mail_90' ? monthlyBase * 3 : monthlyBase;
+    return {
+      tier,
+      label: `$${monthly}`,
+      monthly,
+      annual,
+      source: 'cache',
+      is_estimate: false,
+      pa: formulary?.prior_auth === true,
+      st: formulary?.step_therapy === true,
+    };
+  }
+
+  // Path 2 — pm_formulary copay populated. Real per-fill cost.
+  if (formulary?.copay != null) {
+    const monthlyBase = formulary.copay;
+    const monthly = pharmacyFill === 'mail_90' ? monthlyBase * 3 : monthlyBase;
+    return {
+      tier,
+      label: `$${monthly}`,
+      monthly,
+      annual: monthlyBase * 12,
+      source: 'formulary',
+      is_estimate: false,
+      pa: formulary.prior_auth === true,
+      st: formulary.step_therapy === true,
+    };
+  }
+
+  // Path 3 — pm_formulary coinsurance populated. Real percentage.
+  if (formulary?.coinsurance != null) {
+    return {
+      tier,
+      label: `${formulary.coinsurance}%`,
+      monthly: null,
+      annual: null,
+      source: 'formulary',
+      is_estimate: false,
+      pa: formulary.prior_auth === true,
+      st: formulary.step_therapy === true,
+    };
+  }
+
+  // Path 4 — plan-level tier copay from pbp_benefits.rx_tiers. Real
+  // dollar amount even when the per-drug formulary row didn't carry it.
+  if (tier != null) {
+    const tierCash = tierCopay(plan, tier);
+    if (tierCash != null) {
+      const monthlyBase = tierCash;
+      const monthly = pharmacyFill === 'mail_90' ? monthlyBase * 3 : monthlyBase;
+      return {
+        tier,
+        label: `$${monthly}`,
+        monthly,
+        annual: monthlyBase * 12,
+        source: 'formulary',
+        is_estimate: false,
+        pa: formulary?.prior_auth === true,
+        st: formulary?.step_therapy === true,
+      };
+    }
+
+    // Path 5 — tier-only estimate from industry averages.
+    const tierUsd = TIER_ESTIMATE_USD[tier];
+    if (tierUsd != null) {
+      const monthly = pharmacyFill === 'mail_90' ? tierUsd * 3 : tierUsd;
+      return {
+        tier,
+        label: `est. $${monthly}*`,
+        monthly,
+        annual: tierUsd * 12,
+        source: 'tier_estimate',
+        is_estimate: true,
+        pa: formulary?.prior_auth === true,
+        st: formulary?.step_therapy === true,
+      };
+    }
+    if (tier === 4 || tier === 5) {
+      return {
+        tier,
+        label: 'est. 25–33%*',
+        monthly: null,
+        annual: null,
+        source: 'tier_estimate',
+        is_estimate: true,
+        pa: formulary?.prior_auth === true,
+        st: formulary?.step_therapy === true,
+      };
     }
   }
 
-  const annualFromCache = cached?.estimated_yearly_total ?? null;
-  const monthlyFromFormulary = formulary?.copay ?? null;
-  const monthlyFromTier = tier ? tierCopay(plan, tier) : null;
-
-  const monthlyBase =
-    annualFromCache != null
-      ? Math.round(annualFromCache / 12)
-      : monthlyFromFormulary ?? monthlyFromTier ?? 0;
-  const monthly = pharmacyFill === 'mail_90' ? monthlyBase * 3 : monthlyBase;
-  const annual = annualFromCache != null ? Math.round(annualFromCache) : monthlyBase * 12;
-
-  const label =
-    formulary?.coinsurance != null && (monthlyBase === 0 || monthlyBase == null)
-      ? `${formulary.coinsurance}%`
-      : `$${monthly}`;
-
+  // Path 6 — no data anywhere. Compliance-critical: return
+  // 'unavailable' so the cell renders '—' (em dash), NOT $0.
   return {
     tier,
-    label,
-    monthly,
-    annual,
-    pa: formulary?.prior_auth === true,
-    st: formulary?.step_therapy === true,
+    label: '—',
+    monthly: null,
+    annual: null,
+    source: 'unavailable',
+    is_estimate: false,
+    pa: false,
+    st: false,
+  };
+}
+
+function notCovered(): DrugInfo {
+  return {
+    tier: null,
+    label: 'Not covered',
+    monthly: null,
+    annual: null,
+    source: 'excluded',
+    is_estimate: false,
+    pa: false,
+    st: false,
   };
 }
 

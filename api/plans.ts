@@ -360,8 +360,33 @@ function pickBenefitNumber(
   return typeof v === 'number' ? v : v != null ? Number(v) : null;
 }
 
+// Several Plan-type field names diverge from the canonical
+// pm_plan_benefits.benefit_category strings. Probed against the live
+// table on plan-match-prod, the DB uses these short keys — every
+// alias here was historically failing to find its row, leaving copay
+// and coinsurance as null and the agent quote screen rendering '—'
+// for Labs / Imaging / Outpatient Surgery.
+//
+//   Plan field                    →  pm_plan_benefits.benefit_category
+//   --------------------------------------------------------------
+//   lab_services                  →  lab            (712 rows)
+//   diagnostic_radiology          →  imaging        (748 rows)
+//   outpatient_surgery_hospital   →  outpatient_surgery (748 rows)
+//
+// physical_therapy and mental_health_individual have NO rows in
+// pm_plan_benefits at all — those services will continue to render
+// '—' until a future PBP extractor pass populates them.
+const CATEGORY_ALIAS: Record<string, string> = {
+  lab_services: 'lab',
+  diagnostic_radiology: 'imaging',
+  outpatient_surgery_hospital: 'outpatient_surgery',
+};
+
 function costShareFor(rows: BenefitRow[], category: string): CostShare {
-  const hit = rows.find((r) => r.benefit_category === category);
+  const aliasedCategory = CATEGORY_ALIAS[category] ?? category;
+  const hit =
+    rows.find((r) => r.benefit_category === aliasedCategory) ??
+    rows.find((r) => r.benefit_category === category);
   if (!hit) return { copay: null, coinsurance: null, description: null };
   return {
     copay: toNum(hit.copay),
