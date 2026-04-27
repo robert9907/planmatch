@@ -75,8 +75,13 @@ import { usePrintableQuote } from '@/hooks/usePrintableQuote';
 import type { PrintableQuote } from '@/lib/quotePdf';
 import { useAgentBaseRecommend } from '@/hooks/useAgentBaseRecommend';
 import { BROKER } from '@/lib/constants';
+import { buildSunfireRecommendationText } from '@/lib/clipboardFormat';
 
-const SUNFIRE_URL = 'https://www.sunfirematrix.com/app/consumer/yourmedicare/10447418';
+// Single source of truth for the SunFire workspace URL — see
+// src/lib/constants.ts BROKER.sunfire. The previous in-file constant
+// pointed to the wrong path (/yourmedicare/) and had drifted from the
+// licensed-broker URL (/medicareadvocates/).
+const SUNFIRE_URL = BROKER.sunfire;
 const MAX_FINALIST_COLUMNS = 4;
 const DEFAULT_INPATIENT_DAYS = 5;
 
@@ -797,6 +802,52 @@ export function QuoteDeliveryV4({
   const startedAt = useSession((s) => s.startedAt);
   const agentbaseSync = useAgentBaseRecommend();
 
+  // SunFire-handoff state per plan column. SunFire has no documented
+  // deep-link API for plan pre-selection, so we use the clipboard
+  // pattern: copy the structured plan-handoff text, then open the
+  // broker's SunFire workspace in a new tab. The broker pastes once
+  // into SunFire's plan search.
+  // Status values: 'copying' (during clipboard write) | 'copied' (3s
+  // success indicator) | 'error' (clipboard denied/failed). null = the
+  // default "Open SunFire →" idle state.
+  const [sunfireStatus, setSunfireStatus] = useState<Record<string, 'copying' | 'copied' | 'error'>>({});
+  async function handleOpenSunFire(planId: string) {
+    const col = columns.find((c) => c.id === planId);
+    if (!col) return;
+    const text = buildSunfireRecommendationText({
+      client,
+      plan: col.plan,
+      brokerName: BROKER.name,
+      brokerNpn: BROKER.npn,
+      brokerPhone: BROKER.phone,
+    });
+    setSunfireStatus((prev) => ({ ...prev, [planId]: 'copying' }));
+    let copied = false;
+    try {
+      // Clipboard write must run inside the user-gesture window before
+      // window.open — Chromium pauses pending writes when the focus
+      // shifts to a new tab and they silently fail.
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    } catch (err) {
+      console.warn('[sunfire] clipboard write failed:', (err as Error).message);
+    }
+    // Open the new tab regardless of clipboard success — the broker
+    // can paste manually from their session log if the clipboard API
+    // was denied (HTTP context, permission policy, etc.).
+    window.open(SUNFIRE_URL, '_blank', 'noopener,noreferrer');
+    setSunfireStatus((prev) => ({ ...prev, [planId]: copied ? 'copied' : 'error' }));
+    // Auto-clear the status pill so the action row returns to the
+    // idle "Open SunFire →" label after a few seconds.
+    window.setTimeout(() => {
+      setSunfireStatus((prev) => {
+        const next = { ...prev };
+        delete next[planId];
+        return next;
+      });
+    }, copied ? 4000 : 6000);
+  }
+
   function buildSyncInput(planId: string) {
     if (!result) return null;
     const colIdx = columns.findIndex((c) => c.id === planId);
@@ -1501,14 +1552,47 @@ export function QuoteDeliveryV4({
                         {isRec ? '✓ Recommended' : 'Recommend'}
                       </button>
                     )}
-                    <a
-                      href={SUNFIRE_URL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={btnSunfireStyle}
+                    <button
+                      type="button"
+                      onClick={() => { void handleOpenSunFire(col.id); }}
+                      style={{ ...btnSunfireStyle, cursor: 'pointer' }}
                     >
-                      Open SunFire →
-                    </a>
+                      {sunfireStatus[col.id] === 'copying'
+                        ? 'Copying…'
+                        : sunfireStatus[col.id] === 'copied'
+                          ? '✓ Plan copied · open SunFire'
+                          : sunfireStatus[col.id] === 'error'
+                            ? '⚠ Copy failed · open SunFire'
+                            : 'Open SunFire →'}
+                    </button>
+                    {sunfireStatus[col.id] === 'copied' && (
+                      <div
+                        style={{
+                          marginTop: 4,
+                          fontSize: 10,
+                          fontWeight: 500,
+                          color: COL.inkSub,
+                          fontFamily: FONT.body,
+                          lineHeight: 1.3,
+                        }}
+                      >
+                        Paste into SunFire plan search
+                      </div>
+                    )}
+                    {sunfireStatus[col.id] === 'error' && (
+                      <div
+                        style={{
+                          marginTop: 4,
+                          fontSize: 10,
+                          fontWeight: 500,
+                          color: '#a32d2d',
+                          fontFamily: FONT.body,
+                          lineHeight: 1.3,
+                        }}
+                      >
+                        Clipboard denied · open dev console for details
+                      </div>
+                    )}
                     {isRec && (
                       <SyncStatusPill
                         state={agentbaseSync.state}

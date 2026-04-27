@@ -78,43 +78,60 @@ export function buildClientInfoText({
   ].join('\n');
 }
 
-// Compact SunFire-handoff payload — fired automatically when the broker
-// taps "Recommend" on a finalist column. Different shape from
-// buildClientInfoText: only the fields a SunFire enrollment screen
-// actually needs (identity + the recommended plan + cost story), so
-// the broker can paste once into SunFire's quote/enrollment intake
-// without trimming a longer block.
+// Compact SunFire-handoff payload — fired when the broker clicks "Open
+// SunFire" on a finalist column. SunFire's enrollment portal does NOT
+// expose a documented deep-link API for plan pre-selection, so we use
+// the clipboard handoff: copy a structured paste-ready block, then
+// open the broker's SunFire workspace in a new tab. The broker pastes
+// once into SunFire's plan search / intake field.
+//
+// Format is tuned for paste-readability — single line per fact, no
+// markdown, no Unicode quotes (some Windows enrollment portals choke
+// on smart quotes). The full triple "H1036-308-0" goes in the Contract
+// line so SunFire's plan search resolves to one specific plan even
+// when the carrier has multiple variants in the same county.
 export function buildSunfireRecommendationText({
   client,
   plan,
-  totalRxAnnual,
-  totalAnnualValue,
-  whySwitch,
+  brokerName,
+  brokerNpn,
+  brokerPhone,
 }: {
   client: Client;
   plan: Plan;
-  totalRxAnnual: number;
-  totalAnnualValue: number;
-  whySwitch: string;
+  brokerName: string;
+  brokerNpn: string;
+  brokerPhone: string;
 }): string {
-  const planId = `${plan.contract_id}-${plan.plan_number}`;
-  const lines = [
-    'SUNFIRE HANDOFF',
-    `Client: ${client.name}`,
-    `DOB: ${formatDob(client.dob)}`,
-    `Phone: ${client.phone}`,
-    `ZIP: ${client.zip}`,
-    '',
-    'RECOMMENDED PLAN',
-    `${plan.carrier} · ${plan.plan_name}`,
-    `Plan ID: ${planId}`,
-    `Premium: ${formatPremium(plan.premium)}`,
-    '',
-    `Total Rx Cost: $${Math.round(totalRxAnnual).toLocaleString()}/yr`,
-    `Total Annual Value: $${Math.round(totalAnnualValue).toLocaleString()}/yr`,
-  ];
-  if (whySwitch && whySwitch.trim()) {
-    lines.push('', `Why switch: ${whySwitch}`);
-  }
+  // Plan id triple — Plan.id is "H1036-308-0"; we expose every part
+  // separately on the Contract line so SunFire's intake parser picks
+  // up whichever it indexes on.
+  const segmentId = plan.id.split('-')[2] ?? '0';
+  const triple = `${plan.contract_id}-${plan.plan_number}-${segmentId}`;
+  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+
+  const location = [client.county, client.state, client.zip].filter(Boolean).join(', ');
+  const giveback = (plan.part_b_giveback ?? 0) > 0
+    ? `$${plan.part_b_giveback.toFixed(2)}/mo`
+    : null;
+
+  // Build conditionally so optional fields don't leave gaps. Section
+  // separator (blank line) stays in for visual readability when the
+  // broker pastes into a SunFire intake field that respects newlines.
+  const lines: string[] = [];
+  lines.push('SUNFIRE HANDOFF');
+  lines.push(`Client: ${client.name} · DOB: ${formatDob(client.dob)}`);
+  if (location) lines.push(`Location: ${location}`);
+  if (client.phone) lines.push(`Phone: ${client.phone}`);
+  lines.push('');
+  lines.push('RECOMMENDED PLAN');
+  lines.push(`Plan: ${plan.plan_name}`);
+  lines.push(`Carrier: ${plan.carrier}`);
+  lines.push(`Contract: ${triple}`);
+  lines.push(`Premium: ${formatPremium(plan.premium)} · MOOP: $${(plan.moop_in_network ?? 0).toLocaleString()}`);
+  if (giveback) lines.push(`Part B Giveback: ${giveback}`);
+  lines.push('');
+  lines.push(`Recommended by: ${brokerName} · NPN #${brokerNpn} · ${brokerPhone}`);
+  lines.push(`Date: ${today}`);
   return lines.join('\n');
 }
