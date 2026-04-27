@@ -29,7 +29,7 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
   const removeMedication = useSession((s) => s.removeMedication);
   const removeProvider = useSession((s) => s.removeProvider);
   const setCurrentPlanId = useSession((s) => s.setCurrentPlanId);
-  const setMode = useSession((s) => s.setMode);
+  const setIsAnnualReview = useSession((s) => s.setIsAnnualReview);
   const existingMeds = useSession((s) => s.medications);
   const existingProvs = useSession((s) => s.providers);
 
@@ -119,12 +119,17 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
         planType: c.plan_type,
         medicaidConfirmed: c.medicaid_confirmed,
       });
+      // Auto-flip into Annual Review when the hydrated client carries a
+      // current_plan_id. The benchmark column on QuoteDeliveryV4 reads
+      // currentPlanId directly, so the broker lands on a delta-vs-current
+      // comparison without an extra click. Without a current plan, stay
+      // in new-quote mode.
       if (c.current_plan_id) {
         setCurrentPlanId(c.current_plan_id);
-        setMode('annual_review');
+        setIsAnnualReview(true);
       } else {
         setCurrentPlanId(null);
-        setMode('new_quote');
+        setIsAnnualReview(false);
       }
 
       // Pull meds + providers in the background. fetchClientDetail can
@@ -240,15 +245,18 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
           {isAepWindow() ? (
             <div style={{ padding: '14px 16px', fontSize: 12, color: 'var(--v4-g700)', lineHeight: 1.5 }}>
               <div style={{ fontWeight: 600, color: 'var(--v4-g900)', marginBottom: 4 }}>
-                Giveback plan — re-evaluate at AEP
+                Giveback plan — re-evaluate for 2027
               </div>
               <div style={{ color: 'var(--v4-g500)' }}>
                 Clients enrolled in Part B giveback plans (
                 <code style={{ fontFamily: 'var(--v4-fm)', fontSize: 11 }}>giveback_plan_enrolled</code>
-                ) surface here during Oct 15 – Dec 7. The flag rides through
-                agentbase-sync; AgentBase needs to expose it back via
-                /api/agentbase-clients before the list can populate. Until then
-                the agent should manually review last-quarter giveback enrollments.
+                ) surface here during Oct 15 – Dec 7 so you can re-evaluate
+                whether the giveback amount changed for the new contract year.
+                Click a client → loads with the Annual review toggle pre-flipped.
+                {' '}
+                <em>Wiring complete on the PlanMatch side; the actual list will
+                populate once AgentBase exposes the giveback_plan_enrolled
+                column on /api/agentbase-clients.</em>
               </div>
             </div>
           ) : (
@@ -256,7 +264,8 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
               Needs-attention alerts (tier change, network drop, follow-up)
               light up here once the <code style={{ fontFamily: 'var(--v4-fm)', fontSize: 11 }}>clients.needs_review</code>
               {' '}column lands in AgentBase. Giveback re-evaluation reminders
-              activate automatically during AEP (Oct 15 – Dec 7).
+              activate automatically during AEP (Oct 15 – Dec 7) — clients
+              with active giveback plans will surface for annual review.
             </div>
           )}
           <div className="chdr" style={{ marginTop: 4, borderTop: '1px solid var(--v4-g100)' }}>

@@ -5,7 +5,6 @@ import type {
   Medication,
   NoteType,
   Provider,
-  SessionMode,
   SessionNote,
   SessionState,
 } from '@/types/session';
@@ -51,7 +50,7 @@ function initialState(): SessionState & { benefitFilters: BenefitFilterState } {
   return {
     sessionId: uid('ses'),
     startedAt: Date.now(),
-    mode: 'new_quote',
+    isAnnualReview: false,
     client: emptyClient(),
     medications: [],
     providers: [],
@@ -70,7 +69,7 @@ function initialState(): SessionState & { benefitFilters: BenefitFilterState } {
 
 interface SessionStore extends SessionState {
   benefitFilters: BenefitFilterState;
-  setMode: (mode: SessionMode) => void;
+  setIsAnnualReview: (flag: boolean) => void;
   updateClient: (patch: Partial<Client>) => void;
   addMedication: (med: Omit<Medication, 'id' | 'addedAt'>) => string;
   updateMedication: (id: string, patch: Partial<Medication>) => void;
@@ -97,7 +96,7 @@ export const useSession = create<SessionStore>()(
     (set) => ({
       ...initialState(),
 
-      setMode: (mode) => set({ mode }),
+      setIsAnnualReview: (flag) => set({ isAnnualReview: flag }),
 
       updateClient: (patch) =>
         set((state) => ({ client: { ...state.client, ...patch } })),

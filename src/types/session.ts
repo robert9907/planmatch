@@ -1,3 +1,7 @@
+// Wire-format mode label sent to AgentBase. Internally the session
+// stores `isAnnualReview: boolean` — `mode` is derived at the sync
+// boundary (see buildSyncPayload). Keep the literal type so the
+// AgentBase webhook contract remains explicit.
 export type SessionMode = 'new_quote' | 'annual_review';
 
 export type StateCode = 'NC' | 'TX' | 'GA';
@@ -74,7 +78,19 @@ export interface SessionNote {
 export interface SessionState {
   sessionId: string;
   startedAt: number;
-  mode: SessionMode;
+  /**
+   * True when the broker has flipped the workflow into AEP / Annual
+   * Review mode (Step6 toggle, or auto-flipped by LandingPage when a
+   * hydrated AgentBase client carries a current_plan_id). Drives:
+   *   • QuoteDeliveryV4 prompts for the current plan if missing,
+   *     pins it as the benchmark column, switches Why-switch copy to
+   *     vs-current framing, and computes a stay/switch verdict.
+   *   • The printable PDF cover title flips from "Medicare Plan
+   *     Comparison" → "Annual Plan Review".
+   *   • buildSyncPayload derives the legacy `mode` literal sent to
+   *     AgentBase from this flag.
+   */
+  isAnnualReview: boolean;
   client: Client;
   medications: Medication[];
   providers: Provider[];

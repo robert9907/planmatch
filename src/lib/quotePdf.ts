@@ -97,6 +97,10 @@ export interface PrintableQuote {
   recommendation: string | null;
   /** Pharmacy fill mode for the medication summary header. */
   pharmacyLabel: string;
+  /** True when the broker is in Annual Review (AEP) mode. Drives the
+   *  cover title ("Annual Plan Review" vs "Medicare Plan Comparison")
+   *  and any future AEP-specific page content. */
+  isAnnualReview: boolean;
 }
 
 // ─── Style tokens (B&W friendly) ─────────────────────────────────────
@@ -146,9 +150,10 @@ export function generateQuotePdf(q: PrintableQuote): GenerateResult {
 
   // Header + footer pass — done here so footer can show "page X of Y".
   const total = doc.getNumberOfPages();
+  const headerRightLabel = q.isAnnualReview ? 'Annual Plan Review' : 'Medicare Plan Comparison';
   for (let i = 1; i <= total; i++) {
     doc.setPage(i);
-    drawHeaderFooter(doc, i, total);
+    drawHeaderFooter(doc, i, total, headerRightLabel);
   }
   finalize.forEach((fn) => fn());
 
@@ -166,15 +171,15 @@ function buildFilename(clientName: string): string {
 
 // ─── Header / footer ─────────────────────────────────────────────────
 
-function drawHeaderFooter(doc: jsPDF, page: number, total: number) {
-  // Header — thin rule under "GenerationHealth.me · Medicare Plan Comparison"
+function drawHeaderFooter(doc: jsPDF, page: number, total: number, headerRight: string = 'Medicare Plan Comparison') {
+  // Header — thin rule under "GenerationHealth.me · {right}"
   doc.setFontSize(8);
   doc.setFont(FONT_HEAD, 'bold');
   doc.setTextColor(COL.navyDeep);
   doc.text('GenerationHealth.me', M, M - 14);
   doc.setFont(FONT_HEAD, 'normal');
   doc.setTextColor(COL.inkSub);
-  doc.text('Medicare Plan Comparison', PAGE_W - M, M - 14, { align: 'right' });
+  doc.text(headerRight, PAGE_W - M, M - 14, { align: 'right' });
   doc.setDrawColor(COL.rule);
   doc.setLineWidth(0.5);
   doc.line(M, M - 8, PAGE_W - M, M - 8);
@@ -201,13 +206,21 @@ function drawHeaderFooter(doc: jsPDF, page: number, total: number) {
 function drawCoverPage(doc: jsPDF, q: PrintableQuote, _finalize: Array<() => void>) {
   let y = M + 20;
 
-  // Title block
+  // Title block — AEP mode swaps "Comparison" for "Review" so the
+  // printed document reads as a year-over-year evaluation rather than
+  // a fresh-quote pitch.
   doc.setFont(FONT_HEAD, 'bold');
   doc.setFontSize(28);
   doc.setTextColor(COL.navyDeep);
-  doc.text('Medicare Plan', M, y);
-  y += 28;
-  doc.text('Comparison', M, y);
+  if (q.isAnnualReview) {
+    doc.text('Annual Plan', M, y);
+    y += 28;
+    doc.text('Review', M, y);
+  } else {
+    doc.text('Medicare Plan', M, y);
+    y += 28;
+    doc.text('Comparison', M, y);
+  }
   y += 18;
 
   doc.setFont(FONT_BODY, 'normal');
@@ -656,7 +669,7 @@ function drawRecommendationPage(doc: jsPDF, q: PrintableQuote, _finalize: Array<
   doc.setFont(FONT_HEAD, 'bold');
   doc.setFontSize(18);
   doc.setTextColor(COL.navyDeep);
-  doc.text('Broker Recommendation', M, y);
+  doc.text(q.isAnnualReview ? 'Annual Review Recommendation' : 'Broker Recommendation', M, y);
   y += 22;
 
   // Recommended plan callout

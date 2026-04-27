@@ -17,7 +17,7 @@ export function Sidebar({
 }: SidebarProps) {
   const medCount = useSession((s) => s.medications.length);
   const providerCount = useSession((s) => s.providers.length);
-  const mode = useSession((s) => s.mode);
+  const isAnnualReview = useSession((s) => s.isAnnualReview);
   const startedAt = useSession((s) => s.startedAt);
 
   const progress = Math.round((activeStep / WORKFLOW_STEPS.length) * 100);
@@ -117,7 +117,7 @@ export function Sidebar({
         >
           Session
         </div>
-        <Row k="Mode" v={mode === 'annual_review' ? 'Annual Review' : 'New Quote'} />
+        <Row k="Mode" v={isAnnualReview ? 'Annual Review' : 'New Quote'} />
         <Row k="Meds" v={medCount.toString()} />
         <Row k="Providers" v={providerCount.toString()} />
         <Row k="Started" v={new Date(startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} />

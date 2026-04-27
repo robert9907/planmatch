@@ -17,7 +17,7 @@ export function Step1ClientLookup({ onAdvance }: Step1Props) {
   const client = useSession((s) => s.client);
   const updateClient = useSession((s) => s.updateClient);
   const setCurrentPlanId = useSession((s) => s.setCurrentPlanId);
-  const storeSetMode = useSession((s) => s.setMode);
+  const setIsAnnualReview = useSession((s) => s.setIsAnnualReview);
   const addMedication = useSession((s) => s.addMedication);
   const addProvider = useSession((s) => s.addProvider);
   const medications = useSession((s) => s.medications);
@@ -83,10 +83,10 @@ export function Step1ClientLookup({ onAdvance }: Step1Props) {
     });
     if (c.current_plan_id) {
       setCurrentPlanId(c.current_plan_id);
-      storeSetMode('annual_review');
+      setIsAnnualReview(true);
     } else {
       setCurrentPlanId(null);
-      storeSetMode('new_quote');
+      setIsAnnualReview(false);
     }
 
     // Full fetch → hydrate meds + providers.
@@ -135,7 +135,7 @@ export function Step1ClientLookup({ onAdvance }: Step1Props) {
       medicaidConfirmed: false,
     });
     setCurrentPlanId(null);
-    storeSetMode('new_quote');
+    setIsAnnualReview(false);
   }
 
   function clearSession() {

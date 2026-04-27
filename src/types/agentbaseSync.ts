@@ -58,7 +58,10 @@ export function buildSyncPayload(input: {
   client: Client;
   sessionId: string;
   startedAt: number;
-  mode: SessionMode;
+  /** Source of truth for the wire-format `mode` literal. The session
+   *  store no longer carries `mode` — it carries `isAnnualReview`,
+   *  and we derive the AgentBase contract value here. */
+  isAnnualReview: boolean;
   medications: Medication[];
   providers: Provider[];
   plansCompared: string[];
@@ -69,6 +72,7 @@ export function buildSyncPayload(input: {
   expectedDisclaimerIds: string[];
   givebackPlanEnrolled: boolean;
 }): AgentBaseSyncPayload {
+  const mode: SessionMode = input.isAnnualReview ? 'annual_review' : 'new_quote';
   return {
     client: {
       name: input.client.name,
@@ -82,7 +86,7 @@ export function buildSyncPayload(input: {
     },
     session: {
       started_at: new Date(input.startedAt).toISOString(),
-      mode: input.mode,
+      mode,
       session_token: input.sessionId,
     },
     medications: input.medications,

@@ -244,8 +244,20 @@ export function QuoteDeliveryV4({
   onRecommend,
 }: Props) {
   const currentPlanId = useSession((s) => s.currentPlanId);
+  const isAnnualReview = useSession((s) => s.isAnnualReview);
   const [pharmacyFill, setPharmacyFill] = useState<PharmacyFill>('retail_30');
   const [pickerOpen, setPickerOpen] = useState(false);
+
+  // Annual Review (AEP) prompt: when the broker has flipped into AEP
+  // mode but the session has no current plan pinned, the benchmark
+  // column is missing and the comparison is meaningless. Auto-open
+  // the CurrentPlanPicker so the broker can resolve immediately.
+  // Drives the prominent prompt rendered above the pharmacy toggle.
+  useEffect(() => {
+    if (isAnnualReview && !currentPlanId) {
+      setPickerOpen(true);
+    }
+  }, [isAnnualReview, currentPlanId]);
 
   // Plan Brain — composite ranking + per-axis scores + ribbons.
   const { result, data: brainData, loading } = usePlanBrain({
@@ -644,12 +656,89 @@ export function QuoteDeliveryV4({
     );
   }, [annualNet, columns]);
 
+  // ── Annual Review (AEP) verdict ─────────────────────────────────
+  // When isAnnualReview && a current plan is pinned, compute:
+  //   • netDeltaVsCurrent — per-column annual net cost delta. Positive
+  //     means the alternative SAVES money relative to the current plan.
+  //   • verdict — 'stay' when the best alternative saves < $200/yr
+  //     (within noise threshold; sticking with the known plan is
+  //     usually the broker's recommendation); 'switch' when at least
+  //     one alternative meaningfully beats current.
+  //   • givebackDrop — when the recommended plan has lower Part B
+  //     giveback than the current plan, surface as a "your client's
+  //     monthly cash-back is dropping" warning the broker should
+  //     proactively explain.
+  // Declared above whySwitch (which reads it) so the binding order is
+  // explicit rather than relying on useMemo's lazy capture.
+  const aepVerdict = useMemo(() => {
+    if (!isAnnualReview || !currentPlan || !result) {
+      return { active: false as const };
+    }
+    const currentCol = columns.find((c) => c.variant === 'current');
+    const currentNet = currentCol?.scored?.realAnnualCost?.netAnnual ?? null;
+    const netDeltaVsCurrent: (number | null)[] = columns.map((c) => {
+      if (c.variant === 'current') return null;
+      const altNet = c.scored?.realAnnualCost?.netAnnual ?? null;
+      if (currentNet == null || altNet == null) return null;
+      return currentNet - altNet; // positive = alt saves money
+    });
+    const bestSavings = netDeltaVsCurrent.reduce<number | null>(
+      (acc, v) => (v != null && (acc == null || v > acc) ? v : acc),
+      null,
+    );
+    // Stay threshold: $200/yr is roughly under-noise for the playbook's
+    // utilization estimates; switching for less than that doesn't
+    // justify the disruption of plan changes mid-care.
+    const verdict: 'stay' | 'switch' | null = bestSavings == null
+      ? null
+      : bestSavings < 200 ? 'stay' : 'switch';
+    const recommendedCol = recommendation
+      ? columns.find((c) => c.id === recommendation)
+      : null;
+    const recPlan = recommendedCol?.plan ?? null;
+    const currentGiveback = currentPlan.part_b_giveback ?? 0;
+    const recGiveback = recPlan?.part_b_giveback ?? 0;
+    const givebackDrop = currentGiveback > 0 && recGiveback < currentGiveback
+      ? { current: currentGiveback, recommended: recGiveback, delta: currentGiveback - recGiveback }
+      : null;
+    return {
+      active: true as const,
+      verdict,
+      bestSavings,
+      netDeltaVsCurrent,
+      givebackDrop,
+    };
+  }, [isAnnualReview, currentPlan, result, columns, recommendation]);
+
   const whySwitch = useMemo<string[]>(() => {
     const baselinePlan = columns[baseIdx]?.plan ?? null;
     const baseTotal = annualBreakdown[baseIdx]?.total ?? null;
     return columns.map((c, i) => {
       if (i === baseIdx) {
-        return c.variant === 'current' ? 'Current plan' : 'Lead column · benchmark';
+        if (c.variant === 'current') {
+          return isAnnualReview ? 'Current plan · 2026 baseline' : 'Current plan';
+        }
+        return 'Lead column · benchmark';
+      }
+      // Annual Review framing: when the current plan is pinned, lead
+      // every alternative column with vs-current dollar delta plus a
+      // year-over-year hint, then fall through to the playbook copy.
+      // The playbook copy already names the right tradeoff (extras,
+      // MOOP, network); we just want the AEP "saves $X vs current"
+      // line to come first so the broker has the headline number.
+      if (isAnnualReview && currentPlan) {
+        const arDelta = aepVerdict.active ? aepVerdict.netDeltaVsCurrent[i] : null;
+        const playbookCopy = c.scored?.whySwitchCopy ?? '';
+        const headline =
+          arDelta != null && arDelta >= 200
+            ? `Saves $${Math.round(arDelta).toLocaleString()}/yr vs current plan`
+            : arDelta != null && arDelta <= -200
+              ? `Costs $${Math.round(-arDelta).toLocaleString()} more/yr than current`
+              : arDelta != null && Math.abs(arDelta) < 200
+                ? 'Within $200/yr of current — minor difference'
+                : null;
+        const bits = [headline, playbookCopy].filter((s): s is string => Boolean(s && s.trim()));
+        if (bits.length > 0) return bits.join(' · ');
       }
       // Priority order: archetype-specific copy from the playbook >
       // broker-rule reason > generic cost/MOOP/extras deltas. The
@@ -685,7 +774,7 @@ export function QuoteDeliveryV4({
       if (c.scored?.providerNetworkStatus === 'all_in') bits.push('in-network');
       return bits.filter(Boolean).join(' · ') || '—';
     });
-  }, [columns, annualBreakdown]);
+  }, [columns, annualBreakdown, isAnnualReview, currentPlan, aepVerdict]);
 
   // C-SNP-in-top-3 banner — surfaces the chronic-care plan opportunity
   // when one is competitive. Top-3 by composite (post-broker-rules
@@ -780,6 +869,7 @@ export function QuoteDeliveryV4({
       whySwitch,
       recommendation: recommendation ?? null,
       pharmacyLabel: pharmacyFill === 'mail_90' ? '90-day mail' : '30-day retail',
+      isAnnualReview,
     };
     setPrintableSnapshot(snapshot);
     // Cleanup clears the snapshot so a stale Print click after
@@ -789,7 +879,7 @@ export function QuoteDeliveryV4({
     setPrintableSnapshot, client, medications, providers, result,
     columns, medRows, providerRows, copayRows, inpatientRow, inpatientTotal,
     planCostRows, extraRows, rxTotalMonthly, rxTotalAnnual, whySwitch,
-    recommendation, pharmacyFill,
+    recommendation, pharmacyFill, isAnnualReview,
   ]);
 
   // ── AgentBase sync on Recommend ────────────────────────────────────
@@ -918,6 +1008,29 @@ export function QuoteDeliveryV4({
           an inline panel with CurrentPlanPicker. Once a plan is set,
           the picker shows the selected plan with a Change button and
           the gray benchmark column appears in the table below. */}
+      {/* AEP-mode prompt — when isAnnualReview is on but no current
+          plan is pinned, the comparison has no benchmark and the
+          deltas are meaningless. Surface a prominent prompt and
+          auto-open the picker (see useEffect above). */}
+      {isAnnualReview && !currentPlan && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: '10px 12px',
+            background: '#fcebeb',
+            border: '1px solid #f3c5c5',
+            borderRadius: 8,
+            color: '#a32d2d',
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: FONT.body,
+          }}
+        >
+          ⚠ Annual review needs a current plan pinned as the benchmark.
+          Pick the client&apos;s 2026 plan in the picker below to enable
+          year-over-year deltas.
+        </div>
+      )}
       {!currentPlan && !pickerOpen && (
         <div style={{ marginBottom: 12, fontSize: 12, color: COL.inkSub }}>
           <button
@@ -1053,6 +1166,68 @@ export function QuoteDeliveryV4({
           Special Needs Plan landed in the top 3 by composite score
           after broker rules. Tells the broker "this exists for this
           condition — consider it before quoting MAPD." */}
+      {/* AEP "Stay" verdict — fires when the broker has flipped into
+          Annual Review and no alternative beats the current plan by
+          more than $200/yr in net annual cost. Sticking with the
+          known plan is usually the right call when savings are
+          under-noise; the playbook still surfaces real switch
+          opportunities through the per-column Why-switch copy. */}
+      {aepVerdict.active && aepVerdict.verdict === 'stay' && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: '10px 12px',
+            background: '#eaf3de',
+            border: '1px solid #c6dca0',
+            borderRadius: 8,
+            color: '#3b6d11',
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: FONT.body,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <span>✓</span>
+          <span>
+            Stay recommended — your client&apos;s current plan is still competitive.
+            Best alternative saves only ${Math.round(aepVerdict.bestSavings ?? 0).toLocaleString()}/yr,
+            below the $200 noise threshold.
+          </span>
+        </div>
+      )}
+
+      {/* Giveback drop — when the broker has recommended a plan whose
+          Part B giveback is lower than the current plan's, the
+          client's monthly Social Security cash-back drops on switch.
+          Surface so the broker explains it before the client notices. */}
+      {aepVerdict.active && aepVerdict.givebackDrop && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: '10px 12px',
+            background: '#faeeda',
+            border: '1px solid #ecd2a2',
+            borderRadius: 8,
+            color: '#854f0b',
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: FONT.body,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <span>⚠</span>
+          <span>
+            Giveback drop on switch — current plan pays ${aepVerdict.givebackDrop.current}/mo back
+            to the client; recommended plan pays ${aepVerdict.givebackDrop.recommended}/mo.
+            That&apos;s ${aepVerdict.givebackDrop.delta * 12}/yr less in their Social Security check.
+          </span>
+        </div>
+      )}
+
       {csnpInTop3 && (
         <div
           style={{

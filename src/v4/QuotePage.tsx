@@ -7,7 +7,7 @@
 // phdr + sticky bbar. The user gets the mockup chrome without us
 // re-implementing the tangle of logic that Step6 already handles.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Step6QuoteDelivery } from '@/components/steps/Step6QuoteDelivery';
 import { useSession } from '@/hooks/useSession';
 import { useScreenShareStore } from '@/hooks/useScreenShare';
@@ -24,22 +24,13 @@ export function QuotePage({ onBack }: Props) {
   const medications = useSession((s) => s.medications);
   const providers = useSession((s) => s.providers);
   const selectedFinalists = useSession((s) => s.selectedFinalists);
-  const setMode = useSession((s) => s.setMode);
 
-  // Force new_quote ONCE on first mount — LandingPage flips mode to
-  // annual_review when the hydrated client has a current_plan_id, but
-  // the v4 Quote screen always opens on the side-by-side table.
-  // Critically, after this initial reset the user must be free to
-  // toggle into Annual Review via Step6's ModeToggle without us
-  // immediately reverting. Watching `mode` in the dep array (the old
-  // bug) caused the toggle to flash and re-mount NewQuoteMode every
-  // time the user clicked Annual Review.
-  const initialModeForced = useRef(false);
-  useEffect(() => {
-    if (initialModeForced.current) return;
-    initialModeForced.current = true;
-    setMode('new_quote');
-  }, [setMode]);
+  // No mode override here. The legacy version forced new_quote on
+  // every mount, which stomped the LandingPage's auto-flip into
+  // Annual Review for clients with a current_plan_id. The new flow
+  // uses isAnnualReview as a flag the broker can flip from Step6's
+  // toggle; QuoteDeliveryV4 reads it directly to drive AEP-specific
+  // copy. Same QuoteDeliveryV4 body renders either way.
 
   // Screen-share state lives in a top-level zustand store so the
   // shell-level MiniSoftphone can show a combined "Sharing + On call"

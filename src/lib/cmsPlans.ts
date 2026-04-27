@@ -452,16 +452,6 @@ export function plansForClient(client: { state: string | null; planType: string 
   });
 }
 
-export function lookupByHNumber(h: string): Plan | null {
-  const normalized = h.trim().toUpperCase().replace(/\s+/g, '');
-  for (const plan of PLANS) {
-    if (plan.id.toUpperCase().replace(/-/g, '') === normalized.replace(/-/g, '')) return plan;
-    if (plan.id.toUpperCase().startsWith(normalized + '-')) return plan;
-    if (plan.id.toUpperCase() === normalized) return plan;
-  }
-  return null;
-}
-
 export function findPlan(id: string): Plan | null {
   return PLANS.find((p) => p.id === id) ?? null;
 }

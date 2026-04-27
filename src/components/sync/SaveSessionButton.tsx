@@ -7,7 +7,7 @@ export function SaveSessionButton() {
   const client = useSession((s) => s.client);
   const sessionId = useSession((s) => s.sessionId);
   const startedAt = useSession((s) => s.startedAt);
-  const mode = useSession((s) => s.mode);
+  const isAnnualReview = useSession((s) => s.isAnnualReview);
   const medications = useSession((s) => s.medications);
   const providers = useSession((s) => s.providers);
   const plansCompared = useSession((s) => s.plansCompared);
@@ -38,7 +38,7 @@ export function SaveSessionButton() {
       client,
       sessionId,
       startedAt,
-      mode,
+      isAnnualReview,
       medications,
       providers,
       plansCompared: plansCompared.length ? plansCompared : selectedFinalists,
