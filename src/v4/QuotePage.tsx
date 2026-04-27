@@ -7,9 +7,11 @@
 // phdr + sticky bbar. The user gets the mockup chrome without us
 // re-implementing the tangle of logic that Step6 already handles.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Step6QuoteDelivery } from '@/components/steps/Step6QuoteDelivery';
 import { useSession } from '@/hooks/useSession';
+import { useScreenShareStore } from '@/hooks/useScreenShare';
+import { BROKER } from '@/lib/constants';
 
 interface Props {
   onBack: () => void;
@@ -36,6 +38,20 @@ export function QuotePage({ onBack }: Props) {
     initialModeForced.current = true;
     setMode('new_quote');
   }, [setMode]);
+
+  // Screen-share state lives in a top-level zustand store so the
+  // shell-level MiniSoftphone can show a combined "Sharing + On call"
+  // status without prop-drilling. Start/stop is invoked from the
+  // bbar button below.
+  const shareActive = useScreenShareStore((s) => Boolean(s.active));
+  const shareStarting = useScreenShareStore((s) => s.starting);
+  const startShare = useScreenShareStore((s) => s.start);
+  const stopShare = useScreenShareStore((s) => s.stop);
+  const shareError = useScreenShareStore((s) => s.error);
+  const canShare = useMemo(
+    () => Boolean(client.phone && /\d/.test(client.phone)),
+    [client.phone],
+  );
   return (
     <>
       <div className="scroll">
@@ -62,7 +78,32 @@ export function QuotePage({ onBack }: Props) {
         <div className="bbar-info">
           <strong>{selectedFinalists.length}</strong> finalist{selectedFinalists.length === 1 ? '' : 's'} compared · <strong>{client.name || 'No client'}</strong>
         </div>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {shareError && (
+            <span style={{ fontSize: 10, color: '#a32d2d', marginRight: 4 }}>
+              {shareError}
+            </span>
+          )}
+          <button
+            type="button"
+            className="btn out"
+            disabled={!canShare || shareStarting}
+            title={canShare ? '' : 'Add a client phone number first'}
+            onClick={() => {
+              if (shareActive) {
+                void stopShare('manual');
+                return;
+              }
+              if (!client.phone) return;
+              void startShare({
+                clientPhone: client.phone,
+                clientFirstName: client.name?.split(/\s+/)[0],
+                brokerName: BROKER.name,
+              });
+            }}
+          >
+            {shareActive ? '● Sharing — Stop' : shareStarting ? 'Starting…' : 'Share Screen'}
+          </button>
           <button type="button" className="btn out" onClick={onBack}>← Back</button>
           <button type="button" className="btn pri" onClick={() => window.print()}>Print Quote</button>
         </div>

@@ -14,6 +14,9 @@ import type { ReactNode } from 'react';
 import { BROKER } from '@/lib/constants';
 import { V4_CSS } from './styles';
 import type { Client, Medication, Provider } from '@/types/session';
+import { MiniSoftphone } from '@/components/MiniSoftphone';
+import { useSession } from '@/hooks/useSession';
+import { useScreenShareStore } from '@/hooks/useScreenShare';
 
 export type WorkflowStepId = 'landing' | 'intake' | 'meds' | 'provs' | 'extras' | 'quote';
 
@@ -128,7 +131,25 @@ export function WorkflowShell({
         })}
       </div>
       <div className="page">{children}</div>
+      <ShellSoftphone />
     </div>
+  );
+}
+
+// Pulls client name/phone from the session and the screen-share state
+// from useScreenShareStore. Mounted once at the shell level so the
+// dock persists across Intake → Meds → Providers → Extras → Quote.
+function ShellSoftphone() {
+  const client = useSession((s) => s.client);
+  const shareActive = useScreenShareStore((s) => Boolean(s.active));
+  const stopShare = useScreenShareStore((s) => s.stop);
+  return (
+    <MiniSoftphone
+      clientName={client.name || null}
+      clientPhone={client.phone || null}
+      shareActive={shareActive}
+      onEndShare={() => { void stopShare('end_all'); }}
+    />
   );
 }
 
