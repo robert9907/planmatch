@@ -37,13 +37,17 @@ interface ClientRow {
   part_b_year: string | null;
   year: number | null;
   lead_source: string | null;
+  // Added by AgentBase migration 006_clients_giveback_plan_enrolled.
+  // Drives PlanMatch's Landing Needs-Attention queue during AEP and
+  // the auto-flip into Annual Review on client hydration.
+  giveback_plan_enrolled: boolean | null;
   updated_at: string | null;
 }
 
 const COLUMNS =
   'id, first_name, last_name, phone, email, dob, zip, city, state, county, ' +
   'carrier, plan_name, plan_id, medicare_id, part_a_month, part_a_year, ' +
-  'part_b_month, part_b_year, year, lead_source, updated_at';
+  'part_b_month, part_b_year, year, lead_source, giveback_plan_enrolled, updated_at';
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
@@ -70,6 +74,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await sb
         .from('clients')
         .select(COLUMNS)
+        .order('updated_at', { ascending: false, nullsFirst: false })
+        .limit(limit);
+      if (error) throw error;
+      return sendJson(res, 200, { clients: shapeRows(data) });
+    }
+
+    // ?giveback=true — return only clients flagged for AEP giveback
+    // re-evaluation. Drives the v4 LandingPage Needs-Attention queue
+    // during the Oct 15 – Dec 7 window. Most-recently-updated first
+    // so the freshest enrollments surface at the top of the broker's
+    // review list.
+    if (req.query.giveback === 'true' || req.query.giveback === '1') {
+      const limit = clampLimit(typeof req.query.limit === 'string' ? req.query.limit : '');
+      const { data, error } = await sb
+        .from('clients')
+        .select(COLUMNS)
+        .eq('giveback_plan_enrolled', true)
         .order('updated_at', { ascending: false, nullsFirst: false })
         .limit(limit);
       if (error) throw error;
@@ -143,6 +164,7 @@ function toSummary(r: ClientRow) {
     part_b_effective: joinMonthYear(r.part_b_month, r.part_b_year),
     year: r.year,
     lead_source: r.lead_source ?? '',
+    giveback_plan_enrolled: Boolean(r.giveback_plan_enrolled),
     last_contact_at: r.updated_at ?? null,
   };
 }

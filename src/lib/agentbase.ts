@@ -32,6 +32,10 @@ export interface AgentBaseClient {
   year: number | null;
   lead_source: string;
   last_contact_at: string | null;
+  // True when AgentBase's clients.giveback_plan_enrolled flag is set
+  // (migration 006). Drives the AEP Needs-Attention queue and the
+  // auto-flip into Annual Review on hydration.
+  giveback_plan_enrolled: boolean;
   // Derived client-side so existing UI that reads these doesn't break.
   plan_type: PlanType;
   medicaid_confirmed: boolean;
@@ -112,6 +116,30 @@ export async function fetchRecentClients(limit = 5, signal?: AbortSignal): Promi
   } catch (err) {
     if ((err as { name?: string })?.name !== 'AbortError') {
       console.warn('[agentbase] recent errored:', err);
+    }
+    return [];
+  }
+}
+
+// Fetch clients with giveback_plan_enrolled = true. Drives the
+// LandingPage Needs-Attention queue during AEP (Oct 15 – Dec 7).
+// Always sorted most-recently-updated first so this AEP cycle's
+// re-quotes appear at the top of the broker's review list.
+export async function fetchGivebackClients(limit = 20, signal?: AbortSignal): Promise<AgentBaseClient[]> {
+  try {
+    const res = await fetch(
+      `/api/agentbase-clients?giveback=true&limit=${encodeURIComponent(String(limit))}`,
+      { method: 'GET', headers: { Accept: 'application/json' }, signal },
+    );
+    if (!res.ok) {
+      console.warn('[agentbase] giveback list failed with', res.status);
+      return [];
+    }
+    const body = (await res.json()) as ApiClientsResponse;
+    return (body.clients ?? []).map(deriveSummary);
+  } catch (err) {
+    if ((err as { name?: string })?.name !== 'AbortError') {
+      console.warn('[agentbase] giveback list errored:', err);
     }
     return [];
   }
@@ -211,6 +239,7 @@ function deriveSummary(raw: unknown): AgentBaseClient {
     year: typeof r.year === 'number' ? r.year : null,
     lead_source: String(r.lead_source ?? ''),
     last_contact_at: typeof r.last_contact_at === 'string' ? r.last_contact_at : null,
+    giveback_plan_enrolled: r.giveback_plan_enrolled === true,
     plan_type: planType,
     medicaid_confirmed: planType === 'DSNP',
     current_plan_id: planId || null,

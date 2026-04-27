@@ -12,6 +12,7 @@ import { useSession } from '@/hooks/useSession';
 import {
   fetchClientDetail,
   fetchClientStats,
+  fetchGivebackClients,
   fetchRecentClients,
   searchClients,
   type AgentBaseClient,
@@ -36,6 +37,7 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<AgentBaseClient[]>([]);
   const [recentClients, setRecentClients] = useState<AgentBaseClient[]>([]);
+  const [givebackClients, setGivebackClients] = useState<AgentBaseClient[]>([]);
   const [totalClients, setTotalClients] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [hydrating, setHydrating] = useState(false);
@@ -50,6 +52,14 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
     });
     fetchClientStats(controller.signal).then((stats) => {
       if (!controller.signal.aborted && stats) setTotalClients(stats.total);
+    });
+    // Giveback list — only relevant during the AEP window. Fetched
+    // unconditionally on mount so the broker sees yesterday's queue
+    // even on Oct 14 / Dec 8 (one day on either side); the UI gates
+    // rendering on isAepWindow() below. Network cost is one cheap
+    // SELECT against an indexed boolean column.
+    fetchGivebackClients(20, controller.signal).then((list) => {
+      if (!controller.signal.aborted) setGivebackClients(list);
     });
     return () => controller.abort();
   }, []);
@@ -119,13 +129,18 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
         planType: c.plan_type,
         medicaidConfirmed: c.medicaid_confirmed,
       });
-      // Auto-flip into Annual Review when the hydrated client carries a
-      // current_plan_id. The benchmark column on QuoteDeliveryV4 reads
-      // currentPlanId directly, so the broker lands on a delta-vs-current
-      // comparison without an extra click. Without a current plan, stay
-      // in new-quote mode.
+      // Auto-flip into Annual Review when EITHER the hydrated client
+      // carries a current_plan_id (so the benchmark column has a real
+      // plan to pin) OR the giveback flag is set (queue from the
+      // Needs-Attention list — the broker is reviewing them for the
+      // explicit purpose of re-evaluating the giveback amount, even if
+      // the plan_id wasn't captured cleanly). Without a current plan,
+      // QuoteDeliveryV4 will prompt the broker to pick one.
       if (c.current_plan_id) {
         setCurrentPlanId(c.current_plan_id);
+        setIsAnnualReview(true);
+      } else if (c.giveback_plan_enrolled) {
+        setCurrentPlanId(null);
         setIsAnnualReview(true);
       } else {
         setCurrentPlanId(null);
@@ -240,25 +255,32 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
         <div className="card">
           <div className="chdr">
             <div className="cht">Needs Attention</div>
-            <div className="chact">{isAepWindow() ? 'AEP active' : 'pending schema'}</div>
+            <div className="chact">
+              {isAepWindow()
+                ? `${givebackClients.length} giveback client${givebackClients.length === 1 ? '' : 's'} · AEP active`
+                : 'pending schema'}
+            </div>
           </div>
           {isAepWindow() ? (
-            <div style={{ padding: '14px 16px', fontSize: 12, color: 'var(--v4-g700)', lineHeight: 1.5 }}>
-              <div style={{ fontWeight: 600, color: 'var(--v4-g900)', marginBottom: 4 }}>
-                Giveback plan — re-evaluate for 2027
+            givebackClients.length > 0 ? (
+              <div>
+                <div style={{ padding: '10px 16px 4px', fontSize: 11, color: 'var(--v4-g500)', lineHeight: 1.4 }}>
+                  Clients on Part B giveback plans for 2026 — re-quote against
+                  2027 plans to confirm the giveback amount didn&apos;t drop.
+                  Clicking a client loads with the Annual Review toggle
+                  pre-flipped.
+                </div>
+                {givebackClients.map((c) => (
+                  <RecentRow key={c.id} c={c} onPick={() => pickClient(c)} />
+                ))}
               </div>
-              <div style={{ color: 'var(--v4-g500)' }}>
-                Clients enrolled in Part B giveback plans (
-                <code style={{ fontFamily: 'var(--v4-fm)', fontSize: 11 }}>giveback_plan_enrolled</code>
-                ) surface here during Oct 15 – Dec 7 so you can re-evaluate
-                whether the giveback amount changed for the new contract year.
-                Click a client → loads with the Annual review toggle pre-flipped.
-                {' '}
-                <em>Wiring complete on the PlanMatch side; the actual list will
-                populate once AgentBase exposes the giveback_plan_enrolled
-                column on /api/agentbase-clients.</em>
+            ) : (
+              <div style={{ padding: '14px 16px', fontSize: 12, color: 'var(--v4-g500)', lineHeight: 1.5 }}>
+                No clients flagged with giveback enrollment yet. Once you
+                recommend a Part B giveback plan via PlanMatch, the client
+                surfaces here through AEP for next-year re-evaluation.
               </div>
-            </div>
+            )
           ) : (
             <div style={{ padding: '14px 16px', fontSize: 12, color: 'var(--v4-g500)', lineHeight: 1.5 }}>
               Needs-attention alerts (tier change, network drop, follow-up)

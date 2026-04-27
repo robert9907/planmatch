@@ -183,11 +183,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ─── Upsert the clients row ─────────────────────────────────
-    // Fields that map cleanly to AgentBase's existing schema. Avoid
-    // writing to columns that don't exist there (probe shows: id,
-    // first_name, last_name, phone, email, dob, zip, city, state,
-    // county, carrier, plan_name, plan_id, year, lead_source,
-    // notes, next_step, updated_at).
+    // Fields that map cleanly to AgentBase's existing schema. Schema
+    // probe + AgentBase migrations (001..006) confirm these columns
+    // exist: id, first_name, last_name, phone, email, dob, zip, city,
+    // state, county, carrier, plan_name, plan_id, year, lead_source,
+    // notes, next_step, updated_at, giveback_plan_enrolled.
+    // The giveback flag landed in AgentBase migration 006 — drives
+    // PlanMatch's Landing Needs-Attention surface during AEP and
+    // AgentBase's CRM list filter.
     const planTriple = `${fullBody.recommended_plan.contract_id}-${fullBody.recommended_plan.plan_id}-${fullBody.recommended_plan.segment_id}`;
     const today = new Date().toISOString().slice(0, 10);
     const updates = {
@@ -206,6 +209,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       lead_source: matched ? undefined : 'planmatch', // don't overwrite existing source
       next_step: `Recommended ${fullBody.recommended_plan.plan_name} via PlanMatch on ${today}` +
         (fullBody.giveback_plan_enrolled ? ' · GIVEBACK — re-evaluate at AEP' : ''),
+      giveback_plan_enrolled: fullBody.giveback_plan_enrolled,
       updated_at: new Date().toISOString(),
     };
 
