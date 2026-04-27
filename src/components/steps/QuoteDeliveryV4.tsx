@@ -68,6 +68,8 @@ import type {
   RibbonKey,
   ScoredPlan,
 } from '@/lib/plan-brain-types';
+import type { Condition, DetectedCondition } from '@/lib/condition-detector';
+import { hasRedFlag, leadingReason } from '@/lib/broker-rules';
 
 const SUNFIRE_URL = 'https://www.sunfirematrix.com/app/consumer/yourmedicare/10447418';
 const MAX_FINALIST_COLUMNS = 4;
@@ -153,6 +155,21 @@ function styleFor(variant: ColumnVariant): ColumnStyle {
       return { headerBg: '#f3f4f6', headerFg: COL.ink, bodyBg: undefined, bodyFg: COL.ink };
   }
 }
+
+const CONDITION_LABEL: Record<Condition, string> = {
+  diabetes: 'diabetes',
+  chf: 'CHF (heart failure)',
+  copd: 'COPD',
+  ckd: 'CKD (kidney)',
+  hypertension: 'high blood pressure',
+  afib: 'AFib',
+};
+
+const CONFIDENCE_BG: Record<DetectedCondition['confidence'], { bg: string; fg: string; border: string }> = {
+  certain:  { bg: '#fcebeb', fg: '#a32d2d', border: '#f3c5c5' },
+  likely:   { bg: '#faeeda', fg: '#854f0b', border: '#ecd2a2' },
+  possible: { bg: '#f3f4f6', fg: '#4b5563', border: '#d1d5db' },
+};
 
 const RIBBON_LABEL: Record<string, string> = {
   BEST_OVERALL:        '⭐ Best Overall',
@@ -607,11 +624,14 @@ export function QuoteDeliveryV4({
       if (i === baseIdx) {
         return c.variant === 'current' ? 'Current plan' : 'Lead column · benchmark';
       }
+      // When the broker-rules engine fires for this plan, that's the
+      // most decision-relevant signal — surface it first. Fall back to
+      // the cost/MOOP/extras delta language when no rules apply.
+      const ruleReason = c.scored?.appliedRules?.length
+        ? leadingReason(c.scored.appliedRules)
+        : null;
+      if (ruleReason) return ruleReason;
       const bits: string[] = [];
-      // Lead with the savings dollar — the most decision-relevant
-      // signal. annualBreakdown.total is signed, more-negative = more
-      // expensive; `(this − base)` gives the dollar value the
-      // alternative saves vs the benchmark (positive = saves).
       const savings =
         baseTotal != null && annualBreakdown[i]?.total != null
           ? annualBreakdown[i].total - baseTotal
@@ -635,6 +655,34 @@ export function QuoteDeliveryV4({
       return bits.filter(Boolean).join(' · ') || '—';
     });
   }, [columns, annualBreakdown]);
+
+  // C-SNP-in-top-3 banner — surfaces the chronic-care plan opportunity
+  // when one is competitive. Top-3 by composite (post-broker-rules
+  // adjustment), not necessarily a column slot — that way the banner
+  // fires even if the C-SNP didn't win a ribbon column.
+  const csnpInTop3 = useMemo<{ plan: Plan; conditionLabel: string } | null>(() => {
+    if (!result) return null;
+    const top3 = [...result.scored].sort((a, b) => b.composite - a.composite).slice(0, 3);
+    const csnp = top3.find((s) => s.isCsnp);
+    if (!csnp) return null;
+    // Pick the most-confident detected condition for the badge label.
+    const cert = result.detectedConditions.find((d) => d.confidence === 'certain')
+      ?? result.detectedConditions.find((d) => d.confidence === 'likely')
+      ?? result.detectedConditions[0];
+    const label = cert ? CONDITION_LABEL[cert.condition] : 'chronic care';
+    return { plan: csnp.plan, conditionLabel: label };
+  }, [result]);
+
+  // Per-column red-flag map — Rule 9 (chronic + MOOP at CMS ceiling)
+  // is the only rule with action='penalize' && points>=25, but we use
+  // hasRedFlag() for forward-compat in case more get added.
+  const redFlagByColumnId = useMemo<Record<string, boolean>>(() => {
+    const out: Record<string, boolean> = {};
+    for (const c of columns) {
+      out[c.id] = c.scored ? hasRedFlag(c.scored.appliedRules) : false;
+    }
+    return out;
+  }, [columns]);
 
   // Medications needing assistance — used to gate the help section.
   const medsNeedingAssistance = useMemo(() => {
@@ -719,6 +767,80 @@ export function QuoteDeliveryV4({
         </div>
       )}
 
+      {/* Detected-condition pills — auto-detected from the medication
+          list. Drives broker-rules boosts/penalties and tells the
+          agent at a glance what conditions Plan Brain inferred. */}
+      {result && result.detectedConditions.length > 0 && (
+        <div style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          <strong
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+              color: COL.inkSub,
+              marginRight: 4,
+            }}
+          >
+            Detected
+          </strong>
+          {result.detectedConditions.map((d) => {
+            const c = CONFIDENCE_BG[d.confidence];
+            return (
+              <span
+                key={d.condition}
+                title={d.brokerImplications.join(' · ')}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '3px 8px',
+                  borderRadius: 999,
+                  background: c.bg,
+                  color: c.fg,
+                  border: `1px solid ${c.border}`,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  fontFamily: FONT.body,
+                }}
+              >
+                {CONDITION_LABEL[d.condition]}
+                <span style={{ fontSize: 9, fontWeight: 500, opacity: 0.85 }}>({d.confidence})</span>
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {/* C-SNP-in-top-3 banner — only renders when a Chronic Care
+          Special Needs Plan landed in the top 3 by composite score
+          after broker rules. Tells the broker "this exists for this
+          condition — consider it before quoting MAPD." */}
+      {csnpInTop3 && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: '8px 12px',
+            borderRadius: 8,
+            background: '#eaf3de',
+            border: '1px solid #c6dca0',
+            color: '#3b6d11',
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: FONT.body,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <span>⊕</span>
+          <span>
+            Chronic Care Plan available — <strong>{csnpInTop3.plan.carrier} {csnpInTop3.plan.plan_name}</strong>
+            {' '}is designed for {csnpInTop3.conditionLabel}
+          </span>
+        </div>
+      )}
+
       <div style={{ marginBottom: 12, fontSize: 12, color: COL.inkSub }}>
         <strong style={{ marginRight: 8, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Pharmacy</strong>
         <button type="button" onClick={() => setPharmacyFill('retail_30')} style={pharmBtnStyle(pharmacyFill === 'retail_30')}>30-day retail</button>
@@ -788,6 +910,33 @@ export function QuoteDeliveryV4({
                     {col.variant === 'current' && (
                       <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: COL.inkSub, marginBottom: 3 }}>
                         Current Plan
+                      </div>
+                    )}
+                    {/* Red flag — Rule 9 (chronic + MOOP at CMS
+                        ceiling) or any future ≥25-point penalty. The
+                        broker should not quote this plan without a
+                        compelling reason. tooltip carries every rule
+                        reason that fired. */}
+                    {redFlagByColumnId[col.id] && col.scored && (
+                      <div
+                        title={col.scored.appliedRules
+                          .filter((r) => r.action === 'penalize')
+                          .map((r) => r.reason)
+                          .join(' · ')}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                          background: '#fcebeb',
+                          color: '#a32d2d',
+                          fontSize: 10,
+                          fontWeight: 700,
+                          marginBottom: 4,
+                        }}
+                      >
+                        ⚠ Red flag
                       </div>
                     )}
                     <div style={{ fontSize: 10, opacity: 0.75 }}>{col.carrier}</div>

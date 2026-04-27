@@ -50,6 +50,17 @@ import {
   utilizationServiceCounts,
 } from './plan-brain-utils';
 import { assignRibbons } from './plan-brain-ribbons';
+import {
+  conditionSet,
+  detectConditions,
+  isHealthyClient,
+  type DetectedCondition,
+} from './condition-detector';
+import {
+  applyBrokerRules,
+  netRulePoints,
+  type ClientProfile,
+} from './broker-rules';
 
 const UNCOVERED_DRUG_PENALTY = 1500; // $/yr per uncovered drug
 
@@ -114,6 +125,7 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
     drugLines: string[];
     medicalLines: string[];
     extrasLines: string[];
+    drugCostByRxcui: Record<string, number>;
   };
 
   const rows: Row[] = eligible.map((plan) => {
@@ -149,6 +161,7 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
       drugLines: drugRes.lines,
       medicalLines: medicalRes.lines,
       extrasLines: extrasRes.lines,
+      drugCostByRxcui: drugRes.byRxcui,
     };
   });
 
@@ -157,6 +170,17 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
   const oopScores = normalizeAxis(rows.map((r) => r.totalOOP), true);
   const extrasScores = normalizeAxis(rows.map((r) => r.extrasValue), false);
 
+  // ─── Detect conditions + build client profile ────────────────────
+  // Detection runs ONCE per quote — same for every plan. Profile then
+  // feeds into the broker-rules pass below.
+  const detectedConditions = detectConditions(medications);
+  const clientProfile: ClientProfile = buildClientProfile({
+    client,
+    medications,
+    providers,
+    detectedConditions,
+  });
+
   // ─── Composite + provider boost ──────────────────────────────────
   const scored: ScoredPlan[] = rows.map((r, i) => {
     const composite =
@@ -164,10 +188,11 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
       oopScores[i] * weights.oop +
       extrasScores[i] * weights.extras;
     const boost = providerBoost(r.networkStatus);
+    const baseComposite = Math.round((composite + boost) * 100) / 100;
     return {
       plan: r.plan,
       rank: 0,
-      composite: Math.round((composite + boost) * 100) / 100,
+      composite: baseComposite,
       drugScore: drugScores[i],
       oopScore: oopScores[i],
       extrasScore: extrasScores[i],
@@ -181,8 +206,30 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
       ribbon: null,
       breakdown: '',
       breakdownLines: [],
+      drugCostByRxcui: r.drugCostByRxcui,
+      appliedRules: [],
+      brokerRuleAdjustment: 0,
+      isCsnp: snpKind(r.plan) === 'csnp',
     };
   });
+
+  // ─── Broker rules pass ───────────────────────────────────────────
+  // Apply 12 broker rules per plan AFTER axis scoring + provider boost,
+  // BEFORE final sort/ribbon. Adjustments are bounded so a single rule
+  // can't catapult a $9K-MOOP plan to #1 — boosts and penalties cap
+  // out at ±25 individually but accumulate.
+  for (const s of scored) {
+    const rIdx = scored.indexOf(s);
+    const r = rows[rIdx];
+    const applied = applyBrokerRules(s.plan, s, clientProfile, {
+      benefits: data.benefitsByPlan[s.plan.id] ?? [],
+      drugCostByRxcui: r.drugCostByRxcui,
+    });
+    const delta = netRulePoints(applied);
+    s.appliedRules = applied;
+    s.brokerRuleAdjustment = delta;
+    s.composite = Math.round((s.composite + delta) * 100) / 100;
+  }
 
   // ─── Sort + rank ─────────────────────────────────────────────────
   scored.sort((a, b) => b.composite - a.composite);
@@ -214,7 +261,57 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
   // ─── Console.debug per spec ──────────────────────────────────────
   emitDebugLog(population, weights, scored);
 
-  return { population, weights, utilization, scored, filteredOut };
+  return { population, weights, utilization, scored, filteredOut, detectedConditions };
+}
+
+// Build the client profile consumed by broker-rules. Pulled out so the
+// scoring loop stays linear and the profile shape can be exported for
+// the UI to render condition pills and the "newly eligible" hint.
+function buildClientProfile({
+  client,
+  medications,
+  providers,
+  detectedConditions,
+}: {
+  client: PlanBrainInputs['client'];
+  medications: Medication[];
+  providers: Provider[];
+  detectedConditions: DetectedCondition[];
+}): ClientProfile {
+  const age = clientAge(client);
+  const cset = conditionSet(detectedConditions);
+  // hasChronicCondition powers Rule 9 (red flag at MOOP ceiling). Only
+  // certain/likely detections count — possible-confidence shouldn't
+  // trip the most aggressive penalty.
+  const hasChronicCondition = detectedConditions.some(
+    (d) => d.confidence === 'certain' || d.confidence === 'likely',
+  );
+  const isInsulinUser = medications.some((m) =>
+    /insulin|humalog|novolog|lantus|levemir|tresiba|toujeo|basaglar|fiasp|lyumjev|humulin|novolin/i.test(m.name),
+  );
+  const isNewlyEligible = age != null && age >= 64 && age <= 66;
+  return {
+    age,
+    conditions: detectedConditions,
+    conditionSet: cset,
+    hasChronicCondition,
+    medications,
+    providers,
+    isHealthyClient: isHealthyClient(medications, detectedConditions),
+    isInsulinUser,
+    isNewlyEligible,
+  };
+}
+
+function clientAge(client: PlanBrainInputs['client']): number | null {
+  if (!client.dob) return null;
+  const d = new Date(client.dob);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  let a = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) a -= 1;
+  return a;
 }
 
 // ─── Provider boost ──────────────────────────────────────────────────
@@ -266,8 +363,8 @@ function computeDrugCost({
   medications: Medication[];
   data: PlanBrainInputs['data'];
   benefits: BenefitRow[];
-}): { cost: number; uncovered: string[]; lines: string[] } {
-  if (medications.length === 0) return { cost: 0, uncovered: [], lines: [] };
+}): { cost: number; uncovered: string[]; lines: string[]; byRxcui: Record<string, number> } {
+  if (medications.length === 0) return { cost: 0, uncovered: [], lines: [], byRxcui: {} };
 
   const tripleId = plan.id;
   const contractPlan = `${plan.contract_id}-${plan.plan_number}`;
@@ -278,6 +375,7 @@ function computeDrugCost({
   let total = 0;
   const uncovered: string[] = [];
   const lines: string[] = [];
+  const byRxcui: Record<string, number> = {};
 
   for (const med of medications) {
     if (!med.rxcui) continue;
@@ -334,10 +432,11 @@ function computeDrugCost({
 
     if (drugAnnual == null) drugAnnual = 0;
     total += drugAnnual;
+    byRxcui[med.rxcui] = drugAnnual;
     lines.push(`${med.name} ($${Math.round(drugAnnual)}/yr${tierUsed ? `, tier ${tierUsed}` : ''})`);
   }
 
-  return { cost: total, uncovered, lines };
+  return { cost: total, uncovered, lines, byRxcui };
 }
 
 function looksLikeInsulin(med: Medication): boolean {

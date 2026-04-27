@@ -5,6 +5,8 @@
 
 import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
+import type { DetectedCondition } from './condition-detector';
+import type { RuleApplication } from './broker-rules';
 
 export type Population = 'mapd' | 'csnp' | 'dsnp';
 
@@ -152,6 +154,18 @@ export interface ScoredPlan {
   // Human-readable cost summary for the v4 quote screen.
   breakdown: string;
   breakdownLines: PlanCostBreakdownLine[];
+  // Per-medication annual drug cost (rxcui → $/yr). Used by broker
+  // rules to detect a single cost driver and by future UI to highlight
+  // the most-impactful drug per plan.
+  drugCostByRxcui: Record<string, number>;
+  // Broker rules that fired against this plan. Empty when none match.
+  appliedRules: RuleApplication[];
+  // Sum of boost − penalize points from appliedRules. Already added to
+  // composite at score time; tracked separately for transparency.
+  brokerRuleAdjustment: number;
+  // True when this is a C-SNP plan. Cached from snpKind() so the UI
+  // doesn't re-derive it from plan_name regexes.
+  isCsnp: boolean;
 }
 
 export interface PlanBrainResult {
@@ -161,4 +175,7 @@ export interface PlanBrainResult {
   scored: ScoredPlan[];
   // Plans that were filtered out before scoring (SNP rules).
   filteredOut: { plan: Plan; reason: string }[];
+  // Conditions auto-detected from the medication list. Drives the
+  // condition pills in QuoteDeliveryV4 and the broker rules.
+  detectedConditions: DetectedCondition[];
 }
