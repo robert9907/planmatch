@@ -33,6 +33,7 @@ import type {
   PlanBrainResult,
   Population,
   ScoredPlan,
+  UtilizationProfile,
   WeightProfile,
 } from './plan-brain-types';
 import {
@@ -45,9 +46,7 @@ import {
   EXTRA_DEFAULTS,
   INSULIN_CAP_MONTHLY,
   canonicalBenefitType,
-  deriveUtilization,
   normalizeAxis,
-  utilizationServiceCounts,
 } from './plan-brain-utils';
 import { assignRibbons } from './plan-brain-ribbons';
 import {
@@ -61,6 +60,18 @@ import {
   netRulePoints,
   type ClientProfile,
 } from './broker-rules';
+import {
+  classifyArchetype,
+  detectMedicationPatterns,
+  detectRedFlags,
+  whySwitchCopy,
+  type ArchetypeMatch,
+} from './broker-playbook';
+import {
+  buildUtilization,
+  calculateRealAnnualCost,
+  type UtilizationProfile as UtilProfileV2,
+} from './utilization-model';
 
 const UNCOVERED_DRUG_PENALTY = 1500; // $/yr per uncovered drug
 
@@ -112,11 +123,23 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
   const { plans, client, medications, providers, data, conditionProfile } = inputs;
   const population = detectPopulation(client, inputs.populationOverride);
 
-  // ─── Step 0: condition detection ──────────────────────────────────
-  // Runs first so the SNP filter can keep matching C-SNPs in the
-  // MAPD cohort (a diabetic client should see the diabetes C-SNP).
+  // ─── Step 0: condition + pattern detection ────────────────────────
+  // Run before the SNP filter so condition-aware C-SNP retention
+  // works, and before archetype classification so patterns can shape
+  // the "specialty drug" / "polypharmacy" signals.
   const detectedConditions = detectConditions(medications);
   const detectedSet = conditionSet(detectedConditions);
+  const medicationPatterns = detectMedicationPatterns(medications);
+
+  // Specialty drug detection — walk the formulary across ALL plans
+  // looking for any client rxcui placed on tier 5. If any plan files
+  // it as specialty, treat the whole client as specialty-drug for
+  // archetype classification (tier coverage will vary plan-to-plan
+  // anyway, but the client's profile is the same).
+  const hasSpecialtyDrug = detectSpecialtyDrug(medications, data);
+  const isInsulinUser = medications.some((m) =>
+    /insulin|humalog|novolog|lantus|levemir|tresiba|toujeo|basaglar|fiasp|lyumjev|humulin|novolin/i.test(m.name),
+  );
 
   // ─── Step 1: SNP filter (condition-aware) ─────────────────────────
   const filteredOut: { plan: Plan; reason: string }[] = [];
@@ -144,14 +167,52 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
     return true;
   });
 
+  // ─── Step 2: archetype classification ────────────────────────────
+  // Drives weights, plan-type preferences, and the Why-switch copy
+  // template. Replaces the population-only weight defaults — those
+  // were too coarse (every diabetic got the same MAPD weights as a
+  // healthy 65-year-old).
+  const age = clientAge(client);
+  const archetype: ArchetypeMatch = classifyArchetype({
+    age,
+    conditions: detectedConditions,
+    conditionSet: detectedSet,
+    medications,
+    providers,
+    isInsulinUser,
+    hasSpecialtyDrug,
+  });
+
   // ─── Weights ──────────────────────────────────────────────────────
-  let weights: WeightProfile = defaultWeights(population);
+  // Archetype weights win unless caller provides a populationOverride
+  // (legacy intake) or weightOverride (UI weight slider). When the
+  // client has zero meds the drug axis is meaningless — redistribute.
+  let weights: WeightProfile =
+    inputs.populationOverride
+      ? defaultWeights(population)
+      : { ...archetype.weights };
   if (medications.length === 0) weights = redistributeForNoMeds(weights);
   weights = applyOverride(weights, inputs.weightOverride);
 
   // ─── Utilization profile ──────────────────────────────────────────
-  const utilization = deriveUtilization(medications.length, conditionProfile);
-  const visits = utilizationServiceCounts(utilization, conditionProfile);
+  // Old (deriveUtilization + UTILIZATION_PROFILES) returned three
+  // buckets and didn't stack conditions. The new model takes MAX of
+  // visit counts and combines probabilities via 1 − Π(1 − pᵢ).
+  const utilProfile: UtilProfileV2 = buildUtilization(detectedSet);
+  // Bucket label for the debug log + result.utilization (UI displays
+  // "low / moderate / high"). Approximate from PCP+specialist totals.
+  const utilization = bucketLabel(utilProfile);
+  // Legacy visit shape for computeMedicalCost — derived from the new
+  // profile so the OOP axis stays consistent with the realAnnualCost
+  // calc downstream.
+  const visits = {
+    pcp: utilProfile.pcp,
+    specialist: utilProfile.specialist,
+    lab: utilProfile.labs,
+    imaging: 0,
+    er: utilProfile.erProbability,
+    inpatient: utilProfile.hospitalProbability * utilProfile.hospitalDays,
+  };
 
   // ─── Per-plan calc ───────────────────────────────────────────────
   type Row = {
@@ -250,6 +311,10 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
       appliedRules: [],
       brokerRuleAdjustment: 0,
       isCsnp: snpKind(r.plan) === 'csnp',
+      realAnnualCost: null,
+      redFlags: [],
+      disqualified: false,
+      whySwitchCopy: '',
     };
   });
 
@@ -271,8 +336,68 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
     s.composite = Math.round((s.composite + delta) * 100) / 100;
   }
 
+  // ─── Red-flag pass ───────────────────────────────────────────────
+  // Detects severe per-plan signals: chronic + MOOP at ceiling, all
+  // providers out (DISQUALIFY), cost-driver-not-on-formulary,
+  // giveback-trap. Disqualified plans are removed from the final
+  // ranking but kept on the scored list with disqualified=true so
+  // the UI can render them differently if the broker overrides.
+  const costDriverRxcui = identifyCostDriver(rows);
+  for (const s of scored) {
+    const rIdx = scored.indexOf(s);
+    const r = rows[rIdx];
+    const totalRx = Object.values(r.drugCostByRxcui).reduce((a, b) => a + b, 0);
+    const driverCost = costDriverRxcui ? r.drugCostByRxcui[costDriverRxcui] ?? 0 : 0;
+    const driverIsCostDriverHere = totalRx > 0 && driverCost / totalRx >= 0.8;
+    const formularyForPlan =
+      data.formularyByContractPlan[`${s.plan.contract_id}-${s.plan.plan_number}`] ?? {};
+    const driverNotOnFormulary =
+      !!costDriverRxcui && driverIsCostDriverHere && !formularyForPlan[costDriverRxcui];
+    const flags = detectRedFlags(s.plan, s, {
+      hasChronicCondition: clientProfile.hasChronicCondition,
+      isInsulinUser,
+      costDriverRxcuis: costDriverRxcui ? [costDriverRxcui] : [],
+      costDriverNotOnFormulary: driverNotOnFormulary,
+      // Giveback-trap math is comparison-based; defer to a later pass
+      // by passing 0 here. A full implementation would compute the
+      // delta against the cheapest non-giveback alternative — that
+      // requires the full scored list, which we have, so do it inline:
+      givebackTrapDelta: computeGivebackTrapDelta(s, scored, rows),
+    });
+    s.redFlags = flags;
+    const flagDelta = flags.reduce((sum, f) => sum + f.pointsAdjustment, 0);
+    if (flagDelta !== 0) s.composite = Math.round((s.composite + flagDelta) * 100) / 100;
+    s.disqualified = flags.some((f) => f.disqualify);
+  }
+
+  // ─── realAnnualCost per plan ─────────────────────────────────────
+  // The structured dollar breakdown the V4 quote table renders in the
+  // Total Annual Value row. Derived from the same utilization profile
+  // the OOP axis used, so the two numbers stay consistent.
+  for (const s of scored) {
+    const benefits = data.benefitsByPlan[s.plan.id] ?? [];
+    const inpatientDayOne = readInpatientFirstStage(benefits);
+    // diabetic_supplies copay from pbp_benefits (single-row category).
+    const supplyRow = benefits.find((b) => /diabet.*suppl/i.test(b.benefit_type));
+    const suppliesCopay = supplyRow?.copay ?? 0;
+    s.realAnnualCost = calculateRealAnnualCost({
+      plan: s.plan,
+      drugAnnual: s.totalAnnualDrugCost,
+      util: utilProfile,
+      diabeticSuppliesCopay: suppliesCopay,
+      inpatientDayOne,
+    });
+  }
+
   // ─── Sort + rank ─────────────────────────────────────────────────
-  scored.sort((a, b) => b.composite - a.composite);
+  // Disqualified plans sort to the end; within each tier sort by
+  // composite descending. The UI will render disqualified rows with
+  // visual de-emphasis and the broker can still see them on the
+  // overflow but they're not eligible for the comparison columns.
+  scored.sort((a, b) => {
+    if (a.disqualified !== b.disqualified) return a.disqualified ? 1 : -1;
+    return b.composite - a.composite;
+  });
   scored.forEach((s, i) => (s.rank = i + 1));
 
   // ─── Ribbons ─────────────────────────────────────────────────────
@@ -298,10 +423,114 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
     ];
   }
 
+  // ─── Why-switch copy per plan ────────────────────────────────────
+  // Use the #1 ranked plan as the implicit baseline for "savings vs
+  // baseline". This matches what the V4 table does when no current
+  // plan is set — top-ranked = benchmark.
+  const baselineNet = scored[0]?.realAnnualCost?.netAnnual ?? null;
+  for (const s of scored) {
+    const myNet = s.realAnnualCost?.netAnnual ?? null;
+    const savings = baselineNet != null && myNet != null ? baselineNet - myNet : null;
+    s.whySwitchCopy = whySwitchCopy({
+      archetype: archetype.archetype,
+      savings,
+      plan: s.plan,
+      scored: s,
+    });
+  }
+
   // ─── Console.debug per spec ──────────────────────────────────────
   emitDebugLog(population, weights, scored);
 
-  return { population, weights, utilization, scored, filteredOut, detectedConditions };
+  return {
+    population,
+    weights,
+    utilization,
+    scored,
+    filteredOut,
+    detectedConditions,
+    medicationPatterns,
+    archetype,
+    utilizationProfile: utilProfile,
+  };
+}
+
+// Identify the rxcui that contributes the most across all plans —
+// used as "the" cost-driver for red-flag checks.
+function identifyCostDriver(rows: Array<{ drugCostByRxcui: Record<string, number> }>): string | null {
+  const totals = new Map<string, number>();
+  for (const r of rows) {
+    for (const [rxcui, cost] of Object.entries(r.drugCostByRxcui)) {
+      totals.set(rxcui, (totals.get(rxcui) ?? 0) + cost);
+    }
+  }
+  let best: string | null = null;
+  let bestSum = 0;
+  for (const [rxcui, sum] of totals) {
+    if (sum > bestSum) {
+      best = rxcui;
+      bestSum = sum;
+    }
+  }
+  // Only call it a cost driver when its mean per-plan cost is non-trivial
+  // ($30/yr or more — anything below is generic noise that doesn't
+  // create a giveback trap or formulary risk).
+  if (rows.length === 0 || bestSum / rows.length < 30) return null;
+  return best;
+}
+
+// Giveback-trap math: this plan's giveback minus the drug-cost
+// differential vs the cheapest non-giveback alternative. Negative
+// number = trap (the giveback is offset by higher Rx costs).
+function computeGivebackTrapDelta(
+  thisPlan: ScoredPlan,
+  all: ScoredPlan[],
+  rows: Array<{ plan: Plan; drugCost: number }>,
+): number {
+  if ((thisPlan.plan.part_b_giveback ?? 0) <= 0) return 0;
+  const myRow = rows.find((r) => r.plan.id === thisPlan.plan.id);
+  if (!myRow) return 0;
+  const nonGiveback = all.filter((s) => (s.plan.part_b_giveback ?? 0) === 0);
+  if (nonGiveback.length === 0) return 0;
+  const cheapestRxAlt = nonGiveback.reduce((min, s) => {
+    const row = rows.find((r) => r.plan.id === s.plan.id);
+    if (!row) return min;
+    return row.drugCost < min ? row.drugCost : min;
+  }, Number.POSITIVE_INFINITY);
+  if (!Number.isFinite(cheapestRxAlt)) return 0;
+  const giveback = (thisPlan.plan.part_b_giveback ?? 0) * 12;
+  const drugDelta = myRow.drugCost - cheapestRxAlt; // positive = this plan costs more on Rx
+  return Math.round(giveback - drugDelta);
+}
+
+// Walk the formulary across all plans looking for any tier-5 placement
+// of any client rxcui. The archetype classifier needs a single boolean
+// — if ANY plan files the drug as specialty, the broker's quote needs
+// to lead with formulary coverage on that drug.
+function detectSpecialtyDrug(
+  medications: Medication[],
+  data: PlanBrainInputs['data'],
+): boolean {
+  const rxcuis = medications.map((m) => m.rxcui).filter((x): x is string => !!x);
+  if (rxcuis.length === 0) return false;
+  for (const formulary of Object.values(data.formularyByContractPlan)) {
+    for (const rxcui of rxcuis) {
+      const row = formulary[rxcui];
+      if (row && row.tier === 5) return true;
+    }
+  }
+  return false;
+}
+
+// Approximate the legacy 'low' / 'moderate' / 'high' bucket from the
+// new utilization profile — used only for the result.utilization label
+// rendered in the V4 footer ("Plan Brain · utilization moderate"). The
+// real numbers live in result.utilizationProfile.
+function bucketLabel(p: UtilProfileV2): UtilizationProfile {
+  const score = p.pcp + p.specialist + p.labs + p.hospitalProbability * 30 + p.erProbability * 5;
+  if (score < 5) return 'low';
+  if (score < 18) return 'moderate';
+  return 'high';
 }
 
 // Build the client profile consumed by broker-rules. Pulled out so the
@@ -492,7 +721,7 @@ function computeMedicalCost({
 }: {
   plan: Plan;
   benefits: BenefitRow[];
-  visits: ReturnType<typeof utilizationServiceCounts>;
+  visits: { pcp: number; specialist: number; lab: number; imaging: number; er: number; inpatient: number };
   isCancer: boolean;
 }): { cost: number; lines: string[] } {
   const annualPremium = plan.premium * 12;

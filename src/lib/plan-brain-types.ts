@@ -7,6 +7,8 @@ import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
 import type { DetectedCondition } from './condition-detector';
 import type { RuleApplication } from './broker-rules';
+import type { ArchetypeMatch, MedicationPattern, RedFlag } from './broker-playbook';
+import type { RealAnnualCost, UtilizationProfile as UtilProfileV2 } from './utilization-model';
 
 export type Population = 'mapd' | 'csnp' | 'dsnp';
 
@@ -166,6 +168,21 @@ export interface ScoredPlan {
   // True when this is a C-SNP plan. Cached from snpKind() so the UI
   // doesn't re-derive it from plan_name regexes.
   isCsnp: boolean;
+  // Real annual cost breakdown — premium + drugs + medical
+  // (visits + supplies + ER risk + hospital risk, capped at MOOP) −
+  // giveback. Null until the playbook pass populates it.
+  realAnnualCost: RealAnnualCost | null;
+  // Severe per-plan signals from the red-flag engine. May contain
+  // disqualify entries; plan-brain filters those out before final
+  // ranking, but the entries persist on the ScoredPlan for audit.
+  redFlags: RedFlag[];
+  // True when at least one red flag has disqualify=true. Used by the
+  // UI to render the disqualified-but-shown row differently if the
+  // broker explicitly opts to override.
+  disqualified: boolean;
+  // Archetype-specific "Why switch?" copy. Computed once during the
+  // brain pass so the UI doesn't re-derive from raw deltas.
+  whySwitchCopy: string;
 }
 
 export interface PlanBrainResult {
@@ -178,4 +195,14 @@ export interface PlanBrainResult {
   // Conditions auto-detected from the medication list. Drives the
   // condition pills in QuoteDeliveryV4 and the broker rules.
   detectedConditions: DetectedCondition[];
+  // Medication patterns (escalation/combination signatures) detected
+  // beyond the per-condition flags. Renders as a row of one-line
+  // summaries above the quote table.
+  medicationPatterns: MedicationPattern[];
+  // Primary archetype classification — drives weights, plan-type
+  // preferences, and the Why-switch copy template.
+  archetype: ArchetypeMatch;
+  // Detailed utilization profile (PCP/specialist/labs/ER prob/hospital
+  // prob/supplies). Drives realAnnualCost on each ScoredPlan.
+  utilizationProfile: UtilProfileV2;
 }

@@ -70,6 +70,7 @@ import type {
 } from '@/lib/plan-brain-types';
 import type { Condition, DetectedCondition } from '@/lib/condition-detector';
 import { hasRedFlag, leadingReason } from '@/lib/broker-rules';
+import { formatRealAnnualCostBreakdown } from '@/lib/utilization-model';
 
 const SUNFIRE_URL = 'https://www.sunfirematrix.com/app/consumer/yourmedicare/10447418';
 const MAX_FINALIST_COLUMNS = 4;
@@ -300,7 +301,13 @@ export function QuoteDeliveryV4({
       return medications.some((m) => !!m.rxcui && !!slot[m.rxcui]);
     };
 
-    const allRanked = result ? [...result.scored].sort((a, b) => b.composite - a.composite) : [];
+    // Disqualified plans (e.g. all-providers-out from the red-flag
+    // engine) are excluded from comparison columns. They stay on the
+    // result.scored list — the broker can still see them in audit
+    // mode — but they're not eligible for the navy/teal/leaf slots.
+    const allRanked = result
+      ? [...result.scored].filter((s) => !s.disqualified).sort((a, b) => b.composite - a.composite)
+      : [];
     // Prefer covered plans for comparison columns. If NONE are
     // covered (data gap across the entire finalist set) fall back
     // to the unfiltered list so the table doesn't render with zero
@@ -635,9 +642,13 @@ export function QuoteDeliveryV4({
       if (i === baseIdx) {
         return c.variant === 'current' ? 'Current plan' : 'Lead column · benchmark';
       }
-      // When the broker-rules engine fires for this plan, that's the
-      // most decision-relevant signal — surface it first. Fall back to
-      // the cost/MOOP/extras delta language when no rules apply.
+      // Priority order: archetype-specific copy from the playbook >
+      // broker-rule reason > generic cost/MOOP/extras deltas. The
+      // playbook copy already factors in archetype context so we
+      // prefer it; the rule reason still surfaces when archetype
+      // copy is empty (rare — only happens with no savings + no
+      // network signal).
+      if (c.scored?.whySwitchCopy) return c.scored.whySwitchCopy;
       const ruleReason = c.scored?.appliedRules?.length
         ? leadingReason(c.scored.appliedRules)
         : null;
@@ -684,13 +695,20 @@ export function QuoteDeliveryV4({
     return { plan: csnp.plan, conditionLabel: label };
   }, [result]);
 
-  // Per-column red-flag map — Rule 9 (chronic + MOOP at CMS ceiling)
-  // is the only rule with action='penalize' && points>=25, but we use
-  // hasRedFlag() for forward-compat in case more get added.
+  // Per-column red-flag map — combines two layers:
+  //   1. broker-rules ≥25-point penalty (Rule 9 today)
+  //   2. broker-playbook red-flag engine (critical / disqualify)
+  // Either signal lights the warning chip; tooltip merges every
+  // reason so the broker sees the full picture on hover.
   const redFlagByColumnId = useMemo<Record<string, boolean>>(() => {
     const out: Record<string, boolean> = {};
     for (const c of columns) {
-      out[c.id] = c.scored ? hasRedFlag(c.scored.appliedRules) : false;
+      if (!c.scored) { out[c.id] = false; continue; }
+      const rulesFlag = hasRedFlag(c.scored.appliedRules);
+      const playbookFlag = c.scored.redFlags.some(
+        (f) => f.severity === 'critical' || f.severity === 'disqualify',
+      );
+      out[c.id] = rulesFlag || playbookFlag;
     }
     return out;
   }, [columns]);
@@ -823,6 +841,57 @@ export function QuoteDeliveryV4({
         </div>
       )}
 
+      {/* Archetype badge — single primary classification that drives
+          the weights, plan-type preferences, and Why-switch copy.
+          Hover for the full broker-voice description. */}
+      {result?.archetype && (
+        <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <strong
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+              color: COL.inkSub,
+            }}
+          >
+            Archetype
+          </strong>
+          <span
+            title={result.archetype.description}
+            style={{
+              padding: '4px 10px',
+              borderRadius: 999,
+              background: COL.navyBody,
+              color: COL.navyHeader,
+              border: `1px solid ${COL.navyHeader}`,
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: 'help',
+              fontFamily: FONT.body,
+            }}
+          >
+            {result.archetype.label}
+          </span>
+          <span style={{ fontSize: 10, color: COL.inkSub, fontFamily: FONT.mono }}>
+            weights: drug {Math.round(result.weights.drug * 100)} / oop {Math.round(result.weights.oop * 100)} / extras {Math.round(result.weights.extras * 100)}
+          </span>
+        </div>
+      )}
+
+      {/* Medication patterns — escalation/combination signatures
+          beyond per-condition flags. Renders one line per pattern. */}
+      {result && result.medicationPatterns.length > 0 && (
+        <div style={{ marginBottom: 12, padding: 8, background: '#f5f4f0', borderRadius: 6, border: `1px solid ${COL.rule}` }}>
+          {result.medicationPatterns.map((p) => (
+            <div key={p.id} style={{ fontSize: 11, color: COL.ink, fontFamily: FONT.body, lineHeight: 1.5 }}>
+              <strong style={{ color: COL.navyHeader }}>{p.summary.split(':')[0]}:</strong>
+              {p.summary.includes(':') ? p.summary.slice(p.summary.indexOf(':') + 1) : ''}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* C-SNP-in-top-3 banner — only renders when a Chronic Care
           Special Needs Plan landed in the top 3 by composite score
           after broker rules. Tells the broker "this exists for this
@@ -930,10 +999,14 @@ export function QuoteDeliveryV4({
                         reason that fired. */}
                     {redFlagByColumnId[col.id] && col.scored && (
                       <div
-                        title={col.scored.appliedRules
-                          .filter((r) => r.action === 'penalize')
-                          .map((r) => r.reason)
-                          .join(' · ')}
+                        title={[
+                          ...col.scored.appliedRules
+                            .filter((r) => r.action === 'penalize')
+                            .map((r) => r.reason),
+                          ...col.scored.redFlags
+                            .filter((f) => f.severity === 'critical' || f.severity === 'disqualify')
+                            .map((f) => f.message),
+                        ].join(' · ')}
                         style={{
                           display: 'inline-flex',
                           alignItems: 'center',
@@ -1195,27 +1268,33 @@ export function QuoteDeliveryV4({
               </th>
               {columns.map((col, ci) => {
                 const isCurrent = col.variant === 'current';
-                const annual = annualNet[ci] ?? 0;
-                const savings = savingsVsBaseline[ci] ?? 0;
-                const b = annualBreakdown[ci];
-                // Component-by-component math, hover-revealed:
-                //   "Rx $564 + Premium $0 − Giveback $1,212 + Dental $0
-                //    + OTC $480 + Food $600 = $432/yr cost"
-                // Cost components rendered with "+", credit components
-                // (giveback / extras) with "−" since they reduce net cost.
-                const tooltipParts: string[] = [];
-                if (b) {
-                  tooltipParts.push(`Rx $${b.rx.toLocaleString()}`);
-                  tooltipParts.push(`+ Premium $${b.premium.toLocaleString()}`);
-                  if (b.giveback > 0) tooltipParts.push(`− Giveback $${b.giveback.toLocaleString()}`);
-                  if (b.dental > 0)   tooltipParts.push(`− Dental $${b.dental.toLocaleString()}`);
-                  if (b.vision > 0)   tooltipParts.push(`− Vision $${b.vision.toLocaleString()}`);
-                  if (b.hearing > 0)  tooltipParts.push(`− Hearing $${b.hearing.toLocaleString()}`);
-                  if (b.otc > 0)      tooltipParts.push(`− OTC $${b.otc.toLocaleString()}`);
-                  if (b.food > 0)     tooltipParts.push(`− Food $${b.food.toLocaleString()}`);
-                  tooltipParts.push(`= $${Math.abs(annual).toLocaleString()}/yr ${annual < 0 ? 'cost' : 'value'}`);
-                }
-                const tooltip = tooltipParts.join(' ');
+                // Prefer the playbook's realAnnualCost (premium + drugs +
+                // medical visits + supplies + ER risk + hospital risk,
+                // capped at MOOP, − giveback). Falls back to the older
+                // "extras − cost" annualNet when realAnnualCost hasn't
+                // populated yet (initial render before brain ready).
+                const real = col.scored?.realAnnualCost ?? null;
+                const annual = real ? real.netAnnual : (annualNet[ci] ?? 0);
+                const baselineReal = columns[baseIdx]?.scored?.realAnnualCost?.netAnnual ?? null;
+                const savings = real && baselineReal != null
+                  ? baselineReal - annual
+                  : (savingsVsBaseline[ci] ?? 0);
+                const tooltip = real
+                  ? formatRealAnnualCostBreakdown(real)
+                  : (() => {
+                      const b = annualBreakdown[ci];
+                      if (!b) return '';
+                      const parts: string[] = [];
+                      parts.push(`Rx $${b.rx.toLocaleString()}`);
+                      parts.push(`+ Premium $${b.premium.toLocaleString()}`);
+                      if (b.giveback > 0) parts.push(`− Giveback $${b.giveback.toLocaleString()}`);
+                      if (b.dental > 0)   parts.push(`− Dental $${b.dental.toLocaleString()}`);
+                      if (b.otc > 0)      parts.push(`− OTC $${b.otc.toLocaleString()}`);
+                      if (b.food > 0)     parts.push(`− Food $${b.food.toLocaleString()}`);
+                      const annualVal = annualNet[ci] ?? 0;
+                      parts.push(`= $${Math.abs(annualVal).toLocaleString()}/yr ${annualVal < 0 ? 'cost' : 'value'}`);
+                      return parts.join(' ');
+                    })();
                 return (
                   <td
                     key={col.id}
@@ -1232,9 +1311,14 @@ export function QuoteDeliveryV4({
                       cursor: tooltip ? 'help' : 'default',
                     }}
                   >
-                    {annual < 0 ? '−' : ''}${Math.abs(annual).toLocaleString()}/yr
+                    {real
+                      ? `$${annual.toLocaleString()}/yr`
+                      : `${annual < 0 ? '−' : ''}$${Math.abs(annual).toLocaleString()}/yr`}
                     {!isCurrent && savings > 0 && (
                       <span style={{ fontSize: 9, marginLeft: 6, opacity: 0.85 }}>saves ${Math.round(savings).toLocaleString()}</span>
+                    )}
+                    {real?.cappedAtMoop && (
+                      <span style={{ fontSize: 9, marginLeft: 6, opacity: 0.85, color: '#ffd166' }}>capped @ MOOP</span>
                     )}
                   </td>
                 );
