@@ -65,11 +65,38 @@ import {
 const UNCOVERED_DRUG_PENALTY = 1500; // $/yr per uncovered drug
 
 function snpKind(plan: Plan): 'dsnp' | 'csnp' | 'isnp' | null {
-  const blob = `${plan.plan_name ?? ''} ${plan.plan_type ?? ''}`.toUpperCase();
-  if (/\bD-?SNP\b/.test(blob) || plan.plan_type === 'DSNP') return 'dsnp';
-  if (/\bC-?SNP\b/.test(blob)) return 'csnp';
-  if (/\bI-?SNP\b/.test(blob)) return 'isnp';
+  // Check plan_name (and ONLY plan_name) before falling back to the
+  // AppPlanType enum. api/plans.ts mapPlanType collapses every SNP
+  // variant — D-SNP, C-SNP, I-SNP — into the single AppPlanType='DSNP'
+  // bucket, so plan_type is ambiguous. plan_name carries the canonical
+  // "(HMO C-SNP)" / "(HMO D-SNP)" / "(HMO I-SNP)" suffix and is the
+  // only reliable signal. Match C-SNP and I-SNP first so a name like
+  // "Humana Gold Plus - Diabetes and Heart (HMO C-SNP)" doesn't get
+  // dragged back into the D-SNP bucket by the catch-all.
+  const name = (plan.plan_name ?? '').toUpperCase();
+  if (/\bC-?SNP\b/.test(name)) return 'csnp';
+  if (/\bI-?SNP\b/.test(name)) return 'isnp';
+  if (/\bD-?SNP\b/.test(name) || plan.plan_type === 'DSNP') return 'dsnp';
   return null;
+}
+
+// C-SNPs are condition-specific. The plan name calls out the eligible
+// condition cluster ("Diabetes and Heart", "Cardiovascular Disorders",
+// "Chronic Lung Disorders", "End-Stage Renal Disease"). When the
+// client's auto-detected condition matches the C-SNP's specialty, we
+// keep the plan in the MAPD cohort so the broker can surface it; Rule 1
+// then boosts it +25 if Klein-style PCP is in-network.
+function csnpMatchesClientConditions(plan: Plan, conditions: Set<string>): boolean {
+  const name = (plan.plan_name ?? '').toUpperCase();
+  if (conditions.has('diabetes') && /\bDIABET/.test(name)) return true;
+  if (
+    conditions.has('chf') &&
+    /(HEART|CARDIO|CHF|CONGEST)/.test(name)
+  )
+    return true;
+  if (conditions.has('copd') && /(COPD|LUNG|RESPIRATORY|PULMONARY)/.test(name)) return true;
+  if (conditions.has('ckd') && /(KIDNEY|RENAL|ESRD|CKD)/.test(name)) return true;
+  return false;
 }
 
 function detectPopulation(client: PlanBrainInputs['client'], override?: Population | null): Population {
@@ -85,11 +112,24 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
   const { plans, client, medications, providers, data, conditionProfile } = inputs;
   const population = detectPopulation(client, inputs.populationOverride);
 
-  // ─── Step 1: SNP filter ───────────────────────────────────────────
+  // ─── Step 0: condition detection ──────────────────────────────────
+  // Runs first so the SNP filter can keep matching C-SNPs in the
+  // MAPD cohort (a diabetic client should see the diabetes C-SNP).
+  const detectedConditions = detectConditions(medications);
+  const detectedSet = conditionSet(detectedConditions);
+
+  // ─── Step 1: SNP filter (condition-aware) ─────────────────────────
   const filteredOut: { plan: Plan; reason: string }[] = [];
   const eligible = plans.filter((p) => {
     const kind = snpKind(p);
     if (population === 'mapd' && kind) {
+      // Allow C-SNPs through when the client has the matching
+      // condition. Rule 1 / Rule 4 then boost it +25 if Klein is
+      // in-network. D-SNP and I-SNP stay filtered (D-SNP requires
+      // Medicaid, I-SNP requires institutional residence).
+      if (kind === 'csnp' && csnpMatchesClientConditions(p, detectedSet as unknown as Set<string>)) {
+        return true;
+      }
       filteredOut.push({ plan: p, reason: `${kind?.toUpperCase()} excluded for standard MAPD` });
       return false;
     }
@@ -170,10 +210,10 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
   const oopScores = normalizeAxis(rows.map((r) => r.totalOOP), true);
   const extrasScores = normalizeAxis(rows.map((r) => r.extrasValue), false);
 
-  // ─── Detect conditions + build client profile ────────────────────
-  // Detection runs ONCE per quote — same for every plan. Profile then
-  // feeds into the broker-rules pass below.
-  const detectedConditions = detectConditions(medications);
+  // ─── Build client profile ────────────────────────────────────────
+  // Conditions were detected at Step 0 (above the SNP filter so
+  // condition-matched C-SNPs stay in the MAPD cohort). Now wrap them
+  // with age + flags and hand to the broker rules.
   const clientProfile: ClientProfile = buildClientProfile({
     client,
     medications,
