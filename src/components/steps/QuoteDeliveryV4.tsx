@@ -44,7 +44,7 @@
 //   • Delta badges inline on every cell that differs from baseline.
 //   • Total Annual Value navy strip with green dollar amounts.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
 import { useSession } from '@/hooks/useSession';
@@ -71,6 +71,8 @@ import type {
 import type { Condition, DetectedCondition } from '@/lib/condition-detector';
 import { hasRedFlag, leadingReason } from '@/lib/broker-rules';
 import { formatRealAnnualCostBreakdown } from '@/lib/utilization-model';
+import { usePrintableQuote } from '@/hooks/usePrintableQuote';
+import type { PrintableQuote } from '@/lib/quotePdf';
 
 const SUNFIRE_URL = 'https://www.sunfirematrix.com/app/consumer/yourmedicare/10447418';
 const MAX_FINALIST_COLUMNS = 4;
@@ -730,6 +732,58 @@ export function QuoteDeliveryV4({
     }
     return out;
   }, [medRows]);
+
+  // ── Publish PrintableQuote snapshot for the QuotePage Print button ─
+  // QuotePage (one component up) reads this snapshot and feeds it to
+  // generateQuotePdf when the broker clicks Print. Centralizing the
+  // snapshot here keeps the PDF generator decoupled from React render
+  // and avoids prop-drilling 12 separate arrays up to the bbar.
+  const setPrintableSnapshot = usePrintableQuote((s) => s.setSnapshot);
+  useEffect(() => {
+    if (!result) {
+      setPrintableSnapshot(null);
+      return;
+    }
+    const snapshot: PrintableQuote = {
+      client,
+      age: ageFromDob(client.dob),
+      medications,
+      providers,
+      result,
+      columns: columns.map((c) => ({
+        id: c.id,
+        variant: c.variant,
+        ribbon: c.ribbon,
+        carrier: c.carrier,
+        planName: c.planName,
+        hNumber: c.hNumber,
+        star: c.star,
+        plan: c.plan,
+        scored: c.scored,
+      })),
+      medRows,
+      providerRows,
+      copayRows,
+      inpatientRow,
+      inpatientTotal,
+      planCostRows,
+      extraRows,
+      rxTotalMonthly,
+      rxTotalAnnual,
+      whySwitch,
+      recommendation: recommendation ?? null,
+      pharmacyLabel: pharmacyFill === 'mail_90' ? '90-day mail' : '30-day retail',
+    };
+    setPrintableSnapshot(snapshot);
+    // Cleanup clears the snapshot so a stale Print click after
+    // QuoteDeliveryV4 unmounts (broker navigated away) can't fire.
+    return () => setPrintableSnapshot(null);
+  }, [
+    setPrintableSnapshot, client, medications, providers, result,
+    columns, medRows, providerRows, copayRows, inpatientRow, inpatientTotal,
+    planCostRows, extraRows, rxTotalMonthly, rxTotalAnnual, whySwitch,
+    recommendation, pharmacyFill,
+  ]);
 
   // ── Early returns (after every hook, per Rules of Hooks) ──────────
   if (loading && !result) {
@@ -2022,4 +2076,15 @@ function ProgramRow({ row }: { row: AssistanceRow }) {
       </div>
     </div>
   );
+}
+
+function ageFromDob(dob: string | null | undefined): number | null {
+  if (!dob) return null;
+  const d = new Date(dob);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  let a = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) a -= 1;
+  return a;
 }

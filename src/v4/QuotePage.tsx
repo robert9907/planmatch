@@ -7,10 +7,12 @@
 // phdr + sticky bbar. The user gets the mockup chrome without us
 // re-implementing the tangle of logic that Step6 already handles.
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Step6QuoteDelivery } from '@/components/steps/Step6QuoteDelivery';
 import { useSession } from '@/hooks/useSession';
 import { useScreenShareStore } from '@/hooks/useScreenShare';
+import { usePrintableQuote } from '@/hooks/usePrintableQuote';
+import { generateQuotePdf } from '@/lib/quotePdf';
 import { BROKER } from '@/lib/constants';
 
 interface Props {
@@ -52,6 +54,46 @@ export function QuotePage({ onBack }: Props) {
     () => Boolean(client.phone && /\d/.test(client.phone)),
     [client.phone],
   );
+
+  // Print Quote — generates a multi-page professional PDF from the
+  // snapshot QuoteDeliveryV4 publishes into usePrintableQuote.
+  // Falls back to window.print() when the snapshot isn't ready (brain
+  // still loading or no plans). Two actions: download + open in new
+  // tab; the broker can email/save from the new tab.
+  const printableSnapshot = usePrintableQuote((s) => s.snapshot);
+  const [printing, setPrinting] = useState(false);
+  const [printError, setPrintError] = useState<string | null>(null);
+  function handlePrint() {
+    setPrintError(null);
+    if (!printableSnapshot) {
+      // Brain hasn't published a snapshot yet. Fall back to the
+      // browser's native print so the broker can still get something.
+      window.print();
+      return;
+    }
+    setPrinting(true);
+    try {
+      const { url, filename } = generateQuotePdf(printableSnapshot);
+      // Trigger a download.
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Also open in a new tab so the broker can preview / print
+      // from the browser's native PDF viewer.
+      window.open(url, '_blank', 'noopener');
+      // Revoke the object URL after a short delay so the new tab has
+      // time to load it.
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error('[print-quote] generation failed:', err);
+      setPrintError((err as Error).message ?? 'PDF generation failed');
+    } finally {
+      setPrinting(false);
+    }
+  }
   return (
     <>
       <div className="scroll">
@@ -105,8 +147,21 @@ export function QuotePage({ onBack }: Props) {
             {shareActive ? '● Sharing — Stop' : shareStarting ? 'Starting…' : 'Share Screen'}
           </button>
           <button type="button" className="btn out" onClick={onBack}>← Back</button>
-          <button type="button" className="btn pri" onClick={() => window.print()}>Print Quote</button>
+          <button
+            type="button"
+            className="btn pri"
+            disabled={printing}
+            onClick={handlePrint}
+            title={printableSnapshot ? 'Generate a printable PDF' : 'Plan Brain still loading — fallback to browser print'}
+          >
+            {printing ? 'Generating PDF…' : 'Print Quote'}
+          </button>
         </div>
+        {printError && (
+          <div style={{ position: 'absolute', right: 16, top: -22, fontSize: 11, color: '#a32d2d' }}>
+            {printError}
+          </div>
+        )}
       </div>
     </>
   );
