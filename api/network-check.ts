@@ -303,14 +303,29 @@ async function fetchLive(args: {
   diagnostic: unknown;
 }> {
   const { chromium } = await import('playwright-core');
-  const sparticuz = (await import('@sparticuz/chromium')).default;
-  const executablePath = await sparticuz.executablePath();
-
-  const browser = await chromium.launch({
-    args: sparticuz.args,
-    executablePath,
-    headless: true,
-  });
+  // Platform-aware launch — sparticuz/chromium only ships a Linux
+  // binary, so on Vercel (linux) we use it; on macOS / Windows local
+  // invocation we fall back to Playwright's bundled chromium. Same
+  // pattern as scripts/scrape-medicare-gov.mjs::launchBrowser. Without
+  // this guard, a local prime/repro script gets ENOEXEC the moment it
+  // tries to spawn the Linux binary.
+  const browser = await (async () => {
+    const envPath = process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_BIN;
+    if (envPath) {
+      return chromium.launch({ executablePath: envPath, headless: true });
+    }
+    if (process.platform === 'linux') {
+      const sparticuz = (await import('@sparticuz/chromium')).default;
+      const executablePath = await sparticuz.executablePath();
+      return chromium.launch({ args: sparticuz.args, executablePath, headless: true });
+    }
+    try {
+      return await chromium.launch({ headless: true });
+    } catch {
+      const fallback = `${process.env.HOME}/Library/Caches/ms-playwright/chromium-1217/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`;
+      return chromium.launch({ executablePath: fallback, headless: true });
+    }
+  })();
   try {
     const ctx = await browser.newContext({ userAgent: USER_AGENT, locale: 'en-US' });
     const page = await ctx.newPage();

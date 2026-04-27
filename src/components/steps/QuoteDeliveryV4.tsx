@@ -376,7 +376,7 @@ export function QuoteDeliveryV4({
   const baseIdx = 0;
 
   const medRows = useMemo<MedRow[]>(() => {
-    return medications.map((med) => {
+    const built = medications.map((med) => {
       const lookups = columns.map((c) => lookupDrugCost(c.plan, med, brainData, pharmacyFill));
       return {
         id: med.id,
@@ -391,6 +391,17 @@ export function QuoteDeliveryV4({
         paStFlags: lookups.map((d) => (d ? { pa: d.pa, st: d.st } : null)),
       };
     });
+    // Sort by total monthly cost across all comparison columns,
+    // descending. Highest-cost drugs surface first so the broker sees
+    // the cost driver (Ozempic before atorvastatin) without scrolling.
+    // Rows with no cost data anywhere fall to the bottom; stable order
+    // preserves the broker's input sequence for ties.
+    const costScore = (r: MedRow): number =>
+      r.monthly.reduce((sum: number, m) => sum + (typeof m === 'number' ? m : 0), 0);
+    return built
+      .map((row, idx) => ({ row, idx, score: costScore(row) }))
+      .sort((a, b) => (b.score - a.score) || (a.idx - b.idx))
+      .map(({ row }) => row);
   }, [medications, columns, brainData, pharmacyFill]);
 
   const providerRows = useMemo<ProviderRow[]>(() => {
