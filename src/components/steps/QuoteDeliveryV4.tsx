@@ -73,6 +73,8 @@ import { hasRedFlag, leadingReason } from '@/lib/broker-rules';
 import { formatRealAnnualCostBreakdown } from '@/lib/utilization-model';
 import { usePrintableQuote } from '@/hooks/usePrintableQuote';
 import type { PrintableQuote } from '@/lib/quotePdf';
+import { useAgentBaseRecommend } from '@/hooks/useAgentBaseRecommend';
+import { BROKER } from '@/lib/constants';
 
 const SUNFIRE_URL = 'https://www.sunfirematrix.com/app/consumer/yourmedicare/10447418';
 const MAX_FINALIST_COLUMNS = 4;
@@ -785,6 +787,56 @@ export function QuoteDeliveryV4({
     recommendation, pharmacyFill,
   ]);
 
+  // ── AgentBase sync on Recommend ────────────────────────────────────
+  // The Recommend button writes session.recommendation immediately
+  // (via the onRecommend prop); we additionally fire a sync to
+  // /api/agentbase-recommend so the AgentBase CRM picks up the
+  // recommended plan + brain snapshot. Sync runs alongside the click —
+  // never blocks the UI. Status renders next to the Recommended chip.
+  const sessionId = useSession((s) => s.sessionId);
+  const startedAt = useSession((s) => s.startedAt);
+  const agentbaseSync = useAgentBaseRecommend();
+
+  function buildSyncInput(planId: string) {
+    if (!result) return null;
+    const colIdx = columns.findIndex((c) => c.id === planId);
+    if (colIdx < 0) return null;
+    const col = columns[colIdx];
+    if (!col.scored) return null;
+
+    const medContext = medRows.map((m) => ({
+      name: m.name,
+      rxcui: medications.find((med) => med.id === m.id)?.rxcui ?? null,
+      tier_on_recommended_plan: m.tiers[colIdx] ?? null,
+      monthly_cost: m.monthly[colIdx] ?? null,
+      pa_required: Boolean(m.paStFlags[colIdx]?.pa),
+      st_required: Boolean(m.paStFlags[colIdx]?.st),
+    }));
+    const providerContext = providerRows.map((p) => {
+      const provRecord = providers.find((pp) => pp.id === p.id);
+      return {
+        name: p.name,
+        npi: provRecord?.npi ?? '',
+        specialty: p.specialty || null,
+        network_status: (p.status[colIdx] ?? 'unknown') as 'in' | 'out' | 'unknown',
+      };
+    });
+    return {
+      client,
+      sessionId,
+      startedAt,
+      brokerNpn: BROKER.npn,
+      brokerId: BROKER.name,
+      recommendedPlan: col.plan,
+      recommendedScored: col.scored,
+      medications,
+      providers,
+      brainResult: result,
+      medContext,
+      providerContext,
+    };
+  }
+
   // ── Early returns (after every hook, per Rules of Hooks) ──────────
   if (loading && !result) {
     return (
@@ -1435,7 +1487,16 @@ export function QuoteDeliveryV4({
                       <button
                         type="button"
                         style={isRec ? btnRecOnStyle : btnRecStyle}
-                        onClick={() => onRecommend?.(isRec ? null : col.id)}
+                        onClick={() => {
+                          const next = isRec ? null : col.id;
+                          onRecommend?.(next);
+                          if (next) {
+                            const input = buildSyncInput(next);
+                            if (input) void agentbaseSync.sync(input);
+                          } else {
+                            agentbaseSync.reset();
+                          }
+                        }}
                       >
                         {isRec ? '✓ Recommended' : 'Recommend'}
                       </button>
@@ -1448,6 +1509,18 @@ export function QuoteDeliveryV4({
                     >
                       Open SunFire →
                     </a>
+                    {isRec && (
+                      <SyncStatusPill
+                        state={agentbaseSync.state}
+                        error={agentbaseSync.error}
+                        url={agentbaseSync.result?.agentbase_url ?? null}
+                        givebackFlagged={agentbaseSync.result?.giveback_flagged ?? false}
+                        onRetry={() => {
+                          const input = buildSyncInput(col.id);
+                          if (input) void agentbaseSync.sync(input);
+                        }}
+                      />
+                    )}
                   </td>
                 );
               })}
@@ -2087,4 +2160,82 @@ function ageFromDob(dob: string | null | undefined): number | null {
   const m = now.getMonth() - d.getMonth();
   if (m < 0 || (m === 0 && now.getDate() < d.getDate())) a -= 1;
   return a;
+}
+
+// Small inline status surface for the AgentBase sync that fires when
+// the broker clicks Recommend. Lives in the action row under the
+// Recommend / Open SunFire buttons.
+function SyncStatusPill(props: {
+  state: 'idle' | 'syncing' | 'synced' | 'retrying' | 'error';
+  error: string | null;
+  url: string | null;
+  givebackFlagged: boolean;
+  onRetry: () => void;
+}) {
+  const { state, error, url, givebackFlagged, onRetry } = props;
+  if (state === 'idle') return null;
+  const baseStyle: React.CSSProperties = {
+    marginTop: 6,
+    fontSize: 10,
+    fontWeight: 600,
+    fontFamily: FONT.body,
+    lineHeight: 1.3,
+  };
+  if (state === 'syncing' || state === 'retrying') {
+    return (
+      <div style={{ ...baseStyle, color: COL.inkSub }}>
+        {state === 'syncing' ? 'Syncing to AgentBase…' : 'Retrying sync…'}
+      </div>
+    );
+  }
+  if (state === 'synced') {
+    return (
+      <div style={{ ...baseStyle, color: '#3b6d11' }}>
+        ✓ Synced to AgentBase
+        {url && (
+          <>
+            {' · '}
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#3b6d11', textDecoration: 'underline' }}
+            >
+              Open client →
+            </a>
+          </>
+        )}
+        {givebackFlagged && (
+          <div style={{ fontWeight: 500, color: COL.inkSub, marginTop: 2 }}>
+            Giveback flag set · re-evaluate at AEP
+          </div>
+        )}
+      </div>
+    );
+  }
+  // error
+  return (
+    <div style={{ ...baseStyle, color: '#a32d2d' }}>
+      Sync failed
+      {error && <span style={{ fontWeight: 400, marginLeft: 4 }}>· {error}</span>}
+      {' · '}
+      <button
+        type="button"
+        onClick={onRetry}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          padding: 0,
+          color: '#a32d2d',
+          textDecoration: 'underline',
+          cursor: 'pointer',
+          fontWeight: 700,
+          fontSize: 10,
+          fontFamily: FONT.body,
+        }}
+      >
+        Retry
+      </button>
+    </div>
+  );
 }
