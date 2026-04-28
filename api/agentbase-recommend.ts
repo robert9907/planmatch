@@ -242,12 +242,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // AgentBase's webhook side enforces a unique index on
     // (client_id, lower(trim(name))) — do the same dedup here so
     // a re-click on Recommend doesn't double-insert.
-    const seenNames = new Set<string>();
+    // Dedupe: prefer rxcui as the dedup key when present (collapses
+    // "Ozempic" + "Ozempic 1mg" if they share rxcui), fall back to
+    // lower(name) for entries without a rxcui.
+    const seenKeys = new Set<string>();
+    const recommendNow = new Date().toISOString();
     const medRows = fullBody.medications
       .filter((m) => {
-        const k = (m.name ?? '').trim().toLowerCase();
-        if (!k || seenNames.has(k)) return false;
-        seenNames.add(k);
+        const name = (m.name ?? '').trim().toLowerCase();
+        if (!name) return false;
+        const key = m.rxcui || name;
+        if (seenKeys.has(key)) return false;
+        seenKeys.add(key);
         return true;
       })
       .map((m) => ({
@@ -256,17 +262,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         dose: m.dose ?? null,
         frequency: m.frequency ?? null,
         rxcui: m.rxcui ?? null,
+        synced_from_planmatch_at: recommendNow,
       }));
 
     if (medRows.length > 0) {
-      // Wipe-and-replace so removed meds don't linger from a prior
-      // recommendation on the same client. Cheaper than diff-based
-      // upsert and the broker's intent is "this is the current med
-      // list as of this recommendation".
+      // Wipe Plan-Match-synced rows only, leaving rows the broker
+      // typed manually in the CRM untouched. Recommend re-clicks
+      // refresh the synced subset; manual edits aren't disturbed.
       const { error: delErr } = await sb
         .from('client_medications')
         .delete()
-        .eq('client_id', clientId);
+        .eq('client_id', clientId)
+        .not('synced_from_planmatch_at', 'is', null);
       if (delErr) throw delErr;
       const { error: insErr } = await sb.from('client_medications').insert(medRows);
       if (insErr) throw insErr;
@@ -332,12 +339,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         resolvedIds.push((inserted as { id: number }).id);
       }
 
-      // Step 2: wipe + insert the join rows with the network_status
-      // snapshot and the plan triple recommended in this call.
+      // Step 2: wipe Plan-Match-synced join rows only, leaving manual
+      // links untouched. Then insert with the network_status snapshot,
+      // the plan triple recommended in this call, and a sync stamp so
+      // the CRM client detail can render a "Synced from PlanMatch"
+      // badge alongside each row.
       const { error: delLinksErr } = await sb
         .from('client_providers')
         .delete()
-        .eq('client_id', clientId);
+        .eq('client_id', clientId)
+        .not('synced_from_planmatch_at', 'is', null);
       if (delLinksErr) throw delLinksErr;
 
       const linkRows = resolvedIds.map((providerId, i) => ({
@@ -345,6 +356,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         provider_id: providerId,
         last_known_network_status: dedupedProviders[i].network_status ?? null,
         last_known_plan_id: planTriple,
+        synced_from_planmatch_at: recommendNow,
       }));
       if (linkRows.length > 0) {
         const { error: insLinksErr } = await sb.from('client_providers').insert(linkRows);
