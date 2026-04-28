@@ -44,7 +44,7 @@
 //   • Delta badges inline on every cell that differs from baseline.
 //   • Total Annual Value navy strip with green dollar amounts.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
 import { useSession } from '@/hooks/useSession';
@@ -67,6 +67,7 @@ import type {
   PlanBrainData,
   RibbonKey,
   ScoredPlan,
+  WeightProfile,
 } from '@/lib/plan-brain-types';
 import type { Condition, DetectedCondition } from '@/lib/condition-detector';
 import { hasRedFlag, leadingReason } from '@/lib/broker-rules';
@@ -84,6 +85,23 @@ import { buildSunfireRecommendationText } from '@/lib/clipboardFormat';
 const SUNFIRE_URL = BROKER.sunfire;
 const MAX_FINALIST_COLUMNS = 4;
 const DEFAULT_INPATIENT_DAYS = 5;
+const BRAIN_VERSION = 'v4.1';
+
+// Weight preset buttons — drive `weightOverride` into usePlanBrain.
+// Spec: 5 buttons. Click → recompute composite for each finalist →
+// re-sort comparison columns by composite descending → re-emit
+// `[quote-v4]` console snapshot. Custom is the neutral 33/34/33 fallback;
+// the rest map directly to the preset table in the v4 brief.
+type WeightPresetKey = 'balanced' | 'drug' | 'low_medical' | 'extras' | 'custom';
+
+const WEIGHT_PRESETS: Record<WeightPresetKey, { label: string; weights: WeightProfile }> = {
+  balanced:    { label: 'Balanced',    weights: { drug: 0.50, oop: 0.30, extras: 0.20 } },
+  drug:        { label: 'Drug focused', weights: { drug: 0.70, oop: 0.20, extras: 0.10 } },
+  low_medical: { label: 'Low medical', weights: { drug: 0.20, oop: 0.60, extras: 0.20 } },
+  extras:      { label: 'Extras heavy', weights: { drug: 0.15, oop: 0.15, extras: 0.70 } },
+  custom:      { label: 'Custom',      weights: { drug: 0.33, oop: 0.34, extras: 0.33 } },
+};
+const PRESET_ORDER: WeightPresetKey[] = ['balanced', 'drug', 'low_medical', 'extras', 'custom'];
 
 type PharmacyFill = 'retail_30' | 'mail_90';
 
@@ -113,6 +131,25 @@ const FONT = {
   serif: "'Fraunces', Georgia, serif",
   body:  "'Inter', system-ui, -apple-system, sans-serif",
   mono:  "'JetBrains Mono', monospace",
+};
+
+// V4 spec color tokens — used by the new client-context bar, weight
+// presets, weight readout, and footer per the QuoteDeliveryV4 brief.
+// Distinct from COL above (which is the legacy column-variant palette
+// for the table itself); kept side-by-side rather than merged so a
+// future visual refresh can swap one without disturbing the other.
+const V4 = {
+  navy:        '#0d2f5e',
+  navyLight:   '#1e4a7a',
+  teal:        '#14b8a6',
+  seafoam:     '#67e8f9',
+  green:       '#22c55e',
+  gold:        '#f59e0b',
+  coral:       '#ef4444',
+  bgGray:      '#f1f5f9',
+  border:      '#e2e8f0',
+  textPrimary: '#0f172a',
+  textMuted:   '#64748b',
 };
 
 // ─── Tier badge palette (V4 spec) ──────────────────────────────────
@@ -247,6 +284,10 @@ export function QuoteDeliveryV4({
   const isAnnualReview = useSession((s) => s.isAnnualReview);
   const [pharmacyFill, setPharmacyFill] = useState<PharmacyFill>('retail_30');
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Weight preset — drives weightOverride for usePlanBrain. null lets
+  // the archetype-derived weights win (default behavior). Clicking a
+  // preset overrides; "Custom" returns to the neutral 33/34/33.
+  const [presetKey, setPresetKey] = useState<WeightPresetKey | null>(null);
 
   // Annual Review (AEP) prompt: when the broker has flipped into AEP
   // mode but the session has no current plan pinned, the benchmark
@@ -260,11 +301,18 @@ export function QuoteDeliveryV4({
   }, [isAnnualReview, currentPlanId]);
 
   // Plan Brain — composite ranking + per-axis scores + ribbons.
+  // weightOverride lets the broker swap presets at quote time without
+  // redoing intake. null → archetype-derived defaults win.
+  const weightOverride = useMemo<WeightProfile | null>(
+    () => (presetKey ? WEIGHT_PRESETS[presetKey].weights : null),
+    [presetKey],
+  );
   const { result, data: brainData, loading } = usePlanBrain({
     plans: finalists,
     client,
     medications,
     providers,
+    weightOverride,
   });
 
   // Live drug-cost prime — hits /api/drug-costs and writes back to
@@ -978,6 +1026,38 @@ export function QuoteDeliveryV4({
     };
   }
 
+  // ── Console debug — `[quote-v4]` snapshot per spec ─────────────────
+  // Two emissions: the full render snapshot every time columns
+  // settle, and a CHANGED line whenever the broker flips presets.
+  // Logged via console.info so it stays out of production-error
+  // surfaces but is grep-able from the dev console.
+  const lastPresetRef = useRef<WeightPresetKey | null>(presetKey);
+  useEffect(() => {
+    if (!result) return;
+    const top3 = [...result.scored]
+      .filter((s) => !s.disqualified)
+      .slice(0, 3)
+      .map((s) => `${s.plan.contract_id}-${s.plan.plan_number}`);
+    const w = result.weights;
+    const wInt = {
+      drug: Math.round(w.drug * 100),
+      oop: Math.round(w.oop * 100),
+      extras: Math.round(w.extras * 100),
+    };
+    const prev = lastPresetRef.current;
+    if (prev !== presetKey) {
+      console.info(
+        `[quote-v4] weights CHANGED to {drug:${wInt.drug},oop:${wInt.oop},extras:${wInt.extras}} — recalculating`,
+      );
+      console.info(`[quote-v4] new top3=[${top3.join(', ')}]`);
+      lastPresetRef.current = presetKey;
+    }
+    console.info(
+      `[quote-v4] weights={drug:${wInt.drug},oop:${wInt.oop},extras:${wInt.extras}} plans=${result.scored.length} top3=[${top3.join(', ')}]`,
+    );
+    console.info('[quote-v4] sort=composite dir=desc');
+  }, [result, presetKey]);
+
   // ── Early returns (after every hook, per Rules of Hooks) ──────────
   if (loading && !result) {
     return (
@@ -1001,6 +1081,50 @@ export function QuoteDeliveryV4({
   // component) so the style atoms reference the same numbers.
   const minWidth = LABEL_W + N * PLAN_W;
   const colSpanFull = 1 + N;
+
+  // Recommended column for the gold "RECOMMENDED" badge — pick the
+  // non-current finalist with the lowest realAnnualCost.netAnnual
+  // (= highest annual value to the client). Falls back to the first
+  // non-current column when realAnnualCost hasn't populated yet.
+  const recommendedColId = (() => {
+    const candidates = columns.filter((c) => c.variant !== 'current');
+    if (candidates.length === 0) return null;
+    let best = candidates[0];
+    let bestNet = best.scored?.realAnnualCost?.netAnnual ?? Infinity;
+    for (const c of candidates.slice(1)) {
+      const net = c.scored?.realAnnualCost?.netAnnual ?? Infinity;
+      if (net < bestNet) {
+        best = c;
+        bestNet = net;
+      }
+    }
+    return best.id;
+  })();
+
+  // Active weights for the readout — prefer the live brain output
+  // (which reflects whatever weightOverride flowed through this run);
+  // fall back to the preset's nominal weights while the brain is
+  // still spinning up after a preset flip.
+  const liveWeights: WeightProfile = result?.weights
+    ?? (presetKey ? WEIGHT_PRESETS[presetKey].weights : { drug: 0.5, oop: 0.3, extras: 0.2 });
+  const wPct = {
+    drug: Math.round(liveWeights.drug * 100),
+    oop: Math.round(liveWeights.oop * 100),
+    extras: Math.round(liveWeights.extras * 100),
+  };
+
+  // Client context fields. age/city/zip are computed inline; LIS,
+  // D-SNP, and C-SNP eligibility come from the session + plan-brain
+  // result. medicaidConfirmed is the proxy for D-SNP eligibility;
+  // detected conditions drive C-SNP.
+  const ctxAge = ageFromDob(client.dob);
+  const ctxCityState = [client.county, client.state].filter(Boolean).join(', ');
+  const ctxLocation = [ctxCityState, client.zip].filter(Boolean).join(' ').trim();
+  const csnpConditions = result?.detectedConditions
+    .filter((d) => d.confidence === 'certain' || d.confidence === 'likely')
+    .map((d) => CONDITION_LABEL[d.condition])
+    ?? [];
+  const csnpEligible = csnpConditions.length > 0;
 
   return (
     <div style={{ fontFamily: FONT.body, color: COL.ink }}>
@@ -1253,6 +1377,152 @@ export function QuoteDeliveryV4({
         </div>
       )}
 
+      {/* Client context bar — gray rounded summary the broker reads
+          off during the call: name, age, location, med count, provider
+          count, LIS / D-SNP / C-SNP eligibility. medicaidConfirmed is
+          the proxy for D-SNP; detected conditions (certain/likely)
+          drive C-SNP. LIS isn't tracked in session, so it falls
+          through as "—" when unknown. */}
+      <div
+        style={{
+          marginBottom: 12,
+          padding: '10px 14px',
+          background: V4.bgGray,
+          border: `1px solid ${V4.border}`,
+          borderRadius: 10,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 14,
+          alignItems: 'center',
+          fontSize: 12,
+          fontFamily: FONT.body,
+          color: V4.textPrimary,
+        }}
+      >
+        <ContextField label="Client" value={client.name || '—'} bold />
+        <ContextField label="Age" value={ctxAge != null ? String(ctxAge) : '—'} />
+        <ContextField label="Location" value={ctxLocation || '—'} />
+        <ContextField label="Meds" value={`${medications.length}`} mono />
+        <ContextField label="Providers" value={`${providers.length}`} mono />
+        <ContextField label="LIS" value="—" />
+        <ContextField label="D-SNP" value={client.medicaidConfirmed ? 'Yes' : 'No'} />
+        {csnpEligible && (
+          <ContextField label="C-SNP eligible" value={csnpConditions.join(' · ')} highlight />
+        )}
+      </div>
+
+      {/* Weight presets — recompute composite + re-sort comparison
+          columns. Active button = navy filled. Click → state →
+          weightOverride → usePlanBrain → re-rank → effect emits the
+          `[quote-v4]` snapshot. */}
+      <div
+        style={{
+          marginBottom: 8,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 6,
+          alignItems: 'center',
+        }}
+      >
+        <strong
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+            color: V4.textMuted,
+            marginRight: 4,
+          }}
+        >
+          Weight preset
+        </strong>
+        {PRESET_ORDER.map((key) => {
+          const p = WEIGHT_PRESETS[key];
+          const active = presetKey === key;
+          const pct = {
+            drug: Math.round(p.weights.drug * 100),
+            oop: Math.round(p.weights.oop * 100),
+            extras: Math.round(p.weights.extras * 100),
+          };
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setPresetKey(active ? null : key)}
+              title={`Rx ${pct.drug}% / Medical ${pct.oop}% / Extras ${pct.extras}%`}
+              style={presetBtnStyle(active)}
+            >
+              {p.label}
+              <span style={{ marginLeft: 6, fontSize: 9, opacity: 0.7, fontFamily: FONT.mono }}>
+                {pct.drug}/{pct.oop}/{pct.extras}
+              </span>
+            </button>
+          );
+        })}
+        {presetKey && (
+          <button
+            type="button"
+            onClick={() => setPresetKey(null)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: '4px 8px',
+              color: V4.textMuted,
+              fontSize: 11,
+              fontFamily: FONT.body,
+              cursor: 'pointer',
+              textDecoration: 'underline',
+              textUnderlineOffset: 2,
+            }}
+          >
+            Reset to archetype
+          </button>
+        )}
+      </div>
+
+      {/* Weight readout — current Rx/Medical/Extras % and per-plan
+          composite scores. Mono so the alignment reads as data, not
+          prose. Updates whenever weights change. */}
+      <div
+        style={{
+          marginBottom: 12,
+          padding: '6px 10px',
+          background: '#fff',
+          border: `1px dashed ${V4.border}`,
+          borderRadius: 6,
+          fontSize: 10,
+          fontFamily: FONT.mono,
+          color: V4.textMuted,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 14,
+          alignItems: 'center',
+        }}
+      >
+        <span>
+          Rx <strong style={{ color: V4.navy }}>{wPct.drug}%</strong>
+          {' / '}
+          Medical <strong style={{ color: V4.teal }}>{wPct.oop}%</strong>
+          {' / '}
+          Extras <strong style={{ color: V4.green }}>{wPct.extras}%</strong>
+        </span>
+        {result && (
+          <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 10 }}>
+            <span style={{ color: V4.textMuted }}>composite:</span>
+            {[...result.scored]
+              .filter((s) => !s.disqualified)
+              .slice(0, 3)
+              .map((s) => (
+                <span key={s.plan.id}>
+                  {s.plan.contract_id}-{s.plan.plan_number}
+                  {' '}
+                  <strong style={{ color: V4.textPrimary }}>{s.composite.toFixed(1)}</strong>
+                </span>
+              ))}
+          </span>
+        )}
+      </div>
+
       <div style={{ marginBottom: 12, fontSize: 12, color: COL.inkSub }}>
         <strong style={{ marginRight: 8, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Pharmacy</strong>
         <button type="button" onClick={() => setPharmacyFill('retail_30')} style={pharmBtnStyle(pharmacyFill === 'retail_30')}>30-day retail</button>
@@ -1317,6 +1587,24 @@ export function QuoteDeliveryV4({
                         }}
                       >
                         {col.ribbon}
+                      </div>
+                    )}
+                    {col.id === recommendedColId && (
+                      <div
+                        style={{
+                          display: 'inline-block',
+                          fontSize: 9,
+                          fontWeight: 700,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.06em',
+                          padding: '2px 6px',
+                          borderRadius: 3,
+                          background: V4.gold,
+                          color: '#1f1300',
+                          marginBottom: 4,
+                        }}
+                      >
+                        ★ Recommended
                       </div>
                     )}
                     {col.variant === 'current' && (
@@ -1815,6 +2103,73 @@ export function QuoteDeliveryV4({
           Plan Brain · population {result.population.toUpperCase()} · utilization {result.utilization} · {client.county}, {client.state}
         </div>
       )}
+
+      {/* Global action button row — Print quote, Side-by-side PDF,
+          Enroll in SunFire. Per-column Recommend / Open SunFire buttons
+          live in the table action row above; these are the workflow-
+          level actions the broker hits once they've picked a plan. */}
+      <div
+        style={{
+          marginTop: 14,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => window.print()}
+          style={v4ActionBtnStyle(false)}
+        >
+          🖨 Print quote
+        </button>
+        <button
+          type="button"
+          onClick={() => window.print()}
+          style={v4ActionBtnStyle(false)}
+          title="Use the printable snapshot from usePrintableQuote → quotePdf"
+        >
+          📄 Side-by-side PDF
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const url = (typeof window !== 'undefined' && (window as { ENV?: { SUNFIRE_AGENT_URL?: string } }).ENV?.SUNFIRE_AGENT_URL)
+              || SUNFIRE_URL;
+            window.open(url, '_blank', 'noopener,noreferrer');
+          }}
+          style={v4ActionBtnStyle(true)}
+        >
+          ✓ Enroll in SunFire
+        </button>
+      </div>
+
+      {/* Footer — PlanMatch brain version + data sources + NPN. */}
+      <div
+        style={{
+          marginTop: 16,
+          paddingTop: 10,
+          borderTop: `1px solid ${V4.border}`,
+          fontSize: 10,
+          fontFamily: FONT.body,
+          color: V4.textMuted,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 12,
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <span style={{ fontFamily: FONT.mono }}>
+          PlanMatch brain {BRAIN_VERSION}
+        </span>
+        <span>
+          Sources: pm_plans · pbp_benefits · pm_drug_cost_cache · pm_formulary · pm_provider_cache_coverage
+        </span>
+        <span>
+          {BROKER.name} · NPN {BROKER.npn}
+        </span>
+      </div>
     </div>
   );
 }
@@ -2211,6 +2566,78 @@ function Flag({ children }: { children: React.ReactNode }) {
       {children}
     </span>
   );
+}
+
+// ─── V4 spec atoms ─────────────────────────────────────────────────
+
+function ContextField({
+  label,
+  value,
+  bold,
+  mono,
+  highlight,
+}: {
+  label: string;
+  value: string;
+  bold?: boolean;
+  mono?: boolean;
+  highlight?: boolean;
+}) {
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
+      <span
+        style={{
+          fontSize: 9,
+          fontWeight: 700,
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          color: V4.textMuted,
+        }}
+      >
+        {label}
+      </span>
+      <span
+        style={{
+          fontSize: 12,
+          fontWeight: bold ? 700 : highlight ? 700 : 500,
+          fontFamily: mono ? FONT.mono : FONT.body,
+          color: highlight ? V4.green : V4.textPrimary,
+        }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function presetBtnStyle(active: boolean): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '6px 12px',
+    borderRadius: 6,
+    border: `1px solid ${active ? V4.navy : V4.border}`,
+    background: active ? V4.navy : '#fff',
+    color: active ? '#fff' : V4.textPrimary,
+    fontSize: 11,
+    fontWeight: 600,
+    fontFamily: FONT.body,
+    cursor: 'pointer',
+  };
+}
+
+function v4ActionBtnStyle(primary: boolean): React.CSSProperties {
+  return {
+    padding: '8px 16px',
+    borderRadius: 8,
+    border: primary ? 'none' : `1px solid ${V4.border}`,
+    background: primary ? V4.green : '#fff',
+    color: primary ? '#fff' : V4.textPrimary,
+    fontSize: 12,
+    fontWeight: 700,
+    fontFamily: FONT.body,
+    cursor: 'pointer',
+  };
 }
 
 // ─── Style atoms ───────────────────────────────────────────────────
