@@ -48,6 +48,10 @@ interface SyncInput {
   medContext: Array<{
     name: string;
     rxcui: string | null;
+    /** Strength from session.Medication.strength (e.g. "10 MG"). */
+    dose: string | null;
+    /** Free-text dosing instructions (e.g. "1 tablet daily"). */
+    frequency: string | null;
     tier_on_recommended_plan: number | null;
     monthly_cost: number | null;
     pa_required: boolean;
@@ -163,6 +167,22 @@ export function useAgentBaseRecommend() {
   }, []);
 
   const postOnce = useCallback(async (body: unknown) => {
+    // Debug log — full payload visibility for the meds/providers sync
+    // investigation. Logged just before fetch so the broker (or
+    // whoever's tailing the browser console) can see exactly what's
+    // sent for any given Recommend click. Pulls counts up front so
+    // the line is greppable even when the body itself collapses.
+    if (typeof console !== 'undefined') {
+      const b = body as {
+        medications?: unknown[];
+        providers?: unknown[];
+        recommended_plan?: { plan_name?: string };
+      };
+      console.log(
+        `[agentbase-recommend] POST body — meds=${b.medications?.length ?? 0} providers=${b.providers?.length ?? 0} plan="${b.recommended_plan?.plan_name ?? '?'}"`,
+        body,
+      );
+    }
     const r = await fetch('/api/agentbase-recommend', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

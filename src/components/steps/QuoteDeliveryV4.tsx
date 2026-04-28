@@ -993,14 +993,26 @@ export function QuoteDeliveryV4({
     const col = columns[colIdx];
     if (!col.scored) return null;
 
-    const medContext = medRows.map((m) => ({
-      name: m.name,
-      rxcui: medications.find((med) => med.id === m.id)?.rxcui ?? null,
-      tier_on_recommended_plan: m.tiers[colIdx] ?? null,
-      monthly_cost: m.monthly[colIdx] ?? null,
-      pa_required: Boolean(m.paStFlags[colIdx]?.pa),
-      st_required: Boolean(m.paStFlags[colIdx]?.st),
-    }));
+    const medContext = medRows.map((m) => {
+      // Pull dose + frequency from the session Medication record. The
+      // session type uses `strength` / `dosageInstructions`; the
+      // AgentBase API contract uses `dose` / `frequency`. Map them so
+      // client_medications gets the dosing detail instead of inserting
+      // null. Without this mapping the broker sees meds in AgentBase
+      // with empty Dose / Frequency columns even though the session
+      // captured them.
+      const med = medications.find((x) => x.id === m.id);
+      return {
+        name: m.name,
+        rxcui: med?.rxcui ?? null,
+        dose: med?.strength ?? null,
+        frequency: med?.dosageInstructions ?? null,
+        tier_on_recommended_plan: m.tiers[colIdx] ?? null,
+        monthly_cost: m.monthly[colIdx] ?? null,
+        pa_required: Boolean(m.paStFlags[colIdx]?.pa),
+        st_required: Boolean(m.paStFlags[colIdx]?.st),
+      };
+    });
     const providerContext = providerRows.map((p) => {
       const provRecord = providers.find((pp) => pp.id === p.id);
       return {
