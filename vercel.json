@@ -8,6 +8,9 @@
       "maxDuration": 60
     }
   },
+  "redirects": [
+    { "source": "/test", "destination": "/", "permanent": true, "statusCode": 301 }
+  ],
   "rewrites": [
     { "source": "/capture/:token", "destination": "/index.html" },
     { "source": "/watch/:roomId", "destination": "/index.html" },
