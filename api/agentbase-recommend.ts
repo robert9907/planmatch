@@ -272,6 +272,86 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (insErr) throw insErr;
     }
 
+    // ─── Upsert providers (direct write, two-step) ───────────────
+    // Providers live in a global directory (`providers`) with a join
+    // table (`client_providers`) carrying a per-client snapshot of
+    // network_status + the plan triple it was captured under (see
+    // AgentBase migration 007). Wipe-and-replace the join rows so a
+    // re-Recommend on the same client doesn't accumulate stale links.
+    const seenProviderKeys = new Set<string>();
+    const dedupedProviders = (fullBody.providers || []).filter((p) => {
+      const k = (p?.name ?? '').trim().toLowerCase();
+      if (!k || seenProviderKeys.has(k)) return false;
+      seenProviderKeys.add(k);
+      return true;
+    });
+
+    if (dedupedProviders.length > 0) {
+      // Step 1: resolve each provider to a row in the global directory.
+      // The unique index providers_name_affiliation_unique dedupes on
+      // (lower(name), lower(coalesce(affiliation,''))). PlanMatch
+      // payload doesn't carry affiliation, so all our writes share the
+      // null-affiliation slot per name.
+      const resolvedIds: number[] = [];
+      for (const p of dedupedProviders) {
+        const name = (p.name ?? '').trim();
+        const { data: existing, error: findErr } = await sb
+          .from('providers')
+          .select('id')
+          .ilike('name', name)
+          .is('affiliation', null)
+          .limit(1)
+          .maybeSingle();
+        if (findErr) throw findErr;
+
+        if (existing) {
+          resolvedIds.push((existing as { id: number }).id);
+          continue;
+        }
+
+        const { data: inserted, error: insProvErr } = await sb
+          .from('providers')
+          .insert({ name, specialty: p.specialty ?? null, npi: p.npi || null })
+          .select('id')
+          .single();
+        if (insProvErr) {
+          // Race fallback — concurrent insert won, re-query.
+          const { data: again } = await sb
+            .from('providers')
+            .select('id')
+            .ilike('name', name)
+            .is('affiliation', null)
+            .limit(1)
+            .maybeSingle();
+          if (again) {
+            resolvedIds.push((again as { id: number }).id);
+            continue;
+          }
+          throw insProvErr;
+        }
+        resolvedIds.push((inserted as { id: number }).id);
+      }
+
+      // Step 2: wipe + insert the join rows with the network_status
+      // snapshot and the plan triple recommended in this call.
+      const { error: delLinksErr } = await sb
+        .from('client_providers')
+        .delete()
+        .eq('client_id', clientId);
+      if (delLinksErr) throw delLinksErr;
+
+      const linkRows = resolvedIds.map((providerId, i) => ({
+        client_id: clientId,
+        provider_id: providerId,
+        last_known_network_status: dedupedProviders[i].network_status ?? null,
+        last_known_plan_id: planTriple,
+      }));
+      if (linkRows.length > 0) {
+        const { error: insLinksErr } = await sb.from('client_providers').insert(linkRows);
+        if (insLinksErr) throw insLinksErr;
+      }
+    }
+
     // ─── Forward rich payload to the webhook (best-effort) ───────
     // The direct write above is the must-not-fail path. The webhook
     // forward is the rich-data path; if it fails (AgentBase webhook
