@@ -108,16 +108,24 @@ const PRESET_ORDER: WeightPresetKey[] = ['balanced', 'drug', 'low_medical', 'ext
 type PharmacyFill = 'retail_30' | 'mail_90';
 
 // ─── Color tokens ──────────────────────────────────────────────────
+// Aligned with the v4 Quote mockup spec:
+//   • Best Rx column → navy #0d2f5e
+//   • Lowest OOP column → teal-dark #0d3d4e
+//   • Part B Savings column → leaf-dark #0d3d2e
+//   • Current plan column → header #e2e8f0, cell tint #f1f5f9
+//   • Total Annual Value strip → navy-deep #091e3d (summaryNavy)
+//   • Why Switch row uses V4.navy directly (lighter than summaryNavy
+//     so the two strips read as distinct bands)
 const COL = {
-  navyHeader: '#0c447c',
+  navyHeader: '#0d2f5e',
   navyBody:   '#e6f1fb',
-  tealHeader: '#0f6e56',
+  tealHeader: '#0d3d4e',
   tealBody:   '#e1f5ee',
-  leafHeader: '#3b6d11',
+  leafHeader: '#0d3d2e',
   leafBody:   '#eaf3de',
-  currentHeader: '#e5e7eb',
-  currentBody:   '#f5f4f0',
-  summaryNavy:   '#1a2744',
+  currentHeader: '#e2e8f0',
+  currentBody:   '#f1f5f9',
+  summaryNavy:   '#091e3d',
   summaryGreen:  '#5dca5a',
   saveBg: '#eaf3de', saveText: '#3b6d11',
   moreBg: '#fcebeb', moreText: '#a32d2d',
@@ -126,7 +134,7 @@ const COL = {
   inkSub:'#4b5563',
   rule:  '#e5e7eb',
   ruleStrong: '#374151',
-  panelBg: '#fafaf7',
+  panelBg: '#f8fafc',
 };
 
 const FONT = {
@@ -1299,28 +1307,45 @@ export function QuoteDeliveryV4({
         </div>
       )}
       {!currentPlan && !pickerOpen && (
-        <div style={{ marginBottom: 12, fontSize: 12, color: COL.inkSub }}>
+        <div
+          style={{
+            marginBottom: 12,
+            padding: '12px 14px',
+            border: `1px dashed ${COL.rule}`,
+            borderRadius: 10,
+            background: '#fff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: V4.navy, fontFamily: FONT.body }}>
+              Compare against current plan
+            </div>
+            <div style={{ fontSize: 11, color: COL.inkSub, marginTop: 2 }}>
+              Pin the client's current plan as the benchmark column. All deltas calculate against it.
+            </div>
+          </div>
           <button
             type="button"
             onClick={() => setPickerOpen(true)}
             style={{
-              background: 'transparent',
-              border: 'none',
-              padding: 0,
-              color: COL.navyHeader,
-              fontWeight: 600,
+              padding: '8px 14px',
+              borderRadius: 8,
+              border: `1px solid ${V4.navy}`,
+              background: V4.navy,
+              color: '#fff',
+              fontWeight: 700,
               fontSize: 12,
               cursor: 'pointer',
               fontFamily: FONT.body,
-              textDecoration: 'underline',
-              textUnderlineOffset: 2,
             }}
           >
-            + Add current plan to compare
+            + Add current plan
           </button>
-          <span style={{ marginLeft: 8, fontSize: 11, color: COL.inkSub }}>
-            sets the gray benchmark column · deltas calculate against it
-          </span>
         </div>
       )}
       {(currentPlan || pickerOpen) && (
@@ -1330,6 +1355,52 @@ export function QuoteDeliveryV4({
             onSelected={() => setPickerOpen(false)}
             hint="Once selected, the leftmost gray column anchors all delta badges."
           />
+        </div>
+      )}
+
+      {/* Plan Brain analysis — gradient card that summarizes detected
+          conditions in plain English. Reads brokerImplications off
+          each detected condition; falls back to nothing when Plan
+          Brain hasn't classified anything. The pill row below carries
+          the same conditions with confidence chips for drill-down. */}
+      {result && result.detectedConditions.length > 0 && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: '16px 20px',
+            background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
+            border: '1px solid #bae6fd',
+            borderRadius: 10,
+            fontSize: 13,
+            lineHeight: 1.6,
+            color: V4.navy,
+            fontFamily: FONT.body,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              color: V4.navyLight,
+              marginBottom: 6,
+            }}
+          >
+            Plan Brain Analysis
+          </div>
+          {result.detectedConditions.map((d, idx) => {
+            const implications = d.brokerImplications.filter((s) => s && s.trim());
+            return (
+              <div key={d.condition} style={{ marginTop: idx === 0 ? 0 : 2 }}>
+                <strong style={{ fontWeight: 700 }}>
+                  {CONDITION_LABEL[d.condition]}:
+                </strong>{' '}
+                {d.confidence}
+                {implications.length > 0 && ` · ${implications.join(' · ')}`}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -1842,9 +1913,45 @@ export function QuoteDeliveryV4({
                       </div>
                     )}
                     {col.variant === 'current' && (
-                      <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: COL.inkSub, marginBottom: 3 }}>
-                        Current Plan
-                      </div>
+                      <>
+                        <div
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            padding: '3px 10px',
+                            marginBottom: 4,
+                            borderRadius: 4,
+                            background: COL.white,
+                            color: COL.inkSub,
+                            fontSize: 9,
+                            fontWeight: 700,
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.06em',
+                          }}
+                        >
+                          ◆ Your Current Plan
+                        </div>
+                        {col.plan.part_b_giveback > 0 && (
+                          <div
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              marginBottom: 4,
+                              marginLeft: 4,
+                              padding: '3px 10px',
+                              borderRadius: 4,
+                              background: 'rgba(34,197,94,0.15)',
+                              color: '#22c55e',
+                              fontSize: 9,
+                              fontWeight: 700,
+                            }}
+                          >
+                            $ Part B Giveback · ${col.plan.part_b_giveback.toFixed(2)}/mo
+                          </div>
+                        )}
+                      </>
                     )}
                     {/* Red flag — Rule 9 (chronic + MOOP at CMS
                         ceiling) or any future ≥25-point penalty. The
@@ -2219,30 +2326,37 @@ export function QuoteDeliveryV4({
               })}
             </tr>
 
-            {/* Why switch? subtitle row */}
+            {/* Why Switch? — distinct navy band beneath the navy-deep
+                Total Annual Value strip. Two shades read as separate
+                rows in the mockup, so we pin this to V4.navy rather
+                than reusing summaryNavy. */}
             <tr>
               <th
                 style={{
-                  padding: '0 14px 10px',
+                  padding: '12px 14px',
                   textAlign: 'left',
-                  background: COL.summaryNavy,
-                  color: 'rgba(255,255,255,0.55)',
-                  fontSize: 10,
-                  fontWeight: 400,
+                  background: V4.navy,
+                  color: 'rgba(255,255,255,0.5)',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
                   borderBottom: 'none',
+                  fontFamily: FONT.body,
                 }}
               >
-                Why switch?
+                Why Switch?
               </th>
               {columns.map((col, ci) => (
                 <td
                   key={col.id}
                   style={{
-                    padding: '0 14px 10px',
-                    background: COL.summaryNavy,
-                    color: 'rgba(255,255,255,0.7)',
+                    padding: '12px 14px',
+                    background: V4.navy,
+                    color: 'rgba(255,255,255,0.85)',
                     fontFamily: FONT.body,
-                    fontSize: 10,
+                    fontSize: 12,
+                    lineHeight: 1.5,
                     borderBottom: 'none',
                     whiteSpace: 'normal',
                   }}
@@ -2270,7 +2384,7 @@ export function QuoteDeliveryV4({
                     }}
                   >
                     {isCurrent ? (
-                      <button type="button" style={btnSecondaryStyle}>Keep Current</button>
+                      <button type="button" style={btnSecondaryStyle}>Keep Current Plan</button>
                     ) : (
                       <button
                         type="button"
@@ -3077,17 +3191,18 @@ const btnSecondaryStyle: React.CSSProperties = {
 const btnSunfireStyle: React.CSSProperties = {
   display: 'block',
   width: '100%',
-  padding: '6px 10px',
-  borderRadius: 6,
-  background: '#f1f3f5',
+  padding: '6px 10px 0',
+  background: 'transparent',
   color: COL.inkSub,
   fontFamily: FONT.body,
   fontSize: 11,
-  fontWeight: 600,
+  fontWeight: 500,
   textAlign: 'center',
-  textDecoration: 'none',
-  border: '1px solid #d1d5db',
+  textDecoration: 'underline',
+  textUnderlineOffset: 2,
+  border: 'none',
   boxSizing: 'border-box',
+  marginTop: 2,
 };
 
 // ─── Assistance help section ─────────────────────────────────────────
