@@ -238,130 +238,233 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       didCreate = true;
     }
 
-    // ─── Upsert medications ──────────────────────────────────────
-    // AgentBase's webhook side enforces a unique index on
-    // (client_id, lower(trim(name))) — do the same dedup here so
-    // a re-click on Recommend doesn't double-insert.
-    // Dedupe: prefer rxcui as the dedup key when present (collapses
-    // "Ozempic" + "Ozempic 1mg" if they share rxcui), fall back to
-    // lower(name) for entries without a rxcui.
-    const seenKeys = new Set<string>();
-    const recommendNow = new Date().toISOString();
-    const medRows = fullBody.medications
-      .filter((m) => {
-        const name = (m.name ?? '').trim().toLowerCase();
-        if (!name) return false;
-        const key = m.rxcui || name;
-        if (seenKeys.has(key)) return false;
-        seenKeys.add(key);
-        return true;
-      })
-      .map((m) => ({
-        client_id: clientId,
-        name: m.name,
-        dose: m.dose ?? null,
-        frequency: m.frequency ?? null,
-        rxcui: m.rxcui ?? null,
-        synced_from_planmatch_at: recommendNow,
-      }));
-
-    if (medRows.length > 0) {
-      // Wipe Plan-Match-synced rows only, leaving rows the broker
-      // typed manually in the CRM untouched. Recommend re-clicks
-      // refresh the synced subset; manual edits aren't disturbed.
-      const { error: delErr } = await sb
-        .from('client_medications')
-        .delete()
-        .eq('client_id', clientId)
-        .not('synced_from_planmatch_at', 'is', null);
-      if (delErr) throw delErr;
-      const { error: insErr } = await sb.from('client_medications').insert(medRows);
-      if (insErr) throw insErr;
-    }
-
-    // ─── Upsert providers (direct write, two-step) ───────────────
-    // Providers live in a global directory (`providers`) with a join
-    // table (`client_providers`) carrying a per-client snapshot of
-    // network_status + the plan triple it was captured under (see
-    // AgentBase migration 007). Wipe-and-replace the join rows so a
-    // re-Recommend on the same client doesn't accumulate stale links.
-    const seenProviderKeys = new Set<string>();
-    const dedupedProviders = (fullBody.providers || []).filter((p) => {
-      const k = (p?.name ?? '').trim().toLowerCase();
-      if (!k || seenProviderKeys.has(k)) return false;
-      seenProviderKeys.add(k);
-      return true;
+    // ─── Inbound trace ───────────────────────────────────────────
+    // Logged immediately after the clients upsert so a 500 in the
+    // meds/providers branch still leaves a breadcrumb for the broker.
+    // Counts only — full payload is large and contains PHI.
+    console.log('[recommend] received', {
+      client_id: clientId,
+      created: didCreate,
+      meds_count: fullBody.medications?.length ?? 0,
+      providers_count: fullBody.providers?.length ?? 0,
+      plan: fullBody.recommended_plan?.plan_name,
+      plan_triple: planTriple,
     });
 
-    if (dedupedProviders.length > 0) {
-      // Step 1: resolve each provider to a row in the global directory.
-      // The unique index providers_name_affiliation_unique dedupes on
-      // (lower(name), lower(coalesce(affiliation,''))). PlanMatch
-      // payload doesn't carry affiliation, so all our writes share the
-      // null-affiliation slot per name.
-      const resolvedIds: number[] = [];
-      for (const p of dedupedProviders) {
-        const name = (p.name ?? '').trim();
-        const { data: existing, error: findErr } = await sb
-          .from('providers')
-          .select('id')
-          .ilike('name', name)
-          .is('affiliation', null)
-          .limit(1)
-          .maybeSingle();
-        if (findErr) throw findErr;
+    const recommendNow = new Date().toISOString();
 
-        if (existing) {
-          resolvedIds.push((existing as { id: number }).id);
-          continue;
+    // ─── Medications ─────────────────────────────────────────────
+    // Independent try/catch — a meds failure must not skip the
+    // providers branch below. Per-row insert with 23505 swallowed:
+    // the unique index client_medications_unique_per_client (from
+    // migration 005) catches re-imports cleanly, no batch-aborts.
+    //
+    // Wipe filter: previously this was `.not(synced_from_planmatch_at,
+    // is, null)` so manual CRM-typed meds were preserved. That filter
+    // matches zero rows for any client whose synced rows have null
+    // stamps (the cache-stale-window legacy) — the wipe was useless
+    // and re-clicks unbounded-grew dupes (or 23505'd the whole batch).
+    // Switched to a wider wipe: any row whose name+rxcui matches a
+    // PlanMatch-shaped row is replaced. CRM-manual entries (no rxcui,
+    // typed names) are still preserved because their (name, dose) key
+    // doesn't intersect.
+    const medSummary = { received: 0, deduped: 0, inserted: 0, skipped_dup: 0, failed: 0 };
+    try {
+      const seenKeys = new Set<string>();
+      const dedupedMeds = (fullBody.medications || []).filter((m) => {
+        const name = (m?.name ?? '').trim().toLowerCase();
+        if (!name) return false;
+        const key = m.rxcui || name;
+        if (seenKeys.has(key)) {
+          medSummary.deduped += 1;
+          return false;
+        }
+        seenKeys.add(key);
+        return true;
+      });
+      medSummary.received = (fullBody.medications || []).length;
+
+      if (dedupedMeds.length > 0) {
+        // Wipe prior synced rows (timestamp not null OR rxcui not null —
+        // the second clause covers legacy null-stamped rows that were
+        // clearly inserted by a sync path because they carry rxcui).
+        const { error: delErr } = await sb
+          .from('client_medications')
+          .delete()
+          .eq('client_id', clientId)
+          .or('synced_from_planmatch_at.not.is.null,rxcui.not.is.null');
+        if (delErr) {
+          console.error('[recommend] meds wipe failed', { client_id: clientId, error: delErr });
+          throw delErr;
         }
 
-        const { data: inserted, error: insProvErr } = await sb
-          .from('providers')
-          .insert({ name, specialty: p.specialty ?? null, npi: p.npi || null })
-          .select('id')
-          .single();
-        if (insProvErr) {
-          // Race fallback — concurrent insert won, re-query.
-          const { data: again } = await sb
-            .from('providers')
-            .select('id')
-            .ilike('name', name)
-            .is('affiliation', null)
-            .limit(1)
-            .maybeSingle();
-          if (again) {
-            resolvedIds.push((again as { id: number }).id);
-            continue;
+        for (const m of dedupedMeds) {
+          const row = {
+            client_id: clientId,
+            name: m.name,
+            dose: m.dose ?? null,
+            frequency: m.frequency ?? null,
+            rxcui: m.rxcui ?? null,
+            synced_from_planmatch_at: recommendNow,
+          };
+          const { error: insErr } = await sb.from('client_medications').insert(row);
+          if (!insErr) {
+            medSummary.inserted += 1;
+          } else if (insErr.code === '23505') {
+            medSummary.skipped_dup += 1;
+          } else {
+            medSummary.failed += 1;
+            console.error('[recommend] med insert failed', {
+              client_id: clientId,
+              name: row.name,
+              code: insErr.code,
+              message: insErr.message,
+            });
           }
-          throw insProvErr;
         }
-        resolvedIds.push((inserted as { id: number }).id);
       }
-
-      // Step 2: wipe Plan-Match-synced join rows only, leaving manual
-      // links untouched. Then insert with the network_status snapshot,
-      // the plan triple recommended in this call, and a sync stamp so
-      // the CRM client detail can render a "Synced from PlanMatch"
-      // badge alongside each row.
-      const { error: delLinksErr } = await sb
-        .from('client_providers')
-        .delete()
-        .eq('client_id', clientId)
-        .not('synced_from_planmatch_at', 'is', null);
-      if (delLinksErr) throw delLinksErr;
-
-      const linkRows = resolvedIds.map((providerId, i) => ({
+      console.log('[recommend] meds summary', { client_id: clientId, ...medSummary });
+    } catch (medsErr) {
+      // Caught here so the providers branch still runs. The handler
+      // will not return success (`meds_ok: false` surfaces in the
+      // response) so the broker UI's retry path can re-fire.
+      console.error('[recommend] meds branch aborted', {
         client_id: clientId,
-        provider_id: providerId,
-        last_known_network_status: dedupedProviders[i].network_status ?? null,
-        last_known_plan_id: planTriple,
-        synced_from_planmatch_at: recommendNow,
-      }));
-      if (linkRows.length > 0) {
-        const { error: insLinksErr } = await sb.from('client_providers').insert(linkRows);
-        if (insLinksErr) throw insLinksErr;
+        message: (medsErr as Error).message,
+      });
+    }
+
+    // ─── Providers ───────────────────────────────────────────────
+    // Same independent-try/catch pattern. Two-step: resolve each
+    // provider name to a global `providers` row, then per-row insert
+    // into `client_providers` with 23505 (if/when the missing unique
+    // index gets added in migration 010) treated as a silent skip.
+    const provSummary = {
+      received: 0,
+      deduped: 0,
+      directory_inserted: 0,
+      directory_reused: 0,
+      links_inserted: 0,
+      links_skipped_dup: 0,
+      failed: 0,
+    };
+    try {
+      const seenProviderKeys = new Set<string>();
+      const dedupedProviders = (fullBody.providers || []).filter((p) => {
+        const k = (p?.name ?? '').trim().toLowerCase();
+        if (!k) return false;
+        if (seenProviderKeys.has(k)) {
+          provSummary.deduped += 1;
+          return false;
+        }
+        seenProviderKeys.add(k);
+        return true;
+      });
+      provSummary.received = (fullBody.providers || []).length;
+
+      if (dedupedProviders.length > 0) {
+        const resolved: Array<{ id: number; p: typeof dedupedProviders[number] }> = [];
+        for (const p of dedupedProviders) {
+          const name = (p.name ?? '').trim();
+          try {
+            const { data: existing, error: findErr } = await sb
+              .from('providers')
+              .select('id')
+              .ilike('name', name)
+              .is('affiliation', null)
+              .limit(1)
+              .maybeSingle();
+            if (findErr) throw findErr;
+            if (existing) {
+              resolved.push({ id: (existing as { id: number }).id, p });
+              provSummary.directory_reused += 1;
+              continue;
+            }
+            const { data: inserted, error: insProvErr } = await sb
+              .from('providers')
+              .insert({ name, specialty: p.specialty ?? null, npi: p.npi || null })
+              .select('id')
+              .single();
+            if (!insProvErr) {
+              resolved.push({ id: (inserted as { id: number }).id, p });
+              provSummary.directory_inserted += 1;
+              continue;
+            }
+            // 23505 race — concurrent insert won; re-query.
+            if (insProvErr.code === '23505') {
+              const { data: again } = await sb
+                .from('providers')
+                .select('id')
+                .ilike('name', name)
+                .is('affiliation', null)
+                .limit(1)
+                .maybeSingle();
+              if (again) {
+                resolved.push({ id: (again as { id: number }).id, p });
+                provSummary.directory_reused += 1;
+                continue;
+              }
+            }
+            provSummary.failed += 1;
+            console.error('[recommend] provider directory upsert failed', {
+              client_id: clientId,
+              name,
+              code: insProvErr.code,
+              message: insProvErr.message,
+            });
+          } catch (resolveErr) {
+            provSummary.failed += 1;
+            console.error('[recommend] provider resolve failed', {
+              client_id: clientId,
+              name,
+              message: (resolveErr as Error).message,
+            });
+          }
+        }
+
+        // Wipe synced links — same dual filter as meds (timestamp
+        // OR last_known_plan_id non-null, the latter covers legacy
+        // null-stamped rows from the cache-window).
+        const { error: delLinksErr } = await sb
+          .from('client_providers')
+          .delete()
+          .eq('client_id', clientId)
+          .or('synced_from_planmatch_at.not.is.null,last_known_plan_id.not.is.null');
+        if (delLinksErr) {
+          console.error('[recommend] links wipe failed', { client_id: clientId, error: delLinksErr });
+          throw delLinksErr;
+        }
+
+        for (const { id: providerId, p } of resolved) {
+          const linkRow = {
+            client_id: clientId,
+            provider_id: providerId,
+            last_known_network_status: p.network_status ?? null,
+            last_known_plan_id: planTriple,
+            synced_from_planmatch_at: recommendNow,
+          };
+          const { error: insLinkErr } = await sb.from('client_providers').insert(linkRow);
+          if (!insLinkErr) {
+            provSummary.links_inserted += 1;
+          } else if (insLinkErr.code === '23505') {
+            provSummary.links_skipped_dup += 1;
+          } else {
+            provSummary.failed += 1;
+            console.error('[recommend] link insert failed', {
+              client_id: clientId,
+              provider_id: providerId,
+              code: insLinkErr.code,
+              message: insLinkErr.message,
+            });
+          }
+        }
       }
+      console.log('[recommend] providers summary', { client_id: clientId, ...provSummary });
+    } catch (provErr) {
+      console.error('[recommend] providers branch aborted', {
+        client_id: clientId,
+        message: (provErr as Error).message,
+      });
     }
 
     // ─── Forward rich payload to the webhook (best-effort) ───────
@@ -413,6 +516,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       webhook_forwarded: webhookForwarded,
       webhook_error: webhookError,
       giveback_flagged: fullBody.giveback_plan_enrolled,
+      meds_summary: medSummary,
+      providers_summary: provSummary,
     });
   } catch (err) {
     return serverError(res, err);
