@@ -103,7 +103,7 @@ export function QuotePage({ onBack }: Props) {
             </div>
           )}
         </div>
-        <div className="cnt">
+        <div className="cnt cnt-wide">
           <Step6QuoteDelivery />
         </div>
       </div>

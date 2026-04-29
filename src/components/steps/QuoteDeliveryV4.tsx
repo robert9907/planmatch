@@ -167,6 +167,12 @@ const TIER_BADGE: Record<number, { bg: string; fg: string }> = {
 // ─── Column variants ───────────────────────────────────────────────
 type ColumnVariant = 'current' | 'best_rx' | 'lowest_oop' | 'giveback' | 'normal';
 
+// Section keys for the collapsible table sections. Order matches the
+// table render below (meds → providers → medical → plan costs →
+// extras). The Total Annual Value summary row is intentionally not a
+// section — it always renders.
+type SectionKey = 'meds' | 'providers' | 'medical' | 'planCosts' | 'extras';
+
 interface ColumnDef {
   id: string;
   variant: ColumnVariant;
@@ -291,6 +297,35 @@ export function QuoteDeliveryV4({
   // preset overrides; "Custom" returns to the neutral 33/34/33.
   const [presetKey, setPresetKey] = useState<WeightPresetKey | null>(null);
 
+  // Per-section collapse state. Sections start expanded; clicking a
+  // section header chevron flips its bit. The Total Annual Value /
+  // Why Switch / Recommend rows below "Extra Benefits" stay visible
+  // regardless — they're the always-on summary + CTA, not a section.
+  const [collapsedSections, setCollapsedSections] = useState<Record<SectionKey, boolean>>({
+    meds: false,
+    providers: false,
+    medical: false,
+    planCosts: false,
+    extras: false,
+  });
+  const toggleSection = (k: SectionKey) =>
+    setCollapsedSections((c) => ({ ...c, [k]: !c[k] }));
+
+  // Manual comparison selection. Empty array = let Plan Brain's
+  // ribbon-based auto-pick fill the columns (default). Non-empty =
+  // broker has clicked at least one chip; only those plan IDs get
+  // comparison columns. Capped to MAX_FINALIST_COLUMNS minus the
+  // current-plan benchmark slot when one is set. Cleared whenever
+  // the finalist set changes so stale IDs don't leak across funnels.
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const finalistKey = useMemo(
+    () => finalists.map((p) => p.id).sort().join(','),
+    [finalists],
+  );
+  useEffect(() => {
+    setCompareIds([]);
+  }, [finalistKey]);
+
   // Annual Review (AEP) prompt: when the broker has flipped into AEP
   // mode but the session has no current plan pinned, the benchmark
   // column is missing and the comparison is meaningless. Auto-open
@@ -357,6 +392,36 @@ export function QuoteDeliveryV4({
       const inFinalist = result?.scored.find((s) => s.plan.id === currentPlan.id) ?? null;
       cols.push(makeCol(currentPlan, inFinalist, 'current'));
       used.add(currentPlan.id);
+    }
+
+    // Manual selection mode — broker has clicked one or more chips
+    // above the table. Bypass the ribbon-based auto-pick and only
+    // surface plans that are in compareIds. Variants are still
+    // derived from each plan's Plan Brain ribbon so highlighted
+    // columns (navy / teal / leaf) stay color-coded when they happen
+    // to match a broker pick. Iterate `finalists` (input order) so
+    // column ordering is stable as chips are toggled.
+    if (compareIds.length > 0) {
+      const ribbonByPlanId = new Map(
+        (result?.scored ?? []).map((s) => [s.plan.id, s] as const),
+      );
+      for (const plan of finalists) {
+        if (cols.length >= MAX_FINALIST_COLUMNS) break;
+        if (used.has(plan.id)) continue;
+        if (!compareIds.includes(plan.id)) continue;
+        const scored = ribbonByPlanId.get(plan.id) ?? null;
+        const variant: ColumnVariant =
+          scored?.ribbon === 'LOWEST_DRUG_COST' || scored?.ribbon === 'BEST_OVERALL'
+            ? 'best_rx'
+            : scored?.ribbon === 'LOWEST_OOP'
+              ? 'lowest_oop'
+              : scored?.ribbon === 'PART_B_SAVINGS'
+                ? 'giveback'
+                : 'normal';
+        cols.push(makeCol(plan, scored, variant));
+        used.add(plan.id);
+      }
+      return cols;
     }
 
     // Coverage check — does the plan have ANY pm_formulary rows for
@@ -444,7 +509,7 @@ export function QuoteDeliveryV4({
       used.add(s.plan.id);
     }
     return cols;
-  }, [currentPlan, result, brainData, medications]);
+  }, [currentPlan, result, brainData, medications, compareIds, finalists]);
 
   // ── Per-row data (computed once per render) ───────────────────────
   // Baseline column for delta badges:
@@ -1608,6 +1673,97 @@ export function QuoteDeliveryV4({
         {drugCosts.loading && <span style={{ marginLeft: 8, fontSize: 10, color: COL.inkSub }}>fetching live costs…</span>}
       </div>
 
+      {/* Comparison chips — broker picks which finalists go into the
+          table. While compareIds is empty, the row mirrors whatever
+          Plan Brain auto-picked (so the chip set always matches the
+          table). First click seeds compareIds from the auto-pick and
+          enters manual mode. Capped at 4 columns total — the
+          current-plan benchmark (when set) takes one of those slots. */}
+      {finalists.length > 1 && (() => {
+        const currentInTable = columns
+          .filter((c) => c.variant !== 'current')
+          .map((c) => c.plan.id);
+        const isManual = compareIds.length > 0;
+        const activeIds = isManual ? compareIds : currentInTable;
+        const slotCap = MAX_FINALIST_COLUMNS - (currentPlan ? 1 : 0);
+        const atCap = activeIds.length >= slotCap;
+        const toggleId = (id: string) => {
+          if (!isManual) {
+            const seed = currentInTable.includes(id)
+              ? currentInTable.filter((x) => x !== id)
+              : atCap
+                ? currentInTable
+                : [...currentInTable, id];
+            setCompareIds(seed);
+            return;
+          }
+          setCompareIds((prev) => {
+            if (prev.includes(id)) return prev.filter((x) => x !== id);
+            if (prev.length >= slotCap) return prev;
+            return [...prev, id];
+          });
+        };
+        return (
+          <div style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+            <strong
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                letterSpacing: '0.06em',
+                color: V4.textMuted,
+                marginRight: 4,
+              }}
+            >
+              Compare
+            </strong>
+            {finalists.map((p) => {
+              const on = activeIds.includes(p.id);
+              const disabled = !on && atCap;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => toggleId(p.id)}
+                  disabled={disabled}
+                  title={
+                    disabled
+                      ? `Pick at most ${slotCap} plans — deselect one first`
+                      : `${p.carrier} · ${p.plan_name}`
+                  }
+                  style={compareChipStyle(on, disabled)}
+                >
+                  {on ? '✓ ' : ''}
+                  {p.carrier} · {p.contract_id}-{p.plan_number}
+                </button>
+              );
+            })}
+            {isManual && (
+              <button
+                type="button"
+                onClick={() => setCompareIds([])}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  padding: '4px 8px',
+                  color: V4.textMuted,
+                  fontSize: 11,
+                  fontFamily: FONT.body,
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                  textUnderlineOffset: 2,
+                }}
+              >
+                Reset to recommended
+              </button>
+            )}
+            <span style={{ marginLeft: 'auto', fontSize: 10, color: V4.textMuted, fontFamily: FONT.body }}>
+              {activeIds.length} of {slotCap} selected
+            </span>
+          </div>
+        );
+      })()}
+
       <div style={{ overflowX: 'auto' }}>
         <table
           style={{
@@ -1747,7 +1903,13 @@ export function QuoteDeliveryV4({
 
           {/* ── Body ─────────────────────────────────────────────── */}
           <tbody>
-            <SectionHeader colSpan={colSpanFull} label="Your Medications" />
+            <SectionHeader
+              colSpan={colSpanFull}
+              label="Your Medications"
+              collapsed={collapsedSections.meds}
+              onToggle={() => toggleSection('meds')}
+            />
+            {!collapsedSections.meds && (<>
 
             {medRows.map((m, mi) => (
               <tr key={`med-${mi}`}>
@@ -1877,7 +2039,15 @@ export function QuoteDeliveryV4({
               })}
             </tr>
 
-            <SectionHeader colSpan={colSpanFull} label="Providers" />
+            </>)}
+
+            <SectionHeader
+              colSpan={colSpanFull}
+              label="Providers"
+              collapsed={collapsedSections.providers}
+              onToggle={() => toggleSection('providers')}
+            />
+            {!collapsedSections.providers && (<>
 
             {providerRows.map((pr, pi) => (
               <tr key={`prov-${pi}`}>
@@ -1902,7 +2072,15 @@ export function QuoteDeliveryV4({
               </tr>
             ))}
 
-            <SectionHeader colSpan={colSpanFull} label="Medical Copays" />
+            </>)}
+
+            <SectionHeader
+              colSpan={colSpanFull}
+              label="Medical Copays"
+              collapsed={collapsedSections.medical}
+              onToggle={() => toggleSection('medical')}
+            />
+            {!collapsedSections.medical && (<>
 
             {copayRows.map((row, ri) => (
               <CopayRowEl key={`cp-${ri}`} row={row} columns={columns} />
@@ -1935,17 +2113,35 @@ export function QuoteDeliveryV4({
               })}
             </tr>
 
-            <SectionHeader colSpan={colSpanFull} label="Plan Costs" />
+            </>)}
+
+            <SectionHeader
+              colSpan={colSpanFull}
+              label="Plan Costs"
+              collapsed={collapsedSections.planCosts}
+              onToggle={() => toggleSection('planCosts')}
+            />
+            {!collapsedSections.planCosts && (<>
 
             {planCostRows.map((row, ri) => (
               <CopayRowEl key={`pc-${ri}`} row={row} columns={columns} />
             ))}
 
-            <SectionHeader colSpan={colSpanFull} label="Extra Benefits" />
+            </>)}
+
+            <SectionHeader
+              colSpan={colSpanFull}
+              label="Extra Benefits"
+              collapsed={collapsedSections.extras}
+              onToggle={() => toggleSection('extras')}
+            />
+            {!collapsedSections.extras && (<>
 
             {extraRows.map((row, ri) => (
               <CopayRowEl key={`ex-${ri}`} row={row} columns={columns} betterIsHigher={row.betterIsHigher} />
             ))}
+
+            </>)}
 
             {/* Total Annual Value navy bar */}
             <tr>
@@ -2562,24 +2758,64 @@ function formatCostShare(cs: { copay: number | null; coinsurance: number | null 
 
 // ─── Subcomponents ────────────────────────────────────────────────
 
-function SectionHeader({ colSpan, label }: { colSpan: number; label: string }) {
+function SectionHeader({
+  colSpan,
+  label,
+  collapsed,
+  onToggle,
+}: {
+  colSpan: number;
+  label: string;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
   return (
     <tr>
       <td
         colSpan={colSpan}
         style={{
-          padding: '14px 14px 4px',
-          fontSize: 11,
-          fontWeight: 600,
-          textTransform: 'uppercase',
-          letterSpacing: '0.06em',
-          color: COL.navyHeader,
+          padding: 0,
           background: COL.panelBg,
           borderBottom: `1.5px solid ${COL.navyHeader}`,
-          fontFamily: FONT.body,
         }}
       >
-        {label}
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={!collapsed}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '14px 14px 4px',
+            background: 'transparent',
+            border: 'none',
+            textAlign: 'left',
+            cursor: 'pointer',
+            fontSize: 11,
+            fontWeight: 600,
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+            color: COL.navyHeader,
+            fontFamily: FONT.body,
+          }}
+        >
+          <span
+            style={{
+              display: 'inline-block',
+              width: 10,
+              fontSize: 10,
+              lineHeight: 1,
+              transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+              transition: 'transform 0.12s',
+            }}
+            aria-hidden="true"
+          >
+            ▾
+          </span>
+          {label}
+        </button>
       </td>
     </tr>
   );
@@ -2730,6 +2966,23 @@ function presetBtnStyle(active: boolean): React.CSSProperties {
     fontWeight: 600,
     fontFamily: FONT.body,
     cursor: 'pointer',
+  };
+}
+
+function compareChipStyle(active: boolean, disabled: boolean): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '4px 10px',
+    borderRadius: 999,
+    border: `1px solid ${active ? V4.teal : V4.border}`,
+    background: active ? V4.teal : '#fff',
+    color: active ? '#fff' : V4.textPrimary,
+    fontSize: 11,
+    fontWeight: 600,
+    fontFamily: FONT.body,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.45 : 1,
   };
 }
 

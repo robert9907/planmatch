@@ -74,6 +74,7 @@ export const V4_CSS = `
 .pm4 .pclient strong { color: var(--v4-sea); }
 .pm4 .cnt { max-width: 880px; margin: -16px auto 0; padding: 0 32px 80px;
   position: relative; z-index: 10; width: 100%; }
+.pm4 .cnt.cnt-wide { max-width: 1320px; }
 
 /* ── CARDS + LISTS ── */
 .pm4 .card { background: #fff; border-radius: 11px; border: 1px solid var(--v4-g200);
