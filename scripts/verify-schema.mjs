@@ -50,7 +50,7 @@ if (insertErr) {
   console.error(`  message: ${insertErr.message}`);
   if (missing) {
     console.error('\n→ The table does not exist. Apply the migration:');
-    console.error('  https://supabase.com/dashboard/project/wyyasqvouvdcovttzfnv/sql/new');
+    console.error('  https://supabase.com/dashboard/project/rpcbrkmvalvdmroqzpaq/sql/new');
     console.error('  Paste supabase/migrations/001_capture_sessions.sql → Run.');
   }
   process.exit(1);
