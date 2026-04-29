@@ -47,14 +47,25 @@ export interface SyncInput {
   brainResult: PlanBrainResult;
   /** Per-recommended-plan medication context (tier + monthly cost +
    *  PA/ST flags). Caller derives this from the medRows array on the
-   *  recommended column. */
+   *  recommended column. Name/dose/form are parsed from the RxNorm
+   *  display string ("gabapentin · 300 MG · Oral Capsule") so the CRM
+   *  client_medications row gets a clean ingredient name in the name
+   *  column instead of the full display string. */
   medContext: Array<{
     name: string;
     rxcui: string | null;
-    /** Strength from session.Medication.strength (e.g. "10 MG"). */
+    /** Strength from session.Medication.strength when present, else
+     *  parsed from segment 2 of the RxNorm display string (e.g. "10 MG"). */
     dose: string | null;
+    /** Dose form parsed from segment 3 of the RxNorm display
+     *  ("Oral Capsule", "Pen Injector"). May be multi-segment
+     *  ("Oral Tablet · Extended Release"). */
+    form: string | null;
     /** Free-text dosing instructions (e.g. "1 tablet daily"). */
     frequency: string | null;
+    /** "30" or "90" — derived from the broker's pharmacy-fill toggle.
+     *  Lands in client_medications.refill_days. */
+    refill_days: string | null;
     tier_on_recommended_plan: number | null;
     monthly_cost: number | null;
     pa_required: boolean;

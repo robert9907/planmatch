@@ -68,7 +68,13 @@ interface RecommendBody {
     name: string;
     rxcui: string | null;
     dose?: string | null;
+    /** Dose form parsed from the RxNorm display string ("Oral Capsule",
+     *  "Pen Injector"). Currently dropped at the structured write —
+     *  reserved for a future client_medications.form column. */
+    form?: string | null;
     frequency?: string | null;
+    /** "30" or "90" — drives client_medications.refill_days. */
+    refill_days?: string | null;
     tier_on_recommended_plan: number | null;
     monthly_cost: number | null;
     pa_required: boolean;
@@ -270,11 +276,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // doesn't intersect.
     const medSummary = { received: 0, deduped: 0, inserted: 0, skipped_dup: 0, failed: 0 };
     try {
+      // Dedupe key includes dose so different strengths of the same
+      // active ingredient survive. The prior key was rxcui-only, which
+      // collapsed "Metformin 500 MG" and "Metformin 1000 MG" (same
+      // rxcui, different doses) into a single row — brokers reported
+      // this as "only 5 of 9 meds synced". CRM migration 010 relaxes
+      // the matching DB-level unique index on (client_id, rxcui) to
+      // include dose so the recovered rows actually persist.
       const seenKeys = new Set<string>();
       const dedupedMeds = (fullBody.medications || []).filter((m) => {
         const name = (m?.name ?? '').trim().toLowerCase();
         if (!name) return false;
-        const key = m.rxcui || name;
+        const dose = (m.dose ?? '').trim().toLowerCase();
+        const key = m.rxcui ? `${m.rxcui}|${dose}` : `${name}|${dose}`;
         if (seenKeys.has(key)) {
           medSummary.deduped += 1;
           return false;
@@ -305,6 +319,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             dose: m.dose ?? null,
             frequency: m.frequency ?? null,
             rxcui: m.rxcui ?? null,
+            refill_days: m.refill_days ?? null,
             synced_from_planmatch_at: recommendNow,
           };
           const { error: insErr } = await sb.from('client_medications').insert(row);

@@ -78,6 +78,7 @@ import { useAgentBaseRecommend } from '@/hooks/useAgentBaseRecommend';
 import { useAgentBaseSyncSnapshot } from '@/hooks/useAgentBaseSyncSnapshot';
 import { BROKER } from '@/lib/constants';
 import { buildSunfireRecommendationText } from '@/lib/clipboardFormat';
+import { parseDrugName } from '@/lib/parseDrugName';
 
 // Single source of truth for the SunFire workspace URL — see
 // src/lib/constants.ts BROKER.sunfire. The previous in-file constant
@@ -1038,6 +1039,11 @@ export function QuoteDeliveryV4({
     const col = columns[colIdx];
     if (!col.scored) return null;
 
+    // Pharmacy fill → refill_days string. The CRM client_medications
+    // table stores refill_days as text; this is what populates the
+    // Supply column in the medication table on the client detail.
+    const refillDays = pharmacyFill === 'mail_90' ? '90' : '30';
+
     const medContext = medRows.map((m) => {
       // Pull dose + frequency from the session Medication record. The
       // session type uses `strength` / `dosageInstructions`; the
@@ -1047,11 +1053,26 @@ export function QuoteDeliveryV4({
       // with empty Dose / Frequency columns even though the session
       // captured them.
       const med = medications.find((x) => x.id === m.id);
+      // Parse the RxNorm display string ("gabapentin · 300 MG · Oral
+      // Capsule") so the CRM gets a clean ingredient name instead of
+      // the full display. Brand-name session captures (where med.name
+      // is already a brand like "Ozempic") fall through unchanged
+      // because parseDrugName preserves capitalized tokens.
+      const parsed = parseDrugName(m.name);
       return {
-        name: m.name,
+        // Prefer brand name from session if it's a clean, single-word
+        // capitalized brand; otherwise use the parsed segment-1 name.
+        // The parsed name is the safe default for RxNorm-captured meds.
+        name: parsed.name || m.name,
         rxcui: med?.rxcui ?? null,
-        dose: med?.strength ?? null,
+        // Strength from session wins if present; otherwise fall back
+        // to the parsed dose. RxNorm capture flow populates
+        // med.strength; manual entry may not.
+        dose: med?.strength ?? parsed.dose,
+        // Form from session wins if present; otherwise parsed segment 3+.
+        form: med?.form ?? parsed.form,
         frequency: med?.dosageInstructions ?? null,
+        refill_days: refillDays,
         tier_on_recommended_plan: m.tiers[colIdx] ?? null,
         monthly_cost: m.monthly[colIdx] ?? null,
         pa_required: Boolean(m.paStFlags[colIdx]?.pa),
