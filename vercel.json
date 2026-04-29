@@ -9,8 +9,8 @@
     }
   },
   "redirects": [
-    { "source": "/test", "destination": "/compare", "permanent": true, "statusCode": 301 },
-    { "source": "/", "destination": "/compare", "permanent": true, "statusCode": 301 }
+    { "source": "/test", "destination": "/compare", "statusCode": 301 },
+    { "source": "/", "destination": "/compare", "statusCode": 301 }
   ],
   "rewrites": [
     { "source": "/capture/:token", "destination": "/index.html" },
