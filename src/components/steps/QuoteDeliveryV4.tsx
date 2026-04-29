@@ -2146,6 +2146,35 @@ export function QuoteDeliveryV4({
         <button
           type="button"
           onClick={() => {
+            // Fire-and-forget the structured AgentBase sync so the
+            // CRM's client detail surfaces medications + providers
+            // before the broker finishes enrolling. We do NOT block
+            // the SunFire tab on sync completion — Chromium pauses
+            // pending fetches across navigations and the broker is
+            // about to switch focus to a different tab anyway.
+            //
+            // Plan selection priority:
+            //   1. session.recommendation (broker's explicit pick)
+            //   2. recommendedColId (highest-value finalist — the
+            //      gold-badge column)
+            //   3. first non-current finalist column
+            const targetPlanId =
+              recommendation
+              ?? recommendedColId
+              ?? columns.find((c) => c.variant !== 'current')?.id
+              ?? null;
+            if (targetPlanId) {
+              const input = buildSyncInput(targetPlanId);
+              if (input) {
+                // The hook swallows errors into its own state; the
+                // .catch is belt-and-suspenders for unexpected
+                // rejection paths (e.g. buildBody throwing on bad
+                // input shape).
+                void agentbaseSync.sync(input).catch((err) => {
+                  console.error('[enroll-sunfire] sync kickoff failed:', err);
+                });
+              }
+            }
             const url = (typeof window !== 'undefined' && (window as { ENV?: { SUNFIRE_AGENT_URL?: string } }).ENV?.SUNFIRE_AGENT_URL)
               || SUNFIRE_URL;
             window.open(url, '_blank', 'noopener,noreferrer');
