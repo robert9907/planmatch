@@ -354,12 +354,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             existing = data as { id: number } | null;
           }
 
+          // Tier comes through as a number on the wire
+          // (tier_on_recommended_plan: 1..5 | null). Store as
+          // "Tier N" — short enough to fit the column, matches the
+          // UI's color-rule substring check ("Tier 3" includes "3"),
+          // and consistent with the manual-entry dropdown values.
+          const tierStr = typeof m.tier_on_recommended_plan === 'number'
+            ? `Tier ${m.tier_on_recommended_plan}`
+            : null;
           const patch = {
             name: m.name,
             dose: m.dose ?? null,
             frequency: m.frequency ?? null,
             rxcui: m.rxcui ?? null,
             refill_days: m.refill_days ?? null,
+            tier: tierStr,
             synced_from_planmatch_at: recommendNow,
           };
           if (existing) {
