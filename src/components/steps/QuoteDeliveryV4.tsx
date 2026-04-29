@@ -75,6 +75,7 @@ import { formatRealAnnualCostBreakdown } from '@/lib/utilization-model';
 import { usePrintableQuote } from '@/hooks/usePrintableQuote';
 import type { PrintableQuote } from '@/lib/quotePdf';
 import { useAgentBaseRecommend } from '@/hooks/useAgentBaseRecommend';
+import { useAgentBaseSyncSnapshot } from '@/hooks/useAgentBaseSyncSnapshot';
 import { BROKER } from '@/lib/constants';
 import { buildSunfireRecommendationText } from '@/lib/clipboardFormat';
 
@@ -939,6 +940,50 @@ export function QuoteDeliveryV4({
   const sessionId = useSession((s) => s.sessionId);
   const startedAt = useSession((s) => s.startedAt);
   const agentbaseSync = useAgentBaseRecommend();
+
+  // ── AgentBase structured-sync snapshot ────────────────────────────
+  // Publish a SyncInput keyed to the recommended column so
+  // SaveSessionButton can fire the same /api/agentbase-recommend
+  // direct write that the per-column Recommend button does. Without
+  // this snapshot, Save Session would only post to /api/agentbase-sync
+  // (the pending-webhook path) and meds/providers would stay in JSONB
+  // until manual broker approval. Plan selection mirrors the
+  // Enroll-in-SunFire button: explicit recommendation > gold-badge
+  // column > first non-current finalist.
+  const setSyncSnapshot = useAgentBaseSyncSnapshot((s) => s.setSnapshot);
+  useEffect(() => {
+    if (!result || columns.length === 0) {
+      setSyncSnapshot(null);
+      return;
+    }
+    const goldId = (() => {
+      const cands = columns.filter((c) => c.variant !== 'current');
+      if (cands.length === 0) return null;
+      let best = cands[0];
+      let bestNet = best.scored?.realAnnualCost?.netAnnual ?? Infinity;
+      for (const c of cands.slice(1)) {
+        const net = c.scored?.realAnnualCost?.netAnnual ?? Infinity;
+        if (net < bestNet) { best = c; bestNet = net; }
+      }
+      return best.id;
+    })();
+    const targetId = recommendation ?? goldId ?? null;
+    if (!targetId) {
+      setSyncSnapshot(null);
+      return;
+    }
+    const input = buildSyncInput(targetId);
+    setSyncSnapshot(input);
+    return () => setSyncSnapshot(null);
+    // buildSyncInput is a stable function-declaration closing over the
+    // same deps already listed below; re-including it would re-fire the
+    // effect every render and republish the same snapshot wastefully.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    setSyncSnapshot, result, columns, recommendation,
+    medRows, providerRows, medications, providers, client,
+    sessionId, startedAt,
+  ]);
 
   // SunFire-handoff state per plan column. SunFire has no documented
   // deep-link API for plan pre-selection, so we use the clipboard

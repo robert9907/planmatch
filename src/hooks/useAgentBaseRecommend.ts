@@ -31,7 +31,10 @@ export interface RecommendSyncResult {
   giveback_flagged: boolean;
 }
 
-interface SyncInput {
+// Exported so the SaveSessionButton's belt-and-suspenders structured
+// sync can read a snapshot of the same input shape from the
+// useAgentBaseSyncSnapshot store. Same payload either path.
+export interface SyncInput {
   client: Client;
   sessionId: string;
   startedAt: number;

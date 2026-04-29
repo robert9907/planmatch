@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useSession } from '@/hooks/useSession';
 import { DISCLAIMERS } from '@/lib/compliance';
 import { buildSyncPayload, type AgentBaseSyncResponse, type AgentBaseSyncStatus } from '@/types/agentbaseSync';
+import { useAgentBaseRecommend } from '@/hooks/useAgentBaseRecommend';
+import { useAgentBaseSyncSnapshot } from '@/hooks/useAgentBaseSyncSnapshot';
 
 export function SaveSessionButton() {
   const client = useSession((s) => s.client);
@@ -21,6 +23,15 @@ export function SaveSessionButton() {
   const [status, setStatus] = useState<AgentBaseSyncStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const [agentbaseId, setAgentbaseId] = useState<string | null>(null);
+
+  // Belt-and-suspenders direct write to client_medications +
+  // client_providers. agentbase-sync alone leaves them in JSONB
+  // until a broker manually approves the inbox session — this
+  // closes the gap by also firing the recommend-style direct write
+  // when the QuoteDeliveryV4 step has published a SyncInput
+  // snapshot for the recommended column.
+  const recommendSync = useAgentBaseRecommend();
+  const syncSnapshot = useAgentBaseSyncSnapshot((s) => s.snapshot);
 
   const canSave = !!client.name && !!client.phone;
 
@@ -64,6 +75,20 @@ export function SaveSessionButton() {
       }
       setAgentbaseId(body.session_id ?? null);
       setStatus('saved');
+
+      // Belt-and-suspenders structured sync. Fire-and-forget because
+      // the broker shouldn't have to wait on the second round trip,
+      // and any error is already surfaced through the recommend hook's
+      // own state (independent of this button's "saved" state). If no
+      // snapshot has been published — broker hasn't reached
+      // QuoteDeliveryV4 yet, or finalists are empty — we silently skip
+      // and rely on the CRM's auto-link-on-phone-match path that
+      // /api/agentbase-sync just kicked off.
+      if (syncSnapshot) {
+        void recommendSync.sync(syncSnapshot).catch((err) => {
+          console.error('[save-session] structured sync kickoff failed:', err);
+        });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Network error');
       setStatus('error');
