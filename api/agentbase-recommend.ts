@@ -30,6 +30,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
+import { parseDrugName, normalizeProviderName } from './_lib/normalize.js';
 
 // AgentBase CRM URL pattern. /clients/{id} matches the existing
 // AgentBase routing convention; if it changes, override via env.
@@ -274,18 +275,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // PlanMatch-shaped row is replaced. CRM-manual entries (no rxcui,
     // typed names) are still preserved because their (name, dose) key
     // doesn't intersect.
-    const medSummary = { received: 0, deduped: 0, inserted: 0, skipped_dup: 0, failed: 0 };
+    const medSummary = { received: 0, deduped: 0, updated: 0, inserted: 0, skipped_dup: 0, failed: 0 };
     try {
-      // Dedupe key includes dose so different strengths of the same
-      // active ingredient survive. The prior key was rxcui-only, which
-      // collapsed "Metformin 500 MG" and "Metformin 1000 MG" (same
-      // rxcui, different doses) into a single row — brokers reported
-      // this as "only 5 of 9 meds synced". CRM migration 010 relaxes
-      // the matching DB-level unique index on (client_id, rxcui) to
-      // include dose so the recovered rows actually persist.
+      // Defensive server-side parse: the browser already sends parsed
+      // name/dose/form per QuoteDeliveryV4's buildSyncInput, but
+      // older builds and the consumer flow may still send the raw
+      // RxNorm display string ("gabapentin · 300 MG · Oral Capsule")
+      // in the name field. Re-parse here so the row that actually
+      // hits client_medications always has a clean ingredient name
+      // in the name column and a real dose value, regardless of how
+      // the upstream caller built the payload.
+      const parsedMeds = (fullBody.medications || [])
+        .filter((m) => (m?.name ?? '').trim().length > 0)
+        .map((m) => {
+          const parsed = parseDrugName(m.name);
+          return {
+            ...m,
+            name: parsed.name || m.name,
+            dose: m.dose ?? parsed.dose ?? null,
+          };
+        });
+
+      // Inbound dedup — collapse exact (rxcui|dose) or (lower(name)|dose)
+      // duplicates within this payload only. The DB-side dedup is the
+      // upsert below, which catches existing rows from prior syncs.
       const seenKeys = new Set<string>();
-      const dedupedMeds = (fullBody.medications || []).filter((m) => {
-        const name = (m?.name ?? '').trim().toLowerCase();
+      const dedupedMeds = parsedMeds.filter((m) => {
+        const name = (m.name ?? '').trim().toLowerCase();
         if (!name) return false;
         const dose = (m.dose ?? '').trim().toLowerCase();
         const key = m.rxcui ? `${m.rxcui}|${dose}` : `${name}|${dose}`;
@@ -298,23 +314,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       medSummary.received = (fullBody.medications || []).length;
 
-      if (dedupedMeds.length > 0) {
-        // Wipe prior synced rows (timestamp not null OR rxcui not null —
-        // the second clause covers legacy null-stamped rows that were
-        // clearly inserted by a sync path because they carry rxcui).
-        const { error: delErr } = await sb
-          .from('client_medications')
-          .delete()
-          .eq('client_id', clientId)
-          .or('synced_from_planmatch_at.not.is.null,rxcui.not.is.null');
-        if (delErr) {
-          console.error('[recommend] meds wipe failed', { client_id: clientId, error: delErr });
-          throw delErr;
-        }
+      // Per-row upsert: look up the existing client_medications row
+      // by EITHER (client_id, rxcui) OR (client_id, lower(name)). If
+      // a match exists — typically a manual CRM entry the broker
+      // typed before running PlanMatch — UPDATE in place to attach
+      // the rxcui, refresh dose/frequency/refill_days, and stamp the
+      // sync timestamp. Otherwise INSERT a new row.
+      //
+      // This replaces the prior wipe-and-replace approach which left
+      // orphan duplicates whenever the wipe filter missed manual
+      // entries (different name capitalization, no rxcui, etc.).
+      for (const m of dedupedMeds) {
+        try {
+          const lowerName = (m.name ?? '').trim().toLowerCase();
+          // 1. Match by rxcui first when available — same drug
+          //    regardless of label string.
+          let existing: { id: number } | null = null;
+          if (m.rxcui) {
+            const { data, error } = await sb
+              .from('client_medications')
+              .select('id')
+              .eq('client_id', clientId)
+              .eq('rxcui', m.rxcui)
+              .limit(1)
+              .maybeSingle();
+            if (error) throw error;
+            existing = data as { id: number } | null;
+          }
+          // 2. Fallback: case-insensitive name match.
+          if (!existing && lowerName) {
+            const { data, error } = await sb
+              .from('client_medications')
+              .select('id')
+              .eq('client_id', clientId)
+              .ilike('name', m.name)
+              .limit(1)
+              .maybeSingle();
+            if (error) throw error;
+            existing = data as { id: number } | null;
+          }
 
-        for (const m of dedupedMeds) {
-          const row = {
-            client_id: clientId,
+          const patch = {
             name: m.name,
             dose: m.dose ?? null,
             frequency: m.frequency ?? null,
@@ -322,20 +362,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             refill_days: m.refill_days ?? null,
             synced_from_planmatch_at: recommendNow,
           };
-          const { error: insErr } = await sb.from('client_medications').insert(row);
-          if (!insErr) {
-            medSummary.inserted += 1;
-          } else if (insErr.code === '23505') {
-            medSummary.skipped_dup += 1;
+          if (existing) {
+            const { error: updErr } = await sb
+              .from('client_medications')
+              .update(patch)
+              .eq('id', existing.id);
+            if (updErr) throw updErr;
+            medSummary.updated += 1;
           } else {
-            medSummary.failed += 1;
-            console.error('[recommend] med insert failed', {
-              client_id: clientId,
-              name: row.name,
-              code: insErr.code,
-              message: insErr.message,
-            });
+            const { error: insErr } = await sb
+              .from('client_medications')
+              .insert({ client_id: clientId, ...patch });
+            if (!insErr) {
+              medSummary.inserted += 1;
+            } else if (insErr.code === '23505') {
+              medSummary.skipped_dup += 1;
+            } else {
+              throw insErr;
+            }
           }
+        } catch (perRowErr) {
+          medSummary.failed += 1;
+          console.error('[recommend] med upsert failed', {
+            client_id: clientId,
+            name: m.name,
+            rxcui: m.rxcui,
+            message: (perRowErr as Error).message,
+          });
         }
       }
       console.log('[recommend] meds summary', { client_id: clientId, ...medSummary });
@@ -364,15 +417,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       failed: 0,
     };
     try {
+      // Inbound dedup — collapse exact same-NPI or same-normalized-name
+      // duplicates within this payload only.
       const seenProviderKeys = new Set<string>();
       const dedupedProviders = (fullBody.providers || []).filter((p) => {
-        const k = (p?.name ?? '').trim().toLowerCase();
-        if (!k) return false;
-        if (seenProviderKeys.has(k)) {
+        const npi = (p?.npi ?? '').trim();
+        const norm = normalizeProviderName(p?.name);
+        if (!npi && !norm) return false;
+        const key = npi ? `npi:${npi}` : `name:${norm}`;
+        if (seenProviderKeys.has(key)) {
           provSummary.deduped += 1;
           return false;
         }
-        seenProviderKeys.add(k);
+        seenProviderKeys.add(key);
         return true;
       });
       provSummary.received = (fullBody.providers || []).length;
@@ -381,23 +438,67 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const resolved: Array<{ id: number; p: typeof dedupedProviders[number] }> = [];
         for (const p of dedupedProviders) {
           const name = (p.name ?? '').trim();
+          const npi = (p.npi ?? '').trim();
+          const norm = normalizeProviderName(name);
           try {
-            const { data: existing, error: findErr } = await sb
-              .from('providers')
-              .select('id')
-              .ilike('name', name)
-              .is('affiliation', null)
-              .limit(1)
-              .maybeSingle();
-            if (findErr) throw findErr;
+            // Match strategy:
+            //   1. NPI exact match — the canonical key. Beats name
+            //      because "Dr. Kombiz Klein, DO" and "KOMBIZ KLEIN, DO"
+            //      are clearly the same provider when NPI agrees.
+            //   2. Normalized-name match — strip honorifics and
+            //      degree suffixes, lowercase, collapse whitespace.
+            //      Picks up legacy rows that pre-date NPI capture.
+            let existing: { id: number; npi: string | null } | null = null;
+            if (npi) {
+              const { data, error } = await sb
+                .from('providers')
+                .select('id, npi')
+                .eq('npi', npi)
+                .limit(1)
+                .maybeSingle();
+              if (error) throw error;
+              existing = data as { id: number; npi: string | null } | null;
+            }
+            if (!existing && norm) {
+              // pg_trgm ilike on the raw stored name; we filter the
+              // candidates by recomputing normalize on each result so
+              // "Dr. Smith, MD" and "smith md" both match "smith".
+              const { data, error } = await sb
+                .from('providers')
+                .select('id, name, npi')
+                .ilike('name', `%${norm.split(' ').slice(-1)[0]}%`) // last name as a quick filter
+                .limit(20);
+              if (error) throw error;
+              const hit = (data as Array<{ id: number; name: string; npi: string | null }> | null ?? [])
+                .find((r) => normalizeProviderName(r.name) === norm);
+              if (hit) existing = { id: hit.id, npi: hit.npi };
+            }
+
             if (existing) {
-              resolved.push({ id: (existing as { id: number }).id, p });
+              // If the inbound payload supplies an NPI and the
+              // existing row lacks one, backfill it. Same goes for
+              // specialty — useful upgrade, not a destructive write.
+              if (npi && !existing.npi) {
+                const { error: updErr } = await sb
+                  .from('providers')
+                  .update({ npi, specialty: p.specialty ?? null })
+                  .eq('id', existing.id);
+                if (updErr) {
+                  console.warn('[recommend] provider NPI backfill failed', {
+                    provider_id: existing.id,
+                    npi,
+                    message: updErr.message,
+                  });
+                }
+              }
+              resolved.push({ id: existing.id, p });
               provSummary.directory_reused += 1;
               continue;
             }
+
             const { data: inserted, error: insProvErr } = await sb
               .from('providers')
-              .insert({ name, specialty: p.specialty ?? null, npi: p.npi || null })
+              .insert({ name, specialty: p.specialty ?? null, npi: npi || null })
               .select('id')
               .single();
             if (!insProvErr) {
@@ -405,19 +506,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               provSummary.directory_inserted += 1;
               continue;
             }
-            // 23505 race — concurrent insert won; re-query.
+            // 23505 race — concurrent insert won; re-query by NPI or
+            // normalized name and accept the survivor.
             if (insProvErr.code === '23505') {
-              const { data: again } = await sb
-                .from('providers')
-                .select('id')
-                .ilike('name', name)
-                .is('affiliation', null)
-                .limit(1)
-                .maybeSingle();
-              if (again) {
-                resolved.push({ id: (again as { id: number }).id, p });
-                provSummary.directory_reused += 1;
-                continue;
+              if (npi) {
+                const { data: again } = await sb
+                  .from('providers')
+                  .select('id')
+                  .eq('npi', npi)
+                  .limit(1)
+                  .maybeSingle();
+                if (again) {
+                  resolved.push({ id: (again as { id: number }).id, p });
+                  provSummary.directory_reused += 1;
+                  continue;
+                }
               }
             }
             provSummary.failed += 1;
@@ -437,31 +540,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
         }
 
-        // Wipe synced links — same dual filter as meds (timestamp
-        // OR last_known_plan_id non-null, the latter covers legacy
-        // null-stamped rows from the cache-window).
-        const { error: delLinksErr } = await sb
-          .from('client_providers')
-          .delete()
-          .eq('client_id', clientId)
-          .or('synced_from_planmatch_at.not.is.null,last_known_plan_id.not.is.null');
-        if (delLinksErr) {
-          console.error('[recommend] links wipe failed', { client_id: clientId, error: delLinksErr });
-          throw delLinksErr;
-        }
-
+        // Per-link upsert. Look up by (client_id, provider_id); if
+        // the link exists, refresh the network-status snapshot and
+        // sync timestamp. Otherwise insert. This drops the prior
+        // wipe-and-replace which was destructive across clients
+        // sharing the same provider directory row.
         for (const { id: providerId, p } of resolved) {
-          const linkRow = {
-            client_id: clientId,
-            provider_id: providerId,
+          const linkPatch = {
             last_known_network_status: p.network_status ?? null,
             last_known_plan_id: planTriple,
             synced_from_planmatch_at: recommendNow,
           };
-          const { error: insLinkErr } = await sb.from('client_providers').insert(linkRow);
+          const { data: existingLink, error: findLinkErr } = await sb
+            .from('client_providers')
+            .select('id')
+            .eq('client_id', clientId)
+            .eq('provider_id', providerId)
+            .limit(1)
+            .maybeSingle();
+          if (findLinkErr) {
+            provSummary.failed += 1;
+            console.error('[recommend] link lookup failed', {
+              client_id: clientId, provider_id: providerId, message: findLinkErr.message,
+            });
+            continue;
+          }
+          if (existingLink) {
+            const { error: updErr } = await sb
+              .from('client_providers')
+              .update(linkPatch)
+              .eq('id', (existingLink as { id: number }).id);
+            if (updErr) {
+              provSummary.failed += 1;
+              console.error('[recommend] link update failed', {
+                client_id: clientId, provider_id: providerId, message: updErr.message,
+              });
+            } else {
+              provSummary.links_skipped_dup += 1;
+            }
+            continue;
+          }
+          const { error: insLinkErr } = await sb
+            .from('client_providers')
+            .insert({ client_id: clientId, provider_id: providerId, ...linkPatch });
           if (!insLinkErr) {
             provSummary.links_inserted += 1;
           } else if (insLinkErr.code === '23505') {
+            // Concurrent insert — re-fetch and accept.
             provSummary.links_skipped_dup += 1;
           } else {
             provSummary.failed += 1;
