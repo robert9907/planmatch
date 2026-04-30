@@ -1879,7 +1879,16 @@ export function QuoteDeliveryV4({
                       padding: 14,
                       textAlign: 'left',
                       verticalAlign: 'top',
+                      // Use the `background` shorthand AND explicit
+                      // backgroundColor so the cell paints the variant
+                      // colour even when border-collapse: collapse on the
+                      // outer table strips other styling layers. Some
+                      // browsers ignore backgroundColor alone on <th>
+                      // when the table has collapsed borders + no
+                      // explicit non-transparent shorthand.
+                      background: s.headerBg,
                       backgroundColor: s.headerBg,
+                      backgroundImage: 'none',
                       color: s.headerFg,
                       borderBottom: isDark ? 'none' : `1px solid ${COL.rule}`,
                       borderTopLeftRadius: 10,
@@ -2867,11 +2876,20 @@ const MEDICAL_DEFS: MedicalDef[] = [
   { label: 'Inpatient',          pick: (p) => p.benefits?.medical?.inpatient },
 ];
 
-function copayCash(cs: { copay: number | null; coinsurance: number | null } | null | undefined): number | null {
-  return cs?.copay ?? null;
+function copayCash(cs: { copay: number | null; coinsurance: number | null; description?: string | null } | null | undefined): number | null {
+  if (!cs) return null;
+  if (typeof cs.copay === 'number') return cs.copay;
+  // Description-only fallback (PBP fallback often files mental_health /
+  // physical_therapy as a "$X–$Y copay" range string with copay null).
+  // Parse the leading dollar amount so deltas can still compute.
+  if (cs.description) {
+    const m = cs.description.match(/\$(\d+(?:\.\d+)?)/);
+    if (m) return Number(m[1]);
+  }
+  return null;
 }
 
-function formatCostShare(cs: { copay: number | null; coinsurance: number | null } | null | undefined): string {
+function formatCostShare(cs: { copay: number | null; coinsurance: number | null; description?: string | null } | null | undefined): string {
   // Defensive: api/plans always returns CostShare objects with null
   // fallbacks, but the static cmsPlans seed and any future PBP source
   // could in principle return undefined for a missing field. Render
@@ -2879,6 +2897,14 @@ function formatCostShare(cs: { copay: number | null; coinsurance: number | null 
   if (!cs) return '—';
   if (cs.copay != null) return `$${cs.copay}`;
   if (cs.coinsurance != null) return `${cs.coinsurance}%`;
+  // Last resort — surface the raw PBP description (e.g. "$15–$30 copay")
+  // when the structured numerics didn't populate. Prevents the cell from
+  // rendering "—" on plans where mental_health / physical_therapy filed
+  // as a range. Truncate so wide ranges don't blow out the column.
+  if (cs.description && cs.description.trim()) {
+    const t = cs.description.trim();
+    return t.length > 20 ? `${t.slice(0, 19)}…` : t;
+  }
   return '—';
 }
 
@@ -3155,9 +3181,13 @@ function cellStyle(bg: string | undefined): React.CSSProperties {
     color: COL.ink,
     background: bg ?? COL.white,
     borderBottom: `1px solid ${COL.rule}`,
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
+    // Allow wrapping so delta badges stay visible alongside long
+    // value strings ("Exam + $50 eyewear +$2,500"). Previous
+    // nowrap+overflow:hidden silently clipped the badges on wider
+    // value labels.
+    whiteSpace: 'normal',
+    wordBreak: 'normal',
+    overflow: 'visible',
   };
 }
 
