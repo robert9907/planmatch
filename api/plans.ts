@@ -136,6 +136,15 @@ interface PbpBenefitRow {
   description: string | null;
 }
 
+// Rich pbp row with the columns the merge needs — `copay_max` for
+// dollar-cap categories, `source` for priority dedup. Used by the
+// broad medicare_gov / sb_ocr / manual fetch that mirrors the
+// consumer's plans-with-extras endpoint.
+interface PbpRichRow extends PbpBenefitRow {
+  copay_max: number | null;
+  source: string | null;
+}
+
 // pbp_benefits.plan_id is either 2-part ("H1036-335") or 3-part-with-
 // 1ch-segment ("H5253-187-0"); pm_plans.id is always 3-part-with-3ch
 // ("H1036-335-000"). Strip everything after the second hyphen so both
@@ -192,6 +201,201 @@ interface PbpFallback {
 }
 
 type PbpFallbackMap = Map<string, PbpFallback>;
+
+// ─── Broad pbp_benefits merge — mirrors consumer plans-with-extras ─
+//
+// Earlier versions of this endpoint only fetched a tiny benefit_type
+// subset of pbp_benefits (mental_health_*, physical_therapy,
+// dental_annual_max, otc_allowance, food_card) and treated everything
+// else as missing. The consumer's /api/plans-with-extras has always
+// taken the opposite approach: fetch ALL pbp_benefits with source IN
+// (medicare_gov, sb_ocr, manual), transform to pm_plan_benefits row
+// shape, and merge with PBP winning on conflict. That path produces
+// real numbers for vision_allowance, dental_comprehensive desc-dollar
+// parses ($1,600 annual allowance), authoritative imaging copays,
+// etc. — none of which the agent saw before.
+//
+// Verified parity test (Aetna H3146-004, NC):
+//   Consumer broad fetch returned 26 rows across 3 sources → agent
+//   narrow fetch returned 1 row. The 25 missed rows are exactly the
+//   data the broker QA flagged as missing on the agent side.
+
+// pbp_benefits.benefit_type → pm_plan_benefits.benefit_category. The
+// shape buildBenefits already consumes, so the transformed rows feed
+// straight through the existing flatten path.
+//
+// Two intentional divergences from the consumer's mapping:
+//   • food_card → 'food_card'  (consumer uses 'meals'; we keep the
+//     pm_plan_benefits-native key so PBP rows merge with landscape
+//     food_card rows on conflict instead of duplicating them)
+//   • dental_preventive omitted (agent's Plan.benefits.dental is a
+//     single shape — only the comprehensive row matters here)
+const PBP_TYPE_TO_CATEGORY: Record<string, string> = {
+  primary_care_visit: 'primary_care',
+  inpatient_hospital: 'inpatient',
+  emergency_room: 'emergency',
+  urgent_care: 'urgent_care',
+  specialist_visit: 'specialist',
+  lab_diagnostic: 'lab',
+  imaging: 'imaging',
+  outpatient_surgery: 'outpatient_surgery',
+  ambulance: 'ambulance',
+  dental_comprehensive: 'dental',
+  vision_exam: 'vision_exam',
+  vision_allowance: 'vision',
+  hearing_exam: 'hearing_exam',
+  hearing_aid_allowance: 'hearing',
+  otc_allowance: 'otc',
+  food_card: 'food_card',
+  transportation: 'transportation',
+  fitness: 'fitness',
+  diabetic_supplies: 'insulin',
+  telehealth: 'telehealth',
+  rx_deductible: 'rx_deductible',
+  rx_tier_1: 'rx_tier_1',
+  rx_tier_2: 'rx_tier_2',
+  rx_tier_3: 'rx_tier_3',
+  rx_tier_4: 'rx_tier_4',
+  rx_tier_5: 'rx_tier_5',
+  rx_tier_6: 'rx_tier_6',
+};
+
+// pbp.copay holds different meanings per benefit_type. For these
+// allowance / deductible types the dollar amount lives in `copay` but
+// pm_plan_benefits stores it in `coverage_amount`; the transform
+// remaps so buildBenefits' coverage_amount lookup wins.
+const PBP_ALLOWANCE_TYPES = new Set([
+  'vision_allowance',
+  'hearing_aid_allowance',
+  'otc_allowance',
+  'food_card',
+  'rx_deductible',
+  'transportation',
+]);
+
+// Source priority — keep in sync with consumer plans-with-extras.
+const SOURCE_PRIORITY: Readonly<Record<string, number>> = {
+  medicare_gov: 4,
+  sb_ocr: 3,
+  manual: 2,
+  pbp_federal: 1,
+};
+// OTC + food_card are the carrier-authoritative categories (Medicare.gov
+// Plan Finder doesn't carry the dollar amount for C-SNP healthy-food
+// allowances, so manual / sb_ocr overrides win for these specifically).
+const CARRIER_AUTHORITATIVE_TYPES: ReadonlySet<string> = new Set([
+  'otc_allowance',
+  'food_card',
+]);
+const SOURCE_PRIORITY_CARRIER: Readonly<Record<string, number>> = {
+  manual: 4,
+  sb_ocr: 3,
+  medicare_gov: 2,
+  pbp_federal: 1,
+};
+function sourceRank(source: string | null | undefined, benefitType: string): number {
+  if (!source) return 0;
+  const table = CARRIER_AUTHORITATIVE_TYPES.has(benefitType)
+    ? SOURCE_PRIORITY_CARRIER
+    : SOURCE_PRIORITY;
+  return table[source] ?? 0;
+}
+
+function transformPbpRow(
+  row: PbpRichRow,
+  contract_id: string,
+  plan_id: string,
+  segment_id: string,
+): BenefitRow | null {
+  const category = PBP_TYPE_TO_CATEGORY[row.benefit_type];
+  if (!category) return null;
+
+  const isAllowance = PBP_ALLOWANCE_TYPES.has(row.benefit_type);
+  let coverage_amount = isAllowance ? row.copay : null;
+  const copay = isAllowance ? null : row.copay;
+  let max_coverage = row.copay_max;
+
+  // OTC normalization: pbp_benefits.copay arrives in mixed units
+  // (sb_ocr files quarterly, medicare_gov files monthly, manual
+  // sometimes annual). Beneficiaries get a quarterly disbursement on
+  // the OTC card, so quarterly is the canonical display unit.
+  if (row.benefit_type === 'otc_allowance' && typeof row.copay === 'number' && row.copay > 0) {
+    const desc = (row.description ?? '').toLowerCase();
+    const src = (row.source ?? '').toLowerCase();
+    const perMonth = /per month|\/mo\b|monthly/.test(desc);
+    const perQuarter = /per quarter|every quarter|\/qtr\b|\bqtr\b|quarterly/.test(desc);
+    const perYear = /per year|\/yr\b|annual|yearly/.test(desc);
+    let monthly: number;
+    if (perQuarter) monthly = row.copay / 3;
+    else if (perYear) monthly = row.copay / 12;
+    else if (perMonth) monthly = row.copay;
+    else if (src === 'sb_ocr') monthly = row.copay / 3;
+    else monthly = row.copay;
+    coverage_amount = Math.round(monthly * 3);
+    max_coverage = Math.round(monthly * 12);
+  }
+
+  // food_card normalization → monthly (matches Plan.benefits
+  // .food_card.allowance_per_month contract).
+  if (row.benefit_type === 'food_card' && typeof row.copay === 'number' && row.copay > 0) {
+    const desc = (row.description ?? '').toLowerCase();
+    const perQuarter = /per quarter|every quarter|\/qtr\b|\bqtr\b|quarterly/.test(desc);
+    const perYear = /per year|\/yr\b|annual|yearly/.test(desc);
+    let monthly: number;
+    if (perQuarter) monthly = row.copay / 3;
+    else if (perYear) monthly = row.copay / 12;
+    else monthly = row.copay;
+    coverage_amount = Math.round(monthly);
+    if (max_coverage == null) max_coverage = Math.round(monthly * 12);
+  }
+
+  // Vision normalization → annual. Some plans file biennial; halve so
+  // the dropdown's "/yr" label matches the value.
+  if (row.benefit_type === 'vision_allowance' && typeof row.copay === 'number' && row.copay > 0) {
+    const desc = (row.description ?? '').toLowerCase();
+    const biennial = /every 2 years|every 24 months|every two years|biennial/.test(desc);
+    const annual = biennial ? Math.round(row.copay / 2) : row.copay;
+    coverage_amount = annual;
+    if (max_coverage == null) max_coverage = annual;
+  }
+
+  return {
+    contract_id,
+    plan_id,
+    segment_id,
+    benefit_category: category,
+    benefit_description: row.description,
+    coverage_amount,
+    copay,
+    coinsurance: row.coinsurance,
+    max_coverage,
+  };
+}
+
+// Dollar-from-description parse. Some sb_ocr / medicare_gov rows file
+// the dollar value only in the description string ("$1,600 annual
+// allowance for covered dental services") with copay/coverage_amount
+// null. Pull the LARGEST $-amount in the text — supplemental copy
+// commonly leads with a per-visit copay before the meaningful annual
+// number.
+const DESC_DOLLAR_CATEGORIES: ReadonlySet<string> = new Set([
+  'dental',
+  'hearing',
+  'vision',
+  'otc',
+  'transportation',
+  'food_card',
+]);
+const DESC_DOLLAR_RE = /\$(\d[\d,]*)/g;
+function dollarFromDesc(desc: string | null | undefined): number | null {
+  if (typeof desc !== 'string' || !desc) return null;
+  let max = 0;
+  for (const m of desc.matchAll(DESC_DOLLAR_RE)) {
+    const n = parseInt(m[1].replace(/,/g, ''), 10);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return max > 0 ? max : null;
+}
 
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 2000;
@@ -405,17 +609,166 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (pbpErr) throw pbpErr;
     const pbpFallback = buildPbpFallback((pbpRows ?? []) as PbpBenefitRow[]);
 
+    // ─── Step 3c: broad pbp_benefits merge (parity with consumer) ────
+    // The narrow Step 3b above only feeds mental_health / PT /
+    // dental_max into a side-channel fallback. The consumer's
+    // /api/plans-with-extras has always pulled ALL pbp rows with
+    // source IN (medicare_gov, sb_ocr, manual) and merged them as
+    // first-class benefit rows — that's how vision_allowance copays,
+    // dental_comprehensive desc-dollar parses, and authoritative
+    // imaging copays land in the consumer Results page.
+    //
+    // Shape parity: transform each pbp row to the pm_plan_benefits
+    // row shape via PBP_TYPE_TO_CATEGORY, dedupe by source priority,
+    // backfill from landscape + description-dollar parse, then merge
+    // with PBP winning on (triple, category). buildBenefits below
+    // operates on the merged set.
+    const { data: broadPbpRaw, error: broadPbpErr } = await sb
+      .from('pbp_benefits')
+      .select('plan_id, benefit_type, copay, copay_max, coinsurance, tier_id, description, source')
+      .in('plan_id', [...pbpKeyVariants])
+      .in('source', ['medicare_gov', 'sb_ocr', 'manual']);
+    if (broadPbpErr) throw broadPbpErr;
+    const broadPbpRows = (broadPbpRaw ?? []) as PbpRichRow[];
+
+    // Source-priority dedup: when multiple sources file the same
+    // (plan_id, benefit_type, tier_id), keep the highest-rank row.
+    // medicare_gov wins by default, manual wins for OTC/food_card.
+    const bestByKey = new Map<string, PbpRichRow>();
+    for (const row of broadPbpRows) {
+      const key = `${row.plan_id}|${row.benefit_type}|${row.tier_id ?? 0}`;
+      const prior = bestByKey.get(key);
+      if (
+        !prior ||
+        sourceRank(row.source, row.benefit_type) > sourceRank(prior.source, prior.benefit_type)
+      ) {
+        bestByKey.set(key, row);
+      }
+    }
+
+    // Map canonical 2-part pbp keys back to each finalist's full triple
+    // so the synthesized rows carry the same contract/plan/segment the
+    // landscape rows do — required for the merge keying below.
+    const planByCanonical = new Map<string, { contract_id: string; plan_id: string; segment_id: string }>();
+    for (const k of byTriple.keys()) {
+      const parts = k.split('-');
+      planByCanonical.set(`${parts[0]}-${parts[1]}`, {
+        contract_id: parts[0],
+        plan_id: parts[1],
+        segment_id: parts[2] || '000',
+      });
+    }
+
+    const synthBenefits: BenefitRow[] = [];
+    for (const row of bestByKey.values()) {
+      const canonical = normalizePbpKey(row.plan_id);
+      const plan = planByCanonical.get(canonical);
+      if (!plan) continue;
+      const t = transformPbpRow(row, plan.contract_id, plan.plan_id, plan.segment_id);
+      if (t) synthBenefits.push(t);
+    }
+
+    // Backfill coverage_amount + max_coverage on the synthetic rows
+    // from the matching landscape row when the supplemental source
+    // didn't carry a numeric dollar (sb_ocr commonly files only the
+    // marketing description for non-allowance categories like
+    // dental_comprehensive — see plans-with-extras for the full
+    // rationale).
+    const landscapeRows = (benefitRows ?? []) as BenefitRow[];
+    const landscapeByKey = new Map<string, BenefitRow>();
+    for (const b of landscapeRows) {
+      const triple = `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}`;
+      landscapeByKey.set(`${triple}|${b.benefit_category}`, b);
+    }
+    for (const b of synthBenefits) {
+      if (b.coverage_amount != null && b.max_coverage != null) continue;
+      const triple = `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}`;
+      const land = landscapeByKey.get(`${triple}|${b.benefit_category}`);
+      if (!land) continue;
+      if (b.coverage_amount == null && land.coverage_amount != null) {
+        b.coverage_amount = land.coverage_amount;
+      }
+      if (b.max_coverage == null && land.max_coverage != null) {
+        b.max_coverage = land.max_coverage;
+      }
+    }
+
+    // Description-dollar parse: when both structured fields and the
+    // landscape backfill leave coverage_amount null but the marketing
+    // description carries the value ("$1,600 annual allowance for
+    // covered dental services"), pull the largest dollar amount and
+    // use it. Mirrors consumer behavior — Aetna H3146-004's $1,600
+    // dental cap only lives in the description.
+    for (const b of synthBenefits) {
+      if (b.coverage_amount != null) continue;
+      if (!DESC_DOLLAR_CATEGORIES.has(b.benefit_category)) continue;
+      const parsed = dollarFromDesc(b.benefit_description);
+      if (parsed == null) continue;
+      if (b.benefit_category === 'otc') {
+        const desc = (b.benefit_description ?? '').toLowerCase();
+        const perMonth = /per month|\/mo\b|monthly/.test(desc);
+        const perQuarter = /per quarter|every quarter|\/qtr\b|\bqtr\b|quarterly/.test(desc);
+        const perYear = /per year|\/yr\b|annual|yearly/.test(desc);
+        let monthly = parsed;
+        if (perQuarter) monthly = parsed / 3;
+        else if (perYear) monthly = parsed / 12;
+        else if (perMonth) monthly = parsed;
+        b.coverage_amount = Math.round(monthly * 3);
+        if (b.max_coverage == null) b.max_coverage = Math.round(monthly * 12);
+      } else {
+        b.coverage_amount = parsed;
+      }
+    }
+    // Same desc-dollar parse for the landscape rows that survive the
+    // merge, so plans whose pm_plan_benefits dental row carries only a
+    // description ("Preventive + comprehensive dental · $45 copay")
+    // also pick up a dollar value when one is parseable.
+    for (const b of landscapeRows) {
+      if (b.coverage_amount != null) continue;
+      if (!DESC_DOLLAR_CATEGORIES.has(b.benefit_category)) continue;
+      const parsed = dollarFromDesc(b.benefit_description);
+      if (parsed != null) b.coverage_amount = parsed;
+    }
+
+    // Merge: PBP wins on (triple, category). Drop the matching
+    // landscape row so the buildBenefits flatten path sees one
+    // authoritative entry per category.
+    const pbpKeyset = new Set(
+      synthBenefits.map(
+        (b) => `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}|${b.benefit_category}`,
+      ),
+    );
+    const mergedRows: BenefitRow[] = [
+      ...landscapeRows.filter(
+        (b) => !pbpKeyset.has(
+          `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}|${b.benefit_category}`,
+        ),
+      ),
+      ...synthBenefits,
+    ];
+
+    // Re-index merged rows by triple so buildBenefits below picks them
+    // up via the existing per-plan lookup.
+    const mergedBenefitsByTriple = new Map<string, BenefitRow[]>();
+    for (const b of mergedRows) {
+      const triple = `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}`;
+      const list = mergedBenefitsByTriple.get(triple) ?? [];
+      list.push(b);
+      mergedBenefitsByTriple.set(triple, list);
+    }
+
     // ─── Step 4: shape into Plan[] ──────────────────────────────────
     const plans: Plan[] = [];
     for (const [key, { row, counties }] of byTriple) {
-      // pbpFallback is keyed by the canonical 2-part form (no segment).
-      // The byTriple key is 3-part-with-3ch — collapse it for the lookup.
+      // Use the merged benefits set (landscape + transformed pbp)
+      // instead of the raw landscape rows — that's the parity fix
+      // with the consumer's plans-with-extras endpoint.
       const benefits = buildBenefits(
-        benefitsByTriple.get(key) ?? [],
+        mergedBenefitsByTriple.get(key) ?? [],
         pbpFallback.get(normalizePbpKey(key)),
       );
       const partBGiveback = pickBenefitNumber(
-        benefitsByTriple.get(key) ?? [],
+        mergedBenefitsByTriple.get(key) ?? [],
         'partb_giveback',
         'coverage_amount',
       );
