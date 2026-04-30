@@ -205,17 +205,21 @@ interface ColumnStyle {
 }
 
 function styleFor(variant: ColumnVariant): ColumnStyle {
+  // Per the v4 mockup: only the current-plan column gets a tinted
+  // body. Other columns use white body cells so the dark header bands
+  // and the colored delta badges read as the dominant color cues.
+  // Header bgs stay variant-colored (navy / teal / leaf / gray).
   switch (variant) {
     case 'current':
       return { headerBg: COL.currentHeader, headerFg: COL.ink, bodyBg: COL.currentBody, bodyFg: COL.ink };
     case 'best_rx':
-      return { headerBg: COL.navyHeader, headerFg: COL.white, bodyBg: COL.navyBody, bodyFg: COL.ink };
+      return { headerBg: COL.navyHeader, headerFg: COL.white, bodyBg: undefined, bodyFg: COL.ink };
     case 'lowest_oop':
-      return { headerBg: COL.tealHeader, headerFg: COL.white, bodyBg: COL.tealBody, bodyFg: COL.ink };
+      return { headerBg: COL.tealHeader, headerFg: COL.white, bodyBg: undefined, bodyFg: COL.ink };
     case 'giveback':
-      return { headerBg: COL.leafHeader, headerFg: COL.white, bodyBg: COL.leafBody, bodyFg: COL.ink };
+      return { headerBg: COL.leafHeader, headerFg: COL.white, bodyBg: undefined, bodyFg: COL.ink };
     case 'normal':
-      return { headerBg: '#f3f4f6', headerFg: COL.ink, bodyBg: undefined, bodyFg: COL.ink };
+      return { headerBg: COL.panelBg, headerFg: COL.ink, bodyBg: undefined, bodyFg: COL.ink };
   }
 }
 
@@ -1865,6 +1869,7 @@ export function QuoteDeliveryV4({
               </th>
               {columns.map((col) => {
                 const s = styleFor(col.variant);
+                const isDark = col.variant === 'best_rx' || col.variant === 'lowest_oop' || col.variant === 'giveback';
                 return (
                   <th
                     key={col.id}
@@ -1874,9 +1879,11 @@ export function QuoteDeliveryV4({
                       padding: 14,
                       textAlign: 'left',
                       verticalAlign: 'top',
-                      background: s.headerBg,
+                      backgroundColor: s.headerBg,
                       color: s.headerFg,
-                      borderBottom: `1px solid ${COL.rule}`,
+                      borderBottom: isDark ? 'none' : `1px solid ${COL.rule}`,
+                      borderTopLeftRadius: 10,
+                      borderTopRightRadius: 10,
                       fontWeight: 400,
                     }}
                   >
@@ -2844,27 +2851,32 @@ function providerStatusFor(prov: Provider, plan: Plan): 'in' | 'out' | 'unknown'
 
 interface MedicalDef {
   label: string;
-  pick: (plan: Plan) => { copay: number | null; coinsurance: number | null; description: string | null };
+  pick: (plan: Plan) => { copay: number | null; coinsurance: number | null; description: string | null } | null | undefined;
 }
 
 const MEDICAL_DEFS: MedicalDef[] = [
-  { label: 'PCP',                pick: (p) => p.benefits.medical.primary_care },
-  { label: 'Specialist',         pick: (p) => p.benefits.medical.specialist },
-  { label: 'Labs',               pick: (p) => p.benefits.medical.lab_services },
-  { label: 'Imaging / MRI',      pick: (p) => p.benefits.medical.diagnostic_radiology },
-  { label: 'ER',                 pick: (p) => p.benefits.medical.emergency },
-  { label: 'Urgent Care',        pick: (p) => p.benefits.medical.urgent_care },
-  { label: 'Outpatient Surgery', pick: (p) => p.benefits.medical.outpatient_surgery_hospital },
-  { label: 'Mental Health',      pick: (p) => p.benefits.medical.mental_health_individual },
-  { label: 'PT / OT',            pick: (p) => p.benefits.medical.physical_therapy },
-  { label: 'Inpatient',          pick: (p) => p.benefits.medical.inpatient },
+  { label: 'PCP',                pick: (p) => p.benefits?.medical?.primary_care },
+  { label: 'Specialist',         pick: (p) => p.benefits?.medical?.specialist },
+  { label: 'Labs',               pick: (p) => p.benefits?.medical?.lab_services },
+  { label: 'Imaging / MRI',      pick: (p) => p.benefits?.medical?.diagnostic_radiology },
+  { label: 'ER',                 pick: (p) => p.benefits?.medical?.emergency },
+  { label: 'Urgent Care',        pick: (p) => p.benefits?.medical?.urgent_care },
+  { label: 'Outpatient Surgery', pick: (p) => p.benefits?.medical?.outpatient_surgery_hospital },
+  { label: 'Mental Health',      pick: (p) => p.benefits?.medical?.mental_health_individual },
+  { label: 'PT / OT',            pick: (p) => p.benefits?.medical?.physical_therapy },
+  { label: 'Inpatient',          pick: (p) => p.benefits?.medical?.inpatient },
 ];
 
-function copayCash(cs: { copay: number | null; coinsurance: number | null }): number | null {
-  return cs.copay ?? null;
+function copayCash(cs: { copay: number | null; coinsurance: number | null } | null | undefined): number | null {
+  return cs?.copay ?? null;
 }
 
-function formatCostShare(cs: { copay: number | null; coinsurance: number | null }): string {
+function formatCostShare(cs: { copay: number | null; coinsurance: number | null } | null | undefined): string {
+  // Defensive: api/plans always returns CostShare objects with null
+  // fallbacks, but the static cmsPlans seed and any future PBP source
+  // could in principle return undefined for a missing field. Render
+  // "—" instead of crashing when we hit that case.
+  if (!cs) return '—';
   if (cs.copay != null) return `$${cs.copay}`;
   if (cs.coinsurance != null) return `${cs.coinsurance}%`;
   return '—';
