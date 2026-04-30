@@ -125,11 +125,27 @@ interface BenefitRow {
 }
 
 interface PbpBenefitRow {
-  plan_id: string; // already concatenated "H5296-003-0"
+  // Live data uses both 2-part ("H1036-335") and 3-part-with-1ch-segment
+  // ("H5253-187-0") plan_id formats. Never the API's 3-part-with-3ch
+  // form, so we always normalize to 2-part for fallback lookups.
+  plan_id: string;
   benefit_type: string;
   copay: number | null;
   coinsurance: number | null;
   tier_id: string | null;
+  description: string | null;
+}
+
+// pbp_benefits.plan_id is either 2-part ("H1036-335") or 3-part-with-
+// 1ch-segment ("H5253-187-0"); pm_plans.id is always 3-part-with-3ch
+// ("H1036-335-000"). Strip everything after the second hyphen so both
+// the query and the lookup use the same canonical key — pbp data is
+// uniform per (contract, plan) regardless of segment, so collapsing
+// the segment is safe.
+function normalizePbpKey(planId: string): string {
+  const parts = planId.split('-');
+  if (parts.length < 2) return planId;
+  return `${parts[0]}-${parts[1]}`;
 }
 
 // pbp_benefits carries categories that the structured importer does
@@ -150,20 +166,29 @@ type PbpFallbackType = (typeof PBP_FALLBACK_TYPES)[number];
 // amount in the `copay` slot. Tracked separately because the value
 // feeds Plan.benefits.dental.annual_max — a scalar, not a CostShare.
 const PBP_DENTAL_MAX_TYPE = 'dental_annual_max';
-// Extras allowance fallbacks. The medicare.gov scraper writes these
-// into pbp_benefits with the dollar amount in the `copay` column. We
-// fall back to them when pm_plan_benefits is missing the matching
+// Extras allowance fallbacks. The pbp_federal + medicare.gov scrapers
+// write these into pbp_benefits with the dollar amount in the `copay`
+// column. We fall back when pm_plan_benefits is missing the matching
 // otc / food_card row — common on plans that filed extras only via
-// the SoB scrape, which is what the Quote table is supposed to show
+// the SoB scrape, which is what the Quote table needs to show
 // regardless of pbp_federal completeness.
-const PBP_OTC_TYPE = 'otc_quarter';
-const PBP_FOOD_CARD_TYPE = 'food_card_month';
+//
+// Verified against the live database 2026-04-30:
+//   • benefit_type = 'otc_allowance'   (3,937 rows; description tells
+//                                       period: "OTC quarterly" /
+//                                       "OTC monthly" / "OTC yearly")
+//   • benefit_type = 'food_card'       (3,178 rows; description like
+//                                       "Healthy food/grocery")
+const PBP_OTC_TYPE = 'otc_allowance';
+const PBP_FOOD_CARD_TYPE = 'food_card';
 
 interface PbpFallback {
   costShares: Partial<Record<PbpFallbackType, CostShare>>;
   dentalAnnualMax?: number;
   otcQuarterly?: number;
+  otcDescription?: string;
   foodCardMonthly?: number;
+  foodCardDescription?: string;
 }
 
 type PbpFallbackMap = Map<string, PbpFallback>;
@@ -348,18 +373,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       benefitsByTriple.set(key, list);
     }
 
-    // ─── Step 3b: fetch pbp_benefits fallback for MH/PT ─────────────
+    // ─── Step 3b: fetch pbp_benefits fallback for extras + MH/PT ────
     // pm_plan_benefits is empty for mental_health_individual,
-    // mental_health_group, and physical_therapy across the catalog. The
-    // Medicare.gov detail scraper writes these into pbp_benefits with
-    // plan_id already in "H5296-003-0" format. Pull only the categories
-    // we actually need so the row count stays small.
+    // mental_health_group, physical_therapy, and frequently for OTC /
+    // food card too. The pbp_federal extract + medicare.gov scrape
+    // both land in pbp_benefits, but they store plan_id in 2-part
+    // form ("H1036-335") or 3-part-with-1ch-segment ("H5253-187-0"),
+    // never the API's 3-part-with-3ch form. We probe both shapes and
+    // index everything under the canonical 2-part key so the lookup
+    // in buildBenefits doesn't have to know which scraper wrote each
+    // row.
     const tripleKeys = [...byTriple.keys()];
+    const pbpKeyVariants = new Set<string>();
+    for (const k of tripleKeys) {
+      pbpKeyVariants.add(k);                    // H1036-335-000 (rare)
+      pbpKeyVariants.add(normalizePbpKey(k));   // H1036-335 (most rows)
+      const parts = k.split('-');
+      if (parts.length >= 3) {
+        // Strip leading zeros from segment so '000' → '0' (174 rows
+        // use this single-digit form).
+        const seg1 = parts[2].replace(/^0+/, '') || '0';
+        pbpKeyVariants.add(`${parts[0]}-${parts[1]}-${seg1}`);
+      }
+    }
     const pbpTypes = [...PBP_FALLBACK_TYPES, PBP_DENTAL_MAX_TYPE, PBP_OTC_TYPE, PBP_FOOD_CARD_TYPE];
     const { data: pbpRows, error: pbpErr } = await sb
       .from('pbp_benefits')
-      .select('plan_id, benefit_type, copay, coinsurance, tier_id')
-      .in('plan_id', tripleKeys)
+      .select('plan_id, benefit_type, copay, coinsurance, tier_id, description')
+      .in('plan_id', [...pbpKeyVariants])
       .in('benefit_type', pbpTypes);
     if (pbpErr) throw pbpErr;
     const pbpFallback = buildPbpFallback((pbpRows ?? []) as PbpBenefitRow[]);
@@ -367,9 +408,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ─── Step 4: shape into Plan[] ──────────────────────────────────
     const plans: Plan[] = [];
     for (const [key, { row, counties }] of byTriple) {
+      // pbpFallback is keyed by the canonical 2-part form (no segment).
+      // The byTriple key is 3-part-with-3ch — collapse it for the lookup.
       const benefits = buildBenefits(
         benefitsByTriple.get(key) ?? [],
-        pbpFallback.get(key),
+        pbpFallback.get(normalizePbpKey(key)),
       );
       const partBGiveback = pickBenefitNumber(
         benefitsByTriple.get(key) ?? [],
@@ -478,32 +521,68 @@ function costShareFor(
 // for plans that report a copay range; non-tiered plans use "". We
 // quote the lower end (the broker's "as low as" number) and tag the
 // description with the range so the UI can surface it.
+// OTC period detection — pbp_benefits.description carries strings like
+// "OTC quarterly", "OTC monthly", "OTC yearly" or "$25 allowance" /
+// "OTC allowance". Returns the multiplier to convert the copay value
+// into a quarterly equivalent. Defaults to 1 (already quarterly) when
+// the description is silent — that matches the most common pbp shape.
+function otcQuarterlyMultiplier(description: string | null): number {
+  if (!description) return 1;
+  const d = description.toLowerCase();
+  if (d.includes('monthly') || d.includes('per month') || d.includes('/mo')) return 3;
+  if (d.includes('yearly') || d.includes('annual') || d.includes('/yr')) return 1 / 4;
+  if (d.includes('quarterly') || d.includes('/qtr')) return 1;
+  return 1;
+}
+
+// food_card period detection — most rows are monthly per the spec
+// (pm_plan_benefits.coverage_amount is already monthly when filed). The
+// pbp scraper sometimes writes quarterly. We normalize to monthly here
+// to match the Plan.benefits.food_card.allowance_per_month contract.
+function foodCardMonthlyMultiplier(description: string | null): number {
+  if (!description) return 1;
+  const d = description.toLowerCase();
+  if (d.includes('quarterly') || d.includes('/qtr')) return 1 / 3;
+  if (d.includes('yearly') || d.includes('annual') || d.includes('/yr')) return 1 / 12;
+  return 1;
+}
+
 function buildPbpFallback(rows: PbpBenefitRow[]): PbpFallbackMap {
-  // Group cost-share fallback rows (mental_health_*, physical_therapy)
-  // by plan + benefit_type so we can resolve min/max tier ranges.
+  // All groupings keyed by the canonical 2-part form ("H1036-335") so
+  // the lookup in buildBenefits doesn't have to care which form a
+  // particular scraper wrote.
   const csGrouped = new Map<string, Map<PbpFallbackType, PbpBenefitRow[]>>();
-  // Single-value-per-plan extras — collected separately. The scraper
-  // writes the dollar amount in the `copay` column.
   const dentalMaxByPlan = new Map<string, number>();
   const otcQuarterlyByPlan = new Map<string, number>();
+  const otcDescByPlan = new Map<string, string>();
   const foodCardMonthlyByPlan = new Map<string, number>();
+  const foodCardDescByPlan = new Map<string, string>();
 
   for (const r of rows) {
+    const key = normalizePbpKey(r.plan_id);
     if ((PBP_FALLBACK_TYPES as readonly string[]).includes(r.benefit_type)) {
-      const byType = csGrouped.get(r.plan_id) ?? new Map<PbpFallbackType, PbpBenefitRow[]>();
+      const byType = csGrouped.get(key) ?? new Map<PbpFallbackType, PbpBenefitRow[]>();
       const list = byType.get(r.benefit_type as PbpFallbackType) ?? [];
       list.push(r);
       byType.set(r.benefit_type as PbpFallbackType, list);
-      csGrouped.set(r.plan_id, byType);
+      csGrouped.set(key, byType);
     } else if (r.benefit_type === PBP_DENTAL_MAX_TYPE) {
       const v = toNum(r.copay);
-      if (v != null && v > 0) dentalMaxByPlan.set(r.plan_id, v);
+      if (v != null && v > 0) dentalMaxByPlan.set(key, v);
     } else if (r.benefit_type === PBP_OTC_TYPE) {
       const v = toNum(r.copay);
-      if (v != null && v > 0) otcQuarterlyByPlan.set(r.plan_id, v);
+      if (v != null && v > 0) {
+        const qtr = Math.round(v * otcQuarterlyMultiplier(r.description));
+        if (qtr > 0) otcQuarterlyByPlan.set(key, qtr);
+      }
+      if (r.description) otcDescByPlan.set(key, r.description);
     } else if (r.benefit_type === PBP_FOOD_CARD_TYPE) {
       const v = toNum(r.copay);
-      if (v != null && v > 0) foodCardMonthlyByPlan.set(r.plan_id, v);
+      if (v != null && v > 0) {
+        const mo = Math.round(v * foodCardMonthlyMultiplier(r.description));
+        if (mo > 0) foodCardMonthlyByPlan.set(key, mo);
+      }
+      if (r.description) foodCardDescByPlan.set(key, r.description);
     }
   }
 
@@ -512,7 +591,9 @@ function buildPbpFallback(rows: PbpBenefitRow[]): PbpFallbackMap {
     ...csGrouped.keys(),
     ...dentalMaxByPlan.keys(),
     ...otcQuarterlyByPlan.keys(),
+    ...otcDescByPlan.keys(),
     ...foodCardMonthlyByPlan.keys(),
+    ...foodCardDescByPlan.keys(),
   ]);
   for (const planId of planIds) {
     const costShares: Partial<Record<PbpFallbackType, CostShare>> = {};
@@ -535,7 +616,9 @@ function buildPbpFallback(rows: PbpBenefitRow[]): PbpFallbackMap {
       costShares,
       dentalAnnualMax: dentalMaxByPlan.get(planId),
       otcQuarterly: otcQuarterlyByPlan.get(planId),
+      otcDescription: otcDescByPlan.get(planId),
       foodCardMonthly: foodCardMonthlyByPlan.get(planId),
+      foodCardDescription: foodCardDescByPlan.get(planId),
     });
   }
   return out;
@@ -655,7 +738,9 @@ function buildBenefits(
         otc?.benefit_description ??
         (pbpFallback?.otcQuarterly && pbpFallback.otcQuarterly > 0
           ? `$${pbpFallback.otcQuarterly}/qtr OTC allowance`
-          : null),
+          : pbpFallback?.otcDescription
+            ? pbpFallback.otcDescription
+            : null),
     },
     food_card: {
       allowance_per_month: foodCardMonthly,
@@ -664,7 +749,9 @@ function buildBenefits(
         foodCard?.benefit_description ??
         (pbpFallback?.foodCardMonthly && pbpFallback.foodCardMonthly > 0
           ? `$${pbpFallback.foodCardMonthly}/mo food card`
-          : null),
+          : pbpFallback?.foodCardDescription
+            ? pbpFallback.foodCardDescription
+            : null),
     },
     diabetic: { covered: true, preferred_brands: [] },
     // PBP-as-source caveat: enabled stays true whether or not we

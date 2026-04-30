@@ -357,31 +357,15 @@ export function QuoteDeliveryV4({
     () => (presetKey ? WEIGHT_PRESETS[presetKey].weights : null),
     [presetKey],
   );
-  const { result, data: brainData, loading } = usePlanBrain({
-    plans: finalists,
-    client,
-    medications,
-    providers,
-    weightOverride,
-  });
-
-  // Live drug-cost prime — hits /api/drug-costs and writes back to
-  // pm_drug_cost_cache. byPlanId.<plan.id>.annual_cost is the
-  // authoritative Total Rx Cost for the client's full prescription set.
-  const drugCosts = useDrugCosts(
-    finalists,
-    medications,
-    pharmacyFill === 'mail_90' ? 'mail' : 'retail',
-  );
-
-  // Manufacturer assistance — drives the help section under the table.
-  const assistance = useManufacturerAssistance(medications);
 
   // Current plan resolution. Static seed lookup first (covers the demo
   // / offline path); on miss, fetch the plan from /api/plans by id so
   // production plans like Humana Gold Plus H1036-335 — which never
   // ship in cmsPlans — render as the gray benchmark column instead of
-  // dropping out silently.
+  // dropping out silently. Resolved BEFORE the brain + drug-cost hooks
+  // so the current plan rides into both queries; otherwise the brain
+  // has no formulary data for the current column and every drug cell
+  // renders "—".
   const [fetchedCurrentPlan, setFetchedCurrentPlan] = useState<Plan | null>(null);
   useEffect(() => {
     if (!currentPlanId) {
@@ -389,7 +373,6 @@ export function QuoteDeliveryV4({
       return;
     }
     if (findPlan(currentPlanId)) {
-      // Seed-resolved; nothing to fetch.
       setFetchedCurrentPlan(null);
       return;
     }
@@ -414,6 +397,37 @@ export function QuoteDeliveryV4({
     },
     [currentPlanId, fetchedCurrentPlan],
   );
+
+  // Combined plan set for brain + drug-cost queries. The current plan
+  // needs the same formulary + drug-cost data as the finalists so its
+  // benchmark column shows real per-drug copays instead of "—" rows.
+  // Dedupe by id — a current plan that ALSO landed in the finalist set
+  // shouldn't double-up the brain's per-(plan, rxcui) lookup.
+  const plansForBrain = useMemo<Plan[]>(() => {
+    if (!currentPlan) return finalists;
+    const has = finalists.some((p) => p.id === currentPlan.id);
+    return has ? finalists : [currentPlan, ...finalists];
+  }, [currentPlan, finalists]);
+
+  const { result, data: brainData, loading } = usePlanBrain({
+    plans: plansForBrain,
+    client,
+    medications,
+    providers,
+    weightOverride,
+  });
+
+  // Live drug-cost prime — hits /api/drug-costs and writes back to
+  // pm_drug_cost_cache. byPlanId.<plan.id>.annual_cost is the
+  // authoritative Total Rx Cost for the client's full prescription set.
+  const drugCosts = useDrugCosts(
+    plansForBrain,
+    medications,
+    pharmacyFill === 'mail_90' ? 'mail' : 'retail',
+  );
+
+  // Manufacturer assistance — drives the help section under the table.
+  const assistance = useManufacturerAssistance(medications);
 
   // ── Column selection: ribbon-driven, coverage-filtered ────────────
   // 1. Current plan (if session has one) → 'current' (gray).
