@@ -150,10 +150,20 @@ type PbpFallbackType = (typeof PBP_FALLBACK_TYPES)[number];
 // amount in the `copay` slot. Tracked separately because the value
 // feeds Plan.benefits.dental.annual_max — a scalar, not a CostShare.
 const PBP_DENTAL_MAX_TYPE = 'dental_annual_max';
+// Extras allowance fallbacks. The medicare.gov scraper writes these
+// into pbp_benefits with the dollar amount in the `copay` column. We
+// fall back to them when pm_plan_benefits is missing the matching
+// otc / food_card row — common on plans that filed extras only via
+// the SoB scrape, which is what the Quote table is supposed to show
+// regardless of pbp_federal completeness.
+const PBP_OTC_TYPE = 'otc_quarter';
+const PBP_FOOD_CARD_TYPE = 'food_card_month';
 
 interface PbpFallback {
   costShares: Partial<Record<PbpFallbackType, CostShare>>;
   dentalAnnualMax?: number;
+  otcQuarterly?: number;
+  foodCardMonthly?: number;
 }
 
 type PbpFallbackMap = Map<string, PbpFallback>;
@@ -345,7 +355,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // plan_id already in "H5296-003-0" format. Pull only the categories
     // we actually need so the row count stays small.
     const tripleKeys = [...byTriple.keys()];
-    const pbpTypes = [...PBP_FALLBACK_TYPES, PBP_DENTAL_MAX_TYPE];
+    const pbpTypes = [...PBP_FALLBACK_TYPES, PBP_DENTAL_MAX_TYPE, PBP_OTC_TYPE, PBP_FOOD_CARD_TYPE];
     const { data: pbpRows, error: pbpErr } = await sb
       .from('pbp_benefits')
       .select('plan_id, benefit_type, copay, coinsurance, tier_id')
@@ -472,9 +482,11 @@ function buildPbpFallback(rows: PbpBenefitRow[]): PbpFallbackMap {
   // Group cost-share fallback rows (mental_health_*, physical_therapy)
   // by plan + benefit_type so we can resolve min/max tier ranges.
   const csGrouped = new Map<string, Map<PbpFallbackType, PbpBenefitRow[]>>();
-  // dental_annual_max is a single value per plan (the scraper emits one
-  // row); collect it separately.
+  // Single-value-per-plan extras — collected separately. The scraper
+  // writes the dollar amount in the `copay` column.
   const dentalMaxByPlan = new Map<string, number>();
+  const otcQuarterlyByPlan = new Map<string, number>();
+  const foodCardMonthlyByPlan = new Map<string, number>();
 
   for (const r of rows) {
     if ((PBP_FALLBACK_TYPES as readonly string[]).includes(r.benefit_type)) {
@@ -486,11 +498,22 @@ function buildPbpFallback(rows: PbpBenefitRow[]): PbpFallbackMap {
     } else if (r.benefit_type === PBP_DENTAL_MAX_TYPE) {
       const v = toNum(r.copay);
       if (v != null && v > 0) dentalMaxByPlan.set(r.plan_id, v);
+    } else if (r.benefit_type === PBP_OTC_TYPE) {
+      const v = toNum(r.copay);
+      if (v != null && v > 0) otcQuarterlyByPlan.set(r.plan_id, v);
+    } else if (r.benefit_type === PBP_FOOD_CARD_TYPE) {
+      const v = toNum(r.copay);
+      if (v != null && v > 0) foodCardMonthlyByPlan.set(r.plan_id, v);
     }
   }
 
   const out: PbpFallbackMap = new Map();
-  const planIds = new Set([...csGrouped.keys(), ...dentalMaxByPlan.keys()]);
+  const planIds = new Set([
+    ...csGrouped.keys(),
+    ...dentalMaxByPlan.keys(),
+    ...otcQuarterlyByPlan.keys(),
+    ...foodCardMonthlyByPlan.keys(),
+  ]);
   for (const planId of planIds) {
     const costShares: Partial<Record<PbpFallbackType, CostShare>> = {};
     const byType = csGrouped.get(planId);
@@ -511,6 +534,8 @@ function buildPbpFallback(rows: PbpBenefitRow[]): PbpFallbackMap {
     out.set(planId, {
       costShares,
       dentalAnnualMax: dentalMaxByPlan.get(planId),
+      otcQuarterly: otcQuarterlyByPlan.get(planId),
+      foodCardMonthly: foodCardMonthlyByPlan.get(planId),
     });
   }
   return out;
@@ -540,18 +565,27 @@ function buildBenefits(
   // b13b → otc. Importer writes coverage_amount as the QUARTERLY
   // equivalent ($/qtr), max_coverage as the ANNUAL max. Benefit
   // Filters' "≥ $150 / qtr" tier reads allowance_per_quarter, so we
-  // feed coverage_amount directly.
+  // feed coverage_amount directly. When pm_plan_benefits has no row
+  // (common — only ~30% of plans file OTC structurally), fall back
+  // to the medicare.gov scraper's value in pbp_benefits otc_quarter.
   const otc = rows.find((r) => r.benefit_category === 'otc');
-  const otcQuarterly = toNum(otc?.coverage_amount) ?? 0;
+  const pmOtcQuarterly = toNum(otc?.coverage_amount) ?? 0;
+  const otcQuarterly = pmOtcQuarterly > 0
+    ? pmOtcQuarterly
+    : (pbpFallback?.otcQuarterly ?? 0);
 
   // b13c → food_card. coverage_amount = MONTHLY equivalent so the
   // filter's "≥ $100 / mo" tier maps cleanly. A row with
   // coverage_amount === 1 and no dollar signal is the importer's
   // "offered but no dollar cap" marker (common for post-discharge
   // meals benefits); surface it as > 0 so the filter's Any tier
-  // passes, but the specific dollar tiers won't.
+  // passes, but the specific dollar tiers won't. Same scraper-fallback
+  // logic as OTC for plans missing structured rows.
   const foodCard = rows.find((r) => r.benefit_category === 'food_card');
-  const foodCardMonthly = toNum(foodCard?.coverage_amount) ?? 0;
+  const pmFoodCardMonthly = toNum(foodCard?.coverage_amount) ?? 0;
+  const foodCardMonthly = pmFoodCardMonthly > 0
+    ? pmFoodCardMonthly
+    : (pbpFallback?.foodCardMonthly ?? 0);
 
   // b10b → transportation. coverage_amount is either a dollar cap OR
   // the presence marker (1). The schema's transportation.rides_per_year
@@ -617,12 +651,20 @@ function buildBenefits(
     },
     otc: {
       allowance_per_quarter: otcQuarterly,
-      description: otc?.benefit_description ?? null,
+      description:
+        otc?.benefit_description ??
+        (pbpFallback?.otcQuarterly && pbpFallback.otcQuarterly > 0
+          ? `$${pbpFallback.otcQuarterly}/qtr OTC allowance`
+          : null),
     },
     food_card: {
       allowance_per_month: foodCardMonthly,
       restricted_to_medicaid_eligible: false,
-      description: foodCard?.benefit_description ?? null,
+      description:
+        foodCard?.benefit_description ??
+        (pbpFallback?.foodCardMonthly && pbpFallback.foodCardMonthly > 0
+          ? `$${pbpFallback.foodCardMonthly}/mo food card`
+          : null),
     },
     diabetic: { covered: true, preferred_brands: [] },
     // PBP-as-source caveat: enabled stays true whether or not we

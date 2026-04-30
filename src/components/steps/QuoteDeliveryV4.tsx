@@ -55,6 +55,7 @@ import {
   type AssistanceRow,
 } from '@/hooks/useManufacturerAssistance';
 import { findPlan } from '@/lib/cmsPlans';
+import { fetchPlansByIds } from '@/lib/planCatalog';
 import { CurrentPlanPicker } from '@/components/picker/CurrentPlanPicker';
 import {
   formatDental,
@@ -376,9 +377,42 @@ export function QuoteDeliveryV4({
   // Manufacturer assistance — drives the help section under the table.
   const assistance = useManufacturerAssistance(medications);
 
+  // Current plan resolution. Static seed lookup first (covers the demo
+  // / offline path); on miss, fetch the plan from /api/plans by id so
+  // production plans like Humana Gold Plus H1036-335 — which never
+  // ship in cmsPlans — render as the gray benchmark column instead of
+  // dropping out silently.
+  const [fetchedCurrentPlan, setFetchedCurrentPlan] = useState<Plan | null>(null);
+  useEffect(() => {
+    if (!currentPlanId) {
+      setFetchedCurrentPlan(null);
+      return;
+    }
+    if (findPlan(currentPlanId)) {
+      // Seed-resolved; nothing to fetch.
+      setFetchedCurrentPlan(null);
+      return;
+    }
+    let cancelled = false;
+    fetchPlansByIds([currentPlanId])
+      .then((plans) => {
+        if (cancelled) return;
+        setFetchedCurrentPlan(plans[0] ?? null);
+      })
+      .catch((err) => {
+        console.warn('[quote-v4] current plan fetch failed:', err);
+        if (!cancelled) setFetchedCurrentPlan(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPlanId]);
   const currentPlan = useMemo<Plan | null>(
-    () => (currentPlanId ? findPlan(currentPlanId) : null),
-    [currentPlanId],
+    () => {
+      if (!currentPlanId) return null;
+      return findPlan(currentPlanId) ?? fetchedCurrentPlan ?? null;
+    },
+    [currentPlanId, fetchedCurrentPlan],
   );
 
   // ── Column selection: ribbon-driven, coverage-filtered ────────────
@@ -768,20 +802,11 @@ export function QuoteDeliveryV4({
     });
   }, [columns, rxTotalAnnual]);
 
-  // Backwards-compat surface for the existing render: array of total
-  // numbers keyed by column index.
-  const annualNet = useMemo<(number | null)[]>(
-    () => annualBreakdown.map((b) => b.total),
-    [annualBreakdown],
-  );
-
-  const savingsVsBaseline = useMemo<(number | null)[]>(() => {
-    const base = annualNet[baseIdx];
-    if (base == null) return columns.map(() => null);
-    return annualNet.map((v, i) =>
-      i === baseIdx || v == null ? null : base - v,
-    );
-  }, [annualNet, columns]);
+  // The Total Annual Value strip used to read these numbers. The new
+  // cost-positive renderer computes both the per-column cost and the
+  // savings-vs-baseline inline from realAnnualCost / annualBreakdown,
+  // so the intermediate `annualNet` and `savingsVsBaseline` memos were
+  // removed in 2026-04-30 to avoid dead-code lint failures.
 
   // ── Annual Review (AEP) verdict ─────────────────────────────────
   // When isAnnualReview && a current plan is pinned, compute:
@@ -1873,19 +1898,27 @@ export function QuoteDeliveryV4({
                 return (
                   <th
                     key={col.id}
+                    // Force the variant colour with `!important` via a
+                    // ref. React's style prop can't emit `!important`
+                    // directly, and the live deploy was rendering
+                    // header cells white because something in the
+                    // cascade (Tailwind preflight on table elements,
+                    // or a parent .pm4 reset) won the specificity
+                    // battle. setProperty with the third "important"
+                    // arg guarantees the variant colour wins.
+                    ref={(el) => {
+                      if (!el) return;
+                      el.style.setProperty('background', s.headerBg, 'important');
+                      el.style.setProperty('background-color', s.headerBg, 'important');
+                      el.style.setProperty('background-image', 'none', 'important');
+                      el.style.setProperty('color', s.headerFg, 'important');
+                    }}
                     style={{
                       width: PLAN_W,
                       minWidth: PLAN_W,
                       padding: 14,
                       textAlign: 'left',
                       verticalAlign: 'top',
-                      // Use the `background` shorthand AND explicit
-                      // backgroundColor so the cell paints the variant
-                      // colour even when border-collapse: collapse on the
-                      // outer table strips other styling layers. Some
-                      // browsers ignore backgroundColor alone on <th>
-                      // when the table has collapsed borders + no
-                      // explicit non-transparent shorthand.
                       background: s.headerBg,
                       backgroundColor: s.headerBg,
                       backgroundImage: 'none',
@@ -2288,18 +2321,38 @@ export function QuoteDeliveryV4({
                 // Prefer the playbook's realAnnualCost (premium + drugs +
                 // medical visits + supplies + ER risk + hospital risk,
                 // capped at MOOP, − giveback). Falls back to the older
-                // "extras − cost" annualNet when realAnnualCost hasn't
-                // populated yet (initial render before brain ready).
+                // breakdown when realAnnualCost hasn't populated yet
+                // (initial render before brain ready). Both flow into a
+                // single positive cost number — never render a negative
+                // dollar value: a "−$629/yr" total reads as nonsense to
+                // brokers and clients. Cost is always $X/yr (>= 0).
                 const real = col.scored?.realAnnualCost ?? null;
-                const annual = real ? real.netAnnual : (annualNet[ci] ?? 0);
-                const baselineReal = columns[baseIdx]?.scored?.realAnnualCost?.netAnnual ?? null;
-                const savings = real && baselineReal != null
-                  ? baselineReal - annual
-                  : (savingsVsBaseline[ci] ?? 0);
+                const breakdown = annualBreakdown[ci];
+                // Cost-positive convention. realAnnualCost.netAnnual is
+                // already a positive cost. The fallback breakdown
+                // computes total = -(cost - value); we flip the sign so
+                // the strip always renders the projected annual outlay.
+                const annualCost = real
+                  ? Math.max(0, Math.round(real.netAnnual))
+                  : breakdown
+                    ? Math.max(0, Math.round((breakdown.rx + breakdown.premium) - (breakdown.giveback + breakdown.dental + breakdown.vision + breakdown.hearing + breakdown.otc + breakdown.food)))
+                    : 0;
+                const baselineCost = (() => {
+                  const baseCol = columns[baseIdx];
+                  if (!baseCol) return null;
+                  const baseReal = baseCol.scored?.realAnnualCost?.netAnnual;
+                  if (typeof baseReal === 'number') return Math.max(0, Math.round(baseReal));
+                  const baseB = annualBreakdown[baseIdx];
+                  if (!baseB) return null;
+                  return Math.max(0, Math.round((baseB.rx + baseB.premium) - (baseB.giveback + baseB.dental + baseB.vision + baseB.hearing + baseB.otc + baseB.food)));
+                })();
+                const savings = baselineCost != null && ci !== baseIdx
+                  ? baselineCost - annualCost
+                  : 0;
                 const tooltip = real
                   ? formatRealAnnualCostBreakdown(real)
                   : (() => {
-                      const b = annualBreakdown[ci];
+                      const b = breakdown;
                       if (!b) return '';
                       const parts: string[] = [];
                       parts.push(`Rx $${b.rx.toLocaleString()}`);
@@ -2308,8 +2361,7 @@ export function QuoteDeliveryV4({
                       if (b.dental > 0)   parts.push(`− Dental $${b.dental.toLocaleString()}`);
                       if (b.otc > 0)      parts.push(`− OTC $${b.otc.toLocaleString()}`);
                       if (b.food > 0)     parts.push(`− Food $${b.food.toLocaleString()}`);
-                      const annualVal = annualNet[ci] ?? 0;
-                      parts.push(`= $${Math.abs(annualVal).toLocaleString()}/yr ${annualVal < 0 ? 'cost' : 'value'}`);
+                      parts.push(`= $${annualCost.toLocaleString()}/yr cost`);
                       return parts.join(' ');
                     })();
                 return (
@@ -2328,9 +2380,7 @@ export function QuoteDeliveryV4({
                       cursor: tooltip ? 'help' : 'default',
                     }}
                   >
-                    {real
-                      ? `$${annual.toLocaleString()}/yr`
-                      : `${annual < 0 ? '−' : ''}$${Math.abs(annual).toLocaleString()}/yr`}
+                    {`$${annualCost.toLocaleString()}/yr`}
                     {!isCurrent && savings > 0 && (
                       <span style={{ fontSize: 9, marginLeft: 6, opacity: 0.85 }}>saves ${Math.round(savings).toLocaleString()}</span>
                     )}
