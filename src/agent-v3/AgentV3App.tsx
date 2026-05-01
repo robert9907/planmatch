@@ -21,7 +21,6 @@
 // chrome stays in sync without an extra reducer.
 
 import { useEffect, useMemo, useState } from 'react';
-import { useDrugCosts } from '@/hooks/useDrugCosts';
 import { usePlanBrain } from '@/hooks/usePlanBrain';
 import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
@@ -169,22 +168,42 @@ export function AgentV3App() {
     weightOverride,
   });
 
-  // ── Live drug-cost prime ─────────────────────────────────────────
-  const drugCosts = useDrugCosts(eligiblePlans, medications, 'retail');
+  // ── Drug-cost map sourced from pm_drug_cost_cache ────────────────
+  // Earlier versions threaded useDrugCosts → /api/drug-costs, which
+  // does a Playwright scrape of medicare.gov. Akamai now blocks the
+  // scrape (POST .../drugs/cost times out at 30s on Vercel) and the
+  // stale error gets cached for 5 min, so the swipe deck never sees
+  // costs.
+  //
+  // /api/plan-brain-data already returns the structured pm_drug_cost_cache
+  // slice (per-plan, per-NDC yearly totals) from Supabase — same source
+  // the scrape would write to on a hit. We aggregate per plan: sum
+  // estimated_yearly_total across NDCs, divide by 12 for monthly.
+  // Plans with no cached rows render "—" gracefully (the swipe card
+  // and pinned plan both already handle that).
   const annualDrugByPlanId = useMemo<Record<string, number | null>>(() => {
     const out: Record<string, number | null> = {};
-    for (const [planId, c] of Object.entries(drugCosts.byPlanId)) {
-      out[planId] = c.annual_cost ?? null;
+    if (!brain.data) return out;
+    for (const [planId, ndcMap] of Object.entries(brain.data.drugCostCache)) {
+      let total = 0;
+      let any = false;
+      for (const row of Object.values(ndcMap)) {
+        if (typeof row.estimated_yearly_total === 'number') {
+          total += row.estimated_yearly_total;
+          any = true;
+        }
+      }
+      out[planId] = any ? total : null;
     }
     return out;
-  }, [drugCosts.byPlanId]);
+  }, [brain.data]);
   const monthlyDrugByPlanId = useMemo<Record<string, number | null>>(() => {
     const out: Record<string, number | null> = {};
-    for (const [planId, c] of Object.entries(drugCosts.byPlanId)) {
-      out[planId] = c.monthly_cost ?? null;
+    for (const [planId, annual] of Object.entries(annualDrugByPlanId)) {
+      out[planId] = annual != null ? Math.round(annual / 12) : null;
     }
     return out;
-  }, [drugCosts.byPlanId]);
+  }, [annualDrugByPlanId]);
 
   // ── Brain rank derivatives ───────────────────────────────────────
   // Brain pick = highest-ranked plan that ISN'T the client's current
