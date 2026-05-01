@@ -17,6 +17,12 @@ export interface Client {
   state: StateCode | null;
   planType: PlanType | null;
   medicaidConfirmed: boolean;
+  // Optional — collected by the agent-v3 IntakeScreen. Existing v4
+  // intake doesn't capture these yet, so they stay optional to avoid
+  // forcing a backfill across older session payloads / AgentBase
+  // hydration paths.
+  email?: string;
+  mbi?: string;
 }
 
 export interface Medication {

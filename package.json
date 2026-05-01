@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:full": "vercel dev",
     "build": "npm run lint && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -25,7 +26,7 @@
     "playwright-core": "^1.59.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "twilio": "^5.3.3",
+    "twilio": "^5.13.1",
     "twilio-video": "^2.34.0",
     "zustand": "^4.5.5"
   },

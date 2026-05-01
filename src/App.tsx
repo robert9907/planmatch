@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { CaptureApp } from '@/capture/CaptureApp';
 import { WatchApp } from '@/watch/WatchApp';
+import { AgentV3App } from '@/agent-v3/AgentV3App';
 import { ProviderVerificationDrawer } from '@/components/verification/ProviderVerificationDrawer';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { useVerificationsQueue } from '@/hooks/useVerificationsQueue';
@@ -17,6 +18,10 @@ import { QuotePage } from '@/v4/QuotePage';
 export default function App() {
   if (isCaptureRoute()) return <CaptureApp />;
   if (isWatchRoute()) return <WatchApp />;
+  // /agent-v3 → in-progress redesign of the agent quoting flow. Kept
+  // behind a path prefix so the existing v4 BrokerApp at / is
+  // untouched and Rob can compare side-by-side during review.
+  if (isAgentV3Route()) return <AgentV3App />;
   return <BrokerApp />;
 }
 
@@ -28,6 +33,11 @@ function isCaptureRoute(): boolean {
 function isWatchRoute(): boolean {
   if (typeof window === 'undefined') return false;
   return window.location.pathname.startsWith('/watch/');
+}
+
+function isAgentV3Route(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.location.pathname.startsWith('/agent-v3');
 }
 
 // The broker app now lives entirely inside the v4 WorkflowShell — top
