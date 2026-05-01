@@ -14,10 +14,29 @@ import type { Plan } from '@/types/plans';
 
 type Store = ReturnType<typeof useSession.getState>;
 
-// Verbatim from the reference jsx. Names align with what RxNav returns
-// for the strength + form combos so useResolveRxcuis can fill rxcuis
-// in the background — we don't hard-code rxcui values here so a future
-// RxNav id change doesn't silently break the seed.
+// Verbatim from the reference jsx, with rxcuis pinned to the
+// strength-correct concepts that pm_formulary indexes. The pinning
+// matters because:
+//
+//   • RxNav's parsed-strength field on injectables uses volume notation
+//     ("3 ML", "0.25 MG") that doesn't match user-friendly "1mg/0.75mL"
+//     — useResolveRxcuis can't fall back to a strength-match for
+//     Ozempic Pen Injector, only for SCD oral tablets.
+//   • rerankByCoverage in /api/rxnorm-search probes pm_formulary with
+//     a single .in() call capped at PostgREST's 1000-row page; sibling
+//     rxcuis on the same ingredient tree (e.g. lisinopril 40 MG vs
+//     lisinopril 20 MG) get truncated unevenly. The "covered" bucket
+//     can omit the strength-correct rxcui and the resolver picks the
+//     wrong one.
+//
+// Pinning here insulates the demo from both classes of resolution
+// noise. Rxcuis verified against pm_formulary via /api/plan-brain-data
+// — every entry has at least one tier+copay row across Durham-NC plans.
+//
+// Updates (May 2026): if RxNav reassigns or pm_formulary rotates the
+// canonical rxcui, refresh by querying:
+//   /api/plan-brain-data?ids=<plan-ids>&rxcuis=<candidate>
+// and confirming a row comes back.
 export const ROBERT_SEED = {
   client: {
     name: 'Robert Johnson',
@@ -37,24 +56,31 @@ export const ROBERT_SEED = {
       strength: '1mg/0.75mL',
       dosageInstructions: 'Weekly',
       source: 'manual' as const,
+      // 3 ML semaglutide 1.34 MG/ML Pen Injector [Ozempic] — delivers
+      // 1 MG per dose at the maintenance strength. pm_formulary
+      // typically files this at Tier 3 with prior auth.
+      rxcui: '2398842',
     },
     {
       name: 'Lisinopril',
       strength: '20mg',
       dosageInstructions: 'Daily',
       source: 'manual' as const,
+      rxcui: '314077', // lisinopril 20 MG Oral Tablet — Tier 1 / $0
     },
     {
       name: 'Atorvastatin',
       strength: '40mg',
       dosageInstructions: 'Daily',
       source: 'manual' as const,
+      rxcui: '617311', // atorvastatin 40 MG Oral Tablet — Tier 1 / $0
     },
     {
       name: 'Gabapentin',
       strength: '300mg',
       dosageInstructions: '2x Daily',
       source: 'manual' as const,
+      rxcui: '197321', // gabapentin 300 MG Oral Capsule — Tier 2-3
     },
   ],
   providers: [

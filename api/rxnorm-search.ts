@@ -552,28 +552,31 @@ async function annotateCoverage(drugs: RxNormDrug[]): Promise<RxNormDrug[]> {
 
 // Stable rerank that promotes covered rxcuis without disrupting the
 // existing brand-match / form / strength order within each coverage
-// bucket. Three buckets:
+// bucket. Two buckets:
 //
-//   1. covered + brand-match    (both > 0 indicators)
-//   2. covered (any tty)
-//   3. uncovered
+//   1. covered (any pm_formulary row exists for this rxcui)
+//   2. uncovered
 //
-// Within each bucket, the original rank() order is preserved.
+// Within each bucket the original rank() order is preserved verbatim.
+//
+// Why no count-based tiebreaker: the coverage probe in
+// annotateCoverage() reads up to PostgREST's 1000-row page from
+// pm_formulary across the candidate set. When one rxcui's rows fill
+// the page first, sibling rxcuis on the same ingredient tree get
+// truncated to count=0 even though they ARE in pm_formulary. Sorting
+// by count would then float the page-saturated row above a strength-
+// matched (but page-truncated) row — so a search for "Lisinopril 20mg"
+// would surface lisinopril 40 MG above lisinopril 20 MG, breaking
+// resolution for both manual searches and the agent-v3 seeded meds.
+// Binary "covered? y/n" is the only signal we can trust from a
+// non-aggregate `.in()` probe.
 function rerankByCoverage(drugs: RxNormDrug[]): RxNormDrug[] {
   const indexed = drugs.map((d, i) => ({ d, i }));
   indexed.sort((a, b) => {
     const aCov = (a.d.formulary_coverage ?? 0) > 0 ? 1 : 0;
     const bCov = (b.d.formulary_coverage ?? 0) > 0 ? 1 : 0;
     if (aCov !== bCov) return bCov - aCov;
-    // Both covered or both uncovered — within "covered", prefer the
-    // higher coverage count (Ozempic 2398842 with 677 vs an obscure
-    // sibling SBD with 5).
-    if (aCov === 1) {
-      const ac = a.d.formulary_coverage ?? 0;
-      const bc = b.d.formulary_coverage ?? 0;
-      if (ac !== bc) return bc - ac;
-    }
-    // Stable: preserve original rank order within the bucket.
+    // Stable: preserve original rank() order within the bucket.
     return a.i - b.i;
   });
   return indexed.map((x) => x.d);
