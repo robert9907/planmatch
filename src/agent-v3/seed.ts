@@ -85,9 +85,15 @@ export const ROBERT_SEED = {
   ],
   providers: [
     {
+      // Spec-faithful display name + group, but the NPI is swapped from
+      // the mockup's fake 1234567890 to a real cached Klein-named
+      // internist (Kombiz Klein, NPI 1619976297) so
+      // pm_provider_network_cache returns hit/miss rows for Durham
+      // plans instead of all "?". 13 rows, in-network on 7 of 13
+      // Durham contract-plans as of May 2026.
       name: 'Dr. Combats',
       specialty: 'PCP · Klein Internal Medicine',
-      npi: '1234567890',
+      npi: '1619976297',
       source: 'manual' as const,
     },
   ],

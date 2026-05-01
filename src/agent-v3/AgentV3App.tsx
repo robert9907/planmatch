@@ -84,6 +84,7 @@ export function AgentV3App() {
   const providers = useSession((s) => s.providers);
   const currentPlanId = useSession((s) => s.currentPlanId);
   const setCurrentPlanId = useSession((s) => s.setCurrentPlanId);
+  const updateProvider = useSession((s) => s.updateProvider);
   const checked = useSession((s) => s.complianceChecked);
   const confirmed = useSession((s) => s.disclaimersConfirmed);
 
@@ -167,6 +168,43 @@ export function AgentV3App() {
     userPriorities: userPriorityKeys,
     weightOverride,
   });
+
+  // ── Provider network hydration ────────────────────────────────────
+  // brain.data.networkByPlan already carries pm_provider_network_cache
+  // rows for every (plan, npi) pair — it's part of the same Supabase
+  // payload the brain itself uses. Mirror those rows into
+  // useSession.providers[*].networkStatus so PinnedPlan + SwipeCard
+  // (which read provider.networkStatus[plan.id]) light up immediately,
+  // without requiring a visit to the Providers screen first. The
+  // Providers screen still runs its own checkNetworkBatch on mount
+  // for the staggered Queued → Checking → Verified animation; that's
+  // additive — same data source, just animated.
+  useEffect(() => {
+    if (!brain.data) return;
+    const networkByPlan = brain.data.networkByPlan;
+    for (const provider of providers) {
+      if (!provider.npi) continue;
+      const next: Record<string, 'in' | 'out' | 'unknown'> = {
+        ...(provider.networkStatus ?? {}),
+      };
+      let changed = false;
+      for (const [planTriple, byNpi] of Object.entries(networkByPlan)) {
+        const row = byNpi[provider.npi];
+        if (!row) continue;
+        const status: 'in' | 'out' | 'unknown' =
+          row.covered === true ? 'in' : row.covered === false ? 'out' : 'unknown';
+        if (next[planTriple] !== status) {
+          next[planTriple] = status;
+          changed = true;
+        }
+      }
+      if (changed) updateProvider(provider.id, { networkStatus: next });
+    }
+    // Intentionally not depending on `providers` — we only react to
+    // brain.data refreshes. Re-running on every providers update would
+    // create a write→read loop with updateProvider.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brain.data]);
 
   // ── Drug-cost map sourced from pm_drug_cost_cache ────────────────
   // Earlier versions threaded useDrugCosts → /api/drug-costs, which
