@@ -3,17 +3,20 @@
 // Mockup chrome ported verbatim. Live wires:
 //   • screen nav   → AgentV3App's setScreen
 //   • view toggle  → cosmetic (controls AgentInsight visibility)
-//   • phone        → AgentV3App opens/closes the PhonePanel; the
-//                    button color reflects the live softphone state
-//                    (idle vs connecting/ringing/connected) so the
-//                    broker can see the call status without opening
-//                    the panel
+//   • Call ↗       → opens AgentBase CRM in a new tab. PlanMatch does
+//                    not place voice calls; the broker dials from
+//                    AgentBase. This button is just a deep-link so the
+//                    workflow doesn't require switching tabs by hand.
 //   • share cycle  → useScreenShareStore.start / stop. The mockup
 //                    cycles off → desktop → mobile, but the existing
 //                    share backend is a single Twilio Video Room
 //                    (no desktop/mobile distinction yet) so we collapse
-//                    that to off → on. Documented in screenShareLabel
-//                    so a future split is a single-place change.
+//                    that to off → on. When sharing is live the button
+//                    flips to a red "Stop sharing" pill with a pulsing
+//                    dot, and an SMS-status banner immediately below
+//                    surfaces the /api/screen-share-start outcome (sent
+//                    to +E.164 / failed with copy-link fallback) so a
+//                    silent SMS failure is impossible to miss.
 //   • compliance   → percent of Object.values(checks).filter(Boolean)
 //                    forwarded by AgentV3App. Bar turns green at 100%.
 //   • AgentBase ↗  → opens robert9907/agentbase-crm in a new tab. The
@@ -22,7 +25,7 @@
 //                    just a quick-jump to the CRM dashboard so the
 //                    broker can verify a hydrated client mid-call.
 
-import type { SoftphoneState } from '@/hooks/useSoftphone';
+import { useState } from 'react';
 
 // Aligned with reference/plan-match-agent-full.jsx: 8 screens. The
 // previous waterfall (Results → Report → Compare) collapses into a
@@ -68,16 +71,25 @@ interface Props {
   onNav: (s: ScreenId) => void;
   clientView: boolean;
   onToggleView: () => void;
-  phoneActive: boolean;
-  phoneState: SoftphoneState;
-  onTogglePhone: () => void;
   shareOn: boolean;
   shareStarting: boolean;
+  /** True when the API returned smsFailed for the active share. */
+  shareSmsFailed: boolean;
+  /** E.164 destination the API attempted; null when no result yet. */
+  shareSmsTo: string | null;
+  /** Last error from useScreenShareStore.start (catastrophic failure
+   *  before the room came up — distinct from smsFailed). */
+  shareError: string | null;
+  /** Public /watch/{roomId} link for the active share. Surfaced as a
+   *  copy-link fallback when SMS delivery fails. */
+  shareLink: string | null;
   onCycleShare: () => void;
   complianceProgress: number;
   /** Brain pick + user-kept plans, capped at FINALIST_CAP. */
   finalistCount: number;
-  /** href for the "AgentBase ↗" jump link. Defaults to the prod CRM. */
+  /** href for the "AgentBase ↗" jump link AND the new "Call" button.
+   *  Defaults to the prod CRM where the broker actually places the
+   *  call. */
   agentBaseHref?: string;
 }
 
@@ -86,31 +98,91 @@ export function AgentBar({
   onNav,
   clientView,
   onToggleView,
-  phoneActive,
-  phoneState,
-  onTogglePhone,
   shareOn,
   shareStarting,
+  shareSmsFailed,
+  shareSmsTo,
+  shareError,
+  shareLink,
   onCycleShare,
   complianceProgress,
   finalistCount,
   agentBaseHref = 'https://agentbase-crm.vercel.app/',
 }: Props) {
-  // The phone button reflects the live softphone state so the broker
-  // doesn't need to open the panel to see they're on a call.
-  const phoneLive = phoneState === 'connected' || phoneState === 'on-hold';
-  const phoneLabel = phoneLive
-    ? 'On Call'
-    : phoneState === 'ringing' || phoneState === 'connecting'
-      ? 'Ringing…'
-      : phoneActive
-        ? 'Open'
-        : 'Call';
-  const phoneHot = phoneLive || phoneActive;
+  const [linkCopied, setLinkCopied] = useState(false);
 
   const shareLabel = shareStarting ? 'Starting…' : shareOn ? 'Sharing' : 'Share';
 
+  async function copyShareLink() {
+    if (!shareLink) return;
+    try {
+      await navigator.clipboard.writeText(shareLink);
+      setLinkCopied(true);
+      window.setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      // Clipboard API can be blocked by older Safari permissions; fall
+      // back to a window.prompt so the broker can still grab the link.
+      window.prompt('Copy this link to send to the client:', shareLink);
+    }
+  }
+
+  // Status banner shown immediately under the bar when a share is
+  // active or has just failed. Three states:
+  //   • shareError    — start failed before the room came up
+  //   • shareSmsFailed — room is up, broker is sharing, but Twilio
+  //                      rejected the SMS. Show a copy-link button so
+  //                      the broker can paste the URL into iMessage.
+  //   • shareOn       — happy path, SMS delivered.
+  const banner = shareError ? (
+    <div style={SHARE_BANNER_BASE} role="alert">
+      <span>⚠ Share failed: {shareError}</span>
+    </div>
+  ) : shareOn && shareSmsFailed ? (
+    <div
+      style={{
+        ...SHARE_BANNER_BASE,
+        background: '#7f1d1d',
+        color: '#fecaca',
+      }}
+      role="alert"
+    >
+      <span>
+        SMS to {shareSmsTo ?? 'client'} failed — copy the link and send
+        it manually.
+      </span>
+      {shareLink && (
+        <button
+          type="button"
+          onClick={copyShareLink}
+          style={SHARE_BANNER_BTN}
+        >
+          {linkCopied ? '✓ Copied' : 'Copy link'}
+        </button>
+      )}
+    </div>
+  ) : shareOn ? (
+    <div
+      style={{
+        ...SHARE_BANNER_BASE,
+        background: '#064e3b',
+        color: '#a7f3d0',
+      }}
+    >
+      <span>✓ SMS sent to {shareSmsTo ?? 'client'} — they can join now.</span>
+      {shareLink && (
+        <button
+          type="button"
+          onClick={copyShareLink}
+          style={SHARE_BANNER_BTN}
+        >
+          {linkCopied ? '✓ Copied' : 'Copy link'}
+        </button>
+      )}
+    </div>
+  ) : null;
+
   return (
+    <>
     <div
       style={{
         background: 'linear-gradient(135deg, #0a1628 0%, #0d2f5e 100%)',
@@ -188,29 +260,33 @@ export function AgentBar({
         ))}
       </div>
 
-      {/* Right: Phone + Screen Share + Readiness + AgentBase */}
+      {/* Right: Call (deep-link) + Screen Share + Readiness + AgentBase */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        {/* Phone */}
-        <button
-          type="button"
-          onClick={onTogglePhone}
+        {/* Call — voice happens in AgentBase, not here. This is just a
+            deep-link to the CRM so the broker doesn't have to swap tabs
+            by hand mid-quote. Open in a named tab so repeat clicks
+            focus the existing AgentBase window instead of stacking. */}
+        <a
+          href={agentBaseHref}
+          target="agentbase-crm"
+          rel="noreferrer"
+          title="Place the call in AgentBase CRM"
           style={{
-            background: phoneHot
-              ? 'rgba(52,211,153,0.2)'
-              : 'rgba(255,255,255,0.06)',
-            border: `1px solid ${phoneHot ? '#34d399' : 'rgba(255,255,255,0.15)'}`,
+            background: 'rgba(255,255,255,0.06)',
+            border: '1px solid rgba(255,255,255,0.15)',
             borderRadius: 6,
             padding: '4px 10px',
             fontSize: 12,
             cursor: 'pointer',
-            color: phoneHot ? '#34d399' : 'rgba(255,255,255,0.5)',
+            color: 'rgba(255,255,255,0.5)',
             display: 'flex',
             alignItems: 'center',
             gap: 5,
+            textDecoration: 'none',
           }}
         >
-          📞 {phoneLabel}
-        </button>
+          📞 Call ↗
+        </a>
 
         {/* Screen Share. When active the button flips to a red
             "Stop sharing" affordance with a pulsing dot — same visual
@@ -317,5 +393,33 @@ export function AgentBar({
         </a>
       </div>
     </div>
+    {banner}
+    </>
   );
 }
+
+const SHARE_BANNER_BASE = {
+  position: 'sticky' as const,
+  top: 38,
+  zIndex: 99,
+  padding: '6px 16px',
+  fontSize: 12,
+  fontWeight: 600,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  background: '#7f1d1d',
+  color: '#fecaca',
+};
+
+const SHARE_BANNER_BTN = {
+  background: 'rgba(255,255,255,0.15)',
+  border: '1px solid rgba(255,255,255,0.3)',
+  borderRadius: 4,
+  padding: '2px 10px',
+  fontSize: 11,
+  fontWeight: 700,
+  color: 'inherit',
+  cursor: 'pointer',
+};

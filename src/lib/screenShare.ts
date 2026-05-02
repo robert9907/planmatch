@@ -21,6 +21,10 @@ export interface ShareStartResult {
   brokerToken: string;
   smsFailed: boolean;
   smsError?: string;
+  /** E.164-normalized destination the API attempted to text. Surfaced
+   *  so the UI can show "SMS sent to +19195550147" or, on failure,
+   *  "SMS to +19195550147 failed — copy link". */
+  smsTo?: string;
   link: string;
 }
 

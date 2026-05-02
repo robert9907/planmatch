@@ -8,7 +8,6 @@
 // the AgentBar counters and downstream screens stay coherent):
 //   • screen           — current page id
 //   • clientView       — Agent vs Client display toggle
-//   • phoneOpen        — softphone panel visibility
 //   • eligiblePlans    — county/state plan catalog (one fetch)
 //   • brainResult      — usePlanBrain output (one ranking)
 //   • drugCosts        — useDrugCosts output (one prime)
@@ -19,12 +18,16 @@
 // Compliance progress + finalist counter are derived (not stored) off
 // the same useSession + local state the screens read, so the AgentBar
 // chrome stays in sync without an extra reducer.
+//
+// Voice calls are not handled here — the broker dials from AgentBase
+// (the AgentBar "Call" button is now a deep-link to the CRM). PlanMatch
+// owns screen sharing only; AgentBase owns the call. Two apps, one
+// session.
 
 import { useEffect, useMemo, useState } from 'react';
 import { usePlanBrain } from '@/hooks/usePlanBrain';
 import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
-import { useSoftphone } from '@/hooks/useSoftphone';
 import { useScreenShareStore } from '@/hooks/useScreenShare';
 import { fetchPlansForClient } from '@/lib/planCatalog';
 import { totalComplianceItems } from '@/lib/compliance';
@@ -36,7 +39,6 @@ import { CompareScreen } from './CompareScreen';
 import { EnrollScreen } from './EnrollScreen';
 import { IntakeScreen } from './IntakeScreen';
 import { MedsScreen } from './MedsScreen';
-import { PhonePanel } from './PhonePanel';
 import { PrioritiesScreen, type PriorityKey } from './PrioritiesScreen';
 import { ProvidersScreen } from './ProvidersScreen';
 import { SwipeScreen } from './SwipeScreen';
@@ -73,7 +75,6 @@ const DEFAULT_PRIORITIES: PriorityKey[] = [
 export function AgentV3App() {
   const [screen, setScreen] = useState<ScreenId>('intake');
   const [clientView, setClientView] = useState(false);
-  const [phoneOpen, setPhoneOpen] = useState(false);
   const [priorities, setPriorities] = useState<PriorityKey[]>(DEFAULT_PRIORITIES);
   const [kept, setKept] = useState<Plan[]>([]);
   const [eliminated, setEliminated] = useState<Plan[]>([]);
@@ -101,12 +102,11 @@ export function AgentV3App() {
     applyClientSeed(useSession.getState());
   }, []);
 
-  // Single softphone instance for the whole shell.
-  const phone = useSoftphone({ enabled: true });
-
   // Screen-share store — collapses the spec's three-way cycle to start/stop.
   const shareActive = useScreenShareStore((s) => Boolean(s.active));
   const shareStarting = useScreenShareStore((s) => s.starting);
+  const shareError = useScreenShareStore((s) => s.error);
+  const shareResult = useScreenShareStore((s) => s.result);
   const startShare = useScreenShareStore((s) => s.start);
   const stopShare = useScreenShareStore((s) => s.stop);
 
@@ -329,6 +329,14 @@ export function AgentV3App() {
     if (shareActive) {
       void stopShare('agent-v3 share toggle');
     } else {
+      // Fail fast when the broker hasn't captured a phone yet — the API
+      // would 400 with "clientPhone required" and the UI would silently
+      // surface no SMS. Surfacing an alert is intentionally crude:
+      // share is a deliberate, in-call action, not a background hum.
+      if (!client.phone || client.phone.trim() === '') {
+        window.alert('Add a client phone on the Client screen first — the SMS link can\'t go anywhere without it.');
+        return;
+      }
       void startShare({
         clientPhone: client.phone,
         clientFirstName: client.name.split(' ')[0] || undefined,
@@ -360,38 +368,18 @@ export function AgentV3App() {
         onNav={setScreen}
         clientView={clientView}
         onToggleView={() => setClientView((v) => !v)}
-        phoneActive={phoneOpen}
-        phoneState={phone.state}
-        onTogglePhone={() => setPhoneOpen((o) => !o)}
         shareOn={shareActive}
         shareStarting={shareStarting}
+        shareSmsFailed={Boolean(shareResult?.smsFailed)}
+        shareSmsTo={shareResult?.smsTo ?? null}
+        shareError={shareError}
+        shareLink={shareResult?.link ?? null}
         onCycleShare={onCycleShare}
         complianceProgress={complianceProgress}
         finalistCount={finalistCount}
       />
 
-      <PhonePanel
-        active={phoneOpen}
-        onClose={() => setPhoneOpen(false)}
-        clientName={client.name}
-        clientPhone={client.phone}
-        state={phone.state}
-        duration={phone.duration}
-        muted={phone.muted}
-        error={phone.error}
-        call={phone.call}
-        hangup={phone.hangup}
-        toggleMute={phone.toggleMute}
-        toggleHold={phone.toggleHold}
-        sendDtmf={phone.sendDtmf}
-      />
-
-      <div
-        style={{
-          marginRight: phoneOpen ? 300 : 0,
-          transition: 'margin-right 0.3s',
-        }}
-      >
+      <div>
         {screen === 'intake' && (
           <IntakeScreen onNext={() => setScreen('meds')} />
         )}

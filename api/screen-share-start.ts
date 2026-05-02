@@ -68,17 +68,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const smsBody =
       `${greeting}${brokerName} is sharing their screen so you can follow along. ` +
       `Tap to view: ${link}\n\nThis link works for the next hour. Reply STOP to opt out.`;
+    const normalizedTo = normalizePhone(clientPhone);
     try {
-      await sendSms({ to: normalizePhone(clientPhone), body: smsBody });
+      await sendSms({ to: normalizedTo, body: smsBody });
     } catch (smsErr) {
       // SMS failure shouldn't block the share — the broker can read the
       // link aloud. Tag the response so the UI can surface a warning.
+      // Log loudly server-side so Vercel logs show the Twilio error
+      // (invalid To, unverified trial number, A2P 10DLC rejection, etc.)
+      // — without this the failure is silent end-to-end.
+      const errMsg = (smsErr as Error).message ?? String(smsErr);
+      console.error(
+        `[screen-share-start] SMS to ${normalizedTo} failed: ${errMsg}`,
+      );
       return sendJson(res, 200, {
         roomId,
         roomSid: room.sid,
         brokerToken,
         smsFailed: true,
-        smsError: (smsErr as Error).message,
+        smsError: errMsg,
+        smsTo: normalizedTo,
         link,
       });
     }
@@ -88,6 +97,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       roomSid: room.sid,
       brokerToken,
       smsFailed: false,
+      smsTo: normalizedTo,
       link,
     });
   } catch (err) {
