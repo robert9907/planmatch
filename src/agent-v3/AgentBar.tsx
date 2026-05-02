@@ -212,27 +212,45 @@ export function AgentBar({
           📞 {phoneLabel}
         </button>
 
-        {/* Screen Share */}
+        {/* Screen Share. When active the button flips to a red
+            "Stop sharing" affordance with a pulsing dot — same visual
+            language MiniSoftphone uses on /compare so the broker
+            recognizes "I am live" at a glance. */}
         <button
           type="button"
           onClick={onCycleShare}
           disabled={shareStarting}
+          title={shareOn ? 'Click to stop sharing' : 'Share screen with the client'}
           style={{
             background: shareOn
-              ? 'rgba(131,240,249,0.15)'
+              ? 'rgba(239,68,68,0.18)'
               : 'rgba(255,255,255,0.06)',
-            border: `1px solid ${shareOn ? 'rgba(131,240,249,0.3)' : 'rgba(255,255,255,0.15)'}`,
+            border: `1px solid ${shareOn ? '#ef4444' : 'rgba(255,255,255,0.15)'}`,
             borderRadius: 6,
             padding: '4px 10px',
             fontSize: 12,
             cursor: shareStarting ? 'wait' : 'pointer',
-            color: shareOn ? '#83f0f9' : 'rgba(255,255,255,0.5)',
+            color: shareOn ? '#fecaca' : 'rgba(255,255,255,0.5)',
             display: 'flex',
             alignItems: 'center',
-            gap: 5,
+            gap: 6,
           }}
         >
-          🖥 {shareLabel}
+          {shareOn ? (
+            <span
+              aria-hidden
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: '#ef4444',
+                animation: 'pma3-pulse 1.2s ease-in-out infinite',
+              }}
+            />
+          ) : (
+            <span aria-hidden>🖥</span>
+          )}
+          {shareOn ? 'Stop sharing' : shareLabel}
         </button>
 
         {/* Compliance readiness */}

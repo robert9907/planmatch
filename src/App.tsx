@@ -18,9 +18,9 @@ import { QuotePage } from '@/v4/QuotePage';
 export default function App() {
   if (isCaptureRoute()) return <CaptureApp />;
   if (isWatchRoute()) return <WatchApp />;
-  // /agent-v3 → in-progress redesign of the agent quoting flow. Kept
-  // behind a path prefix so the existing v4 BrokerApp at / is
-  // untouched and Rob can compare side-by-side during review.
+  // /agent-v3 is now the primary agent experience (vercel.json
+  // redirects / → /agent-v3). The v4 BrokerApp stays reachable at
+  // /compare for parity checks and as a fallback during the cutover.
   if (isAgentV3Route()) return <AgentV3App />;
   return <BrokerApp />;
 }

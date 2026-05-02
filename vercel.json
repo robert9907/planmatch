@@ -10,7 +10,7 @@
   },
   "redirects": [
     { "source": "/test", "destination": "/compare", "statusCode": 301 },
-    { "source": "/", "destination": "/compare", "statusCode": 301 }
+    { "source": "/", "destination": "/agent-v3", "statusCode": 302 }
   ],
   "rewrites": [
     { "source": "/capture/:token", "destination": "/index.html" },
