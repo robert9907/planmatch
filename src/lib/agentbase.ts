@@ -174,8 +174,61 @@ export async function fetchClientDetail(
   id: string,
   signal?: AbortSignal,
 ): Promise<AgentBaseClientDetail | null> {
+  return fetchDetailFrom(`/api/clients/${encodeURIComponent(id)}`, signal);
+}
+
+/** AgentBase-facing variant — hits /api/client-session?clientId=…
+ *  Same payload shape as fetchClientDetail; the separate URL exists so
+ *  the AgentBase deep-link contract (?clientId=) is stable independent
+ *  of the internal /api/clients/[id] route. Used by AgentV3App when
+ *  it sees a `clientId` query param on mount. Returns null on 404 /
+ *  network failure; surfaces non-OK errors via the second tuple
+ *  element so the caller can show the broker the API message instead
+ *  of a generic "couldn't load". */
+export async function fetchClientSession(
+  clientId: string,
+  signal?: AbortSignal,
+): Promise<{ detail: AgentBaseClientDetail | null; error: string | null }> {
   try {
-    const res = await fetch(`/api/clients/${encodeURIComponent(id)}`, {
+    const res = await fetch(
+      `/api/client-session?clientId=${encodeURIComponent(clientId)}`,
+      { method: 'GET', headers: { Accept: 'application/json' }, signal },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      const msg = `client-session ${res.status}: ${body.slice(0, 200)}`;
+      console.warn('[agentbase]', msg);
+      return { detail: null, error: msg };
+    }
+    const body = (await res.json()) as {
+      client: unknown;
+      medications: unknown[];
+      providers: unknown[];
+    };
+    return {
+      detail: {
+        client: deriveDetail(body.client),
+        medications: (body.medications ?? []) as AgentBaseClientDetail['medications'],
+        providers: (body.providers ?? []) as AgentBaseClientDetail['providers'],
+      },
+      error: null,
+    };
+  } catch (err) {
+    if ((err as { name?: string })?.name === 'AbortError') {
+      return { detail: null, error: null };
+    }
+    const msg = (err as Error).message ?? String(err);
+    console.warn('[agentbase] session fetch errored:', msg);
+    return { detail: null, error: msg };
+  }
+}
+
+async function fetchDetailFrom(
+  url: string,
+  signal?: AbortSignal,
+): Promise<AgentBaseClientDetail | null> {
+  try {
+    const res = await fetch(url, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       signal,
