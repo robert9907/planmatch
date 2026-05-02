@@ -2,12 +2,17 @@
 // browser-based calling from PlanMatch.
 //
 // Flow:
-//   1. On mount, fetch a Voice access token from /api/softphone-token,
-//      construct a Device, and register so incoming calls (rare for
-//      a broker tool) are accepted.
-//   2. Call(phoneNumber) → Device.connect({ params: { To } }) — TwiML
-//      App on AgentBase routes the call via <Dial>{To}</Dial>.
-//   3. State machine: idle → ringing → connected → on-hold → idle.
+//   1. The Device is NOT constructed on mount. `new Device()` builds an
+//      AudioHelper that probes audio in/out, which Chrome's autoplay
+//      policy treats as needing a user gesture; constructing on mount
+//      logs "The AudioContext was not allowed to start" in the console
+//      every page load. We defer construction to the first call() so
+//      the Device is born inside the click handler's gesture chain.
+//   2. call(phoneNumber) → ensureDevice() (lazy mint + register) →
+//      Device.connect({ params: { To } }) — the TwiML App on AgentBase
+//      routes the call via <Dial>{To}</Dial>.
+//   3. State machine: idle → connecting → ringing → connected →
+//      on-hold → idle.
 //   4. Token auto-refresh ~5 minutes before expiry; updateToken() on
 //      the live Device avoids tearing down an active call.
 //   5. Fail-soft: any error logs + sets `error`, never throws past
@@ -39,8 +44,9 @@ interface TokenResponse {
 interface UseSoftphoneArgs {
   /** Default broker identity for the token. Server caps to 64 chars. */
   identity?: string;
-  /** Auto-init on mount. Disable when the broker hasn't reached a
-   *  page that needs the softphone yet (saves a token fetch). */
+  /** Reserved for future use. Device construction is now lazy (first
+   *  call), so passing false is a no-op — kept for call-site stability
+   *  with the previous mount-time-init API. */
   enabled?: boolean;
 }
 
@@ -74,9 +80,14 @@ function normalizeForDial(raw: string): string {
 }
 
 export function useSoftphone(args: UseSoftphoneArgs = {}): UseSoftphoneApi {
-  const { identity: requestedIdentity, enabled = true } = args;
+  const { identity: requestedIdentity } = args;
 
-  const [state, setState] = useState<SoftphoneState>('unavailable');
+  // Initial state is 'idle' (not 'unavailable') so the AgentBar phone
+  // button + PhonePanel "Call" button render in their ready styling
+  // before the Device exists. The first call() invocation will lazily
+  // mint the token and construct the Device; if that fails we flip to
+  // 'unavailable' at that point.
+  const [state, setState] = useState<SoftphoneState>('idle');
   const [muted, setMuted] = useState(false);
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -125,68 +136,60 @@ export function useSoftphone(args: UseSoftphoneArgs = {}): UseSoftphoneApi {
     }, refreshAt);
   }, [fetchToken]);
 
-  // Init pass: token → Device → register. Cleanup unregisters and
-  // destroys so a hot-reload or component unmount doesn't leak a
-  // ghost device that keeps fielding incoming calls.
+  // Lazy device construction — runs from inside the call() handler so
+  // the AudioHelper that `new Device()` builds is created from a user
+  // gesture. Subsequent calls reuse the same Device.
+  const ensureDevice = useCallback(async (): Promise<Device | null> => {
+    if (deviceRef.current) return deviceRef.current;
+    try {
+      const tk = await fetchToken();
+      const device = new Device(tk.token, {
+        // Keep the codec list small — Opus is the modern default,
+        // PCMU is the universal fallback.
+        codecPreferences: ['opus' as Call.Codec, 'pcmu' as Call.Codec],
+        // Don't auto-answer incoming calls; the broker may not want
+        // a stray call to interrupt a screen-share.
+        allowIncomingWhileBusy: false,
+      });
+
+      device.on('registered', () => {
+        setState((s) => (s === 'unavailable' ? 'idle' : s));
+        setError(null);
+      });
+      device.on('error', (err) => {
+        console.warn('[softphone] device error:', err?.message ?? err);
+        setError(err?.message ?? 'softphone error');
+        // Don't set 'unavailable' on every transient error — most
+        // are recoverable (network blip during refresh, codec
+        // negotiation hiccup). Only flip to unavailable when we
+        // genuinely lose the device.
+      });
+      device.on('incoming', (call: Call) => {
+        // PlanMatch is broker-outbound-only; reject incoming calls
+        // so a stray AgentBase route doesn't ring the broker
+        // mid-quote. A future build can hook this for a "ringing"
+        // toast; for now keep the contract narrow.
+        call.reject();
+      });
+
+      await device.register();
+      deviceRef.current = device;
+      setIdentity(tk.identity);
+      scheduleRefresh(tk.ttlSeconds);
+      return device;
+    } catch (err) {
+      console.warn('[softphone] init failed:', (err as Error).message);
+      setError((err as Error).message);
+      setState('unavailable');
+      return null;
+    }
+  }, [fetchToken, scheduleRefresh]);
+
+  // Cleanup-only effect — destroys the lazily-constructed Device on
+  // unmount / hot reload so we don't leak a ghost that keeps fielding
+  // incoming calls.
   useEffect(() => {
-    if (!enabled) return;
-    let cancelled = false;
-    let device: Device | null = null;
-
-    (async () => {
-      try {
-        const tk = await fetchToken();
-        if (cancelled) return;
-        device = new Device(tk.token, {
-          // Keep the codec list small — Opus is the modern default,
-          // PCMU is the universal fallback.
-          codecPreferences: ['opus' as Call.Codec, 'pcmu' as Call.Codec],
-          // Don't auto-answer incoming calls; the broker may not want
-          // a stray call to interrupt a screen-share.
-          allowIncomingWhileBusy: false,
-        });
-
-        device.on('registered', () => {
-          if (cancelled) return;
-          setState('idle');
-          setError(null);
-        });
-        device.on('error', (err) => {
-          console.warn('[softphone] device error:', err?.message ?? err);
-          if (cancelled) return;
-          setError(err?.message ?? 'softphone error');
-          // Don't set 'unavailable' on every transient error — most
-          // are recoverable (network blip during refresh, codec
-          // negotiation hiccup). Only flip to unavailable when we
-          // genuinely lose the device.
-        });
-        device.on('incoming', (call: Call) => {
-          // PlanMatch is broker-outbound-only; reject incoming calls
-          // so a stray AgentBase route doesn't ring the broker
-          // mid-quote. A future build can hook this for a "ringing"
-          // toast; for now keep the contract narrow.
-          call.reject();
-        });
-
-        await device.register();
-        if (cancelled) {
-          device.destroy();
-          return;
-        }
-        deviceRef.current = device;
-        setIdentity(tk.identity);
-        scheduleRefresh(tk.ttlSeconds);
-      } catch (err) {
-        console.warn('[softphone] init failed:', (err as Error).message);
-        if (!cancelled) {
-          setError((err as Error).message);
-          setState('unavailable');
-        }
-      }
-    })();
-
     return () => {
-      cancelled = true;
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = null;
@@ -199,12 +202,13 @@ export function useSoftphone(args: UseSoftphoneArgs = {}): UseSoftphoneApi {
         try { callRef.current.disconnect(); } catch { /* noop */ }
         callRef.current = null;
       }
+      const device = deviceRef.current;
       if (device) {
         try { device.destroy(); } catch { /* noop */ }
       }
       deviceRef.current = null;
     };
-  }, [enabled, fetchToken, scheduleRefresh]);
+  }, []);
 
   // Wire a fresh Call object to our state machine + timers. Pulled
   // out so call() and a future incoming-call path share one path.
@@ -245,11 +249,6 @@ export function useSoftphone(args: UseSoftphoneArgs = {}): UseSoftphoneApi {
 
   const call = useCallback(async (phoneNumber: string) => {
     setError(null);
-    const device = deviceRef.current;
-    if (!device) {
-      setError('softphone not ready');
-      return;
-    }
     if (callRef.current) {
       // Already on a call — caller must hang up first. This guards
       // against an accidental double-click on a phone number link
@@ -261,6 +260,10 @@ export function useSoftphone(args: UseSoftphoneArgs = {}): UseSoftphoneApi {
       setError(`invalid phone number: ${phoneNumber}`);
       return;
     }
+    // Lazy mint inside the click-handler chain so AudioContext can
+    // start. ensureDevice handles its own setError on failure.
+    const device = await ensureDevice();
+    if (!device) return;
     try {
       // Twilio.Device.connect returns a Promise<Call>. The TwiML App
       // sees `params.To` and dials it via <Dial><Number>{To}</Number>.
@@ -270,7 +273,7 @@ export function useSoftphone(args: UseSoftphoneArgs = {}): UseSoftphoneApi {
       console.warn('[softphone] connect failed:', (err as Error).message);
       setError((err as Error).message);
     }
-  }, [attachCall]);
+  }, [ensureDevice, attachCall]);
 
   const hangup = useCallback(() => {
     const c = callRef.current;
