@@ -1,23 +1,27 @@
-// broker-rules — 12 rules a human Medicare broker would apply on top
-// of the raw composite score. Run AFTER axis scoring + provider boost,
+// broker-rules — rules a human Medicare broker would apply on top of
+// the raw composite score. Run AFTER axis scoring + provider boost,
 // BEFORE final ranking. Each rule sees one plan + one client profile
 // and returns a score adjustment + a human-readable reason.
 //
 // The rules encode broker judgment that pure cost math misses:
 //   • a C-SNP is the right answer for a diabetic if their PCP is in-
 //     network, even if a cheaper MAPD scores higher on the OOP axis
-//   • a CHF patient should never land on a $9k MOOP plan, period
+//   • any plan with a $5K+ MOOP is exposed; tiered penalty applies,
+//     unless every med is on the plan's lowest tier AND the primary
+//     provider is in-network
 //   • a healthy client with a Part B giveback walks away with cash
 //
 // Each rule has:
 //   id            — stable identifier (UI uses this to format reasons)
 //   action        — 'boost' (+points) | 'penalize' (-points) | 'flag'
-//   points        — composite-score adjustment (flags don't move score)
-//   reason        — broker-voice one-liner shown under "Why switch?"
+//   points        — composite-score adjustment (flags don't move score);
+//                   may be a fn(plan, profile, ctx, scored) for tiered rules
+//   reason        — broker-voice one-liner shown under "Why switch?";
+//                   may be a fn(...) when the wording depends on the bracket
 //   match         — pure predicate; given (plan, profile, ctx) → bool
 //
-// flags surface in UI but don't change ranking. Rule 5 (single cost
-// driver) and Rule 11 (COPD inhaler) are flags, not boosts.
+// Flags surface in UI but don't change ranking. single_cost_driver
+// and copd_inhaler_decider are flags, not boosts.
 
 import type { Plan } from '@/types/plans';
 import type { Medication, Provider } from '@/types/session';
@@ -46,6 +50,15 @@ export interface RuleContext {
   // Per-plan per-medication annual drug cost in dollars, keyed by
   // rxcui. plan-brain populates this from its own drug-cost loop.
   drugCostByRxcui: Record<string, number>;
+  // Per-plan per-medication formulary tier, keyed by rxcui. Missing
+  // entry = med wasn't placed on a tier (off-formulary or unpriced).
+  tierByRxcui: Record<string, number>;
+  // Lowest tier number the plan files in pbp_benefits (typically 1,
+  // 0 when the plan has a Select Care preferred-generic tier).
+  lowestTierOnPlan: number;
+  // True when the client's primary provider (first in the providers
+  // array) is confirmed in-network on this plan.
+  primaryProviderInNetwork: boolean;
 }
 
 export interface RuleApplication {
@@ -55,12 +68,17 @@ export interface RuleApplication {
   reason: string;
 }
 
+type RuleArgs = [Plan, ClientProfile, RuleContext, ScoredPlan];
+
 interface Rule {
   id: string;
   action: RuleAction;
-  points: number;
-  reason: string;
-  match: (plan: Plan, profile: ClientProfile, ctx: RuleContext, scored: ScoredPlan) => boolean;
+  // Static when the magnitude is the same every time the rule fires;
+  // function when a single rule covers tiered brackets (e.g. MOOP
+  // penalty). The function form is evaluated only after match() is true.
+  points: number | ((...args: RuleArgs) => number);
+  reason: string | ((...args: RuleArgs) => string);
+  match: (...args: RuleArgs) => boolean;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────
@@ -73,6 +91,24 @@ function isCSNP(plan: Plan): boolean {
 function isPPO(plan: Plan): boolean {
   const blob = `${plan.plan_name ?? ''}`.toUpperCase();
   return /\bPPO\b/.test(blob);
+}
+
+// MOOP penalty: $5,001–$6,500 → -50, $6,501+ → -75. Returns 0 below
+// the threshold, including the boundary at exactly $5,000.
+function moopPenaltyPoints(moop: number): number {
+  if (moop <= 5000) return 0;
+  if (moop <= 6500) return 50;
+  return 75;
+}
+
+// Override: cancels the MOOP penalty when BOTH (a) every priced
+// medication landed on the plan's lowest-cost tier AND (b) the
+// client's primary provider is in-network. Either alone is not enough.
+function moopPenaltyOverridden(profile: ClientProfile, ctx: RuleContext): boolean {
+  if (!ctx.primaryProviderInNetwork) return false;
+  const rxcuis = profile.medications.map((m) => m.rxcui).filter((x): x is string => !!x);
+  if (rxcuis.length === 0) return false;
+  return rxcuis.every((id) => ctx.tierByRxcui[id] === ctx.lowestTierOnPlan);
 }
 
 function hasDiabeticSupplies(rows: BenefitRow[]): boolean {
@@ -106,14 +142,6 @@ const RULES: Rule[] = [
     reason: 'No diabetic-supplies coverage — strips, monitors, lancets billed under Part B only',
     match: (_plan, profile, ctx) =>
       profile.conditionSet.has('diabetes') && !hasDiabeticSupplies(ctx.benefits),
-  },
-  {
-    id: 'chf_high_moop',
-    action: 'penalize',
-    points: 20,
-    reason: 'CHF patient on a $5K+ MOOP plan — readmissions hit MOOP fast',
-    match: (plan, profile) =>
-      profile.conditionSet.has('chf') && (plan.moop_in_network ?? 0) > 5000,
   },
   {
     id: 'chf_csnp_in_network',
@@ -163,14 +191,6 @@ const RULES: Rule[] = [
       profile.isNewlyEligible && scored.extrasScore >= 75,
   },
   {
-    id: 'chronic_at_moop_ceiling',
-    action: 'penalize',
-    points: 25,
-    reason: 'RED FLAG — chronic condition + MOOP at the CMS regulatory ceiling',
-    match: (plan, profile) =>
-      profile.hasChronicCondition && (plan.moop_in_network ?? 0) >= 7550,
-  },
-  {
     id: 'insulin_with_cap',
     action: 'boost',
     points: 10,
@@ -191,6 +211,20 @@ const RULES: Rule[] = [
     reason: 'Star rating below 3.0 — CMS underperformer, expect call-center pain',
     match: (plan) => (plan.star_rating ?? 5) < 3.0 && (plan.star_rating ?? 0) > 0,
   },
+  {
+    id: 'moop_penalty',
+    action: 'penalize',
+    // Tiered: -50 at $5,001–$6,500, -75 above $6,500. Static $5,000
+    // boundary is intentionally inclusive (no penalty at exactly $5K).
+    points: (plan) => moopPenaltyPoints(plan.moop_in_network ?? 0),
+    reason: (plan) => {
+      const m = plan.moop_in_network ?? 0;
+      if (m > 6500) return `MOOP $${m.toLocaleString()} — high-exposure plan, large unbounded downside`;
+      return `MOOP $${m.toLocaleString()} — meaningful out-of-pocket exposure if utilization spikes`;
+    },
+    match: (plan, profile, ctx) =>
+      moopPenaltyPoints(plan.moop_in_network ?? 0) > 0 && !moopPenaltyOverridden(profile, ctx),
+  },
 ];
 
 export function applyBrokerRules(
@@ -202,7 +236,11 @@ export function applyBrokerRules(
   const out: RuleApplication[] = [];
   for (const rule of RULES) {
     if (rule.match(plan, profile, ctx, scored)) {
-      out.push({ ruleId: rule.id, action: rule.action, points: rule.points, reason: rule.reason });
+      const points =
+        typeof rule.points === 'function' ? rule.points(plan, profile, ctx, scored) : rule.points;
+      const reason =
+        typeof rule.reason === 'function' ? rule.reason(plan, profile, ctx, scored) : rule.reason;
+      out.push({ ruleId: rule.id, action: rule.action, points, reason });
     }
   }
   return out;

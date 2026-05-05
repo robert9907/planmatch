@@ -227,7 +227,14 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
     medicalLines: string[];
     extrasLines: string[];
     drugCostByRxcui: Record<string, number>;
+    tierByRxcui: Record<string, number>;
+    lowestTierOnPlan: number;
+    primaryProviderInNetwork: boolean;
   };
+
+  // First provider is treated as the primary unless the data layer
+  // someday adds an explicit primary flag.
+  const primaryNpi = providers[0]?.npi ?? null;
 
   const rows: Row[] = eligible.map((plan) => {
     const benefits = data.benefitsByPlan[plan.id] ?? [];
@@ -250,6 +257,9 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
       userPriorities: inputs.userPriorities ?? [],
     });
     const networkStatus = computeNetworkStatus(plan, providers, data);
+    const planNetwork = data.networkByPlan[plan.id] ?? {};
+    const primaryProviderInNetwork =
+      primaryNpi != null && planNetwork[primaryNpi]?.covered === true;
     const totalOOP = medicalRes.cost + drugRes.cost;
     return {
       plan,
@@ -263,6 +273,9 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
       medicalLines: medicalRes.lines,
       extrasLines: extrasRes.lines,
       drugCostByRxcui: drugRes.byRxcui,
+      tierByRxcui: drugRes.tierByRxcui,
+      lowestTierOnPlan: drugRes.lowestTier,
+      primaryProviderInNetwork,
     };
   });
 
@@ -329,6 +342,9 @@ export function runPlanBrain(inputs: PlanBrainInputs): PlanBrainResult {
     const applied = applyBrokerRules(s.plan, s, clientProfile, {
       benefits: data.benefitsByPlan[s.plan.id] ?? [],
       drugCostByRxcui: r.drugCostByRxcui,
+      tierByRxcui: r.tierByRxcui,
+      lowestTierOnPlan: r.lowestTierOnPlan,
+      primaryProviderInNetwork: r.primaryProviderInNetwork,
     });
     const delta = netRulePoints(applied);
     s.appliedRules = applied;
@@ -632,19 +648,35 @@ function computeDrugCost({
   medications: Medication[];
   data: PlanBrainInputs['data'];
   benefits: BenefitRow[];
-}): { cost: number; uncovered: string[]; lines: string[]; byRxcui: Record<string, number> } {
-  if (medications.length === 0) return { cost: 0, uncovered: [], lines: [], byRxcui: {} };
+}): {
+  cost: number;
+  uncovered: string[];
+  lines: string[];
+  byRxcui: Record<string, number>;
+  tierByRxcui: Record<string, number>;
+  lowestTier: number;
+} {
+  const tierCosts = readTierCopays(benefits);
+  // Lowest tier the plan files in pbp_benefits — usually 1, sometimes 0
+  // when the plan offers a Select Care preferred-generic tier.
+  const planTierNums = Object.keys(tierCosts)
+    .map((k) => Number(k))
+    .filter((n) => Number.isFinite(n));
+  const lowestTier = planTierNums.length > 0 ? Math.min(...planTierNums) : 1;
+
+  if (medications.length === 0)
+    return { cost: 0, uncovered: [], lines: [], byRxcui: {}, tierByRxcui: {}, lowestTier };
 
   const tripleId = plan.id;
   const contractPlan = `${plan.contract_id}-${plan.plan_number}`;
   const cache = data.drugCostCache[tripleId] ?? {};
   const formulary = data.formularyByContractPlan[contractPlan] ?? {};
-  const tierCosts = readTierCopays(benefits);
 
   let total = 0;
   const uncovered: string[] = [];
   const lines: string[] = [];
   const byRxcui: Record<string, number> = {};
+  const tierByRxcui: Record<string, number> = {};
 
   for (const med of medications) {
     if (!med.rxcui) continue;
@@ -702,10 +734,11 @@ function computeDrugCost({
     if (drugAnnual == null) drugAnnual = 0;
     total += drugAnnual;
     byRxcui[med.rxcui] = drugAnnual;
+    if (tierUsed != null) tierByRxcui[med.rxcui] = tierUsed;
     lines.push(`${med.name} ($${Math.round(drugAnnual)}/yr${tierUsed ? `, tier ${tierUsed}` : ''})`);
   }
 
-  return { cost: total, uncovered, lines, byRxcui };
+  return { cost: total, uncovered, lines, byRxcui, tierByRxcui, lowestTier };
 }
 
 function looksLikeInsulin(med: Medication): boolean {
