@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSession } from '@/hooks/useSession';
 import { CurrentPlanPicker } from '@/components/picker/CurrentPlanPicker';
+import { buildPlanMatchWizardUrl } from '@/lib/planMatchWizard';
 import type { PlanType, StateCode } from '@/types/session';
 
 const STATE_OPTIONS: StateCode[] = ['NC', 'TX', 'GA'];
@@ -220,6 +221,15 @@ export function IntakePage({ onContinue, onBack }: Props) {
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
           <button type="button" className="btn out" onClick={onBack}>← Back</button>
+          <button
+            type="button"
+            className="btn out"
+            disabled={!client.name || !client.phone}
+            onClick={() => window.open(buildPlanMatchWizardUrl(client), '_blank', 'noopener')}
+            title="Opens the Plan Match enrollment wizard in a new tab, pre-filled with this client's data."
+          >
+            Plan Match enrollment ↗
+          </button>
           <button type="button" className="btn sea" disabled={!canContinue} onClick={onContinue}>
             Continue to Medications →
           </button>
