@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "mg:scrape": "node scripts/scrape-medicare-gov.mjs",
-    "db:migrate:print": "cat scripts/migrations/001_pbp_benefits.sql"
+    "db:migrate:print": "cat scripts/migrations/001_pbp_benefits.sql",
+    "provider:fhir-lookup": "tsx scripts/fhir-provider-lookup.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",

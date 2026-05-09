@@ -1,0 +1,738 @@
+// scripts/fhir-provider-lookup.ts
+//
+// Aggregates FHIR Provider Directory data across MA carriers for a
+// single NPI and upserts in-network rows into pm_provider_network_cache.
+//
+// Public (no-auth) carriers wired now:
+//   - UHC      https://flex.optum.com/fhirpublic/R4
+//   - Humana   https://fhir.humana.com/api
+//   - Devoted  https://fhir.devoted.com/fhir
+//   - Cigna    https://fhir.cigna.com/ProviderDirectory/v1
+//
+// Gated carriers stubbed (enabled=false until creds arrive):
+//   - Aetna     OAuth client_credentials at apif1.aetna.com
+//   - Wellcare  partners.centene.com registration
+//   - Alignment Azure B2C registration
+//
+// Per-carrier flow:
+//   1. Find PractitionerRole records that reference the NPI.
+//      - Strategy A (most carriers):   Practitioner?identifier=...us-npi|NPI
+//                                      → PractitionerRole?practitioner=PRAC_ID
+//      - Strategy B (Cigna):           PractitionerRole?identifier=NPI
+//                                      (Cigna's CapabilityStatement omits
+//                                      identifier on Practitioner, so go
+//                                      direct on PractitionerRole)
+//   2. Extract Organization references from the
+//      `network-reference` PDEX extension on each role.
+//   3. Build network → contract_plan map by paginating the carrier's
+//      InsurancePlan resources (cached in-memory per run).
+//   4. Emit { npi, carrier, plan_contract_id, network_name, in_network: true }
+//   5. Upsert into pm_provider_network_cache with covered=true,
+//      segment_id='0' (FHIR doesn't expose CMS segments; '0' is the
+//      conventional default — segmented plans need separate handling).
+//
+// Run:
+//   npx tsx scripts/fhir-provider-lookup.ts --npi=1619976297 --dry-run
+//   npx tsx scripts/fhir-provider-lookup.ts --npi=1619976297              (writes)
+//   npx tsx scripts/fhir-provider-lookup.ts --npi=1619976297 --carrier=uhc
+//   npx tsx scripts/fhir-provider-lookup.ts --npi=1619976297 --state=NC
+//
+// Requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in env (or .env.local).
+
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { readFileSync, existsSync } from 'node:fs';
+
+// ─── Env ──────────────────────────────────────────────────────────
+function loadEnv() {
+  if (!existsSync('.env.local')) return;
+  for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
+    const m = line.match(/^([A-Z_][A-Z0-9_]*)=("?)([^"\n]*)\2$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[3];
+  }
+}
+loadEnv();
+
+// ─── CLI ──────────────────────────────────────────────────────────
+function getArg(name: string): string | undefined {
+  const eq = process.argv.find((a) => a.startsWith(`--${name}=`));
+  if (eq) return eq.slice(name.length + 3);
+  const idx = process.argv.indexOf(`--${name}`);
+  if (idx >= 0 && process.argv[idx + 1] && !process.argv[idx + 1].startsWith('--')) {
+    return process.argv[idx + 1];
+  }
+  return undefined;
+}
+const NPI = getArg('npi');
+const STATE = getArg('state')?.toUpperCase();
+const ONLY_CARRIER = getArg('carrier')?.toLowerCase();
+const NAME_ARG = getArg('name'); // "Family,Given" — required for carriers like Wellcare
+const DRY_RUN = process.argv.includes('--dry-run');
+const VERBOSE = process.argv.includes('--verbose');
+
+if (!NPI || !/^\d{10}$/.test(NPI)) {
+  console.error('Usage: npx tsx scripts/fhir-provider-lookup.ts --npi=<10-digit NPI> [--name=Family,Given] [--state=NC] [--carrier=uhc|humana|devoted|cigna|wellcare] [--dry-run] [--verbose]');
+  process.exit(1);
+}
+
+const NAME_PARTS = (() => {
+  if (!NAME_ARG) return null;
+  const [family, given] = NAME_ARG.split(',').map((s) => s.trim());
+  if (!family || !given) {
+    console.error('--name must be "Family,Given" (e.g. --name=Klein,Kombiz)');
+    process.exit(1);
+  }
+  return { family, given };
+})();
+
+// ─── Carrier config ───────────────────────────────────────────────
+type LookupStrategy =
+  | 'practitioner-then-role'
+  | 'role-by-identifier'
+  | 'role-by-chained-practitioner-identifier'
+  // Centene/Wellcare: Practitioner has no identifier search and chained
+  // search is rejected. Search by name → filter response client-side by
+  // NPI → query PractitionerRole with prefixed reference (Practitioner/<id>).
+  | 'name-then-role-with-prefixed-ref';
+
+interface CarrierConfig {
+  name: string;
+  baseUrl: string;
+  enabled: boolean;
+  strategy: LookupStrategy;
+  // Encode identifier as `system|value` (Humana/UHC/Devoted) or just the value (some servers strict).
+  npiSystem: string;
+  notes?: string;
+}
+
+const CARRIERS: CarrierConfig[] = [
+  {
+    name: 'uhc',
+    baseUrl: 'https://flex.optum.com/fhirpublic/R4',
+    enabled: true,
+    strategy: 'practitioner-then-role',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+  },
+  {
+    name: 'humana',
+    baseUrl: 'https://fhir.humana.com/api',
+    enabled: true,
+    strategy: 'practitioner-then-role',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+  },
+  {
+    name: 'devoted',
+    baseUrl: 'https://fhir.devoted.com/fhir',
+    enabled: true,
+    strategy: 'practitioner-then-role',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+  },
+  {
+    name: 'cigna',
+    baseUrl: 'https://fhir.cigna.com/ProviderDirectory/v1',
+    enabled: true,
+    strategy: 'role-by-chained-practitioner-identifier',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+    notes: 'CapabilityStatement omits identifier on Practitioner AND PractitionerRole. Chained search PractitionerRole?practitioner.identifier=… works in practice.',
+  },
+  // ─── Gated carriers — enable when creds land ────────────────
+  {
+    name: 'aetna',
+    baseUrl: 'https://apif1.aetna.com/fhir/v1/providerdirectory',
+    enabled: false,
+    strategy: 'practitioner-then-role',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+    notes: 'OAuth2 client_credentials required. Token: https://apif1.aetna.com/fhir/v1/fhirserver_auth/oauth2/token',
+  },
+  {
+    // Discovered via the partner-portal SPA: the Angular bundle at
+    // partners.centene.com/main.<hash>.esm.js leaks
+    // `https://external-api.my.centene.com/partner-portal`, whose `/apis`
+    // endpoint is unauthenticated and lists every Centene FHIR API host.
+    // The "FHIR - Provider Directory" entry (no auth, no scopes) points
+    // to `https://prod.api.centene.com/fhir/providerdirectory`.
+    // Verified Klein (NPI 1619976297) findable here. Two complications:
+    //   (1) Their CapabilityStatement omits `identifier` on Practitioner
+    //       AND PractitionerRole, AND chained
+    //       `PractitionerRole?practitioner.identifier=…` returns 400.
+    //       The only path is name-search → fan out — so this strategy
+    //       requires a `--name=family,given` CLI flag (not implemented
+    //       yet; left disabled to avoid silent zeroes).
+    //   (2) Their network Organizations are named like "Exchange NC" or
+    //       "Do Not Use - WCG National HMO" — these don't carry CMS
+    //       H-format identifiers, so plan_contract_id resolution will
+    //       need a separate Centene network → CMS contract mapping.
+    name: 'wellcare',
+    baseUrl: 'https://prod.api.centene.com/fhir/providerdirectory',
+    enabled: true,
+    strategy: 'name-then-role-with-prefixed-ref',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+    notes: 'Requires --name=Family,Given (server has no NPI search). Networks emit display names like "Exchange NC" / "Do Not Use - WCG National HMO" — InsurancePlan resource is empty on this endpoint, so plan_contract_id will be null and no cache rows are written until a Centene network → CMS contract mapping table is built. Auto-fetches name from NPPES if --name omitted.',
+  },
+  {
+    name: 'alignment',
+    baseUrl: '',
+    enabled: false,
+    strategy: 'practitioner-then-role',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+    notes: 'No public FHIR base URL discovered. Interop page (alignmenthealth.com/interoperability-apis) only links to a B2C-blob doc with HL7 spec references; provider-search SPA (providersearch.alignmenthealthplan.com) is React with a self-contained backend (/api/* returns SPA shell, not FHIR); DNS sweep of fhir.*/api.* alignmenthealth.com|alignmenthealthplan.com|alignmenthealthcare.com all NXDOMAIN; B2C tenant guesses (alignmenthealth/ahcb2c/ahcprod/etc.) all 404. Likely behind Azure B2C with a non-discoverable tenant name — registration via the developer portal still required.',
+  },
+];
+
+// ─── FHIR types we care about ─────────────────────────────────────
+interface Reference { reference?: string; display?: string }
+interface Identifier { system?: string; value?: string }
+interface Extension {
+  url: string;
+  valueReference?: Reference;
+  valueCodeableConcept?: unknown;
+  extension?: Extension[];
+}
+interface PractitionerRole {
+  resourceType: 'PractitionerRole';
+  id: string;
+  identifier?: Identifier[];
+  extension?: Extension[];
+  practitioner?: Reference;
+  organization?: Reference;
+  location?: Reference[];
+}
+interface Practitioner {
+  resourceType: 'Practitioner';
+  id: string;
+  identifier?: Identifier[];
+  name?: Array<{ text?: string; family?: string; given?: string[] }>;
+}
+interface InsurancePlan {
+  resourceType: 'InsurancePlan';
+  id: string;
+  identifier?: Identifier[];
+  name?: string;
+  network?: Reference[];
+}
+interface Bundle<T = unknown> {
+  resourceType: 'Bundle';
+  type?: string;
+  total?: number;
+  link?: Array<{ relation: string; url: string }>;
+  entry?: Array<{ fullUrl?: string; resource: T }>;
+}
+
+// ─── HTTP ─────────────────────────────────────────────────────────
+const NETWORK_REF_URL = 'http://hl7.org/fhir/us/davinci-pdex-plan-net/StructureDefinition/network-reference';
+const REQUEST_TIMEOUT_MS = 30_000;
+
+async function fhirGet<T = unknown>(url: string): Promise<T | null> {
+  const ctl = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const res = await fetch(url, {
+    headers: { Accept: 'application/fhir+json' },
+    signal: ctl,
+  });
+  if (!res.ok) {
+    if (VERBOSE) console.warn(`  [http ${res.status}] ${url}`);
+    return null;
+  }
+  return (await res.json()) as T;
+}
+
+function buildSearchUrl(base: string, resource: string, params: Record<string, string>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) q.append(k, v);
+  return `${base.replace(/\/$/, '')}/${resource}?${q.toString()}`;
+}
+
+async function* paginateBundle<T>(initialUrl: string, maxPages = 50): AsyncGenerator<Bundle<T>> {
+  let url: string | null = initialUrl;
+  for (let page = 0; page < maxPages && url; page++) {
+    const bundle = await fhirGet<Bundle<T>>(url);
+    if (!bundle) return;
+    yield bundle;
+    url = bundle.link?.find((l) => l.relation === 'next')?.url ?? null;
+  }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────
+
+// Strip the resource prefix and any base URL to isolate the id.
+//   "Organization/abc"                          → "abc"
+//   "https://x.com/api/Organization/abc"        → "abc"
+function refToId(ref: string | undefined): string | null {
+  if (!ref) return null;
+  const slash = ref.lastIndexOf('/');
+  return slash >= 0 ? ref.slice(slash + 1) : ref;
+}
+
+// Pull every network-reference Organization id off a PractitionerRole.
+function extractNetworkRefs(role: PractitionerRole): Array<{ id: string; display?: string }> {
+  const out: Array<{ id: string; display?: string }> = [];
+  for (const ext of role.extension ?? []) {
+    if (ext.url !== NETWORK_REF_URL) continue;
+    const id = refToId(ext.valueReference?.reference);
+    if (!id) continue;
+    out.push({ id, display: ext.valueReference?.display });
+  }
+  return out;
+}
+
+// CMS MA contract-plan from a freeform plan identifier.
+//   "H1290-001-000"        → "H1290-001"   (Devoted)
+//   "H7617-109-000-2026"   → "H7617-109"   (Humana)
+//   "H5420016000"          → "H5420-016"   (UHC: dashes stripped, contract+plan+segment concatenated)
+// Returns null when the value isn't a CMS H-style id (e.g. UHC commercial PPO/EPO).
+function extractContractPlan(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const dashed = raw.match(/^(H\d{4}-\d{3})\b/i);
+  if (dashed) return dashed[1].toUpperCase();
+  const concat = raw.match(/^(H\d{4})(\d{3})(?:\d{3})?$/i);
+  if (concat) return `${concat[1]}-${concat[2]}`.toUpperCase();
+  return null;
+}
+
+// Public NPPES lookup — used to auto-populate family/given for
+// strategies like Centene that can't be searched by NPI. Free, no auth.
+let nppesNameCache: { family: string; given: string } | null | undefined;
+async function nppesName(npi: string): Promise<{ family: string; given: string } | null> {
+  if (nppesNameCache !== undefined) return nppesNameCache;
+  try {
+    const r = await fetch(
+      `https://npiregistry.cms.hhs.gov/api/?number=${npi}&version=2.1`,
+      { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    );
+    if (!r.ok) { nppesNameCache = null; return null; }
+    const j = await r.json() as { results?: Array<{ basic?: { first_name?: string; last_name?: string } }> };
+    const b = j.results?.[0]?.basic;
+    if (!b?.first_name || !b?.last_name) { nppesNameCache = null; return null; }
+    nppesNameCache = { family: b.last_name, given: b.first_name };
+    return nppesNameCache;
+  } catch {
+    nppesNameCache = null;
+    return null;
+  }
+}
+
+// ─── Per-carrier lookup ───────────────────────────────────────────
+
+interface LookupResult {
+  carrier: string;
+  enabled: boolean;
+  found_practitioner: boolean;
+  practitioner_ids: string[];
+  practitioner_names: string[];
+  roles: number;
+  networks: Array<{ org_id: string; display?: string }>;
+  plans: Array<{
+    plan_contract_id: string;
+    plan_full_id: string;
+    plan_name?: string;
+    network_org_id: string;
+    network_display?: string;
+  }>;
+  notes: string[];
+  error?: string;
+}
+
+async function findRolesForNpi(c: CarrierConfig, npi: string): Promise<{
+  practitionerIds: string[];
+  practitionerNames: string[];
+  roles: PractitionerRole[];
+  notes: string[];
+}> {
+  const notes: string[] = [];
+  const tokenValue = `${c.npiSystem}|${npi}`;
+
+  if (c.strategy === 'role-by-chained-practitioner-identifier') {
+    // Cigna: chained search. PractitionerRole?practitioner.identifier=… traverses
+    // the reference and matches Practitioner.identifier server-side, even though
+    // their CapabilityStatement doesn't list identifier as a direct search param.
+    const url = buildSearchUrl(c.baseUrl, 'PractitionerRole', {
+      'practitioner.identifier': tokenValue,
+      _count: '100',
+    });
+    const roles: PractitionerRole[] = [];
+    for await (const bundle of paginateBundle<PractitionerRole>(url, 5)) {
+      for (const e of bundle.entry ?? []) if (e.resource) roles.push(e.resource);
+    }
+    notes.push(`PractitionerRole?practitioner.identifier=… (chained) → ${roles.length} role(s)`);
+    const pracIds = Array.from(new Set(
+      roles.map((r) => refToId(r.practitioner?.reference)).filter((x): x is string => !!x),
+    ));
+    return { practitionerIds: pracIds, practitionerNames: [], roles, notes };
+  }
+
+  if (c.strategy === 'name-then-role-with-prefixed-ref') {
+    // Centene/Wellcare. NPI search not supported anywhere; chained also rejected.
+    // Search Practitioner by family/given → keep only the records whose
+    // Practitioner.identifier carries our target NPI → for each match, query
+    // PractitionerRole using the FULL "Practitioner/<id>" reference (Centene
+    // returns 0 if you pass the bare id).
+    let nameParts: { family: string; given: string } | null = NAME_PARTS;
+    if (!nameParts) {
+      nameParts = await nppesName(npi);
+      if (nameParts) notes.push(`auto-fetched name from NPPES: ${nameParts.given} ${nameParts.family}`);
+    }
+    if (!nameParts) {
+      notes.push('SKIPPED: --name=Family,Given required and NPPES lookup failed');
+      return { practitionerIds: [], practitionerNames: [], roles: [], notes };
+    }
+    const url = buildSearchUrl(c.baseUrl, 'Practitioner', {
+      family: nameParts.family,
+      given: nameParts.given,
+      _count: '50',
+    });
+    const bundle = await fhirGet<Bundle<Practitioner>>(url);
+    const candidates = (bundle?.entry ?? []).map((e) => e.resource).filter(Boolean);
+    notes.push(`Practitioner?family=${nameParts.family}&given=${nameParts.given} → ${candidates.length} candidate(s)`);
+    const matches = candidates.filter((p) =>
+      (p.identifier ?? []).some((i) => i.system?.endsWith('us-npi') && i.value === npi),
+    );
+    if (matches.length === 0) {
+      notes.push('No candidates matched the target NPI');
+      return { practitionerIds: [], practitionerNames: [], roles: [], notes };
+    }
+    notes.push(`NPI-matched practitioners: ${matches.map((p) => p.id).join(', ')}`);
+    const practitionerIds = matches.map((p) => p.id);
+    const practitionerNames = Array.from(new Set(
+      matches.flatMap((p) => p.name?.map((n) => (n.text || `${(n.given ?? []).join(' ')} ${n.family ?? ''}`).trim()) ?? []),
+    )).filter(Boolean);
+
+    const roles: PractitionerRole[] = [];
+    for (const pid of practitionerIds) {
+      const roleUrl = buildSearchUrl(c.baseUrl, 'PractitionerRole', {
+        practitioner: `Practitioner/${pid}`, // CRITICAL: prefixed ref, bare id returns 0
+        _count: '100',
+      });
+      for await (const rb of paginateBundle<PractitionerRole>(roleUrl, 5)) {
+        for (const e of rb.entry ?? []) if (e.resource) roles.push(e.resource);
+      }
+    }
+    notes.push(`PractitionerRole?practitioner=Practitioner/<id> → ${roles.length} role(s)`);
+    return { practitionerIds, practitionerNames, roles, notes };
+  }
+
+  if (c.strategy === 'role-by-identifier') {
+    // PractitionerRole.identifier carries NPI directly. Try token form, then bare value.
+    let roles: PractitionerRole[] = [];
+    for (const ident of [tokenValue, npi]) {
+      const url = buildSearchUrl(c.baseUrl, 'PractitionerRole', { identifier: ident });
+      const bundle = await fhirGet<Bundle<PractitionerRole>>(url);
+      if (!bundle) continue;
+      const found = (bundle.entry ?? []).map((e) => e.resource).filter(Boolean);
+      if (found.length > 0) {
+        roles = found;
+        notes.push(`PractitionerRole?identifier=${ident.includes('|') ? 'system|value' : 'value'} → ${found.length} role(s)`);
+        break;
+      }
+    }
+    const pracIds = Array.from(new Set(
+      roles.map((r) => refToId(r.practitioner?.reference)).filter((x): x is string => !!x),
+    ));
+    return { practitionerIds: pracIds, practitionerNames: [], roles, notes };
+  }
+
+  // Default: Practitioner?identifier= → fan out to PractitionerRole?practitioner=
+  const pracUrl = buildSearchUrl(c.baseUrl, 'Practitioner', { identifier: tokenValue });
+  const pracBundle = await fhirGet<Bundle<Practitioner>>(pracUrl);
+  const practitioners = (pracBundle?.entry ?? []).map((e) => e.resource).filter(Boolean);
+  if (practitioners.length === 0) {
+    notes.push('Practitioner search returned 0 results');
+    return { practitionerIds: [], practitionerNames: [], roles: [], notes };
+  }
+  const practitionerIds = practitioners.map((p) => p.id);
+  const practitionerNames = Array.from(new Set(
+    practitioners.flatMap((p) => p.name?.map((n) => n.text || `${(n.given ?? []).join(' ')} ${n.family ?? ''}`.trim()) ?? []),
+  )).filter(Boolean);
+  notes.push(`Practitioner search → ${practitioners.length} record(s): ${practitionerIds.join(', ')}`);
+
+  // Pull roles per Practitioner.id (carriers vary on whether they accept comma-OR).
+  const roles: PractitionerRole[] = [];
+  for (const pid of practitionerIds) {
+    const roleUrl = buildSearchUrl(c.baseUrl, 'PractitionerRole', { practitioner: pid, _count: '50' });
+    for await (const bundle of paginateBundle<PractitionerRole>(roleUrl, 5)) {
+      for (const e of bundle.entry ?? []) if (e.resource) roles.push(e.resource);
+    }
+  }
+  notes.push(`PractitionerRole?practitioner=… → ${roles.length} role(s)`);
+  return { practitionerIds, practitionerNames, roles, notes };
+}
+
+interface PlanIndex {
+  byNetworkOrgId: Map<string, Array<{ plan_full_id: string; plan_contract_id: string; plan_name?: string }>>;
+  byNameLower: Map<string, Array<{ plan_full_id: string; plan_contract_id: string; plan_name?: string }>>;
+  totalPlans: number;
+}
+
+// Fetch every InsurancePlan from a carrier, building two indexes:
+//   1) network Organization id → plans (for direct-match carriers)
+//   2) lowercase plan name → plans  (fallback when PR.network refs are sub-networks
+//                                   whose Organization.name carries the plan name —
+//                                   UHC stores it this way)
+// Cached per-process per-carrier — first call pays the pagination cost, subsequent
+// NPI lookups in the same run reuse it.
+const PLAN_INDEX_CACHE = new Map<string, Promise<PlanIndex>>();
+
+async function buildPlanIndex(c: CarrierConfig): Promise<PlanIndex> {
+  const cached = PLAN_INDEX_CACHE.get(c.name);
+  if (cached) return cached;
+  const work = (async () => {
+    const byNetworkOrgId = new Map<string, Array<{ plan_full_id: string; plan_contract_id: string; plan_name?: string }>>();
+    const byNameLower = new Map<string, Array<{ plan_full_id: string; plan_contract_id: string; plan_name?: string }>>();
+    const initial = buildSearchUrl(c.baseUrl, 'InsurancePlan', { _count: '200' });
+    let totalPlans = 0;
+    for await (const bundle of paginateBundle<InsurancePlan>(initial, 100)) {
+      for (const e of bundle.entry ?? []) {
+        const ip = e.resource;
+        if (!ip) continue;
+        totalPlans++;
+        const planFullId = ip.identifier?.[0]?.value ?? ip.id;
+        const planContract = extractContractPlan(planFullId) ?? extractContractPlan(ip.id);
+        if (!planContract) continue;
+        const entry = { plan_full_id: planFullId, plan_contract_id: planContract, plan_name: ip.name };
+        for (const net of ip.network ?? []) {
+          const orgId = refToId(net.reference);
+          if (!orgId) continue;
+          const arr = byNetworkOrgId.get(orgId) ?? [];
+          arr.push(entry);
+          byNetworkOrgId.set(orgId, arr);
+        }
+        if (ip.name) {
+          const key = ip.name.toLowerCase().trim();
+          const arr = byNameLower.get(key) ?? [];
+          arr.push(entry);
+          byNameLower.set(key, arr);
+        }
+      }
+    }
+    if (VERBOSE) console.warn(`  [${c.name}] InsurancePlan index: ${totalPlans} plans → ${byNetworkOrgId.size} networks / ${byNameLower.size} names`);
+    return { byNetworkOrgId, byNameLower, totalPlans };
+  })();
+  PLAN_INDEX_CACHE.set(c.name, work);
+  return work;
+}
+
+// Fetch Organization resources for the given ids with bounded concurrency, returning
+// a Map<id, {name, partOf}>. Used to resolve PractitionerRole.network sub-orgs to
+// their human-readable plan names when the id-level join misses (UHC).
+async function fetchOrganizations(
+  c: CarrierConfig,
+  ids: string[],
+  concurrency = 8,
+  cap = 200,
+): Promise<Map<string, { name?: string; partOf?: string }>> {
+  const out = new Map<string, { name?: string; partOf?: string }>();
+  const trimmed = ids.slice(0, cap);
+  let i = 0;
+  async function worker() {
+    while (i < trimmed.length) {
+      const idx = i++;
+      const id = trimmed[idx];
+      try {
+        const org = await fhirGet<{ id: string; name?: string; partOf?: { reference?: string } }>(
+          `${c.baseUrl.replace(/\/$/, '')}/Organization/${encodeURIComponent(id)}`,
+        );
+        if (org) {
+          out.set(id, { name: org.name, partOf: refToId(org.partOf?.reference) ?? undefined });
+        }
+      } catch {
+        // ignore individual fetch failures
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return out;
+}
+
+async function lookupCarrier(c: CarrierConfig, npi: string): Promise<LookupResult> {
+  const result: LookupResult = {
+    carrier: c.name,
+    enabled: c.enabled,
+    found_practitioner: false,
+    practitioner_ids: [],
+    practitioner_names: [],
+    roles: 0,
+    networks: [],
+    plans: [],
+    notes: c.notes ? [c.notes] : [],
+  };
+  if (!c.enabled) {
+    result.notes.push('SKIPPED: carrier not yet enabled (credentials pending)');
+    return result;
+  }
+  try {
+    const { practitionerIds, practitionerNames, roles, notes } = await findRolesForNpi(c, npi);
+    result.notes.push(...notes);
+    result.practitioner_ids = practitionerIds;
+    result.practitioner_names = practitionerNames;
+    result.roles = roles.length;
+    result.found_practitioner = practitionerIds.length > 0 || roles.length > 0;
+    if (roles.length === 0) return result;
+
+    // Collect distinct network org ids from all roles.
+    const networkMap = new Map<string, string | undefined>();
+    for (const r of roles) {
+      for (const n of extractNetworkRefs(r)) {
+        if (!networkMap.has(n.id)) networkMap.set(n.id, n.display);
+      }
+    }
+    result.networks = Array.from(networkMap, ([org_id, display]) => ({ org_id, display }));
+    if (networkMap.size === 0) {
+      result.notes.push('No network-reference extensions on the returned roles');
+      return result;
+    }
+
+    // Resolve networks → plans via the carrier's full InsurancePlan index.
+    const index = await buildPlanIndex(c);
+    const seen = new Set<string>(); // dedupe (plan_contract_id|orgId)
+    function addHit(orgId: string, display: string | undefined, plan: { plan_full_id: string; plan_contract_id: string; plan_name?: string }) {
+      const k = `${plan.plan_contract_id}|${orgId}`;
+      if (seen.has(k)) return;
+      seen.add(k);
+      result.plans.push({
+        plan_contract_id: plan.plan_contract_id,
+        plan_full_id: plan.plan_full_id,
+        plan_name: plan.plan_name,
+        network_org_id: orgId,
+        network_display: display,
+      });
+    }
+
+    // Pass 1: direct id-level join (Devoted, Humana, Cigna).
+    for (const [orgId, display] of networkMap) {
+      for (const p of index.byNetworkOrgId.get(orgId) ?? []) addHit(orgId, display, p);
+    }
+
+    // Pass 2: name-level fallback (UHC stores plan names on the Network sub-org).
+    // Only fire when pass 1 came up empty AND we haven't blown the network budget.
+    if (result.plans.length === 0 && networkMap.size > 0 && networkMap.size <= 1000) {
+      const idsNeedingNames = Array.from(networkMap.keys()).filter((id) => !networkMap.get(id));
+      if (idsNeedingNames.length > 0) {
+        const orgs = await fetchOrganizations(c, idsNeedingNames);
+        for (const [id, info] of orgs) {
+          if (info.name) networkMap.set(id, info.name); // promote display
+        }
+      }
+      for (const [orgId, display] of networkMap) {
+        if (!display) continue;
+        const key = display.toLowerCase().trim();
+        for (const p of index.byNameLower.get(key) ?? []) addHit(orgId, display, p);
+      }
+      if (result.plans.length > 0) {
+        result.notes.push('Resolved plans via Organization.name → InsurancePlan.name fallback');
+      }
+    }
+
+    if (result.plans.length === 0) {
+      result.notes.push(`Found ${networkMap.size} network ref(s) but no InsurancePlan rows reference them (id or name)`);
+    }
+  } catch (err) {
+    result.error = (err as Error).message;
+  }
+  return result;
+}
+
+// ─── Cache write ──────────────────────────────────────────────────
+
+interface CacheRow {
+  plan_id: string;
+  segment_id: string;
+  npi: string;
+  covered: boolean;
+}
+
+async function upsertCache(sb: SupabaseClient, rows: CacheRow[]) {
+  if (rows.length === 0) return { wrote: 0 };
+  // De-dupe on (plan_id, segment_id, npi).
+  const dedup = new Map<string, CacheRow>();
+  for (const r of rows) dedup.set(`${r.plan_id}|${r.segment_id}|${r.npi}`, r);
+  const final = Array.from(dedup.values());
+  const { error } = await sb
+    .from('pm_provider_network_cache')
+    .upsert(final, { onConflict: 'plan_id,segment_id,npi' });
+  if (error) throw error;
+  return { wrote: final.length };
+}
+
+// ─── Main ─────────────────────────────────────────────────────────
+
+async function main() {
+  const target = ONLY_CARRIER ? CARRIERS.filter((c) => c.name === ONLY_CARRIER) : CARRIERS;
+  if (target.length === 0) {
+    console.error(`No carrier matches --carrier=${ONLY_CARRIER}`);
+    process.exit(1);
+  }
+
+  console.log(`# fhir-provider-lookup  npi=${NPI}${STATE ? `  state=${STATE}` : ''}  dry-run=${DRY_RUN}`);
+  if (STATE) console.log(`# (--state filter parsed but not yet wired through; PractitionerRole.location addresses are heterogeneous across carriers)`);
+  console.log(`# carriers: ${target.map((c) => `${c.name}${c.enabled ? '' : '(disabled)'}`).join(', ')}`);
+  console.log();
+
+  const t0 = Date.now();
+  const results = await Promise.all(target.map((c) => lookupCarrier(c, NPI!)));
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+
+  // ─── Print raw mapped results ──────────────────────────────
+  for (const r of results) {
+    console.log(`── ${r.carrier} ────────────────────────────────────────`);
+    if (!r.enabled) {
+      console.log(`  [disabled] ${r.notes.join('; ')}`);
+      continue;
+    }
+    if (r.error) {
+      console.log(`  [error] ${r.error}`);
+      continue;
+    }
+    console.log(`  practitioner_ids:   ${r.practitioner_ids.join(', ') || '—'}`);
+    if (r.practitioner_names.length) console.log(`  practitioner_names: ${r.practitioner_names.join(' / ')}`);
+    console.log(`  roles:              ${r.roles}`);
+    console.log(`  networks:           ${r.networks.length}`);
+    for (const n of r.networks) console.log(`    • ${n.org_id}${n.display ? `  "${n.display}"` : ''}`);
+    console.log(`  plans:              ${r.plans.length}`);
+    for (const p of r.plans) {
+      console.log(`    • ${p.plan_contract_id}  (${p.plan_full_id})  ${p.plan_name ?? ''}  via ${p.network_display ?? p.network_org_id}`);
+    }
+    if (r.notes.length) console.log(`  notes:              ${r.notes.join(' | ')}`);
+  }
+
+  // ─── Build cache rows ─────────────────────────────────────
+  const cacheRows: CacheRow[] = [];
+  for (const r of results) {
+    if (!r.enabled || r.error) continue;
+    for (const p of r.plans) {
+      cacheRows.push({ plan_id: p.plan_contract_id, segment_id: '0', npi: NPI!, covered: true });
+    }
+  }
+
+  console.log();
+  console.log(`# elapsed ${elapsed}s  candidate cache rows: ${cacheRows.length}`);
+  if (cacheRows.length === 0) {
+    console.log('# nothing to write.');
+    return;
+  }
+
+  // Show the unique upsert payload before committing.
+  const uniq = new Map<string, CacheRow>();
+  for (const r of cacheRows) uniq.set(`${r.plan_id}|${r.segment_id}|${r.npi}`, r);
+  console.log(`# unique upsert payload (${uniq.size} rows):`);
+  for (const r of uniq.values()) {
+    console.log(`    ${JSON.stringify(r)}`);
+  }
+
+  if (DRY_RUN) {
+    console.log();
+    console.log('# --dry-run set — skipping pm_provider_network_cache write.');
+    return;
+  }
+
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY — cannot write. Use --dry-run to skip.');
+    process.exit(1);
+  }
+  const sb = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { wrote } = await upsertCache(sb, cacheRows);
+  console.log(`# wrote ${wrote} row(s) to pm_provider_network_cache.`);
+}
+
+main().catch((err) => {
+  console.error('FATAL:', err);
+  process.exit(1);
+});
