@@ -46,7 +46,15 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson } from './_lib/http.js';
 import { supabase } from './_lib/supabase.js';
 
-export const config = { maxDuration: 60 };
+// 120s instead of 60s: the live medicare.gov fallback (Akamai cookie
+// warm + plans/search POST) routinely exceeds 60s for TX / GA plans
+// where pm_provider_network_cache hasn't been pre-warmed. Pre-launch
+// audit caught 504 FUNCTION_INVOCATION_TIMEOUTs on TX (NPI 1760438840
+// + H5216-348-0) and GA (NPI 1811300411 + H5216-207-0); raising the
+// budget gives the playwright path room to complete and upsert the
+// cache row, which converts the next call for the same pair into a
+// sub-100ms cache hit.
+export const config = { maxDuration: 120 };
 
 const PLAN_SEARCH_URL = 'https://www.medicare.gov/api/v1/data/plan-compare/plans/search';
 const WARM_URL = 'https://www.medicare.gov/plan-compare/';
