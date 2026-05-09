@@ -19,6 +19,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useSession } from '@/hooks/useSession';
+import { isValidMbi, normalizeMbi } from '@/lib/mbiValidation';
 import type { StateCode } from '@/types/session';
 import {
   Card,
@@ -76,11 +77,37 @@ export function IntakeScreen({ onNext }: Props) {
     };
   }, [client.zip]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // MBI is optional, but if the broker types one it must conform to
+  // the CMS character-class spec — same regex the consumer widget
+  // enforces (see src/lib/mbiValidation.ts). Empty string = ok,
+  // partially-typed (<11 chars) = ok (still in progress), 11+ chars
+  // that don't validate = blocked. Continue stays disabled until
+  // either the field is empty or the value is fully valid.
+  const mbiRaw = client.mbi ?? '';
+  const mbiNormalized = normalizeMbi(mbiRaw);
+  const mbiEmpty = mbiNormalized.length === 0;
+  const mbiValid = mbiEmpty || isValidMbi(mbiNormalized);
+  const mbiBadge = mbiEmpty
+    ? undefined
+    : mbiValid
+      ? '✓ Verified'
+      : mbiNormalized.length < 11
+        ? `${mbiNormalized.length}/11`
+        : 'Invalid format';
+  const mbiBadgeTone: 'success' | 'error' =
+    !mbiEmpty && mbiNormalized.length >= 11 && !mbiValid ? 'error' : 'success';
+
   // Continue requires the four fields the rest of the workflow can't
   // function without. Email + MBI are nice-to-have but not blocking;
-  // the broker often captures them mid-call after the SOA.
+  // the broker often captures them mid-call after the SOA. If a value
+  // IS entered for MBI, it must validate — otherwise downstream
+  // SunFire deep-links and AgentBase records receive a malformed ID.
   const canContinue = Boolean(
-    client.name && client.dob && /^\d{5}$/.test(client.zip) && client.phone,
+    client.name &&
+      client.dob &&
+      /^\d{5}$/.test(client.zip) &&
+      client.phone &&
+      mbiValid,
   );
 
   const countyValue = client.county
@@ -158,7 +185,8 @@ export function IntakeScreen({ onNext }: Props) {
               value={client.mbi ?? ''}
               onChange={(v) => updateClient({ mbi: v.toUpperCase() })}
               placeholder="1EG4-TE5-MK72"
-              badge={client.mbi && client.mbi.trim().length >= 11 ? '✓ Verified' : undefined}
+              badge={mbiBadge}
+              badgeTone={mbiBadgeTone}
             />
           </div>
         </div>

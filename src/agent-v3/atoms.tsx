@@ -154,6 +154,7 @@ export function FieldInput({
   inputMode,
   maxLength,
   badge,
+  badgeTone = 'success',
   rightHint,
 }: {
   label: string;
@@ -164,8 +165,13 @@ export function FieldInput({
   inputMode?: 'text' | 'numeric' | 'tel' | 'email';
   maxLength?: number;
   badge?: string;
+  badgeTone?: 'success' | 'error';
   rightHint?: ReactNode;
 }) {
+  const badgeColors =
+    badgeTone === 'error'
+      ? { background: '#fee2e2', color: '#991b1b' }
+      : { background: '#d1fae5', color: '#065f46' };
   return (
     <div>
       <label
@@ -220,8 +226,8 @@ export function FieldInput({
         {badge && (
           <span
             style={{
-              background: '#d1fae5',
-              color: '#065f46',
+              background: badgeColors.background,
+              color: badgeColors.color,
               fontSize: 10,
               fontWeight: 600,
               padding: '2px 7px',
