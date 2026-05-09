@@ -41,6 +41,7 @@
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { readFileSync, existsSync } from 'node:fs';
+import { resolveWellcareNetworks } from './wellcare-network-map.js';
 
 // ─── Env ──────────────────────────────────────────────────────────
 function loadEnv() {
@@ -166,7 +167,7 @@ const CARRIERS: CarrierConfig[] = [
     enabled: true,
     strategy: 'name-then-role-with-prefixed-ref',
     npiSystem: 'http://hl7.org/fhir/sid/us-npi',
-    notes: 'Requires --name=Family,Given (server has no NPI search). Networks emit display names like "Exchange NC" / "Do Not Use - WCG National HMO" — InsurancePlan resource is empty on this endpoint, so plan_contract_id will be null and no cache rows are written until a Centene network → CMS contract mapping table is built. Auto-fetches name from NPPES if --name omitted.',
+    notes: 'Server has no NPI search; uses name search (auto-fetched from NPPES if --name omitted). Their FHIR InsurancePlan resource is empty, so plan resolution goes through scripts/wellcare-network-map.ts — broad-tier rules over pm_plans (national HMO/PPO + state-specific overlays). State filter inherits from --state or NPPES location.',
   },
   {
     name: 'alignment',
@@ -288,25 +289,38 @@ function extractContractPlan(raw: string | undefined | null): string | null {
 }
 
 // Public NPPES lookup — used to auto-populate family/given for
-// strategies like Centene that can't be searched by NPI. Free, no auth.
-let nppesNameCache: { family: string; given: string } | null | undefined;
-async function nppesName(npi: string): Promise<{ family: string; given: string } | null> {
-  if (nppesNameCache !== undefined) return nppesNameCache;
+// strategies like Centene that can't be searched by NPI, plus to infer
+// the practitioner's state when the user didn't pass --state. Free, no auth.
+interface NppesInfo { family: string; given: string; state?: string }
+let nppesCache: NppesInfo | null | undefined;
+async function nppesLookup(npi: string): Promise<NppesInfo | null> {
+  if (nppesCache !== undefined) return nppesCache;
   try {
     const r = await fetch(
       `https://npiregistry.cms.hhs.gov/api/?number=${npi}&version=2.1`,
       { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
     );
-    if (!r.ok) { nppesNameCache = null; return null; }
-    const j = await r.json() as { results?: Array<{ basic?: { first_name?: string; last_name?: string } }> };
-    const b = j.results?.[0]?.basic;
-    if (!b?.first_name || !b?.last_name) { nppesNameCache = null; return null; }
-    nppesNameCache = { family: b.last_name, given: b.first_name };
-    return nppesNameCache;
+    if (!r.ok) { nppesCache = null; return null; }
+    const j = await r.json() as {
+      results?: Array<{
+        basic?: { first_name?: string; last_name?: string };
+        addresses?: Array<{ address_purpose?: string; state?: string }>;
+      }>;
+    };
+    const rec = j.results?.[0];
+    const b = rec?.basic;
+    if (!b?.first_name || !b?.last_name) { nppesCache = null; return null; }
+    const loc = rec?.addresses?.find((a) => a.address_purpose === 'LOCATION') ?? rec?.addresses?.[0];
+    nppesCache = { family: b.last_name, given: b.first_name, state: loc?.state };
+    return nppesCache;
   } catch {
-    nppesNameCache = null;
+    nppesCache = null;
     return null;
   }
+}
+async function nppesName(npi: string): Promise<{ family: string; given: string } | null> {
+  const i = await nppesLookup(npi);
+  return i ? { family: i.family, given: i.given } : null;
 }
 
 // ─── Per-carrier lookup ───────────────────────────────────────────
@@ -540,7 +554,7 @@ async function fetchOrganizations(
   return out;
 }
 
-async function lookupCarrier(c: CarrierConfig, npi: string): Promise<LookupResult> {
+async function lookupCarrier(c: CarrierConfig, npi: string, sb: SupabaseClient | null): Promise<LookupResult> {
   const result: LookupResult = {
     carrier: c.name,
     enabled: c.enabled,
@@ -575,6 +589,33 @@ async function lookupCarrier(c: CarrierConfig, npi: string): Promise<LookupResul
     result.networks = Array.from(networkMap, ([org_id, display]) => ({ org_id, display }));
     if (networkMap.size === 0) {
       result.notes.push('No network-reference extensions on the returned roles');
+      return result;
+    }
+
+    // ─── Wellcare/Centene: pm_plans-based mapping ──────────────────
+    // Their FHIR InsurancePlan resource is empty, so the regular index
+    // path produces zero hits. Instead, translate the network display
+    // names into pm_plans rows via the broad-tier rules in
+    // wellcare-network-map.ts.
+    if (c.name === 'wellcare' && sb) {
+      const stateOverride = STATE ?? (await nppesLookup(npi))?.state;
+      if (!stateOverride) {
+        result.notes.push('No state available (--state not set, NPPES has no LOCATION address); national networks will match every Wellcare state — likely overbroad');
+      } else {
+        result.notes.push(`Wellcare network → pm_plans mapping in state=${stateOverride}`);
+      }
+      const { hits, rulesFired, unmatched } = await resolveWellcareNetworks(
+        sb,
+        Array.from(networkMap, ([org_id, display]) => ({ org_id, display })),
+        { practitionerState: stateOverride },
+      );
+      for (const h of hits) result.plans.push(h);
+      if (rulesFired.size) {
+        result.notes.push('rules fired: ' + Array.from(rulesFired, ([k, n]) => `${k} (${n})`).join(', '));
+      }
+      if (unmatched.length) {
+        result.notes.push(`unmatched networks (no rule): ${Array.from(new Set(unmatched)).join(', ')}`);
+      }
       return result;
     }
 
@@ -664,8 +705,18 @@ async function main() {
   console.log(`# carriers: ${target.map((c) => `${c.name}${c.enabled ? '' : '(disabled)'}`).join(', ')}`);
   console.log();
 
+  // Build a Supabase client up front so Wellcare's pm_plans-based mapping
+  // can run during lookup (not just at write time). If env vars aren't
+  // present we still proceed — Wellcare resolution will be skipped with a
+  // note, and the rest of the carriers don't touch the DB during lookup.
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const sb = url && key
+    ? createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
+    : null;
+
   const t0 = Date.now();
-  const results = await Promise.all(target.map((c) => lookupCarrier(c, NPI!)));
+  const results = await Promise.all(target.map((c) => lookupCarrier(c, NPI!, sb)));
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
 
   // ─── Print raw mapped results ──────────────────────────────
@@ -721,13 +772,10 @@ async function main() {
     return;
   }
 
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) {
+  if (!sb) {
     console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY — cannot write. Use --dry-run to skip.');
     process.exit(1);
   }
-  const sb = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
   const { wrote } = await upsertCache(sb, cacheRows);
   console.log(`# wrote ${wrote} row(s) to pm_provider_network_cache.`);
 }
