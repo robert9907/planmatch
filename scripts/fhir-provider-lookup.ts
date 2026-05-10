@@ -133,7 +133,63 @@ const CARRIERS: CarrierConfig[] = [
     enabled: true,
     strategy: 'role-by-chained-practitioner-identifier',
     npiSystem: 'http://hl7.org/fhir/sid/us-npi',
-    notes: 'CapabilityStatement omits identifier on Practitioner AND PractitionerRole. Chained search PractitionerRole?practitioner.identifier=… works in practice.',
+    notes: 'CapabilityStatement omits identifier on Practitioner AND PractitionerRole. Chained search PractitionerRole?practitioner.identifier=… works in practice. Commercial only — no Medicare/HealthSpring data on this endpoint.',
+  },
+  {
+    name: 'bcbs-tn',
+    baseUrl: 'https://api.bcbst.com/r4/providerdirectory/BCBST',
+    enabled: true,
+    strategy: 'practitioner-then-role',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+    notes: 'HAPI FHIR 5.4.1, full PDEX Plan-Net resources, Open Access (no auth). Discovered after the unrelated /fhir/metadata path on api.bcbst.com 401d — directory lives under /r4/providerdirectory/BCBST.',
+  },
+  {
+    name: 'clover',
+    baseUrl: 'https://public-api.cloverhealth.com/providerdirectory/api',
+    enabled: true,
+    strategy: 'practitioner-then-role',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+    notes: 'Custom server (Clover Health FHIR R4). All PDEX Plan-Net resources. GA/TX MA market.',
+  },
+  {
+    name: 'kaiser',
+    baseUrl: 'https://kpx-service-bus.kp.org/service/hp/mhpo/healthplanproviderv1rc',
+    enabled: true,
+    strategy: 'practitioner-then-role',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+    notes: 'Smile CDR-powered. ~405k PractitionerRoles total — closed-system Kaiser network. Hostname is non-obvious (fhir.kp.org / api.kp.org / developer.kp.org all 404); the kpx-service-bus path is what the CapabilityStatement.implementation.url points to.',
+  },
+  {
+    name: 'molina',
+    baseUrl: 'https://api.interop.molinahealthcare.com/ProviderDirectory',
+    enabled: true,
+    strategy: 'practitioner-then-role',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+    notes: 'Sapphire/HealthEdge backend (data fronted by molina.sapphirethreesixtyfive.com). 17M+ PractitionerRoles total. Returns content-type application/json (not application/fhir+json) — body is still FHIR, parser doesn\'t care.',
+  },
+  {
+    name: 'scan',
+    baseUrl: 'https://providerdirectory.scanhealthplan.com',
+    enabled: true,
+    strategy: 'practitioner-then-role',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+    notes: 'InterSystems FHIR Server. Rejects unfiltered Practitioner / Organization searches with HTTP 413 (Payload Too Large) — our identifier-bounded queries always pass a filter so this isn\'t hit in normal flow.',
+  },
+  {
+    name: 'amerihealth-caritas',
+    baseUrl: 'https://api-ext.amerihealthcaritas.com/NCEX/provider-api',
+    enabled: true,
+    strategy: 'practitioner-then-role',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+    notes: 'Smile CDR-powered. Path includes a market code (NCEX = NC, other states use different codes — wire one carrier-config per market when we expand beyond NC).',
+  },
+  {
+    name: 'christus',
+    baseUrl: 'https://chp.healthtrioconnect.com/fhirprovdir',
+    enabled: true,
+    strategy: 'role-by-chained-practitioner-identifier',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+    notes: 'HealthTrio vendor. CapabilityStatement omits identifier on Practitioner AND PractitionerRole — only chained search works. Server returns 406 on plain `application/fhir+json` Accept; the FHIR_ACCEPT constant sends both forms so this carrier negotiates to its preferred `application/json+fhir`.',
   },
   // ─── Gated carriers — enable when creds land ────────────────
   {
@@ -222,10 +278,17 @@ interface Bundle<T = unknown> {
 const NETWORK_REF_URL = 'http://hl7.org/fhir/us/davinci-pdex-plan-net/StructureDefinition/network-reference';
 const REQUEST_TIMEOUT_MS = 30_000;
 
+// HealthTrio (CHRISTUS) returns 406 on the standard `application/fhir+json`
+// and only honors the legacy `application/json+fhir` form. Sending both as a
+// comma-separated Accept lets every carrier we've wired pick the one it
+// understands — verified against UHC/Humana/Devoted/Cigna/Wellcare/BCBS-TN/
+// Clover/Kaiser/Molina/SCAN/AmeriHealth/CHRISTUS, all 200.
+const FHIR_ACCEPT = 'application/fhir+json, application/json+fhir';
+
 async function fhirGet<T = unknown>(url: string): Promise<T | null> {
   const ctl = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   const res = await fetch(url, {
-    headers: { Accept: 'application/fhir+json' },
+    headers: { Accept: FHIR_ACCEPT },
     signal: ctl,
   });
   if (!res.ok) {
