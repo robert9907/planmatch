@@ -77,10 +77,55 @@ export const BENEFIT_MAP: BenefitMapEntry[] = [
   // ── Section B7 (Health Care Professional services) ───────────────
   { benefit_type: 'primary_care',  source_table: 'pbp_b7_health_prof', sub_letter: 'b7a' },
   { benefit_type: 'specialist',    source_table: 'pbp_b7_health_prof', sub_letter: 'b7d' },
-  { benefit_type: 'physical_therapy',
-    source_table: 'pbp_b7_health_prof', sub_letter: 'b7i' },
+  // b7b — Chiropractic. CMS uses _copay_mc_amt_min/_max here (mc
+  // before amt), not the standard _copay_amt_mc_min pattern, so this
+  // entry needs explicit column overrides.
+  { benefit_type: 'chiropractic',
+    source_table: 'pbp_b7_health_prof',
+    copay_col:           'pbp_b7b_copay_mc_amt_min',
+    copay_max_col:       'pbp_b7b_copay_mc_amt_max',
+    coinsurance_col:     'pbp_b7b_coins_mc_pct_min',
+    coinsurance_max_col: 'pbp_b7b_coins_mc_pct_max',
+    prior_auth_col:      'pbp_b7b_auth_yn',
+    referral_col:        'pbp_b7b_refer_yn',
+  },
+  // b7c — Occupational Therapy. Same _copay_mc_amt_min ordering as
+  // chiropractic; sub_letter shorthand would resolve to the wrong
+  // column names (verified empirically against H5253-117 landing
+  // table — _copay_amt_mc_min doesn't exist for b7c).
   { benefit_type: 'occupational_therapy',
-    source_table: 'pbp_b7_health_prof', sub_letter: 'b7c' },
+    source_table: 'pbp_b7_health_prof',
+    copay_col:           'pbp_b7c_copay_mc_amt_min',
+    copay_max_col:       'pbp_b7c_copay_mc_amt_max',
+    coinsurance_col:     'pbp_b7c_coins_mc_pct_min',
+    coinsurance_max_col: 'pbp_b7c_coins_mc_pct_max',
+    prior_auth_col:      'pbp_b7c_auth_yn',
+    referral_col:        'pbp_b7c_refer_yn',
+  },
+  // b7i — Physical Therapy (and Speech Therapy in some plan filings).
+  // Same _copay_mc_amt_min ordering as chiropractic/OT.
+  { benefit_type: 'physical_therapy',
+    source_table: 'pbp_b7_health_prof',
+    copay_col:           'pbp_b7i_copay_mc_amt_min',
+    copay_max_col:       'pbp_b7i_copay_mc_amt_max',
+    coinsurance_col:     'pbp_b7i_coins_mc_pct_min',
+    coinsurance_max_col: 'pbp_b7i_coins_mc_pct_max',
+    prior_auth_col:      'pbp_b7i_auth_yn',
+    referral_col:        'pbp_b7i_refer_yn',
+  },
+  // b7k — Medicare-covered podiatry / foot care. CMS files a single
+  // copay (not a min/max pair) plus an optional max — pbp_b7k_copay_mc_amt
+  // for the headline value and pbp_b7k_copay_mc_max_amt when the plan
+  // declares a per-visit cap. Verified against H5253-117 landing table.
+  { benefit_type: 'podiatry',
+    source_table: 'pbp_b7_health_prof',
+    copay_col:           'pbp_b7k_copay_mc_amt',
+    copay_max_col:       'pbp_b7k_copay_mc_max_amt',
+    coinsurance_col:     'pbp_b7k_coins_mc_pct',
+    coinsurance_max_col: 'pbp_b7k_coins_mc_max_pct',
+    prior_auth_col:      'pbp_b7k_auth_yn',
+    referral_col:        'pbp_b7k_refer_yn',
+  },
   { benefit_type: 'telehealth',    source_table: 'pbp_b7_health_prof', sub_letter: 'b7j' },
   // Mental health is split into individual session vs group session.
   // CMS uses _mcis_ (medical-cov individual session) and _mcgs_ for
@@ -104,14 +149,57 @@ export const BENEFIT_MAP: BenefitMapEntry[] = [
     prior_auth_col:      'pbp_b7e_auth_yn',
     referral_col:        'pbp_b7e_refer_yn',
   },
-  // Psychiatric services (b7h) — distinct from mental health (b7e).
-  { benefit_type: 'psychiatric',   source_table: 'pbp_b7_health_prof', sub_letter: 'b7h' },
+  // Psychiatric services (b7h) — same individual/group split as
+  // mental health, with the same _mcis_ / _mcgs_ infixes. b7h uses
+  // _minamt/_maxamt (no _amt_) and _minpct/_maxpct (no _pct_) suffixes.
+  { benefit_type: 'psychiatric_individual',
+    source_table: 'pbp_b7_health_prof',
+    copay_col:           'pbp_b7h_copay_mcis_minamt',
+    copay_max_col:       'pbp_b7h_copay_mcis_maxamt',
+    coinsurance_col:     'pbp_b7h_coins_mcis_minpct',
+    coinsurance_max_col: 'pbp_b7h_coins_mcis_maxpct',
+    prior_auth_col:      'pbp_b7h_auth_yn',
+    referral_col:        'pbp_b7h_refer_yn',
+  },
+  { benefit_type: 'psychiatric_group',
+    source_table: 'pbp_b7_health_prof',
+    copay_col:           'pbp_b7h_copay_mcgs_minamt',
+    copay_max_col:       'pbp_b7h_copay_mcgs_maxamt',
+    coinsurance_col:     'pbp_b7h_coins_mcgs_minpct',
+    coinsurance_max_col: 'pbp_b7h_coins_mcgs_maxpct',
+    prior_auth_col:      'pbp_b7h_auth_yn',
+    referral_col:        'pbp_b7h_refer_yn',
+  },
 
   // ── Section B4 (Emergency / Urgent / Worldwide) ──────────────────
   { benefit_type: 'emergency',         source_table: 'pbp_b4_emerg_urgent', sub_letter: 'b4a' },
   { benefit_type: 'urgent_care',       source_table: 'pbp_b4_emerg_urgent', sub_letter: 'b4b' },
+  // Worldwide emergency uses three sub-types: wec (emergency care),
+  // wet (emergency transport), wuc (urgent care abroad). The "headline"
+  // benefit users compare on is wec — emergency care abroad. wet and
+  // wuc are tracked as separate benefit_types for completeness.
   { benefit_type: 'worldwide_emergency',
-    source_table: 'pbp_b4_emerg_urgent', sub_letter: 'b4c' },
+    source_table: 'pbp_b4_emerg_urgent',
+    copay_col:           'pbp_b4c_copay_amt_wec_min',
+    copay_max_col:       'pbp_b4c_copay_amt_wec_max',
+    coinsurance_col:     'pbp_b4c_coins_pct_wec_min',
+    coinsurance_max_col: 'pbp_b4c_coins_pct_wec_max',
+    // b4c has no auth/refer columns at the top level
+  },
+  { benefit_type: 'worldwide_emergency_transport',
+    source_table: 'pbp_b4_emerg_urgent',
+    copay_col:           'pbp_b4c_copay_amt_wet_min',
+    copay_max_col:       'pbp_b4c_copay_amt_wet_max',
+    coinsurance_col:     'pbp_b4c_coins_pct_wet_min',
+    coinsurance_max_col: 'pbp_b4c_coins_pct_wet_max',
+  },
+  { benefit_type: 'worldwide_urgent_care',
+    source_table: 'pbp_b4_emerg_urgent',
+    copay_col:           'pbp_b4c_copay_amt_wuc_min',
+    copay_max_col:       'pbp_b4c_copay_amt_wuc_max',
+    coinsurance_col:     'pbp_b4c_coins_pct_wuc_min',
+    coinsurance_max_col: 'pbp_b4c_coins_pct_wuc_max',
+  },
 
   // ── Section B8 (Outpatient Diagnostic / Lab) ─────────────────────
   // b8a is one wide row covering lab + diagnostic radiology +
@@ -150,6 +238,21 @@ export const BENEFIT_MAP: BenefitMapEntry[] = [
     coinsurance_max_col: 'pbp_b9b_coins_pct_mc_max',
     prior_auth_col:      'pbp_b9b_auth_yn',
   },
+  // b9a observation services — same row as outpatient hospital surgery
+  // (b9a_ohs) but with the _obs_ infix on every cost-share column.
+  // CMS treats observation as a distinct line because plans frequently
+  // file a different copay (often $0 or a per-stay flat rate). Auth /
+  // refer flags are filed per-service too (_auth_obs_yn vs the surgery
+  // _auth_ohs_yn).
+  { benefit_type: 'outpatient_observation',
+    source_table: 'pbp_b9_outpat_hosp',
+    copay_col:           'pbp_b9a_copay_obs_amt_min',
+    copay_max_col:       'pbp_b9a_copay_obs_amt_max',
+    coinsurance_col:     'pbp_b9a_coins_obs_pct_min',
+    coinsurance_max_col: 'pbp_b9a_coins_obs_pct_max',
+    prior_auth_col:      'pbp_b9a_auth_obs_yn',
+    referral_col:        'pbp_b9a_refer_obs_yn',
+  },
 
   // ── Section B10 (Ambulance / Transport) ──────────────────────────
   // Two rows — ground (gas) and air (aas) ambulance, distinguished
@@ -172,20 +275,73 @@ export const BENEFIT_MAP: BenefitMapEntry[] = [
   },
 
   // ── Section B16 (Dental) ──────────────────────────────────────────
+  // b16a (preventive) uses _mc_ infix on every cost-share field.
+  // b16b (comprehensive) splits into 7 sub-services (dx=diagnostic,
+  // ft=fluoride, oe=oral exam, ods=oral diag svcs, ops=oral prosthetic
+  // svcs, ov=other, pc=preventive cleaning) — each with its own copay
+  // and coinsurance. The headline "comprehensive dental" copay most
+  // users compare on is the oral exam (oe), which is the most
+  // commonly filled. If a plan files _ops_ instead, that's a follow-up.
   { benefit_type: 'dental_preventive',
-    source_table: 'pbp_b16_dental', sub_letter: 'b16a' },
+    source_table: 'pbp_b16_dental',
+    copay_col:           'pbp_b16a_copay_mc_amt_min',
+    copay_max_col:       'pbp_b16a_copay_mc_amt_max',
+    coinsurance_col:     'pbp_b16a_coins_mc_pct_min',
+    coinsurance_max_col: 'pbp_b16a_coins_mc_pct_max',
+    prior_auth_col:      'pbp_b16a_auth_mc_yn',
+    referral_col:        'pbp_b16a_refer_mc_yn',
+  },
   { benefit_type: 'dental_comprehensive',
-    source_table: 'pbp_b16_dental', sub_letter: 'b16b' },
+    source_table: 'pbp_b16_dental',
+    copay_col:           'pbp_b16b_copay_oe_amt_min',
+    copay_max_col:       'pbp_b16b_copay_oe_amt_max',
+    coinsurance_col:     'pbp_b16b_coins_oe_pct_min',
+    coinsurance_max_col: 'pbp_b16b_coins_oe_pct_max',
+    prior_auth_col:      'pbp_b16b_auth_oe_yn',
+    referral_col:        'pbp_b16b_refer_oe_yn',
+  },
 
   // ── Section B17 (Vision) ──────────────────────────────────────────
   { benefit_type: 'vision_exam',     source_table: 'pbp_b17_eye_exams_wear', sub_letter: 'b17a' },
   { benefit_type: 'vision_eyewear',  source_table: 'pbp_b17_eye_exams_wear', sub_letter: 'b17b' },
 
   // ── Section B18 (Hearing) ─────────────────────────────────────────
-  { benefit_type: 'hearing_exam', source_table: 'pbp_b18_hearing_exams_aids', sub_letter: 'b18a' },
-  { benefit_type: 'hearing_aid',  source_table: 'pbp_b18_hearing_exams_aids', sub_letter: 'b18b' },
+  // b18a (hearing exams) uses a flat _copay_amt (single value, no
+  // _min/_max) for the routine exam, plus _med_coins_pct for the
+  // Medicare-covered diagnostic exam. Most plans file the routine copay.
+  { benefit_type: 'hearing_exam',
+    source_table: 'pbp_b18_hearing_exams_aids',
+    copay_col:           'pbp_b18a_copay_amt',
+    coinsurance_col:     'pbp_b18a_med_coins_pct',
+    coinsurance_max_col: 'pbp_b18a_med_coins_pct_max',
+    prior_auth_col:      'pbp_b18a_auth_yn',
+    referral_col:        'pbp_b18a_refer_yn',
+  },
+  // b18b (hearing aids) carries 4 service categories (at = annual
+  // total, ie = inner ear, oe = outer ear, ote = over-the-ear) crossed
+  // with min/max. The most universal metric is the annual total (_at_).
+  // Annual allowance ($-cap) lives in pbp_b18b_maxplan_amt — captured
+  // separately as a follow-up via coverage_amount mapping.
+  { benefit_type: 'hearing_aid',
+    source_table: 'pbp_b18_hearing_exams_aids',
+    copay_col:           'pbp_b18b_copay_at_min_amt',
+    copay_max_col:       'pbp_b18b_copay_at_max_amt',
+    coinsurance_col:     'pbp_b18b_coins_pct_at_min',
+    coinsurance_max_col: 'pbp_b18b_coins_pct_at_max',
+    prior_auth_col:      'pbp_b18b_auth_yn',
+    referral_col:        'pbp_b18b_refer_yn',
+  },
+  // b18c (OTC hearing aids) uses standard _copay_amt_min/_max +
+  // _coins_pct_min/_max — NO _mc_ infix (unlike b16a's _mc_ pattern).
   { benefit_type: 'hearing_aid_otc',
-    source_table: 'pbp_b18_hearing_exams_aids', sub_letter: 'b18c' },
+    source_table: 'pbp_b18_hearing_exams_aids',
+    copay_col:           'pbp_b18c_copay_amt_min',
+    copay_max_col:       'pbp_b18c_copay_amt_max',
+    coinsurance_col:     'pbp_b18c_coins_pct_min',
+    coinsurance_max_col: 'pbp_b18c_coins_pct_max',
+    prior_auth_col:      'pbp_b18c_auth_yn',
+    referral_col:        'pbp_b18c_refer_yn',
+  },
 
   // ── Section B6 (Home health) ─────────────────────────────────────
   { benefit_type: 'home_health',
