@@ -48,7 +48,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
 import { useSession } from '@/hooks/useSession';
-import { usePlanBrain } from '@/hooks/usePlanBrain';
+import {
+  usePlanBrain,
+  type PlanBrainData,
+  type RibbonKey,
+  type ScoredPlan,
+  type WeightProfile,
+  type CompatRuleApplication,
+  type CompatRealAnnualCost,
+} from '@/hooks/usePlanBrain';
 import { useDrugCosts, lookupPlanCost } from '@/hooks/useDrugCosts';
 import {
   useManufacturerAssistance,
@@ -64,15 +72,57 @@ import {
   formatOtc,
   formatFoodCard,
 } from '@/lib/extractBenefitValue';
-import type {
-  PlanBrainData,
-  RibbonKey,
-  ScoredPlan,
-  WeightProfile,
-} from '@/lib/plan-brain-types';
-import type { Condition, DetectedCondition } from '@/lib/condition-detector';
-import { hasRedFlag, leadingReason } from '@/lib/broker-rules';
-import { formatRealAnnualCostBreakdown } from '@/lib/utilization-model';
+import type { DetectedConditionKey, DetectedCondition } from '@/lib/condition-detector';
+import { strongestRule } from '@/lib/broker-rules';
+
+// `Condition` was the agent v3 alias for what condition-detector now
+// names DetectedConditionKey. Kept as a local alias to minimize the
+// blast radius of the brain-transplant rename.
+type Condition = DetectedConditionKey;
+
+// Replacement helpers for the now-removed broker-rules / utilization-model
+// exports. The shapes match the old function signatures one-for-one so
+// callers stay unchanged below.
+function hasRedFlag(applied: ReadonlyArray<CompatRuleApplication>): boolean {
+  // Old behavior: any penalize rule with magnitude >= 25 lights the chip.
+  return applied.some((r) => r.action === 'penalize' && r.points >= 25);
+}
+
+function leadingReason(applied: ReadonlyArray<CompatRuleApplication>): string | null {
+  if (applied.length === 0) return null;
+  // Prefer boosts (positive framing) over penalties; among same-action
+  // rules, prefer higher points. Mirrors the old broker-rules export
+  // verbatim — see git history of src/lib/broker-rules.ts pre-transplant.
+  const sorted = [...applied].sort((a, b) => {
+    const order: Record<string, number> = { boost: 0, flag: 1, penalize: 2 };
+    if (order[a.action] !== order[b.action]) return order[a.action] - order[b.action];
+    return b.points - a.points;
+  });
+  return sorted[0].reason;
+}
+
+// Local replacement for the removed formatRealAnnualCostBreakdown export.
+// Builds the "Rx $X + Premium $Y + Medical $Z … = $N/yr" tooltip line
+// from the per-line dollar amounts on a CompatRealAnnualCost.
+function formatRealAnnualCostBreakdown(c: CompatRealAnnualCost): string {
+  const parts: string[] = [];
+  if (c.drugs > 0) parts.push(`Rx $${c.drugs.toLocaleString()}`);
+  if (c.premium > 0) parts.push(`+ Premium $${c.premium.toLocaleString()}`);
+  if (c.medicalVisits > 0) parts.push(`+ Medical $${c.medicalVisits.toLocaleString()}`);
+  if (c.supplies > 0) parts.push(`+ Supplies $${c.supplies.toLocaleString()}`);
+  if (c.erExpected > 0) parts.push(`+ ER risk $${c.erExpected.toLocaleString()}`);
+  if (c.hospitalExpected > 0) parts.push(`+ Hospital risk $${c.hospitalExpected.toLocaleString()}`);
+  if (c.cappedAtMoop) parts.push('(medical capped at MOOP)');
+  if (c.givebackSavings > 0) parts.push(`− Giveback $${c.givebackSavings.toLocaleString()}`);
+  parts.push(`= $${c.netAnnual.toLocaleString()}/yr`);
+  return parts.join(' ');
+}
+
+// Touch the imports to keep tree-shake-aware bundlers from dropping
+// strongestRule (kept available for future audit-mode UI even though
+// QuoteDeliveryV4 doesn't read it directly today).
+void strongestRule;
+void formatRealAnnualCostBreakdown;
 import { usePrintableQuote } from '@/hooks/usePrintableQuote';
 import type { PrintableQuote } from '@/lib/quotePdf';
 import { useAgentBaseRecommend } from '@/hooks/useAgentBaseRecommend';
@@ -231,6 +281,11 @@ const CONDITION_LABEL: Record<Condition, string> = {
   ckd: 'CKD (kidney)',
   hypertension: 'high blood pressure',
   afib: 'AFib',
+  // Added with the brain transplant — the new condition-detector
+  // surface includes depression and pain_management. Labels mirror
+  // the existing copy register (lowercase, plain English).
+  depression: 'depression',
+  pain_management: 'chronic pain',
 };
 
 const CONFIDENCE_BG: Record<DetectedCondition['confidence'], { bg: string; fg: string; border: string }> = {

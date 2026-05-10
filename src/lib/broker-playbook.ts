@@ -1,462 +1,822 @@
-// broker-playbook — the broker's mental model expressed as code:
+// Broker Playbook — client archetypes, medication patterns, and
+// red-flag engine. The pieces a 25-year Medicare broker reaches for
+// before they look at any plan numbers.
 //
-//   1. Medication-pattern detection — escalation/combination signatures
-//      that go beyond "client has condition X". A diabetic on metformin
-//      alone is a different broker quote than the same diabetic three
-//      escalations deep on insulin.
+// What this module owns:
+//   1. ClientArchetype — the single label that summarizes WHO this
+//      person is (healthy newly-eligible / single-chronic diabetic /
+//      multi-chronic / insulin-dependent / specialty-drug / …).
+//      Drives weight selection + plan-type preference + red-flag
+//      family activation. Picked by classifyArchetype with a strict
+//      priority order so two archetypes never both fire.
+//   2. ARCHETYPE_RULES — the table mapping each archetype to its
+//      drug/OOP/extras weights, preferred plan types, critical
+//      decision factors, and which red-flag families apply.
+//   3. MEDICATION_PATTERNS — combinations a broker spots instantly:
+//      Metformin + Ozempic = "diabetes escalation, not stable";
+//      Entresto = "confirmed CHF, hospital-readmission risk dominant".
+//      Each pattern has plain-English broker copy.
+//   4. RED_FLAGS — explicit overrides on top of the composite score.
+//      A flag can disqualify a plan, penalize its score, or just
+//      attach a warning surfaced to the user.
 //
-//   2. Client archetype classification — categorical labels (healthy
-//      newly eligible, single chronic, multi chronic, complex
-//      polypharmacy, insulin-dependent, specialty drug, provider-locked)
-//      that drive the weight profile. Replaces the old hardcoded
-//      50/30/20 weights from plan-brain-weights.
+// What this module does NOT own:
+//   - The composite scoring math (still in plan-brain.ts).
+//   - The condition-detection from meds (still in condition-detector.ts).
+//     We CONSUME its output here.
+//   - UI copy templates (focusCopyFor in reportCard.ts).
 //
-//   3. Red-flag engine — severe per-plan signals that can DISQUALIFY a
-//      plan outright (all-providers-out, cost-driver-not-on-formulary)
-//      or surface a CRITICAL warning the broker cannot ignore. Distinct
-//      from the +/− broker-rules layer (those are score adjustments
-//      with reasons; red flags can outright remove plans from the pool
-//      or override the ranking).
+// Detection priority is intentional: insulin_dependent is technically
+// also single_chronic (diabetes), but the insulin signal dominates the
+// plan choice (the $35/mo IRA cap matters more than the diabetes
+// label). Same for specialty_drug — a Humira patient might also be
+// multi_chronic, but the specialty drug economics drive everything.
 
-import type { Plan } from '@/types/plans';
-import type { Medication, Provider } from '@/types/session';
-import type { Condition, DetectedCondition } from './condition-detector';
-import type { ScoredPlan, WeightProfile } from './plan-brain-types';
+import type { BrainScoredPlan, BrainWeights } from './plan-brain-types';
+import type { DetectedCondition } from './condition-detector';
 
-// ─── Medication patterns ──────────────────────────────────────────────
+// ─── Archetype types ──────────────────────────────────────────────────
 
-export type MedicationPatternId =
-  | 'diabetes_escalation'
-  | 'cardiac_cascade'
-  | 'respiratory_burden'
-  | 'statin_bp_combo'
-  | 'pain_complexity';
-
-export interface MedicationPattern {
-  id: MedicationPatternId;
-  /** Severity tag. Each pattern has its own severity vocabulary; the
-   *  UI just renders the string. */
-  severity: string;
-  /** Drugs that triggered the pattern, in input order. */
-  meds: string[];
-  /** Broker-voice one-liner summarizing the pattern + severity. */
-  summary: string;
-}
-
-const MED_RX = {
-  metformin: /\bmetformin\b|\bglucophage\b/i,
-  glp1: /\bozempic\b|\bsemaglutide\b|\brybelsus\b|\bmounjaro\b|\btirzepatide\b|\btrulicity\b|\bdulaglutide\b|\bvictoza\b|\bliraglutide\b|\bwegovy\b|\bzepbound\b/i,
-  sglt2: /\bjardiance\b|\bempagliflozin\b|\bfarxiga\b|\bdapagliflozin\b|\binvokana\b|\bcanagliflozin\b|\bsteglatro\b|\bertugliflozin\b/i,
-  insulin: /\binsulin\b|\bhumalog\b|\bnovolog\b|\blantus\b|\blevemir\b|\btresiba\b|\btoujeo\b|\bbasaglar\b|\bhumulin\b|\bnovolin\b|\bfiasp\b|\blyumjev\b/i,
-  entresto: /\bentresto\b|\bsacubitril\b/i,
-  betaBlocker: /\bcarvedilol\b|\bmetoprolol\b|\batenolol\b|\bbisoprolol\b|\bnebivolol\b|\bcoreg\b|\btoprol\b/i,
-  aceArb: /\blisinopril\b|\benalapril\b|\bramipril\b|\blosartan\b|\bvalsartan\b|\birbesartan\b|\bolmesartan\b|\btelmisartan\b|\bcandesartan\b/i,
-  diuretic: /\bfurosemide\b|\blasix\b|\btorsemide\b|\bbumetanide\b|\bspironolactone\b|\beplerenone\b|\bhydrochlorothiazide\b|\bhctz\b/i,
-  icsLaba: /\btrelegy\b|\bbreo\b|\bsymbicort\b|\badvair\b|\bdulera\b|\bwixela\b|\bairsupra\b|\bbreyna\b/i,
-  lama: /\bspiriva\b|\btiotropium\b|\bincruse\b|\bumeclidinium\b|\btudorza\b|\baclidinium\b/i,
-  statin: /\batorvastatin\b|\bsimvastatin\b|\brosuvastatin\b|\bpravastatin\b|\blovastatin\b|\bpitavastatin\b|\blipitor\b|\bcrestor\b|\bzocor\b/i,
-  bpCombo: /\blisinopril\b|\blosartan\b|\bvalsartan\b|\bamlodipine\b|\bhydrochlorothiazide\b|\bhctz\b|\benalapril\b|\bramipril\b|\bolmesartan\b|\btelmisartan\b|\bnorvasc\b/i,
-  gabapentinoid: /\bgabapentin\b|\bneurontin\b|\bpregabalin\b|\blyrica\b/i,
-  duloxetineSnri: /\bduloxetine\b|\bcymbalta\b|\bvenlafaxine\b|\beffexor\b|\bmilnacipran\b|\bsavella\b/i,
-};
-
-function matchedMeds(meds: { name: string }[], rx: RegExp): string[] {
-  return meds.filter((m) => rx.test(m.name)).map((m) => m.name);
-}
-
-export function detectMedicationPatterns(meds: { name: string }[]): MedicationPattern[] {
-  const out: MedicationPattern[] = [];
-
-  // ── Diabetes escalation ladder ──
-  const dmHits = {
-    metformin: matchedMeds(meds, MED_RX.metformin),
-    glp1: matchedMeds(meds, MED_RX.glp1),
-    sglt2: matchedMeds(meds, MED_RX.sglt2),
-    insulin: matchedMeds(meds, MED_RX.insulin),
-  };
-  const ladderRungs =
-    (dmHits.metformin.length > 0 ? 1 : 0) +
-    (dmHits.glp1.length > 0 ? 1 : 0) +
-    (dmHits.sglt2.length > 0 ? 1 : 0) +
-    (dmHits.insulin.length > 0 ? 1 : 0);
-  if (ladderRungs >= 1 && (dmHits.glp1.length > 0 || dmHits.sglt2.length > 0 || dmHits.insulin.length > 0 || dmHits.metformin.length > 0)) {
-    let severity: 'moderate' | 'aggressive' | 'insulin_dependent' = 'moderate';
-    if (dmHits.insulin.length > 0) severity = 'insulin_dependent';
-    else if (ladderRungs >= 3) severity = 'aggressive';
-    else if (ladderRungs === 2) severity = 'moderate';
-    else severity = 'moderate';
-    const allMeds = [...dmHits.metformin, ...dmHits.glp1, ...dmHits.sglt2, ...dmHits.insulin];
-    out.push({
-      id: 'diabetes_escalation',
-      severity,
-      meds: allMeds,
-      summary:
-        severity === 'insulin_dependent'
-          ? `Diabetes escalation: insulin-dependent — IRA $35/mo cap is the headline savings`
-          : severity === 'aggressive'
-            ? `Diabetes escalation: aggressive (${ladderRungs} drug classes) — A1c likely uncontrolled`
-            : `Diabetes escalation: moderate (${allMeds.join(' + ')})`,
-    });
-  }
-
-  // ── Cardiac cascade ──
-  const entresto = matchedMeds(meds, MED_RX.entresto);
-  const beta = matchedMeds(meds, MED_RX.betaBlocker);
-  const ace = matchedMeds(meds, MED_RX.aceArb);
-  const diur = matchedMeds(meds, MED_RX.diuretic);
-  if (entresto.length > 0) {
-    out.push({
-      id: 'cardiac_cascade',
-      severity: 'confirmed',
-      meds: [...entresto, ...beta, ...ace, ...diur],
-      summary: 'Cardiac cascade: CHF confirmed (Entresto) — MOOP and inpatient day-1 are decision-critical',
-    });
-  } else if (beta.length > 0 && ace.length > 0 && diur.length > 0) {
-    out.push({
-      id: 'cardiac_cascade',
-      severity: 'likely',
-      meds: [...beta, ...ace, ...diur],
-      summary: 'Cardiac cascade: CHF likely (β-blocker + ACE/ARB + diuretic) — verify with the client',
-    });
-  }
-
-  // ── Respiratory burden ──
-  const icsLaba = matchedMeds(meds, MED_RX.icsLaba);
-  const lama = matchedMeds(meds, MED_RX.lama);
-  if (icsLaba.length > 0 && lama.length > 0) {
-    out.push({
-      id: 'respiratory_burden',
-      severity: 'severe',
-      meds: [...icsLaba, ...lama],
-      summary: 'Respiratory burden: severe COPD (ICS/LABA + LAMA) — inhaler tier placement decides the plan',
-    });
-  }
-
-  // ── Statin + BP combo (CV prevention, no chronic disease implied) ──
-  const statin = matchedMeds(meds, MED_RX.statin);
-  const bp = matchedMeds(meds, MED_RX.bpCombo);
-  // Only fire when the meds list is small (≤4) — large polypharmacy
-  // overrides this signal because it's no longer "just CV prevention".
-  if (statin.length > 0 && bp.length > 0 && meds.length <= 4) {
-    out.push({
-      id: 'statin_bp_combo',
-      severity: 'cv_prevention',
-      meds: [...statin, ...bp],
-      summary: 'Statin + BP: CV prevention regimen — tier-1 generics, focus on MOOP and extras, not Rx',
-    });
-  }
-
-  // ── Pain complexity ──
-  const gaba = matchedMeds(meds, MED_RX.gabapentinoid);
-  const dlx = matchedMeds(meds, MED_RX.duloxetineSnri);
-  if (gaba.length > 0 && dlx.length > 0) {
-    out.push({
-      id: 'pain_complexity',
-      severity: 'chronic_pain',
-      meds: [...gaba, ...dlx],
-      summary: 'Pain complexity: chronic pain (gabapentinoid + SNRI) — specialist + PT visits are the cost driver',
-    });
-  }
-
-  return out;
-}
-
-// ─── Archetypes ───────────────────────────────────────────────────────
-
-export type Archetype =
+export type ClientArchetype =
+  | 'specialty_drug'
+  | 'dual_eligible'
+  | 'insulin_dependent'
+  | 'complex_polypharmacy'
+  | 'multi_chronic'
+  | 'single_chronic'
+  | 'provider_locked'
   | 'healthy_newly_eligible'
   | 'healthy_established'
-  | 'single_chronic'
-  | 'multi_chronic'
-  | 'complex_polypharmacy'
-  | 'insulin_dependent'
-  | 'specialty_drug'
-  | 'provider_locked';
+  | 'general';
 
-export interface ArchetypeMatch {
-  archetype: Archetype;
-  weights: WeightProfile;
-  preferences: { preferCsnp: boolean; preferPpo: boolean };
-  /** Two-word UI label (e.g. "Single Chronic"). */
-  label: string;
-  /** One-line broker-voice description for the badge tooltip. */
-  description: string;
-}
-
-interface ClassifyArgs {
+export interface ArchetypeProfile {
   age: number | null;
-  conditions: DetectedCondition[];
-  conditionSet: Set<Condition>;
-  medications: Medication[];
-  providers: Provider[];
-  /** True when any med matches the insulin pattern. */
-  isInsulinUser: boolean;
-  /** True when any med has a tier 5 row in pm_formulary for the
-   *  client's contracted plan list. Caller computes this — the
-   *  playbook doesn't have access to formulary rows. */
-  hasSpecialtyDrug: boolean;
+  /** Union of self-reported csnpConditions and med-detected conditions
+   *  with confidence >= likely. Lowercased canonical names like
+   *  'diabetes' / 'chf' / 'copd' / 'ckd' / 'hypertension'. */
+  conditions: ReadonlyArray<string>;
+  detectedConditions: ReadonlyArray<DetectedCondition>;
+  medications: ReadonlyArray<{ name: string; rxcui?: string }>;
+  providerCount: number;
+  /** True when the user self-reports Medicaid on About-You (which
+   *  derives FlowState.dsnpEligible === true). 'unsure' is treated as
+   *  false here — we only flip the archetype when the user is
+   *  confirmed dual-eligible. */
+  dualEligible: boolean;
 }
 
-const HEALTHY_NEWLY_ELIGIBLE: Omit<ArchetypeMatch, 'archetype'> = {
-  weights: { drug: 0.15, oop: 0.25, extras: 0.60 },
-  preferences: { preferCsnp: false, preferPpo: false },
-  label: 'Healthy · Newly Eligible',
-  description: 'Age 65, low Rx burden — extras (dental/OTC/fitness) drive the value calculation',
-};
-const HEALTHY_ESTABLISHED: Omit<ArchetypeMatch, 'archetype'> = {
-  weights: { drug: 0.20, oop: 0.30, extras: 0.50 },
-  preferences: { preferCsnp: false, preferPpo: false },
-  label: 'Healthy · Established',
-  description: 'Older but still low-utilization — extras still dominate, MOOP secondary',
-};
-const SINGLE_CHRONIC: Omit<ArchetypeMatch, 'archetype'> = {
-  weights: { drug: 0.40, oop: 0.40, extras: 0.20 },
-  preferences: { preferCsnp: true, preferPpo: false },
-  label: 'Single Chronic',
-  description: 'One chronic condition — balanced Rx + OOP, C-SNP preferred when in-network',
-};
-const MULTI_CHRONIC: Omit<ArchetypeMatch, 'archetype'> = {
-  weights: { drug: 0.35, oop: 0.50, extras: 0.15 },
-  preferences: { preferCsnp: false, preferPpo: false },
-  label: 'Multi-Chronic',
-  description: 'Two+ chronic conditions — MOOP is king, hospital risk doubles the math',
-};
-const COMPLEX_POLYPHARMACY: Omit<ArchetypeMatch, 'archetype'> = {
-  weights: { drug: 0.60, oop: 0.30, extras: 0.10 },
-  preferences: { preferCsnp: false, preferPpo: false },
-  label: 'Complex Polypharmacy',
-  description: '5+ medications — Rx tiering and donut-hole math dominate; verify formulary on every drug',
-};
-const INSULIN_DEPENDENT: Omit<ArchetypeMatch, 'archetype'> = {
-  weights: { drug: 0.55, oop: 0.30, extras: 0.15 },
-  preferences: { preferCsnp: true, preferPpo: false },
-  label: 'Insulin-Dependent',
-  description: 'On insulin — IRA $35/mo cap is mandatory, all Part D plans must comply',
-};
-const SPECIALTY_DRUG: Omit<ArchetypeMatch, 'archetype'> = {
-  weights: { drug: 0.70, oop: 0.20, extras: 0.10 },
-  preferences: { preferCsnp: false, preferPpo: false },
-  label: 'Specialty Drug',
-  description: 'Tier 5 specialty — drug coverage is the only axis that matters; verify PA/ST/quantity limits',
-};
-const PROVIDER_LOCKED: Omit<ArchetypeMatch, 'archetype'> = {
-  weights: { drug: 0.30, oop: 0.40, extras: 0.30 },
-  preferences: { preferCsnp: false, preferPpo: true },
-  label: 'Provider-Locked',
-  description: '2+ specific providers — PPO flexibility is worth the premium bump; verify network on every plan',
+export interface ArchetypeRule {
+  /** 50/30/20 → 0.50/0.30/0.20 — sums to 1.0, matches BrainWeights. */
+  weights: BrainWeights;
+  /** Preferred plan types in order. The brain uses these as soft
+   *  guidance for ranking + suggestion copy; not as hard filters. */
+  planTypes: ReadonlyArray<string>;
+  /** What a broker would check first for this archetype — surfaced
+   *  in the agent dashboard and in console diagnostics. */
+  criticalFactors: ReadonlyArray<string>;
+  /** Which red-flag families fire for this archetype. Lets us skip
+   *  flags that don't apply (e.g., insulin_no_cap on a patient who
+   *  isn't on insulin). */
+  redFlagFamilies: ReadonlyArray<RedFlagFamily>;
+}
+
+// ─── Detection priority + predicates ─────────────────────────────────
+//
+// Most-specific first. Once one fires, the rest are skipped — a
+// Humira patient with diabetes + hypertension is 'specialty_drug'
+// (the Tier 5 economics dominate) regardless of how many other
+// archetypes they could also satisfy.
+
+// Excludes 'general' — that's the fallback when nothing else fires.
+//
+// dual_eligible sits second only to specialty_drug because the D-SNP
+// economics (typically $0 premium, $0 drug copays, transportation /
+// meals built in) dominate plan choice for any dual beneficiary EXCEPT
+// when they're also on a Tier-5 specialty drug — where the specialty
+// economics still dictate the plan even though they're dual.
+const ARCHETYPE_PRIORITY: ReadonlyArray<Exclude<ClientArchetype, 'general'>> = [
+  'specialty_drug',
+  'dual_eligible',
+  'insulin_dependent',
+  'complex_polypharmacy',
+  'multi_chronic',
+  'single_chronic',
+  'provider_locked',
+  'healthy_established',
+  'healthy_newly_eligible',
+];
+
+// Common chronic conditions that count toward single/multi_chronic
+// classification. We exclude 'hypertension' from the chronic count
+// because most BP patients are stable on Tier-1 generics and don't
+// drive the chronic-care decision. Exported so plan-brain's profile
+// detector applies the same definition — without this, a healthy
+// 65-year-old on Lisinopril alone classified as "sick" (Profile A)
+// and skipped the premium penalty path.
+export const CHRONIC_CONDITION_KEYS: ReadonlySet<string> = new Set([
+  'diabetes', 'chf', 'copd', 'ckd', 'cardio', 'esrd', 'cancer',
+]);
+
+const INSULIN_NAMES: ReadonlyArray<string> = [
+  'lantus', 'basaglar', 'tresiba', 'levemir', 'humalog', 'novolog',
+  'insulin glargine', 'insulin lispro', 'insulin aspart', 'insulin detemir',
+  'humulin', 'novolin', 'admelog', 'fiasp', 'lyumjev', 'toujeo',
+  'apidra', 'afrezza', 'semglee', 'rezvoglar',
+];
+
+const SPECIALTY_DRUG_NAMES: ReadonlyArray<string> = [
+  'humira', 'stelara', 'enbrel', 'otezla', 'xeljanz', 'rinvoq',
+  'dupixent', 'cosentyx', 'skyrizi', 'tremfya', 'kevzara',
+  'ocrevus', 'tysabri', 'tecfidera', 'revlimid', 'imbruvica',
+  'keytruda', 'opdivo', 'ibrance', 'pomalyst', 'jakafi',
+  'venclexta', 'kalydeco', 'orkambi', 'trikafta', 'spinraza',
+];
+
+const includesAny = (haystack: string, needles: ReadonlyArray<string>): boolean => {
+  const h = haystack.toLowerCase();
+  return needles.some((n) => h.includes(n));
 };
 
-/**
- * Classify the client into ONE primary archetype. Priority order
- * (most-specific first):
- *   specialty_drug → insulin_dependent → complex_polypharmacy →
- *   provider_locked → multi_chronic → single_chronic →
- *   healthy_newly_eligible (age 65) → healthy_established (66-74).
- *
- * Provider-locked sits in the middle because two providers + complex
- * meds means the polypharmacy classification is more decision-relevant
- * than the network preference (which is a soft +5 in broker-rules).
- */
-export function classifyArchetype(args: ClassifyArgs): ArchetypeMatch {
-  const { age, conditionSet, medications, providers, isInsulinUser, hasSpecialtyDrug } = args;
-  const certainOrLikely = args.conditions.filter((d) => d.confidence !== 'possible').length;
+const DETECT: Record<Exclude<ClientArchetype, 'general'>, (p: ArchetypeProfile) => boolean> = {
+  specialty_drug: (p) =>
+    p.medications.some((m) => includesAny(m.name, SPECIALTY_DRUG_NAMES)),
 
-  if (hasSpecialtyDrug) return { archetype: 'specialty_drug', ...SPECIALTY_DRUG };
-  if (isInsulinUser) return { archetype: 'insulin_dependent', ...INSULIN_DEPENDENT };
-  if (medications.length >= 5) return { archetype: 'complex_polypharmacy', ...COMPLEX_POLYPHARMACY };
-  if (providers.length >= 2 && conditionSet.size <= 1) {
-    return { archetype: 'provider_locked', ...PROVIDER_LOCKED };
+  dual_eligible: (p) => p.dualEligible === true,
+
+  insulin_dependent: (p) =>
+    p.medications.some((m) => includesAny(m.name, INSULIN_NAMES)),
+
+  complex_polypharmacy: (p) => p.medications.length >= 5,
+
+  multi_chronic: (p) => {
+    const chronic = p.conditions.filter((c) => CHRONIC_CONDITION_KEYS.has(c));
+    return chronic.length >= 2;
+  },
+
+  single_chronic: (p) => {
+    const chronic = p.conditions.filter((c) => CHRONIC_CONDITION_KEYS.has(c));
+    return chronic.length === 1;
+  },
+
+  provider_locked: (p) => p.providerCount >= 2,
+
+  // Strict: 65 exactly, ≤1 med, no chronic conditions. The "newly
+  // eligible" framing assumes you're on the cusp of Medicare and
+  // optimizing for first-year benefits. Conditions are filtered
+  // through CHRONIC_CONDITION_KEYS so a single BP med (hypertension
+  // likely) doesn't kick the user out of healthy.
+  healthy_newly_eligible: (p) =>
+    p.age === 65 &&
+    p.medications.length <= 1 &&
+    p.conditions.filter((c) => CHRONIC_CONDITION_KEYS.has(c)).length === 0,
+
+  // Stable established beneficiary: 66–74, ≤2 meds, no chronic
+  // conditions. Past the newly-eligible window but not yet at the
+  // age where utilization spikes.
+  healthy_established: (p) =>
+    p.age != null &&
+    p.age >= 66 &&
+    p.age <= 74 &&
+    p.medications.length <= 2 &&
+    p.conditions.filter((c) => CHRONIC_CONDITION_KEYS.has(c)).length === 0,
+};
+
+export function classifyArchetype(p: ArchetypeProfile): ClientArchetype {
+  for (const a of ARCHETYPE_PRIORITY) {
+    if (DETECT[a](p)) return a;
   }
-  if (certainOrLikely >= 2) return { archetype: 'multi_chronic', ...MULTI_CHRONIC };
-  if (certainOrLikely >= 1) return { archetype: 'single_chronic', ...SINGLE_CHRONIC };
-  if (age != null && age <= 65) return { archetype: 'healthy_newly_eligible', ...HEALTHY_NEWLY_ELIGIBLE };
-  return { archetype: 'healthy_established', ...HEALTHY_ESTABLISHED };
+  return 'general';
 }
 
-// ─── Red-flag engine ──────────────────────────────────────────────────
+// ─── Archetype rule table ────────────────────────────────────────────
 
-export type RedFlagSeverity = 'critical' | 'penalty' | 'flag' | 'disqualify';
+export const ARCHETYPE_RULES: Record<ClientArchetype, ArchetypeRule> = {
+  // Specialty drug economics dominate — the Tier 5 coinsurance % is
+  // the single biggest cost lever; OOP is secondary because they'll
+  // hit Rx MOOP either way.
+  specialty_drug: {
+    weights: { drug: 0.70, oop: 0.20, extras: 0.10 },
+    planTypes: ['MAPD'],
+    criticalFactors: [
+      'Tier 5 coinsurance % (varies 25–33%)',
+      'Specialty drug copay cap if any',
+      'Rx out-of-pocket maximum (will be reached)',
+      'Step-therapy / prior-auth requirements',
+      'Manufacturer assistance program eligibility',
+    ],
+    redFlagFamilies: ['critical_drug', 'star_rating'],
+  },
 
-export interface RedFlag {
+  // Dual-eligible (Medicare + Medicaid): D-SNP plans typically have
+  // $0 premium, $0 drug copays, and lifeline extras (transportation,
+  // meals, OTC card). Drug + OOP weights drop to near-zero; extras
+  // dominate because that's the differentiator across D-SNPs.
+  dual_eligible: {
+    weights: { drug: 0.10, oop: 0.20, extras: 0.70 },
+    planTypes: ['D-SNP', 'MAPD'],
+    criticalFactors: [
+      'D-SNP availability with provider in-network',
+      'Transportation benefit (covered rides to appointments)',
+      'OTC / grocery card monthly value',
+      'Meal benefit (post-discharge or chronic)',
+      'Dental + vision + hearing depth (Medicaid covers little of these)',
+      'Care coordination (built into D-SNP)',
+    ],
+    redFlagFamilies: ['dual_dsnp_match', 'dual_on_mapd', 'all_providers_out', 'star_rating'],
+  },
+
+  // Insulin-dependent: $35/mo IRA cap is mandatory; supplies
+  // coverage is the next biggest lever. Drugs and OOP roughly
+  // co-equal because endocrinology + lab utilization is high.
+  insulin_dependent: {
+    weights: { drug: 0.55, oop: 0.30, extras: 0.15 },
+    planTypes: ['C-SNP', 'MAPD'],
+    criticalFactors: [
+      '$35/month insulin cap (IRA — mandatory)',
+      'Insulin tier placement (some plans Tier 2 $0, others Tier 3 $47)',
+      'Diabetic supplies coverage ($0 strips/lancets/CGM)',
+      'Endocrinologist copay × 4 visits/yr',
+      'A1C lab frequency coverage',
+    ],
+    redFlagFamilies: ['insulin_cap', 'diabetic_supplies', 'all_providers_out', 'star_rating'],
+  },
+
+  // Polypharmacy: 5+ drugs means even a $0 plan with one missing
+  // drug becomes the most expensive plan. Drug coverage trumps
+  // everything else.
+  complex_polypharmacy: {
+    weights: { drug: 0.60, oop: 0.30, extras: 0.10 },
+    planTypes: ['MAPD', 'C-SNP'],
+    criticalFactors: [
+      'Total monthly drug cost across ALL meds',
+      'Number of drugs NOT on formulary (any miss is critical)',
+      'Rx deductible (hit fast with 5+ drugs)',
+      'Tier-3/4 coinsurance vs. flat copay',
+      'Coverage gap implications',
+    ],
+    redFlagFamilies: ['critical_drug', 'all_providers_out', 'star_rating'],
+  },
+
+  // Multi-chronic: MOOP is king — these patients WILL hit MOOP
+  // through a hospitalization. Inpatient + ER copays drive the
+  // worst-case dollars more than monthly drug costs.
+  multi_chronic: {
+    weights: { drug: 0.35, oop: 0.50, extras: 0.15 },
+    planTypes: ['C-SNP', 'MAPD'],
+    criticalFactors: [
+      'MOOP — they WILL hit it',
+      'Inpatient copay per day (will be admitted)',
+      'ER copay (will use it)',
+      'Specialist copay × multiple specialists',
+      'Care coordination (managing 2+ conditions)',
+      'All-drugs-on-formulary check',
+      'Telehealth + ambulance coverage',
+    ],
+    redFlagFamilies: [
+      'chronic_maxmoop',
+      'critical_drug',
+      'all_providers_out',
+      'chf_high_inpatient',
+      'star_rating',
+      'narrow_network_multi_specialist',
+    ],
+  },
+
+  // Single-chronic: drug + OOP equally important. C-SNP if
+  // available — purpose-built for the condition and usually $0
+  // copays on condition meds.
+  single_chronic: {
+    weights: { drug: 0.40, oop: 0.40, extras: 0.20 },
+    planTypes: ['C-SNP', 'MAPD'],
+    criticalFactors: [
+      'C-SNP availability with provider in-network',
+      'Cost of the condition-driver drug',
+      'MOOP — they WILL use healthcare',
+      'Condition-specific supplies coverage',
+      'Specialist copay × ~4 visits/yr',
+      'Lab copay × ~6 draws/yr',
+      'Care coordination (built into C-SNP)',
+    ],
+    redFlagFamilies: [
+      'chronic_maxmoop',
+      'critical_drug',
+      'all_providers_out',
+      'diabetic_supplies',
+      'chf_high_inpatient',
+      'copd_inhaler_tier4',
+      'star_rating',
+    ],
+  },
+
+  // Provider-locked: 2+ providers they want to keep. Drug + OOP
+  // moderate; the implicit "plan must keep all providers" lives in
+  // the brain's allProvidersOutOfNetwork disqualifier, not as an
+  // explicit weight.
+  provider_locked: {
+    weights: { drug: 0.30, oop: 0.30, extras: 0.40 },
+    planTypes: ['PPO', 'HMO-POS', 'MAPD'],
+    criticalFactors: [
+      'ALL providers must be in-network',
+      'PPO vs. HMO — referral requirements',
+      'Out-of-network coverage as safety net (PPO)',
+    ],
+    redFlagFamilies: ['all_providers_out', 'narrow_network_multi_specialist', 'star_rating'],
+  },
+
+  // Healthy newly-eligible (65, ≤1 med): extras dominate. Giveback,
+  // OTC, dental, vision, fitness — the year-one benefits beat
+  // everything else when drug costs are pennies.
+  healthy_newly_eligible: {
+    weights: { drug: 0.15, oop: 0.25, extras: 0.60 },
+    planTypes: ['giveback', 'MAPD'],
+    criticalFactors: [
+      'Part B giveback amount',
+      'OTC card monthly value',
+      'Dental coverage tier',
+      'Vision allowance',
+      'Fitness benefit',
+    ],
+    redFlagFamilies: ['giveback_trap', 'star_rating'],
+  },
+
+  // Healthy established (66–74, ≤2 meds): same shape as newly
+  // eligible but slightly more weight on OOP — they're aging into
+  // higher utilization probability.
+  healthy_established: {
+    weights: { drug: 0.20, oop: 0.30, extras: 0.50 },
+    planTypes: ['giveback', 'MAPD'],
+    criticalFactors: [
+      'Part B giveback amount',
+      'Low MOOP (peace of mind)',
+      'OTC card',
+      'Dental + vision',
+    ],
+    redFlagFamilies: ['giveback_trap', 'star_rating'],
+  },
+
+  // General: catch-all for users that don't fit a specific story.
+  // Falls back to standard 50/30/20 — same as the legacy default.
+  general: {
+    weights: { drug: 0.50, oop: 0.30, extras: 0.20 },
+    planTypes: ['MAPD'],
+    criticalFactors: [
+      'Drug coverage + total cost',
+      'MOOP exposure',
+      'Provider network',
+      'Extras value',
+    ],
+    redFlagFamilies: ['critical_drug', 'all_providers_out', 'star_rating'],
+  },
+};
+
+// ─── Medication patterns ─────────────────────────────────────────────
+//
+// What a broker spots in the first 5 seconds of looking at a med list.
+// Each pattern has a `variant` slot so a single pattern (e.g.
+// 'diabetes_escalation') can resolve to one of several variants
+// ('moderate' / 'aggressive' / 'insulin_dependent') with different
+// implication copy. Variants are mutually exclusive within a pattern.
+
+export interface MedicationPattern {
+  /** Pattern family id — stable for analytics. */
   id: string;
-  severity: RedFlagSeverity;
-  message: string;
-  /** Composite-score adjustment (negative for penalty, 0 otherwise).
-   *  Disqualify rules don't move the score — they remove the plan
-   *  from the eligible pool entirely. */
-  pointsAdjustment: number;
-  /** True when this flag should remove the plan from the final
-   *  ranking (e.g. all providers out-of-network). */
-  disqualify: boolean;
+  /** Variant within the family. */
+  variant: string;
+  /** Sentence-ready broker copy for surface in the Report Card or
+   *  agent dashboard. */
+  implication: string;
 }
 
-interface RedFlagContext {
-  hasChronicCondition: boolean;
-  isInsulinUser: boolean;
-  /** Names of medications whose annual cost is ≥80% of total Rx cost.
-   *  Caller derives this from the per-rxcui drug-cost map. */
-  costDriverRxcuis: string[];
-  /** True when the cost-driver drug has NO formulary row on this
-   *  plan. Caller threads this in. */
-  costDriverNotOnFormulary: boolean;
-  /** Net giveback delta — positive when this plan's giveback exceeds
-   *  the cheapest non-giveback alternative's drug-cost differential.
-   *  Negative means the giveback is a "trap" (saving $30/mo on premium
-   *  costs the client $50/mo more in drugs). */
-  givebackTrapDelta: number;
+interface PatternFamily {
+  id: string;
+  detect: (meds: ReadonlyArray<{ name: string }>) => string | null;
+  variants: Record<string, string>;
 }
 
-/**
- * Detect red flags for one (plan, scoredPlan) pair. Severity drives UI:
- *   critical    — show ⚠ banner, broker should think twice
- *   penalty     — score adjustment, surfaced in tooltip
- *   flag        — informational, no score change
- *   disqualify  — remove from ranking
- */
-export function detectRedFlags(
-  plan: Plan,
-  scored: ScoredPlan,
-  ctx: RedFlagContext,
-): RedFlag[] {
-  const out: RedFlag[] = [];
+const PATTERN_FAMILIES: ReadonlyArray<PatternFamily> = [
+  {
+    id: 'diabetes_escalation',
+    detect: (meds) => {
+      const has = (names: ReadonlyArray<string>) => meds.some((m) => includesAny(m.name, names));
+      const biguanide = has(['metformin']);
+      const glp1 = has(['ozempic', 'semaglutide', 'trulicity', 'mounjaro', 'rybelsus', 'zepbound']);
+      const sglt2 = has(['jardiance', 'farxiga', 'invokana', 'empagliflozin', 'dapagliflozin']);
+      const insulin = has(INSULIN_NAMES);
+      if (insulin) return 'insulin_dependent';
+      if (biguanide && glp1 && sglt2) return 'aggressive';
+      if (biguanide && glp1) return 'moderate';
+      return null;
+    },
+    variants: {
+      moderate:
+        'Diabetes not controlled on Metformin alone — doctor added an injectable. Expect endocrinology visits, A1C every 3 months, possible insulin within 1–2 years.',
+      aggressive:
+        'Triple therapy — diabetes is being managed aggressively. High utilization expected. MOOP and supplies coverage are load-bearing. C-SNP is ideal if available.',
+      insulin_dependent:
+        'Insulin-dependent — highest diabetes utilization. $35/mo IRA cap is mandatory; supplies coverage critical. C-SNP if available.',
+    },
+  },
 
-  // 1. Chronic condition + MOOP at CMS regulatory ceiling. The
-  // broker-rules layer already penalizes -25; the red-flag engine
-  // surfaces the same signal as a CRITICAL warning so the UI shows a
-  // banner the broker can't miss. Both can fire — they live in
-  // different layers (rules adjust composite, flags drive UI).
-  if (ctx.hasChronicCondition && (plan.moop_in_network ?? 0) >= 7550) {
-    out.push({
-      id: 'chronic_at_moop_ceiling',
-      severity: 'critical',
-      message: `MOOP $${(plan.moop_in_network ?? 0).toLocaleString()} is at the CMS regulatory ceiling — chronic-condition clients hit MOOP fast`,
-      pointsAdjustment: 0, // already penalized in broker-rules
-      disqualify: false,
-    });
+  {
+    id: 'cardiac_cascade',
+    detect: (meds) => {
+      const has = (names: ReadonlyArray<string>) => meds.some((m) => includesAny(m.name, names));
+      const beta = has(['metoprolol', 'carvedilol', 'atenolol', 'bisoprolol']);
+      const aceArb = has(['lisinopril', 'losartan', 'valsartan', 'enalapril', 'ramipril', 'olmesartan']);
+      const anticoag = has(['eliquis', 'xarelto', 'warfarin', 'coumadin', 'apixaban', 'rivaroxaban']);
+      const entresto = has(['entresto', 'sacubitril/valsartan']);
+      const diuretic = has(['furosemide', 'bumetanide', 'spironolactone', 'torsemide']);
+      if (entresto) return 'chf_confirmed';
+      if (beta && aceArb && diuretic) return 'chf_likely';
+      if (anticoag && beta) return 'afib_cardiac';
+      if (beta && aceArb) return 'hypertension_managed';
+      return null;
+    },
+    variants: {
+      chf_confirmed:
+        'Entresto = confirmed heart failure. Hospital readmission risk dominates plan choice. C-SNP for heart conditions if available.',
+      chf_likely:
+        'Beta blocker + ACE/ARB + diuretic = likely heart failure. Expect cardiology visits, echo, BNP labs. MOOP matters more than drug cost.',
+      afib_cardiac:
+        'Anticoagulant + beta blocker = atrial fibrillation. INR monitoring if on warfarin. Cardiology 2–4×/year.',
+      hypertension_managed:
+        'Blood pressure managed with two drugs. Stable. Don\'t overweight cardiac risk in scoring.',
+    },
+  },
+
+  {
+    id: 'respiratory_burden',
+    detect: (meds) => {
+      const has = (names: ReadonlyArray<string>) => meds.some((m) => includesAny(m.name, names));
+      const icsLaba = has(['symbicort', 'breo', 'advair', 'trelegy', 'wixela', 'dulera']);
+      const lama = has(['spiriva', 'tiotropium', 'incruse', 'tudorza']);
+      const rescue = has(['albuterol', 'proair', 'ventolin', 'proventil', 'levalbuterol']);
+      if (icsLaba && lama) return 'copd_severe';
+      if (icsLaba) return 'copd_moderate';
+      if (rescue && !icsLaba) return 'asthma_mild';
+      return null;
+    },
+    variants: {
+      copd_severe:
+        'ICS/LABA + LAMA = severe COPD. High ER risk. Pulmonary rehab + inhaler costs drive plan choice.',
+      copd_moderate:
+        'Maintenance inhaler = moderate COPD. Inhaler tier (3 vs 4) is the key cost differentiator.',
+      asthma_mild:
+        'Rescue inhaler only = mild asthma. Not a major plan driver.',
+    },
+  },
+
+  {
+    id: 'cv_prevention',
+    detect: (meds) => {
+      const has = (names: ReadonlyArray<string>) => meds.some((m) => includesAny(m.name, names));
+      const statin = has(['atorvastatin', 'rosuvastatin', 'simvastatin', 'pravastatin', 'lovastatin']);
+      const bp = has([
+        'lisinopril', 'losartan', 'amlodipine', 'metoprolol', 'hydrochlorothiazide',
+        'valsartan', 'enalapril', 'olmesartan',
+      ]);
+      if (statin && bp) return 'standard_prevention';
+      return null;
+    },
+    variants: {
+      standard_prevention:
+        'Statin + BP med = doctor protecting against cardiovascular events. All Tier-1 generics — drug cost is NOT the differentiator. Focus on MOOP, extras, provider network.',
+    },
+  },
+
+  {
+    id: 'pain_complexity',
+    detect: (meds) => {
+      const has = (names: ReadonlyArray<string>) => meds.some((m) => includesAny(m.name, names));
+      const gaba = has(['gabapentin', 'pregabalin', 'lyrica']);
+      const dulox = has(['duloxetine', 'cymbalta']);
+      if (gaba && dulox) return 'neuropathic_pain';
+      if (gaba) return 'nerve_pain';
+      return null;
+    },
+    variants: {
+      neuropathic_pain:
+        'Two pain medications = chronic pain management. May need pain specialist. All generics — focus on specialist copay and provider network.',
+      nerve_pain:
+        'Single nerve-pain medication — common and not a major plan driver.',
+    },
+  },
+];
+
+export function detectMedicationPatterns(
+  meds: ReadonlyArray<{ name: string }>,
+): MedicationPattern[] {
+  if (meds.length === 0) return [];
+  const out: MedicationPattern[] = [];
+  for (const fam of PATTERN_FAMILIES) {
+    const variant = fam.detect(meds);
+    if (variant && fam.variants[variant]) {
+      out.push({ id: fam.id, variant, implication: fam.variants[variant] });
+    }
   }
-
-  // 2. Insulin user without $35 cap. After the IRA, every Part D plan
-  // is required to honor $35/mo for insulin — but if our drug-cost
-  // engine sees a higher figure (data lag, preferred/non-preferred
-  // mismatch), penalize so the broker investigates.
-  if (ctx.isInsulinUser) {
-    // Caller-side note: scored.totalAnnualDrugCost / 12 / numInsulins
-    // > 35 would indicate a violation. We rely on the broker-rules
-    // "insulin_with_cap" boost firing as an "OK signal"; absence isn't
-    // a red flag by itself, so we DON'T fire here unless we have
-    // explicit evidence of a violation. Keeps false positives down.
-  }
-
-  // 3. All providers out of network → DISQUALIFY. The plan is
-  // unusable for this client; remove it entirely so the broker
-  // doesn't waste airtime explaining why "this $0 premium plan"
-  // isn't viable.
-  if (scored.providerNetworkStatus === 'all_out') {
-    out.push({
-      id: 'all_providers_out',
-      severity: 'disqualify',
-      message: 'Every listed provider is out-of-network on this plan',
-      pointsAdjustment: 0,
-      disqualify: true,
-    });
-  }
-
-  // 4. Cost-driver drug not on formulary. If the drug that accounts
-  // for ≥80% of the client's annual Rx cost has no formulary row,
-  // every other consideration is moot — this plan won't cover the
-  // drug at all, the client will pay full cash.
-  if (ctx.costDriverRxcuis.length > 0 && ctx.costDriverNotOnFormulary) {
-    out.push({
-      id: 'cost_driver_off_formulary',
-      severity: 'penalty',
-      message: `Cost-driver drug not on this plan's formulary — client pays full cash for ≥80% of Rx spend`,
-      pointsAdjustment: -25,
-      disqualify: false,
-    });
-  }
-
-  // 5. Giveback trap. Plan offers a Part B giveback but the cheaper
-  // premium is offset by higher drug costs vs alternatives. Surface
-  // as FLAG (no score change) because the broker should explain the
-  // tradeoff rather than the engine silently demoting it.
-  if ((plan.part_b_giveback ?? 0) > 0 && ctx.givebackTrapDelta < 0) {
-    out.push({
-      id: 'giveback_trap',
-      severity: 'flag',
-      message: `Part B giveback (-$${plan.part_b_giveback}/mo) is offset by $${Math.abs(ctx.givebackTrapDelta)}/yr higher drug costs vs alternatives`,
-      pointsAdjustment: 0,
-      disqualify: false,
-    });
-  }
-
   return out;
 }
 
-// ─── Why-switch copy generation ───────────────────────────────────────
+// ─── Red flags ───────────────────────────────────────────────────────
+//
+// Scored AFTER broker rules. Each flag declares its action:
+//   disqualify → plan is removed from Top 3 selection.
+//   penalize  → composite score gets `points` added (negative penalty).
+//   warn      → no score change; flag attaches for UI.
+//   flag      → no score change; flag attaches for UI (lower-severity
+//               warn synonym, kept distinct so analytics can split).
+//
+// Severity is independent of action — a 'medium' severity flag with
+// 'penalize' costs less than a 'high' one.
 
-export interface WhySwitchInputs {
-  archetype: Archetype;
-  /** Annual savings vs the baseline column ($/yr; positive = saves). */
-  savings: number | null;
-  /** Plan being described (the alternative, not the baseline). */
-  plan: Plan;
-  scored: ScoredPlan;
+export type RedFlagSeverity = 'critical' | 'high' | 'medium' | 'low';
+export type RedFlagAction = 'disqualify' | 'penalize' | 'warn' | 'flag';
+
+export type RedFlagFamily =
+  | 'chronic_maxmoop'
+  | 'insulin_cap'
+  | 'all_providers_out'
+  | 'critical_drug'
+  | 'diabetic_supplies'
+  | 'chf_high_inpatient'
+  | 'copd_inhaler_tier4'
+  | 'giveback_trap'
+  | 'star_rating'
+  | 'narrow_network_multi_specialist'
+  | 'dual_dsnp_match'
+  | 'dual_on_mapd';
+
+export interface RedFlagInstance {
+  id: RedFlagFamily;
+  severity: RedFlagSeverity;
+  action: RedFlagAction;
+  message: string;
+  points?: number;
 }
 
-/**
- * Archetype-specific copy for the "Why switch?" row. Falls back to a
- * generic savings line when nothing archetype-specific applies.
- *
- * The broker's voice changes by archetype:
- *   healthy_*           — lead with extras dollar value
- *   single_chronic      — lead with MOOP + provider fit
- *   multi_chronic       — lead with MOOP, then provider
- *   complex_polypharmacy — lead with Rx coverage breadth
- *   insulin_dependent   — confirm $35 cap, then savings
- *   specialty_drug      — confirm formulary tier, then PA/ST status
- *   provider_locked     — lead with network fit
- */
-export function whySwitchCopy(input: WhySwitchInputs): string {
-  const { archetype, savings, plan, scored } = input;
+const MAINT_INHALER_NAMES: ReadonlyArray<string> = [
+  'symbicort', 'breo', 'advair', 'trelegy', 'spiriva',
+  'incruse', 'tudorza', 'wixela', 'dulera', 'anoro',
+];
 
-  const savingsBit = savings != null && savings > 50
-    ? `Saves $${Math.round(savings).toLocaleString()}/yr`
-    : savings != null && savings < -50
-      ? `Costs $${Math.round(-savings).toLocaleString()} more/yr`
-      : null;
+interface RedFlagDef {
+  family: RedFlagFamily;
+  severity: RedFlagSeverity;
+  action: RedFlagAction;
+  /** Negative — added to composite when action === 'penalize'. */
+  points?: number;
+  check: (profile: ArchetypeProfile, plan: BrainScoredPlan) => boolean;
+  message: (profile: ArchetypeProfile, plan: BrainScoredPlan) => string;
+}
 
-  const networkBit = scored.providerNetworkStatus === 'all_in' ? 'all docs in-network' : null;
-  const moopBit = `$${plan.moop_in_network.toLocaleString()} MOOP`;
+const RED_FLAG_DEFS: ReadonlyArray<RedFlagDef> = [
+  {
+    family: 'chronic_maxmoop',
+    severity: 'critical',
+    action: 'warn',
+    check: (p, plan) => {
+      const hasChronic = p.conditions.some((c) => CHRONIC_CONDITION_KEYS.has(c));
+      return hasChronic && (plan.row.moop ?? 0) >= 7500;
+    },
+    message: (_p, plan) =>
+      `MOOP $${(plan.row.moop ?? 0).toLocaleString()} — at the CMS ceiling. With your conditions, one bad year hits the maximum.`,
+  },
 
-  switch (archetype) {
-    case 'healthy_newly_eligible':
-    case 'healthy_established': {
-      const extras: string[] = [];
-      if (plan.benefits.dental.annual_max > 1000) extras.push(`$${plan.benefits.dental.annual_max} dental`);
-      if (plan.benefits.otc.allowance_per_quarter > 0) extras.push(`$${plan.benefits.otc.allowance_per_quarter * 4}/yr OTC`);
-      if (plan.benefits.food_card.allowance_per_month > 0) extras.push(`$${plan.benefits.food_card.allowance_per_month * 12}/yr food`);
-      if ((plan.part_b_giveback ?? 0) > 0) extras.push(`$${plan.part_b_giveback}/mo giveback`);
-      const lead = extras.slice(0, 2).join(' · ') || 'standard extras';
-      return [savingsBit, lead].filter(Boolean).join(' · ');
-    }
-    case 'single_chronic':
-    case 'multi_chronic': {
-      return [savingsBit, moopBit, networkBit].filter(Boolean).join(' · ');
-    }
-    case 'complex_polypharmacy': {
-      const uncov = scored.uncoveredDrugRxcuis.length;
-      const rxBit = uncov > 0 ? `${uncov} uncovered drug${uncov > 1 ? 's' : ''}` : 'all meds covered';
-      return [savingsBit, rxBit, moopBit].filter(Boolean).join(' · ');
-    }
-    case 'insulin_dependent': {
-      return [savingsBit, '$35/mo insulin cap', networkBit].filter(Boolean).join(' · ');
-    }
-    case 'specialty_drug': {
-      return [savingsBit, 'verify Tier 5 PA/ST', moopBit].filter(Boolean).join(' · ');
-    }
-    case 'provider_locked': {
-      const ppoBit = /\bPPO\b/i.test(plan.plan_name) ? 'PPO flexibility' : null;
-      return [networkBit, ppoBit, savingsBit].filter(Boolean).join(' · ');
-    }
+  {
+    family: 'insulin_cap',
+    severity: 'critical',
+    action: 'penalize',
+    points: -30,
+    check: (p, plan) => {
+      // Only fires for insulin-dependent users. Approximation: if
+      // any insulin in the user's list has a formulary copay > 35
+      // on this plan, the plan isn't honoring the IRA cap (or has
+      // it filed in a way we can't see).
+      const userInsulins = p.medications.filter((m) => includesAny(m.name, INSULIN_NAMES));
+      if (userInsulins.length === 0) return false;
+      for (const ins of userInsulins) {
+        if (!ins.rxcui) continue;
+        const cov = plan.formulary.get(ins.rxcui);
+        if (!cov || cov.tier == null) continue;
+        const tierBenefit = plan.benefits.find((b) => b.benefit_category === `rx_tier_${cov.tier}`);
+        const copay = tierBenefit?.copay ?? null;
+        if (copay != null && copay > 35) return true;
+      }
+      return false;
+    },
+    message: () =>
+      'Insulin tier copay above the $35/month IRA cap on this plan — could cost hundreds more per month than a compliant plan.',
+  },
+
+  {
+    family: 'all_providers_out',
+    severity: 'critical',
+    action: 'disqualify',
+    check: (_p, plan) => plan.score.allProvidersOutOfNetwork,
+    message: () => 'None of your providers accept this plan.',
+  },
+
+  {
+    family: 'critical_drug',
+    severity: 'high',
+    action: 'penalize',
+    points: -25,
+    check: (p, plan) => {
+      // Cost-driver drug = highest-tier drug on the user's list.
+      // If it's tier 3+ AND not covered on this plan, the plan is
+      // structurally wrong for this user.
+      let driver: { rxcui?: string; name: string; tier: number } | null = null;
+      for (const m of p.medications) {
+        if (!m.rxcui) continue;
+        const cov = plan.formulary.get(m.rxcui);
+        const tier = cov?.tier ?? 0;
+        if (driver == null || tier > driver.tier) {
+          driver = { rxcui: m.rxcui, name: m.name, tier };
+        }
+      }
+      if (!driver || driver.tier < 3) return false;
+      const cov = driver.rxcui ? plan.formulary.get(driver.rxcui) : undefined;
+      return !cov;
+    },
+    message: (p) => {
+      // Re-derive the driver name for the message — keeps the
+      // function pure (no shared state with check).
+      let driverName = 'your most expensive medication';
+      for (const m of p.medications) {
+        if (m.name) driverName = m.name;
+      }
+      return `${driverName} is not on this plan's formulary.`;
+    },
+  },
+
+  {
+    family: 'diabetic_supplies',
+    severity: 'medium',
+    action: 'penalize',
+    points: -15,
+    check: (p, plan) => {
+      const isDiabetic = p.conditions.includes('diabetes');
+      if (!isDiabetic) return false;
+      // Insulin/supplies category in pbp_benefits is keyed 'insulin'
+      // by the medicare_gov mapper. Absent = not covered.
+      return !plan.benefits.some((b) => b.benefit_category === 'insulin');
+    },
+    message: () => 'Diabetic supplies (test strips, lancets, glucose monitor) not covered.',
+  },
+
+  {
+    family: 'chf_high_inpatient',
+    severity: 'medium',
+    action: 'penalize',
+    points: -10,
+    check: (p, plan) => {
+      const isChf = p.conditions.includes('chf') || p.conditions.includes('cardio');
+      if (!isChf) return false;
+      const ip = plan.benefits.find((b) => b.benefit_category === 'inpatient');
+      const perDay = ip?.copay ?? 0;
+      return perDay > 300;
+    },
+    message: (_p, plan) => {
+      const ip = plan.benefits.find((b) => b.benefit_category === 'inpatient');
+      const perDay = ip?.copay ?? 0;
+      return `$${perDay}/day inpatient copay — risky for heart failure (high readmission rate).`;
+    },
+  },
+
+  {
+    family: 'copd_inhaler_tier4',
+    severity: 'medium',
+    action: 'penalize',
+    points: -10,
+    check: (p, plan) => {
+      const isCopd = p.conditions.includes('copd');
+      if (!isCopd) return false;
+      const userInhalers = p.medications.filter((m) => includesAny(m.name, MAINT_INHALER_NAMES));
+      if (userInhalers.length === 0) return false;
+      return userInhalers.some((m) => {
+        if (!m.rxcui) return false;
+        const cov = plan.formulary.get(m.rxcui);
+        return cov?.tier != null && cov.tier >= 4;
+      });
+    },
+    message: () =>
+      'Maintenance inhaler is Tier 4 on this plan — expect higher copays than tier-3 alternatives.',
+  },
+
+  {
+    family: 'giveback_trap',
+    severity: 'high',
+    action: 'flag',
+    check: (_p, plan) => {
+      // True if the giveback's annual value is less than the plan's
+      // annual drug cost relative to the cheapest plan's drug cost.
+      // We don't have cross-plan context here, so approximate: a
+      // plan with a giveback AND a totalAnnualDrugCost > $1,000
+      // is a candidate. The message phrases it as a question —
+      // surface, don't disqualify.
+      const giveback = plan.score.partBGivebackAnnual ?? 0;
+      const drugCost = plan.score.totalAnnualDrugCost ?? 0;
+      return giveback > 0 && drugCost > giveback;
+    },
+    message: (_p, plan) => {
+      const monthly = Math.round((plan.score.partBGivebackAnnual ?? 0) / 12);
+      return `Plan gives back $${monthly}/mo but your drugs cost $${(plan.score.totalAnnualDrugCost ?? 0).toLocaleString()}/yr on it — check the math vs. cheaper-drug alternatives.`;
+    },
+  },
+
+  {
+    family: 'star_rating',
+    severity: 'medium',
+    action: 'penalize',
+    points: -10,
+    check: (_p, plan) => {
+      // PmPlanRow doesn't currently expose star_rating uniformly.
+      // Until we expose it, this flag is dormant — kept as a stub
+      // so the wiring is in place when the data lands. Returns
+      // false so it never fires; check is here for shape-stability.
+      const rating = (plan.row as { star_rating?: number | null }).star_rating ?? null;
+      return rating != null && rating < 3.0;
+    },
+    message: (_p, plan) => {
+      const rating = (plan.row as { star_rating?: number | null }).star_rating ?? null;
+      return `Below-average CMS star rating (${rating?.toFixed(1) ?? '?'}/5).`;
+    },
+  },
+
+  {
+    family: 'narrow_network_multi_specialist',
+    severity: 'low',
+    action: 'penalize',
+    points: -5,
+    check: (p, plan) => {
+      if (p.providerCount < 2) return false;
+      const planType = (plan.row.plan_type ?? '').toUpperCase();
+      // Strict HMO (without -POS) means no out-of-network fallback.
+      return planType.includes('HMO') && !planType.includes('POS') && !planType.includes('PPO');
+    },
+    message: () =>
+      'Strict HMO with multiple specialists — referrals required for each specialist visit.',
+  },
+
+  // ── Dual-eligibility red flags ──────────────────────────────────────
+  // These two pair up: a dual user gets a positive boost for D-SNP
+  // plans and a warn (no points) for standard MAPD. The boost +
+  // warn together steer the dual toward the D-SNP without disqualifying
+  // the MAPD outright (some duals deliberately stay on MAPD for
+  // network reasons — broker call, not a hard exclusion).
+
+  {
+    family: 'dual_dsnp_match',
+    severity: 'high',
+    action: 'penalize',  // negative-conventioned action, positive points = boost
+    points: 20,
+    check: (p, plan) => {
+      if (!p.dualEligible) return false;
+      const t = (plan.row.snp_type ?? '').toLowerCase();
+      return t.includes('d-snp') || t.includes('dsnp') || t.includes('dual');
+    },
+    message: () =>
+      'Built for dual-eligible beneficiaries — typically $0 premium, $0 drug copays, and lifeline extras (transportation, meals, OTC).',
+  },
+
+  {
+    family: 'dual_on_mapd',
+    severity: 'high',
+    action: 'warn',
+    check: (p, plan) => {
+      if (!p.dualEligible) return false;
+      const t = (plan.row.snp_type ?? '').toLowerCase();
+      // Fires only on plain MAPD (not D-SNP, not C-SNP). C-SNP can
+      // be a reasonable alternative for a dual with a chronic
+      // condition and the broker may steer there instead.
+      return !t.includes('d-snp') && !t.includes('dsnp') && !t.includes('dual')
+        && !t.includes('c-snp') && !t.includes('csnp') && !t.includes('chronic');
+    },
+    message: () =>
+      'You qualify for a Dual Special Needs Plan — a plain MAPD typically costs you premium and copays a D-SNP would waive.',
+  },
+];
+
+export function evaluateRedFlags(
+  profile: ArchetypeProfile,
+  archetype: ClientArchetype,
+  plan: BrainScoredPlan,
+): RedFlagInstance[] {
+  const families = new Set(ARCHETYPE_RULES[archetype].redFlagFamilies);
+  const out: RedFlagInstance[] = [];
+  for (const def of RED_FLAG_DEFS) {
+    // Only run flags that this archetype subscribes to. Keeps the
+    // diabetic_supplies flag from firing on a healthy newly-eligible
+    // user, etc.
+    if (!families.has(def.family)) continue;
+    if (!def.check(profile, plan)) continue;
+    out.push({
+      id: def.family,
+      severity: def.severity,
+      action: def.action,
+      message: def.message(profile, plan),
+      points: def.points,
+    });
   }
+  return out;
 }

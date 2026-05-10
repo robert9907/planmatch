@@ -1,47 +1,49 @@
-// plan-brain-weights — default weight profiles + redistribution rules.
+// Plan Brain — default weight profiles per population.
 //
-// Drug / OOP / Extras weights sum to 1.0. Defaults differ by population
-// because SNP populations care more about extras (transportation, OTC,
-// dental) and less about drug optimization since their formularies are
-// already tuned for the SNP cohort.
+// The three axes are (in order): drug cost, OOP cost, extras value.
+// The weights below sum to 1.0 within each profile. Adjust here to
+// shift the Brain's preference globally; for per-session overrides
+// the agent dashboard will pass weightsOverride through BrainInputs.
+//
+// Per Rob's spec:
+//   Standard MAPD : 50/30/20 — drugs dominate; most non-SNP seniors
+//                              are healthy enough that OOP differences
+//                              are small year-over-year, and extras
+//                              are nice-to-have not load-bearing.
+//   C-SNP         : 40/25/35 — extras matter more (food card,
+//                              diabetic supplies, meal benefit) for
+//                              chronic-condition populations whose
+//                              drug regimens are similar across plans.
+//   D-SNP         : 35/25/40 — extras dominate. Medicaid covers most
+//                              copays for duals so OOP signal is
+//                              weaker; transportation/OTC/food are
+//                              lifeline benefits.
 
-import type { Population, WeightProfile } from './plan-brain-types';
+import type { BrainWeights, RankPopulation } from './plan-brain-types';
 
-const PROFILES: Record<Population, WeightProfile> = {
-  mapd: { drug: 0.5, oop: 0.3, extras: 0.2 },
-  csnp: { drug: 0.4, oop: 0.25, extras: 0.35 },
-  dsnp: { drug: 0.35, oop: 0.25, extras: 0.4 },
-};
+export const WEIGHTS_STANDARD: BrainWeights = { drug: 0.50, oop: 0.30, extras: 0.20 };
+export const WEIGHTS_CSNP: BrainWeights = { drug: 0.40, oop: 0.25, extras: 0.35 };
+export const WEIGHTS_DSNP: BrainWeights = { drug: 0.35, oop: 0.25, extras: 0.40 };
+// Healthy client — fewer than 3 meds, no chronic condition, no SNP.
+// They won't hit MOOP, so OOP differences between plans are tiny;
+// the Part B giveback is their biggest dollar lever. Bumping extras
+// (which the giveback boost rides through composite scoring) makes
+// giveback plans surface organically in Top 3.
+export const WEIGHTS_HEALTHY: BrainWeights = { drug: 0.40, oop: 0.20, extras: 0.40 };
 
-export function defaultWeights(population: Population): WeightProfile {
-  return { ...PROFILES[population] };
+export function defaultWeightsFor(pop: RankPopulation): BrainWeights {
+  if (pop === 'csnp') return WEIGHTS_CSNP;
+  if (pop === 'dsnp' || pop === 'dsnp-unsure') return WEIGHTS_DSNP;
+  return WEIGHTS_STANDARD;
 }
 
-// When the user has zero medications the drug axis is meaningless —
-// redistribute its weight to OOP (70%) and extras (30%) so the
-// composite still discriminates between plans. Per spec.
-export function redistributeForNoMeds(weights: WeightProfile): WeightProfile {
-  const drugSlice = weights.drug;
+// When the user enters NO drugs the drug axis is meaningless. We
+// redistribute its mass to OOP (70%) and extras (30%) per spec.
+export function noDrugsRedistribution(base: BrainWeights): BrainWeights {
+  const carryover = base.drug;
   return {
     drug: 0,
-    oop: weights.oop + drugSlice * 0.7,
-    extras: weights.extras + drugSlice * 0.3,
-  };
-}
-
-// Allow callers to tweak individual axes (e.g. UI weight sliders) while
-// keeping the sum at 1.0 — proportionally rescale the untouched axes.
-export function applyOverride(
-  base: WeightProfile,
-  override: Partial<WeightProfile> | null | undefined,
-): WeightProfile {
-  if (!override) return base;
-  const next: WeightProfile = { ...base, ...override };
-  const sum = next.drug + next.oop + next.extras;
-  if (sum <= 0) return base;
-  return {
-    drug: next.drug / sum,
-    oop: next.oop / sum,
-    extras: next.extras / sum,
+    oop: base.oop + carryover * 0.7,
+    extras: base.extras + carryover * 0.3,
   };
 }

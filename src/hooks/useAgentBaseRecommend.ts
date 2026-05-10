@@ -18,7 +18,7 @@
 import { useCallback, useRef, useState } from 'react';
 import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
-import type { ScoredPlan, PlanBrainResult } from '@/lib/plan-brain-types';
+import type { ScoredPlan, PlanBrainResult } from '@/hooks/usePlanBrain';
 
 export type RecommendSyncState = 'idle' | 'syncing' | 'synced' | 'retrying' | 'error';
 

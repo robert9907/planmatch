@@ -18,7 +18,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable, { type RowInput } from 'jspdf-autotable';
 import { BROKER, MEDICARE_2026 } from './constants';
-import type { ScoredPlan, PlanBrainResult } from './plan-brain-types';
+import type { ScoredPlan, PlanBrainResult } from '@/hooks/usePlanBrain';
 import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
 
