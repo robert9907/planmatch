@@ -12,6 +12,10 @@
     "typecheck": "tsc -b --noEmit",
     "mg:scrape": "node scripts/scrape-medicare-gov.mjs",
     "db:migrate:print": "cat scripts/migrations/001_pbp_benefits.sql",
+    "formulary:import": "tsx scripts/import-cms-spuf.ts",
+    "formulary:test": "tsx --test scripts/cms-spuf/parser.test.ts",
+    "pbp:import": "tsx scripts/import-cms-pbp.ts",
+    "pbp:test": "tsx --test scripts/cms-pbp/parser.test.ts",
     "provider:fhir-lookup": "tsx scripts/fhir-provider-lookup.ts"
   },
   "dependencies": {
@@ -22,19 +26,27 @@
     "@twilio/voice-sdk": "^2.18.2",
     "@vercel/blob": "^2.3.3",
     "@vercel/node": "^5.7.10",
+    "csv-parse": "^5.5.6",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
+    "pg": "^8.13.0",
+    "pg-copy-streams": "^6.0.6",
     "playwright-core": "^1.59.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "twilio": "^5.13.1",
     "twilio-video": "^2.34.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "yauzl": "^3.2.0",
     "zustand": "^4.5.5"
   },
   "devDependencies": {
     "@types/node": "^22.7.4",
+    "@types/pg": "^8.11.10",
+    "@types/pg-copy-streams": "^1.2.5",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
+    "@types/yauzl": "^2.10.3",
     "@typescript-eslint/parser": "^8.59.0",
     "@vitejs/plugin-react": "^4.3.2",
     "autoprefixer": "^10.4.20",
@@ -43,6 +55,7 @@
     "globals": "^15.15.0",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
+    "tsx": "^4.21.0",
     "typescript": "^5.6.2",
     "vite": "^5.4.8"
   }
