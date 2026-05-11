@@ -7,11 +7,14 @@
 // the savings vs current when positive. Best-per-row cells get a green
 // tint to draw the eye.
 
+import { useState } from 'react';
 import type { Plan } from '@/types/plans';
 import { useSession } from '@/hooks/useSession';
 import { Card, Container, Header, Nav, fmt } from './atoms';
 import {
   annualEstimate,
+  costShareNumeric,
+  formatCostShare,
   formatPcp,
   formatPremium,
   formatSpecialist,
@@ -36,6 +39,7 @@ export function CompareScreen({
   onNext,
 }: Props) {
   const finalists = [brainPick, ...kept].filter((p): p is Plan => !!p);
+  const [showAll, setShowAll] = useState(false);
   // Provider in-network status by plan id, copied off the first
   // provider's networkStatus (matches what swipe + pinned cards show).
   const providers = useSession((s) => s.providers);
@@ -143,6 +147,85 @@ export function CompareScreen({
     },
   ];
 
+  // Full 23-category breakdown — surfaced behind an expander so the
+  // default table stays scannable. Numbers come straight off the
+  // pm_plan_benefits rows the brain already loads, so no extra fetch.
+  const expandedRows: typeof rows = [
+    { l: 'Urgent Care',
+      g: (p) => formatCostShare(p.benefits.medical.urgent_care),
+      c: current ? formatCostShare(current.benefits.medical.urgent_care) : '—',
+      n: (p) => costShareNumeric(p.benefits.medical.urgent_care),
+      cn: current ? costShareNumeric(current.benefits.medical.urgent_care) : null },
+    { l: 'Emergency',
+      g: (p) => formatCostShare(p.benefits.medical.emergency),
+      c: current ? formatCostShare(current.benefits.medical.emergency) : '—' },
+    { l: 'Inpatient (per stay)',
+      g: (p) => formatCostShare(p.benefits.medical.inpatient),
+      c: current ? formatCostShare(current.benefits.medical.inpatient) : '—' },
+    { l: 'Outpatient surg. (hosp)',
+      g: (p) => formatCostShare(p.benefits.medical.outpatient_surgery_hospital),
+      c: current ? formatCostShare(current.benefits.medical.outpatient_surgery_hospital) : '—' },
+    { l: 'Outpatient surg. (ASC)',
+      g: (p) => formatCostShare(p.benefits.medical.outpatient_surgery_asc),
+      c: current ? formatCostShare(current.benefits.medical.outpatient_surgery_asc) : '—' },
+    { l: 'Outpatient observation',
+      g: (p) => formatCostShare(p.benefits.medical.outpatient_observation),
+      c: current ? formatCostShare(current.benefits.medical.outpatient_observation) : '—' },
+    { l: 'Lab services',
+      g: (p) => formatCostShare(p.benefits.medical.lab_services),
+      c: current ? formatCostShare(current.benefits.medical.lab_services) : '—' },
+    { l: 'Diagnostic tests',
+      g: (p) => formatCostShare(p.benefits.medical.diagnostic_tests),
+      c: current ? formatCostShare(current.benefits.medical.diagnostic_tests) : '—' },
+    { l: 'X-ray',
+      g: (p) => formatCostShare(p.benefits.medical.xray),
+      c: current ? formatCostShare(current.benefits.medical.xray) : '—' },
+    { l: 'Diagnostic radiology',
+      g: (p) => formatCostShare(p.benefits.medical.diagnostic_radiology),
+      c: current ? formatCostShare(current.benefits.medical.diagnostic_radiology) : '—' },
+    { l: 'Therapeutic radiology',
+      g: (p) => formatCostShare(p.benefits.medical.therapeutic_radiology),
+      c: current ? formatCostShare(current.benefits.medical.therapeutic_radiology) : '—' },
+    { l: 'Mental health (indiv.)',
+      g: (p) => formatCostShare(p.benefits.medical.mental_health_individual),
+      c: current ? formatCostShare(current.benefits.medical.mental_health_individual) : '—' },
+    { l: 'Mental health (group)',
+      g: (p) => formatCostShare(p.benefits.medical.mental_health_group),
+      c: current ? formatCostShare(current.benefits.medical.mental_health_group) : '—' },
+    { l: 'Physical therapy',
+      g: (p) => formatCostShare(p.benefits.medical.physical_therapy),
+      c: current ? formatCostShare(current.benefits.medical.physical_therapy) : '—' },
+    { l: 'Telehealth',
+      g: (p) => formatCostShare(p.benefits.medical.telehealth),
+      c: current ? formatCostShare(current.benefits.medical.telehealth) : '—' },
+    { l: 'Rx Tier 1',
+      g: (p) => formatCostShare(p.benefits.rx_tiers.tier_1),
+      c: current ? formatCostShare(current.benefits.rx_tiers.tier_1) : '—' },
+    { l: 'Rx Tier 2',
+      g: (p) => formatCostShare(p.benefits.rx_tiers.tier_2),
+      c: current ? formatCostShare(current.benefits.rx_tiers.tier_2) : '—' },
+    { l: 'Rx Tier 3',
+      g: (p) => formatCostShare(p.benefits.rx_tiers.tier_3),
+      c: current ? formatCostShare(current.benefits.rx_tiers.tier_3) : '—' },
+    { l: 'Rx Tier 4',
+      g: (p) => formatCostShare(p.benefits.rx_tiers.tier_4),
+      c: current ? formatCostShare(current.benefits.rx_tiers.tier_4) : '—' },
+    { l: 'Rx Tier 5',
+      g: (p) => formatCostShare(p.benefits.rx_tiers.tier_5),
+      c: current ? formatCostShare(current.benefits.rx_tiers.tier_5) : '—' },
+    { l: 'Transportation',
+      g: (p) => planDisplay(p).transport,
+      c: current ? planDisplay(current).transport : '—' },
+    { l: 'Food card',
+      g: (p) => planDisplay(p).meals,
+      c: current ? planDisplay(current).meals : '—' },
+    { l: 'Fitness',
+      g: (p) => planDisplay(p).fitness,
+      c: current ? planDisplay(current).fitness : '—' },
+  ];
+
+  const displayRows = showAll ? [...rows, ...expandedRows] : rows;
+
   const cols = `140px 1fr repeat(${finalists.length}, 1fr)`;
 
   return (
@@ -233,7 +316,7 @@ export function CompareScreen({
           ))}
         </div>
 
-        {rows.map((r, i) => {
+        {displayRows.map((r, i) => {
           const numericVals = r.n
             ? finalists.map(r.n).filter((v): v is number => v != null)
             : [];
@@ -367,6 +450,26 @@ export function CompareScreen({
           })}
         </div>
       </Card>
+      <div style={{ textAlign: 'center', margin: '10px 0 0' }}>
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          style={{
+            background: 'transparent',
+            border: '1px solid rgba(13,47,94,0.15)',
+            borderRadius: 8,
+            padding: '6px 14px',
+            fontSize: 11,
+            fontWeight: 700,
+            color: '#0d2f5e',
+            cursor: 'pointer',
+            letterSpacing: 0.4,
+            textTransform: 'uppercase',
+          }}
+        >
+          {showAll ? 'Hide full benefits' : 'Show all 23 copay categories'}
+        </button>
+      </div>
       <Nav onBack={onBack} onNext={onNext} nextLabel="CMS Compliance →" />
     </Container>
   );

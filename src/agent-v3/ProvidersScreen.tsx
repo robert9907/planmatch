@@ -23,6 +23,7 @@
 //     final state is the colored badge, not "Verified".
 
 import { useEffect, useMemo, useState } from 'react';
+import { useProviderSearch } from '@/hooks/useProviderSearch';
 import { useSession } from '@/hooks/useSession';
 import { checkNetworkBatch, type NetworkStatus } from '@/lib/networkCheck';
 import { fetchPlansForClient } from '@/lib/planCatalog';
@@ -56,6 +57,8 @@ export function ProvidersScreen({
   const client = useSession((s) => s.client);
   const providers = useSession((s) => s.providers);
   const updateProvider = useSession((s) => s.updateProvider);
+  const addProvider = useSession((s) => s.addProvider);
+  const removeProvider = useSession((s) => s.removeProvider);
 
   const [eligiblePlans, setEligiblePlans] = useState<Plan[]>([]);
   useEffect(() => {
@@ -97,6 +100,25 @@ export function ProvidersScreen({
         title="Your doctors"
         sub="Verifying network status across all recommended plans…"
       />
+      <AddProviderPanel
+        state={client.state}
+        excludeNpis={providers
+          .map((p) => p.npi)
+          .filter((n): n is string => !!n)}
+        onAdd={(r) => {
+          addProvider({
+            name: r.display_name,
+            npi: r.npi,
+            specialty: r.specialty ?? undefined,
+            address:
+              r.practice_city && r.practice_state
+                ? `${r.practice_city}, ${r.practice_state}${r.practice_zip ? ' ' + r.practice_zip : ''}`
+                : undefined,
+            source: 'manual',
+          });
+        }}
+      />
+
       {providers.length === 0 ? (
         <Card>
           <div
@@ -107,9 +129,8 @@ export function ProvidersScreen({
               textAlign: 'center',
             }}
           >
-            No providers captured yet. Use the existing Providers workflow
-            to add doctors (NPI search, photo capture, or manual), then
-            return here to verify network status.
+            Search NPPES above to add providers — network status across
+            recommended plans populates per row once added.
           </div>
         </Card>
       ) : (
@@ -124,6 +145,7 @@ export function ProvidersScreen({
               for (const [planId, status] of map) next[planId] = status;
               updateProvider(provider.id, { networkStatus: next });
             }}
+            onRemove={() => removeProvider(provider.id)}
             staggerIndex={i}
           />
         ))
@@ -147,11 +169,13 @@ function ProviderCard({
   provider,
   topPlans,
   onWriteBack,
+  onRemove,
   staggerIndex,
 }: {
   provider: Provider;
   topPlans: Plan[];
   onWriteBack: (map: Map<string, NetworkStatus>) => void;
+  onRemove: () => void;
   staggerIndex: number;
 }) {
   const [rows, setRows] = useState<PlanRowState[]>([]);
@@ -235,7 +259,7 @@ function ProviderCard({
         >
           🩺
         </div>
-        <div>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 17, color: '#0d2f5e' }}>
             {provider.name}
           </div>
@@ -245,6 +269,22 @@ function ProviderCard({
               .join(' · ')}
           </div>
         </div>
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={`Remove ${provider.name}`}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: '#94a3b8',
+            cursor: 'pointer',
+            fontSize: 14,
+            padding: '0 4px',
+            lineHeight: 1,
+          }}
+        >
+          ✕
+        </button>
       </div>
 
       {rows.length === 0 && (
@@ -383,5 +423,140 @@ function RowBadge({ state }: { state: RowState }) {
     >
       ? Unknown
     </span>
+  );
+}
+
+function AddProviderPanel({
+  state,
+  excludeNpis,
+  onAdd,
+}: {
+  state: string | null;
+  excludeNpis: readonly string[];
+  onAdd: (r: {
+    npi: string;
+    display_name: string;
+    specialty: string | null;
+    practice_city: string | null;
+    practice_state: string | null;
+    practice_zip: string | null;
+  }) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const search = useProviderSearch(query, state, excludeNpis);
+
+  return (
+    <Card style={{ marginBottom: 12, padding: '16px 20px' }}>
+      <label
+        style={{
+          display: 'block',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 0.6,
+          textTransform: 'uppercase',
+          color: '#64748b',
+          marginBottom: 6,
+        }}
+      >
+        Add provider
+      </label>
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={
+          state
+            ? `First last name (e.g. jane smith) — ${state} ranked first`
+            : 'First last name (e.g. jane smith)'
+        }
+        style={{
+          width: '100%',
+          padding: '10px 12px',
+          borderRadius: 10,
+          border: '1px solid rgba(13,47,94,0.12)',
+          fontSize: 14,
+          color: '#0d2f5e',
+          outline: 'none',
+          background: '#f8fafc',
+          boxSizing: 'border-box',
+        }}
+      />
+      {search.loading && (
+        <div style={{ marginTop: 8, fontSize: 11, color: '#64748b' }}>
+          Searching NPPES…
+        </div>
+      )}
+      {search.error && (
+        <div style={{ marginTop: 8, fontSize: 11, color: '#a32d2d' }}>
+          {search.error}
+        </div>
+      )}
+      {search.fallback === 'last_name_only' && (
+        <div style={{ marginTop: 8, fontSize: 11, color: '#92400e' }}>
+          No first-name match — showing last-name-only results.
+        </div>
+      )}
+      {search.results.length > 0 && (
+        <ul
+          style={{
+            listStyle: 'none',
+            margin: '8px 0 0',
+            padding: 0,
+            border: '1px solid rgba(13,47,94,0.08)',
+            borderRadius: 10,
+            overflow: 'hidden',
+            background: 'white',
+          }}
+        >
+          {search.results.map((r) => (
+            <li
+              key={r.npi}
+              style={{ borderBottom: '1px solid rgba(13,47,94,0.04)' }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  onAdd(r);
+                  setQuery('');
+                }}
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '10px 12px',
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 12,
+                  fontSize: 13,
+                }}
+              >
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ fontWeight: 700, color: '#0d2f5e' }}>
+                    {r.display_name}
+                  </span>
+                  {r.specialty && (
+                    <span style={{ marginLeft: 8, fontSize: 11, color: '#64748b' }}>
+                      {r.specialty}
+                    </span>
+                  )}
+                  <span style={{ marginLeft: 8, fontSize: 11, color: '#94a3b8' }}>
+                    NPI {r.npi}
+                    {r.practice_city
+                      ? ` · ${r.practice_city}${r.practice_state ? ', ' + r.practice_state : ''}`
+                      : ''}
+                  </span>
+                </span>
+                <span style={{ fontSize: 11, color: '#0071e3', fontWeight: 700 }}>
+                  Add
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }

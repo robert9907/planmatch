@@ -33,6 +33,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDrugCosts } from '@/hooks/useDrugCosts';
+import { useDrugSearch } from '@/hooks/useDrugSearch';
 import { useSession } from '@/hooks/useSession';
 import {
   bulkLookupFormulary,
@@ -76,6 +77,8 @@ function iconForMed(med: Medication): string {
 export function MedsScreen({ onNext, onBack, clientView }: Props) {
   const client = useSession((s) => s.client);
   const medications = useSession((s) => s.medications);
+  const addMedication = useSession((s) => s.addMedication);
+  const removeMedication = useSession((s) => s.removeMedication);
 
   // Eligible plan set drives the formulary prime + the live total
   // drug-cost lookup. Same call shape the v4 MedsPage uses so the
@@ -160,6 +163,21 @@ export function MedsScreen({ onNext, onBack, clientView }: Props) {
         sub="Checking coverage and costs across all plans…"
       />
 
+      <AddMedPanel
+        excludeRxcuis={medications
+          .map((m) => m.rxcui)
+          .filter((r): r is string => !!r)}
+        onAdd={(r) => {
+          addMedication({
+            name: r.displayName,
+            rxcui: r.rxcui,
+            strength: r.strength ?? undefined,
+            form: r.dose_form ?? undefined,
+            source: 'manual',
+          });
+        }}
+      />
+
       {medications.length === 0 ? (
         <Card>
           <div
@@ -170,9 +188,8 @@ export function MedsScreen({ onNext, onBack, clientView }: Props) {
               textAlign: 'center',
             }}
           >
-            No medications captured yet. Use the existing Medications
-            workflow to add drugs (RxNorm search or photo capture), then
-            return here to see live coverage.
+            Search above to add medications — tier and live annual cost
+            populate per row once each med has an RxNorm match.
           </div>
         </Card>
       ) : (
@@ -183,6 +200,7 @@ export function MedsScreen({ onNext, onBack, clientView }: Props) {
             index={i}
             plans={eligiblePlans}
             tick={formularyTick}
+            onRemove={() => removeMedication(med.id)}
           />
         ))
       )}
@@ -284,11 +302,13 @@ function MedRow({
   index,
   plans,
   tick,
+  onRemove,
 }: {
   med: Medication;
   index: number;
   plans: Plan[];
   tick: number;
+  onRemove: () => void;
 }) {
   const stats = useMemo(() => perDrugBest(med, plans, tick), [med, plans, tick]);
   const tierForIcon = stats.bestTier ?? 0;
@@ -329,6 +349,22 @@ function MedRow({
         </div>
       </div>
       <TierBadge tier={stats.bestTier} />
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove ${med.name}`}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          color: '#94a3b8',
+          cursor: 'pointer',
+          fontSize: 14,
+          padding: '0 4px',
+          lineHeight: 1,
+        }}
+      >
+        ✕
+      </button>
       <div style={{ textAlign: 'right', minWidth: 95 }}>
         {!med.rxcui ? (
           <div style={{ fontSize: 10, color: '#a32d2d', fontWeight: 600 }}>
@@ -368,6 +404,132 @@ function MedRow({
           </div>
         )}
       </div>
+    </Card>
+  );
+}
+
+function AddMedPanel({
+  excludeRxcuis,
+  onAdd,
+}: {
+  excludeRxcuis: readonly string[];
+  onAdd: (r: {
+    rxcui: string;
+    displayName: string;
+    strength: string | null;
+    dose_form: string | null;
+  }) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const search = useDrugSearch(query, excludeRxcuis);
+
+  return (
+    <Card style={{ marginBottom: 12, padding: '16px 20px' }}>
+      <label
+        style={{
+          display: 'block',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 0.6,
+          textTransform: 'uppercase',
+          color: '#64748b',
+          marginBottom: 6,
+        }}
+      >
+        Add medication
+      </label>
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Type a drug name (e.g. metformin, ozempic)"
+        style={{
+          width: '100%',
+          padding: '10px 12px',
+          borderRadius: 10,
+          border: '1px solid rgba(13,47,94,0.12)',
+          fontSize: 14,
+          color: '#0d2f5e',
+          outline: 'none',
+          background: '#f8fafc',
+          boxSizing: 'border-box',
+        }}
+      />
+      {search.loading && (
+        <div style={{ marginTop: 8, fontSize: 11, color: '#64748b' }}>
+          Searching pm_drugs…
+        </div>
+      )}
+      {search.error && (
+        <div style={{ marginTop: 8, fontSize: 11, color: '#a32d2d' }}>
+          {search.error}
+        </div>
+      )}
+      {search.results.length > 0 && (
+        <ul
+          style={{
+            listStyle: 'none',
+            margin: '8px 0 0',
+            padding: 0,
+            border: '1px solid rgba(13,47,94,0.08)',
+            borderRadius: 10,
+            overflow: 'hidden',
+            background: 'white',
+          }}
+        >
+          {search.results.map((r) => (
+            <li
+              key={r.rxcui}
+              style={{ borderBottom: '1px solid rgba(13,47,94,0.04)' }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  onAdd({
+                    rxcui: r.rxcui,
+                    displayName: r.displayName,
+                    strength: r.strength,
+                    dose_form: r.dose_form,
+                  });
+                  setQuery('');
+                }}
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '10px 12px',
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 12,
+                  fontSize: 13,
+                }}
+              >
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ fontWeight: 700, color: '#0d2f5e' }}>
+                    {r.displayName}
+                  </span>
+                  {r.strength && (
+                    <span style={{ marginLeft: 8, fontSize: 11, color: '#64748b' }}>
+                      {r.strength}
+                    </span>
+                  )}
+                  {r.dose_form && (
+                    <span style={{ marginLeft: 4, fontSize: 11, color: '#94a3b8' }}>
+                      · {r.dose_form}
+                    </span>
+                  )}
+                </span>
+                <span style={{ fontSize: 11, color: '#0071e3', fontWeight: 700 }}>
+                  Add
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </Card>
   );
 }

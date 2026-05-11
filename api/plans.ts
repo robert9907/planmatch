@@ -18,6 +18,10 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
+import {
+  filterPlanLevelExclusions,
+  getNonCommissionableSets,
+} from './_lib/non-commissionable.js';
 import { supabase } from './_lib/supabase.js';
 
 type AppPlanType = 'MA' | 'MAPD' | 'DSNP' | 'PDP' | 'MEDSUPP';
@@ -457,6 +461,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const sb = supabase();
 
+    // ─── Non-commissionable exclusions ──────────────────────────────
+    // Mirror the consumer flow: fetch the (contracts, plans) Rob can't
+    // sell, push the contract-level set into the pm_plans query as a
+    // PostgREST `contract_id=not.in.(…)` filter, and apply the plan-
+    // level set in JS after the rows return. Fails closed on cold-
+    // start lookup error so Rob never sees plans he can't write.
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey =
+      process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SECRET_KEY;
+    if (!supabaseUrl || !supabaseKey) {
+      return serverError(
+        res,
+        new Error('SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing'),
+      );
+    }
+    const nonComm = await getNonCommissionableSets(supabaseUrl, supabaseKey);
+
     // ─── Step 1: fetch matching pm_plans rows ───────────────────────
     // When ids are passed we ignore the geo filters and just load those
     // triples (finalist refetch path). Otherwise filter by state +
@@ -468,6 +489,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       )
       .eq('sanctioned', false)
       .limit(limit);
+
+    if (nonComm.contracts.size > 0) {
+      plansQuery = plansQuery.not(
+        'contract_id',
+        'in',
+        `(${[...nonComm.contracts].join(',')})`,
+      );
+    }
 
     if (idsParam) {
       const ids = idsParam
@@ -538,6 +567,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (planType) {
       rows = rows.filter((r) => mapPlanType(r.plan_type, r.snp, r.snp_type) === planType);
     }
+
+    // Plan-level non-commissionable exclusion. PostgREST already
+    // dropped the contract-level blocks above; this strips the
+    // remaining (contract_id, plan_id) pairs Rob can't sell — UHC
+    // convention where only specific plans within a contract are
+    // blocked, not the whole contract.
+    rows = filterPlanLevelExclusions(rows, nonComm.plans);
 
     // ─── Step 2: aggregate by (contract_id, plan_id, segment_id) ────
     // Landscape rows are one-per-county; the app wants one plan per

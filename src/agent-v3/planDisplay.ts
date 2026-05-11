@@ -123,3 +123,24 @@ export function formatSpecialist(plan: Plan): string {
   const c = plan.benefits.medical.specialist.copay;
   return c == null ? '—' : `$${c}`;
 }
+
+// Generic CostShare formatter — copay wins when present, otherwise
+// coinsurance %, otherwise em-dash. Used by the CompareScreen expanded
+// rows for medical-benefit categories and Part D tier copays.
+export function formatCostShare(
+  cs: { copay: number | null; coinsurance: number | null } | undefined | null,
+): string {
+  if (!cs) return '—';
+  if (cs.copay != null) return `$${cs.copay}`;
+  if (cs.coinsurance != null) return `${cs.coinsurance}%`;
+  return '—';
+}
+
+export function costShareNumeric(
+  cs: { copay: number | null; coinsurance: number | null } | undefined | null,
+): number | null {
+  if (!cs) return null;
+  if (cs.copay != null) return cs.copay;
+  if (cs.coinsurance != null) return cs.coinsurance;
+  return null;
+}
