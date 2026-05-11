@@ -428,11 +428,29 @@ function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
   }
 
   // ── mapdContractPlanIds ──────────────────────────────────────────
-  // Any plan with ≥1 formulary row counts as MAPD per brief.
-  const mapdContractPlanIds = new Set<string>();
-  for (const [contractPlan, rxMap] of Object.entries(data.formularyByContractPlan)) {
-    if (Object.keys(rxMap).length > 0) mapdContractPlanIds.add(contractPlan);
-  }
+  // INTENTIONALLY UNSET. The brain's MA-only filter (plan-brain.ts:841)
+  // drops any plan not in this set when the user has no VA coverage —
+  // designed for the consumer flow, where the pool is mixed MA/MAPD.
+  //
+  // Why we can't derive it here: /api/plan-brain-data scopes the
+  // pm_formulary query to the user's specific rxcuis (expandedRxcuiList).
+  // So `data.formularyByContractPlan` only contains plans that cover
+  // the user's exact meds — NOT the full set of MAPDs. Building
+  // mapdContractPlanIds from it under-reports MAPD coverage and the
+  // brain ends up filtering the pool down to whatever 2-3 plans
+  // happen to list the user's drugs (Durham NC 27713 went from 50+
+  // candidates to 2 — the bug this comment exists for).
+  //
+  // Why it's safe to skip: the agent's /api/plans already applies a
+  // planType=MAPD filter at query time via mapPlanType(plan_type, snp,
+  // snp_type). MA-only plans never enter the agent pool in the first
+  // place, so the brain's redundant filter has nothing to do. If a
+  // future caller passes planType=null and needs MA-only suppression,
+  // the right fix is to add a dedicated /api/plan-brain-data field
+  // populated by SELECT DISTINCT (contract_id, plan_id) FROM
+  // pm_formulary WHERE contract_id IN (...) AND plan_id IN (...) —
+  // not to revive the rxcui-scoped derivation below.
+  const mapdContractPlanIds: ReadonlySet<string> | undefined = undefined;
 
   // ── providerNetworkByPlanKey (keyed contract-plan, no segment) ───
   const providerNetworkByPlanKey = new Map<
