@@ -65,8 +65,7 @@ import {
 // env var and reload to see new output.
 const BRAIN_DEBUG: boolean =
   typeof import.meta !== 'undefined' &&
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (import.meta as any).env?.VITE_BRAIN_DEBUG === 'true';
+  (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_BRAIN_DEBUG === 'true';
 function isBrainDebugOn(): boolean {
   return BRAIN_DEBUG;
 }
