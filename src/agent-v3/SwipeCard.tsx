@@ -21,6 +21,8 @@ interface Props {
   onLeft: () => void;
   onRight: () => void;
   onCompare: (plan: Plan) => void;
+  /** Tap anywhere on the card body → open plan detail. */
+  onShowDetail: (plan: Plan) => void;
   /** 0-based index of this card in the swipe pool. */
   idx: number;
   total: number;
@@ -43,6 +45,7 @@ export function SwipeCard({
   onLeft,
   onRight,
   onCompare,
+  onShowDetail,
   idx,
   total,
   capReached,
@@ -105,6 +108,17 @@ export function SwipeCard({
       onTouchStart={(e) => start(e.touches[0].clientX)}
       onTouchMove={(e) => move(e.touches[0].clientX)}
       onTouchEnd={end}
+      onClick={(e) => {
+        // Tap-to-detail. Suppressed when the gesture was a drag
+        // (|dx| ≥ 5px ≈ swipe attempt) so we don't surface the modal
+        // on every keep/eliminate. Action buttons inside stopPropagation
+        // their own clicks already.
+        if (Math.abs(dx) >= 5) return;
+        if ((e.target as HTMLElement).closest('button')) return;
+        onShowDetail(plan);
+      }}
+      role="button"
+      tabIndex={0}
       style={{
         background: isGold
           ? 'linear-gradient(135deg, #fffdf5, #fef9e7, #fffdf5)'

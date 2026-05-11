@@ -43,6 +43,9 @@ interface Props {
   onKeep: (plan: Plan) => void;
   onEliminate: (plan: Plan) => void;
   onCompare: (plan: Plan) => void;
+  /** Tap-anywhere-on-card → opens PlanDetailModal (always available,
+   *  unlike onCompare which requires a current plan). */
+  onShowDetail: (plan: Plan) => void;
   onNext: () => void;
   onBack: () => void;
   /** rxcui-aware annual + monthly drug cost lookups. */
@@ -68,6 +71,7 @@ export function SwipeScreen({
   onKeep,
   onEliminate,
   onCompare,
+  onShowDetail,
   onNext,
   onBack,
   annualDrugByPlanId,
@@ -128,6 +132,7 @@ export function SwipeScreen({
           monthlyDrugCost={monthlyDrugByPlanId[current.id] ?? null}
           annualDrugCost={annualDrugByPlanId[current.id] ?? null}
           onCompare={onCompare}
+          onShowDetail={onShowDetail}
           compact
         />
       )}
@@ -144,6 +149,7 @@ export function SwipeScreen({
             annualDrugCost={annualDrugByPlanId[brainPick.id] ?? null}
             reason={brainReasonByPlanId[brainPick.id] ?? null}
             onCompare={onCompare}
+            onShowDetail={onShowDetail}
           />
         </div>
       )}
@@ -182,6 +188,7 @@ export function SwipeScreen({
           onLeft={() => onEliminate(cur)}
           onRight={() => onKeep(cur)}
           onCompare={onCompare}
+          onShowDetail={onShowDetail}
           idx={
             // Original-pool count = eliminated + kept + pool, minus the
             // brain pick which sits separately.
@@ -210,6 +217,7 @@ export function SwipeScreen({
           brainScoreByPlanId={brainScoreByPlanId}
           monthlyDrugByPlanId={monthlyDrugByPlanId}
           statusFor={statusFor}
+          onShowDetail={onShowDetail}
         />
       )}
 
@@ -408,11 +416,13 @@ function NextUpRail({
   brainScoreByPlanId,
   monthlyDrugByPlanId,
   statusFor,
+  onShowDetail,
 }: {
   plans: Plan[];
   brainScoreByPlanId: Record<string, number>;
   monthlyDrugByPlanId: Record<string, number | null>;
   statusFor: (id: string) => 'in' | 'out' | 'unknown';
+  onShowDetail: (plan: Plan) => void;
 }) {
   if (plans.length === 0) return null;
   return (
@@ -435,8 +445,10 @@ function NextUpRail({
           const monthly = monthlyDrugByPlanId[p.id];
           const status = statusFor(p.id);
           return (
-            <div
+            <button
               key={p.id}
+              type="button"
+              onClick={() => onShowDetail(p)}
               style={{
                 background: 'white',
                 border: '1px solid rgba(13,47,94,0.06)',
@@ -447,6 +459,10 @@ function NextUpRail({
                 justifyContent: 'space-between',
                 gap: 12,
                 fontSize: 12,
+                cursor: 'pointer',
+                textAlign: 'left',
+                width: '100%',
+                font: 'inherit',
               }}
             >
               <div style={{ minWidth: 0, flex: 1 }}>
@@ -499,7 +515,7 @@ function NextUpRail({
               >
                 {status === 'in' ? '✓' : status === 'out' ? '✕' : '?'}
               </span>
-            </div>
+            </button>
           );
         })}
       </div>

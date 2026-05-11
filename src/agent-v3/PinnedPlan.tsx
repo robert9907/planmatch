@@ -25,6 +25,10 @@ interface Props {
   /** Brain reason — single sentence explaining the rank. */
   reason?: string | null;
   onCompare: (plan: Plan) => void;
+  /** Tap-anywhere → plan detail. Optional so legacy callers that
+   *  haven't wired the modal still build; passing it makes the whole
+   *  card tappable. */
+  onShowDetail?: (plan: Plan) => void;
   /** Compact variant used for the current-plan rail at top of swipe. */
   compact?: boolean;
 }
@@ -40,11 +44,19 @@ export function PinnedPlan({
   monthlyDrugCost,
   reason,
   onCompare,
+  onShowDetail,
   compact,
 }: Props) {
   const disp = planDisplay(plan);
   return (
     <div
+      onClick={(e) => {
+        if (!onShowDetail) return;
+        if ((e.target as HTMLElement).closest('button')) return;
+        onShowDetail(plan);
+      }}
+      role={onShowDetail ? 'button' : undefined}
+      tabIndex={onShowDetail ? 0 : undefined}
       style={{
         background: `linear-gradient(135deg, ${borderColor}10, ${borderColor}06)`,
         border: `2px solid ${borderColor}`,
@@ -52,6 +64,7 @@ export function PinnedPlan({
         padding: compact ? '12px 16px' : '16px 20px',
         position: 'relative',
         overflow: 'hidden',
+        cursor: onShowDetail ? 'pointer' : 'default',
       }}
     >
       <div

@@ -30,12 +30,14 @@ import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
 import { useScreenShareStore } from '@/hooks/useScreenShare';
 import { fetchClientSession } from '@/lib/agentbase';
+import { bulkLookupFormulary, getCachedFormulary } from '@/lib/formularyLookup';
 import { fetchPlansForClient } from '@/lib/planCatalog';
 import { totalComplianceItems } from '@/lib/compliance';
 import type { Plan } from '@/types/plans';
 import type { StateCode } from '@/types/session';
 import { AgentBar, FINALIST_CAP, type ScreenId } from './AgentBar';
 import { CompareModal } from './CompareModal';
+import { PlanDetailModal } from './PlanDetailModal';
 import { ComplianceScreen } from './ComplianceScreen';
 import { CompareScreen } from './CompareScreen';
 import { EnrollScreen } from './EnrollScreen';
@@ -60,6 +62,17 @@ function getClientIdParam(): string | null {
   const v = new URLSearchParams(window.location.search).get('clientId');
   return v && v.trim() ? v.trim() : null;
 }
+
+// Annual-cost ceiling per Part D tier — used by the sanity layer over
+// pm_drug_cost_cache. Module-scope so it isn't re-created every render
+// (would invalidate the annualDrugByPlanId memo).
+const TIER_ANNUAL_CEILING: Record<number, number> = {
+  1: 360,    // Tier 1 generics — $30/mo upper bound (most are $0-$10)
+  2: 720,    // Tier 2 preferred generics — $60/mo
+  3: 1800,   // Tier 3 preferred brands — $150/mo
+  4: 4800,   // Tier 4 non-preferred — $400/mo
+  5: 18000,  // Tier 5 specialty — coinsurance on high-priced biologics
+};
 
 type HydrationState =
   | { kind: 'idle' }       // no clientId in URL — seed mode or empty
@@ -97,6 +110,7 @@ export function AgentV3App() {
   const [kept, setKept] = useState<Plan[]>([]);
   const [eliminated, setEliminated] = useState<Plan[]>([]);
   const [compareTarget, setCompareTarget] = useState<Plan | null>(null);
+  const [detailTarget, setDetailTarget] = useState<Plan | null>(null);
 
   const client = useSession((s) => s.client);
   const medications = useSession((s) => s.medications);
@@ -322,6 +336,22 @@ export function AgentV3App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brain.data]);
 
+  // ── Formulary cache prime (shell-level) ──────────────────────────
+  // MedsScreen primes pm_formulary entries for eligiblePlans × user
+  // rxcuis, but that screen may be skipped (AgentBase hydration lands
+  // directly on swipe, ?seed flows, etc.). Re-prime here so the
+  // formulary-based sanity layer below has the data it needs to
+  // override implausible pm_drug_cost_cache values.
+  useEffect(() => {
+    if (eligiblePlans.length === 0 || medications.length === 0) return;
+    const rxcuis = medications
+      .map((m) => m.rxcui)
+      .filter((s): s is string => !!s);
+    if (rxcuis.length === 0) return;
+    const contractIds = [...new Set(eligiblePlans.map((p) => p.contract_id))];
+    void bulkLookupFormulary(contractIds, rxcuis);
+  }, [eligiblePlans, medications]);
+
   // ── Drug-cost map sourced from pm_drug_cost_cache ────────────────
   // Earlier versions threaded useDrugCosts → /api/drug-costs, which
   // does a Playwright scrape of medicare.gov. Akamai now blocks the
@@ -333,24 +363,88 @@ export function AgentV3App() {
   // slice (per-plan, per-NDC yearly totals) from Supabase — same source
   // the scrape would write to on a hit. We aggregate per plan: sum
   // estimated_yearly_total across NDCs, divide by 12 for monthly.
-  // Plans with no cached rows render "—" gracefully (the swipe card
-  // and pinned plan both already handle that).
+  //
+  // Sanity layer: pm_drug_cost_cache occasionally carries bad rows
+  // (full retail markup landed instead of plan-discounted cost — the
+  // Wellcare Simple HMO-POS gabapentin row had estimated_yearly_total
+  // = $15,378 against a Tier 1-2 generic that should be $0-$120/yr).
+  // For each plan we compute a per-rxcui tier ceiling from the primed
+  // formulary cache and use it as a soft cap. The cached value wins
+  // when it sits inside the ceiling band; when it exceeds the band by
+  // a wide margin we fall back to copay × 12 from the formulary tier.
+  // Drugs marked 'not_covered' in formulary skip the ceiling — full
+  // retail there is legitimate.
   const annualDrugByPlanId = useMemo<Record<string, number | null>>(() => {
     const out: Record<string, number | null> = {};
     if (!brain.data) return out;
-    for (const [planId, ndcMap] of Object.entries(brain.data.drugCostCache)) {
-      let total = 0;
-      let any = false;
+    const rxcuis = medications
+      .map((m) => m.rxcui)
+      .filter((s): s is string => !!s);
+
+    for (const plan of eligiblePlans) {
+      const contractPlan = `${plan.contract_id}-${plan.plan_number}`;
+      const ndcMap = brain.data.drugCostCache[plan.id] ?? {};
+      let cacheTotal = 0;
+      let anyCache = false;
       for (const row of Object.values(ndcMap)) {
         if (typeof row.estimated_yearly_total === 'number') {
-          total += row.estimated_yearly_total;
-          any = true;
+          cacheTotal += row.estimated_yearly_total;
+          anyCache = true;
         }
       }
-      out[planId] = any ? total : null;
+
+      // Build the formulary-derived sane total + sane ceiling.
+      let formularyTotal = 0;
+      let ceilingTotal = 0;
+      let allCovered = true;
+      for (const rxcui of rxcuis) {
+        const hit = getCachedFormulary(contractPlan, rxcui);
+        if (!hit) {
+          // No formulary data — can't bound, fall back to cache.
+          allCovered = false;
+          continue;
+        }
+        if (hit.tier === 'not_covered' || hit.tier === 'excluded') {
+          // Drug isn't on formulary — patient pays retail, cache is
+          // authoritative. Skip ceiling for this drug.
+          allCovered = false;
+          continue;
+        }
+        const tierNum = typeof hit.tier === 'number' ? hit.tier : null;
+        if (tierNum != null) {
+          ceilingTotal += TIER_ANNUAL_CEILING[tierNum] ?? 1800;
+        }
+        if (typeof hit.copay === 'number') {
+          formularyTotal += hit.copay * 12;
+        }
+      }
+
+      if (!anyCache) {
+        out[plan.id] = allCovered && rxcuis.length > 0 ? formularyTotal : null;
+        continue;
+      }
+
+      // Override threshold: cache > 1.5× ceiling and ceiling > 0
+      // means the cache is implausibly high vs. what the plan's
+      // formulary filing says it should be. Use the formulary total
+      // (or ceiling if formulary copay is null) instead.
+      if (allCovered && ceilingTotal > 0 && cacheTotal > ceilingTotal * 1.5) {
+        const replacement = formularyTotal > 0 ? formularyTotal : ceilingTotal;
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn(
+            `[drug-cost-sanity] ${plan.contract_id}-${plan.plan_number}: ` +
+              `cache=$${cacheTotal} → $${replacement} ` +
+              `(tier ceiling $${ceilingTotal}, formulary copay × 12 = $${formularyTotal})`,
+          );
+        }
+        out[plan.id] = replacement;
+        continue;
+      }
+
+      out[plan.id] = cacheTotal;
     }
     return out;
-  }, [brain.data]);
+  }, [brain.data, eligiblePlans, medications]);
   const monthlyDrugByPlanId = useMemo<Record<string, number | null>>(() => {
     const out: Record<string, number | null> = {};
     for (const [planId, annual] of Object.entries(annualDrugByPlanId)) {
@@ -532,6 +626,7 @@ export function AgentV3App() {
             onKeep={keepPlan}
             onEliminate={eliminatePlan}
             onCompare={setCompareTarget}
+            onShowDetail={setDetailTarget}
             onNext={() => setScreen('compare')}
             onBack={() => setScreen('priorities')}
             annualDrugByPlanId={annualDrugByPlanId}
@@ -574,6 +669,17 @@ export function AgentV3App() {
           candidate={compareTarget}
           annualDrugByPlanId={annualDrugByPlanId}
           onClose={() => setCompareTarget(null)}
+        />
+      )}
+
+      {detailTarget && (
+        <PlanDetailModal
+          plan={detailTarget}
+          annualDrug={annualDrugByPlanId[detailTarget.id] ?? null}
+          brainScore={brainScoreByPlanId[detailTarget.id] ?? null}
+          brainReason={brainReasonByPlanId[detailTarget.id] ?? null}
+          providers={providers}
+          onClose={() => setDetailTarget(null)}
         />
       )}
 
