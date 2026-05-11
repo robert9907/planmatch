@@ -175,7 +175,7 @@ export function SwipeScreen({
         <div style={{ flex: 1, height: 1, background: '#e2e8f0' }} />
       </div>
 
-      {!allDone && cur && current && (
+      {!allDone && cur && (
         <SwipeCard
           plan={cur}
           current={current}
@@ -199,24 +199,18 @@ export function SwipeScreen({
         />
       )}
 
-      {/* When current is missing the SwipeCard can't render (it
-          benchmarks against current). Surface a hint so the broker
-          knows to set the current plan upstream. */}
-      {!current && cur && (
-        <div
-          style={{
-            background: '#fffbeb',
-            border: '1px solid #f59e0b',
-            borderRadius: 10,
-            padding: '14px 18px',
-            color: '#92400e',
-            fontSize: 13,
-            textAlign: 'center',
-          }}
-        >
-          Set the client's current plan on the v4 Quote screen first —
-          the swipe cards benchmark against it.
-        </div>
+      {/* "Next up" preview of the remaining pool — gives the agent
+          a glance at what's coming behind the active swipe card so
+          they don't have to swipe blind. Capped at the next 3 plans;
+          rendered as compact cards (no actions) since the agent's
+          decision happens on the active card above. */}
+      {!allDone && pool.length > 1 && (
+        <NextUpRail
+          plans={pool.slice(1, 4)}
+          brainScoreByPlanId={brainScoreByPlanId}
+          monthlyDrugByPlanId={monthlyDrugByPlanId}
+          statusFor={statusFor}
+        />
       )}
 
       {allDone && (
@@ -405,6 +399,110 @@ function Pile({
           {renderRight?.(plan)}
         </div>
       ))}
+    </div>
+  );
+}
+
+function NextUpRail({
+  plans,
+  brainScoreByPlanId,
+  monthlyDrugByPlanId,
+  statusFor,
+}: {
+  plans: Plan[];
+  brainScoreByPlanId: Record<string, number>;
+  monthlyDrugByPlanId: Record<string, number | null>;
+  statusFor: (id: string) => 'in' | 'out' | 'unknown';
+}) {
+  if (plans.length === 0) return null;
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 700,
+          color: '#64748b',
+          letterSpacing: 1,
+          textTransform: 'uppercase',
+          margin: '0 0 6px',
+        }}
+      >
+        Next up · {plans.length} plan{plans.length === 1 ? '' : 's'}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {plans.map((p) => {
+          const score = brainScoreByPlanId[p.id];
+          const monthly = monthlyDrugByPlanId[p.id];
+          const status = statusFor(p.id);
+          return (
+            <div
+              key={p.id}
+              style={{
+                background: 'white',
+                border: '1px solid rgba(13,47,94,0.06)',
+                borderRadius: 10,
+                padding: '10px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                fontSize: 12,
+              }}
+            >
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontWeight: 700, color: '#0d2f5e' }}>
+                  {p.carrier}{' '}
+                  <span style={{ color: '#94a3b8', fontWeight: 400 }}>
+                    · {p.plan_name}
+                  </span>
+                </div>
+                <div style={{ fontSize: 10, color: '#94a3b8' }}>
+                  ${p.premium}/mo premium · {p.plan_type}
+                  {monthly != null ? ` · $${monthly}/mo drugs` : ''}
+                </div>
+              </div>
+              {score != null && (
+                <span
+                  style={{
+                    background:
+                      score >= 70
+                        ? '#dbeafe'
+                        : score >= 50
+                          ? '#fef3c7'
+                          : '#fee2e2',
+                    color:
+                      score >= 70
+                        ? '#1e40af'
+                        : score >= 50
+                          ? '#92400e'
+                          : '#991b1b',
+                    fontSize: 9,
+                    fontWeight: 700,
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                  }}
+                >
+                  {Math.round(score)}/100
+                </span>
+              )}
+              <span
+                style={{
+                  fontSize: 11,
+                  color:
+                    status === 'in'
+                      ? '#059669'
+                      : status === 'out'
+                        ? '#a32d2d'
+                        : '#94a3b8',
+                  fontWeight: 700,
+                }}
+              >
+                {status === 'in' ? '✓' : status === 'out' ? '✕' : '?'}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

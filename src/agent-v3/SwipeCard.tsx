@@ -13,7 +13,11 @@ import { formatPremium, planDisplay } from './planDisplay';
 
 interface Props {
   plan: Plan;
-  current: Plan;
+  // Optional — when the broker hasn't picked a current plan (new to
+  // Medicare, SEP, IEP, or just hasn't been captured upstream yet)
+  // the card still renders. The vs-current comparison columns (MOOP /
+  // Part D arrows) gracefully degrade to standalone metric values.
+  current: Plan | null;
   onLeft: () => void;
   onRight: () => void;
   onCompare: (plan: Plan) => void;
@@ -85,7 +89,7 @@ export function SwipeCard({
 
   const disp = planDisplay(plan);
   const monthlyDrug = monthlyDrugByPlanId[plan.id] ?? null;
-  const monthlyDrugCurrent = monthlyDrugByPlanId[current.id] ?? null;
+  const monthlyDrugCurrent = current ? monthlyDrugByPlanId[current.id] ?? null : null;
   const annualDrug = annualDrugByPlanId[plan.id] ?? null;
 
   return (
@@ -297,14 +301,20 @@ export function SwipeCard({
         <MetricCard
           label="MOOP"
           value={fmt(plan.moop_in_network)}
-          comp={current.moop_in_network}
-          better={plan.moop_in_network < current.moop_in_network}
+          comp={current ? current.moop_in_network : undefined}
+          better={
+            current ? plan.moop_in_network < current.moop_in_network : undefined
+          }
         />
         <MetricCard
           label="Part D"
           value={`$${plan.drug_deductible ?? 0}`}
-          comp={current.drug_deductible ?? 0}
-          better={(plan.drug_deductible ?? 0) <= (current.drug_deductible ?? 0)}
+          comp={current ? current.drug_deductible ?? 0 : undefined}
+          better={
+            current
+              ? (plan.drug_deductible ?? 0) <= (current.drug_deductible ?? 0)
+              : undefined
+          }
         />
         <MetricCard
           label={providerLabel}

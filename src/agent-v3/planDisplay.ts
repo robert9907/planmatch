@@ -7,6 +7,7 @@
 // maps one to the other so every card renders consistently.
 
 import type { Plan } from '@/types/plans';
+import { fitnessProgramForCarrier } from '@/lib/fitness-program';
 
 export interface PlanDisplay {
   dental: string;
@@ -72,8 +73,16 @@ export function planDisplay(plan: Plan): PlanDisplay {
     ? `${b.transportation.rides_per_year} trips/yr`
     : 'None';
 
+  // Brand the fitness benefit using the carrier heuristic — Humana →
+  // Go365, UHC/AARP → Renew Active, BCBS → Silver&Fit, default →
+  // SilverSneakers. Prefer the value already filed on the plan if it's
+  // a real program name; "Yes" / null fall through to the heuristic so
+  // the agent never sees a generic label.
+  const filedProgram = b.fitness.program;
   const fitness = b.fitness.enabled
-    ? b.fitness.program ?? 'Yes'
+    ? filedProgram && filedProgram !== 'OneCall' && filedProgram !== 'Active&Fit'
+      ? filedProgram
+      : fitnessProgramForCarrier(plan.carrier)
     : 'None';
 
   return {
