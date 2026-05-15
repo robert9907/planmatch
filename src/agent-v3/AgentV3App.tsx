@@ -643,6 +643,8 @@ export function AgentV3App() {
             brainPick={brainPick}
             kept={kept}
             annualDrugByPlanId={annualDrugByPlanId}
+            brainError={brain.error}
+            dataFetchFailed={brain.dataFetchFailed}
             onBack={() => setScreen('swipe')}
             onNext={() => setScreen('compliance')}
           />
