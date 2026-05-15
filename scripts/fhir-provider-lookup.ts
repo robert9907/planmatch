@@ -42,6 +42,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolveWellcareNetworks } from './wellcare-network-map.js';
+import { resolveBcbsncNetworks } from './bcbsnc-network-map.js';
 
 // ─── Env ──────────────────────────────────────────────────────────
 function loadEnv() {
@@ -153,7 +154,7 @@ const CARRIERS: CarrierConfig[] = [
       'PDEX Plan-Net v1.0.0 (2021), no auth. CapabilityStatement omits identifier on Practitioner (only family/given/name/_id are searchable) AND lists identifier only on InsurancePlan — but PractitionerRole?identifier=<NPI> (bare value, no system) works in practice. ' +
       'PractitionerRole.extension carries network-reference (standard PDEX URL) so the regular extractNetworkRefs path captures network memberships. ' +
       'InsurancePlan resource is empty (0 results on any filter); MA networks live as Organization resources (S-10 "Medicare Advantage HMO", S-11 "Medicare Advantage PPO", S-37 "Healthy Blue + Medicare", S-36 "Experience Health Medicare Advantage HMO") with no H-contract identifiers. ' +
-      'Plan resolution therefore needs a Wellcare-style network-map module (scripts/bcbsnc-network-map.ts — TODO) before this carrier contributes rows to pm_provider_network_cache; for now the lookup reports networks and exits with 0 plans.',
+      'Plan resolution goes through scripts/bcbsnc-network-map.ts — each FHIR network display name maps 1:1 to a CMS contract (HMO→H3449, PPO→H3404, Healthy Blue+Medicare→H9147 D-SNP, Experience Health→H3777).',
   },
   {
     name: 'clover',
@@ -664,6 +665,25 @@ async function lookupCarrier(c: CarrierConfig, npi: string, sb: SupabaseClient |
     result.networks = Array.from(networkMap, ([org_id, display]) => ({ org_id, display }));
     if (networkMap.size === 0) {
       result.notes.push('No network-reference extensions on the returned roles');
+      return result;
+    }
+
+    // ─── BCBS NC: pm_plans-based mapping ───────────────────────────
+    // Their FHIR InsurancePlan resource is empty, but each network
+    // display name lines up with exactly one CMS contract (BCBS NC is
+    // NC-only, so no state inference needed).
+    if (c.name === 'bcbs-nc' && sb) {
+      const { hits, rulesFired, unmatched } = await resolveBcbsncNetworks(
+        sb,
+        Array.from(networkMap, ([org_id, display]) => ({ org_id, display })),
+      );
+      for (const h of hits) result.plans.push(h);
+      if (rulesFired.size) {
+        result.notes.push('rules fired: ' + Array.from(rulesFired, ([k, n]) => `${k} (${n})`).join(', '));
+      }
+      if (unmatched.length) {
+        result.notes.push(`unmatched networks (no rule): ${Array.from(new Set(unmatched)).join(', ')}`);
+      }
       return result;
     }
 
