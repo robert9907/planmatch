@@ -3,16 +3,7 @@
 // Aggregator for the agent-side Plan Brain — one round trip pulls every
 // table the engine needs to score the user's candidate plans:
 //
-//   pm_plan_benefits             — canonical merged benefits per plan
-//                                  (medical copays + extras allowances).
-//                                  We deliberately do NOT read the raw
-//                                  pbp_benefits split feed — that table
-//                                  lacks the coverage_amount column where
-//                                  annual allowances (dental, vision,
-//                                  OTC) live, and using it silently
-//                                  zeros out every extras dollar in the
-//                                  brain. See classifyPlanDentalTier /
-//                                  extractCategoryAnnualValue.
+//   pbp_benefits                 — medical copays + extras per plan
 //   pm_drug_cost_cache           — pre-computed per-plan per-drug totals
 //   pm_formulary                 — tier + cost-share fallback
 //   pm_drug_ndc                  — rxcui → NDC bridge
@@ -31,18 +22,14 @@ import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { supabase } from './_lib/supabase.js';
 import { expandRxcui } from './formulary.js';
 
-export const config = { maxDuration: 120 };
-
 interface BenefitRow {
-  contract_id: string;
   plan_id: string;
-  segment_id: string;
-  benefit_category: string;
-  benefit_description: string | null;
-  coverage_amount: number | null;
+  benefit_type: string;
+  tier_id: string | null;
   copay: number | null;
   coinsurance: number | null;
-  max_coverage: number | null;
+  description: string | null;
+  source: string;
 }
 
 interface DrugCacheRow {
@@ -104,6 +91,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   );
   if (triples.length === 0) return badRequest(res, 'no valid triple ids');
 
+  const tripleIds = triples.map((t) => `${t.contract}-${t.plan}-${(t.segment === '0' ? '000' : t.segment.padStart(3, '0'))}`);
   const contractPlans = [...new Set(triples.map((t) => `${t.contract}-${t.plan}`))];
   const contracts = [...new Set(triples.map((t) => t.contract))];
   const planNumbers = [...new Set(triples.map((t) => t.plan))];
@@ -148,13 +136,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // other's results.
     const [benefitsRes, drugCacheRes, formularyRes, ndcRes, networkRes] = await Promise.all([
       sb
-        .from('pm_plan_benefits')
-        .select(
-          'contract_id, plan_id, segment_id, benefit_category, benefit_description, ' +
-            'coverage_amount, copay, coinsurance, max_coverage',
-        )
-        .in('contract_id', contracts)
-        .in('plan_id', planNumbers),
+        .from('pbp_benefits')
+        .select('plan_id, benefit_type, tier_id, copay, coinsurance, description, source')
+        .in('plan_id', uniqueAcceptableIds(ids, tripleIds)),
       // pm_drug_cost_cache uses (plan_id="<contract>-<plan>", segment_id, ndc).
       rxcuis.length > 0
         ? sb
@@ -195,17 +179,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (networkRes.error) throw networkRes.error;
 
     // ─── Index by triple id ────────────────────────────────────────
-    // The (contract_id, plan_id) IN-filter above can produce a cross
-    // product — e.g. requesting [H1036-335, H9700-008] returns rows
-    // for H1036-008 and H9700-335 too. Discard rows that don't match
-    // a requested triple via matchToRequestedTriple.
     const benefitsByPlan: Record<string, BenefitRow[]> = {};
-    for (const r of (benefitsRes.data ?? []) as unknown as BenefitRow[]) {
-      const segNorm = (r.segment_id ?? '0').replace(/^0+/, '') || '0';
-      const triple = `${r.contract_id}-${r.plan_id}-${segNorm === '0' ? '000' : segNorm.padStart(3, '0')}`;
-      const matched = matchToRequestedTriple(triple, ids);
-      if (!matched) continue;
-      (benefitsByPlan[matched] ||= []).push(r);
+    for (const r of (benefitsRes.data ?? []) as BenefitRow[]) {
+      const key = normalizeTripleId(r.plan_id, ids);
+      (benefitsByPlan[key] ||= []).push(r);
     }
 
     const drugCostCache: Record<string, Record<string, DrugCacheRow>> = {};
@@ -286,10 +263,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 }
 
-// Triple ids land here in any of three segment-padding styles —
-// medicare_gov uses the segment as-typed ("H1036-335-2"), federal
-// pbp rows zero-pad to 3 ("H1036-335-002"), pm_drug_cost_cache stores
-// "0" — so we try every permutation against the caller-supplied form.
+// pbp_benefits stores triple ids inconsistently across sources —
+// medicare_gov rows use the segment as-typed ("H1036-335-2"), federal
+// rows zero-pad to 3 ("H1036-335-002"). We accept both and return the
+// caller-supplied form so the client doesn't have to renormalize.
+function uniqueAcceptableIds(requested: string[], normalized: string[]): string[] {
+  return [...new Set([...requested, ...normalized])];
+}
+
+function normalizeTripleId(planId: string, requested: string[]): string {
+  const matched = matchToRequestedTriple(planId, requested);
+  return matched ?? planId;
+}
+
 function matchToRequestedTriple(planId: string, requested: string[]): string | null {
   if (requested.includes(planId)) return planId;
   // Try permuting the segment between '0' / '00' / '000' to match.

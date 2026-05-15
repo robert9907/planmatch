@@ -26,8 +26,6 @@ interface Props {
   brainPick: Plan | null;
   kept: Plan[];
   annualDrugByPlanId: Record<string, number | null>;
-  brainError?: string | null;
-  dataFetchFailed?: boolean;
   onBack: () => void;
   onNext: () => void;
 }
@@ -37,15 +35,11 @@ export function CompareScreen({
   brainPick,
   kept,
   annualDrugByPlanId,
-  brainError,
-  dataFetchFailed,
   onBack,
   onNext,
 }: Props) {
   const finalists = [brainPick, ...kept].filter((p): p is Plan => !!p);
   const [showAll, setShowAll] = useState(false);
-  const [bannerDismissed, setBannerDismissed] = useState(false);
-  const showErrorBanner = !!brainError && !bannerDismissed;
   // Provider in-network status by plan id, copied off the first
   // provider's networkStatus (matches what swipe + pinned cards show).
   const providers = useSession((s) => s.providers);
@@ -57,20 +51,12 @@ export function CompareScreen({
   };
 
   if (finalists.length === 0) {
-    const sub = dataFetchFailed
-      ? 'We had trouble loading plan data. Please try again.'
-      : brainError
-        ? 'No plans matched your criteria. Try adjusting your selections.'
-        : 'Pick at least one plan in Swipe Mode first.';
     return (
       <Container wide>
-        <Header title="Your finalists — side by side" sub={sub} />
-        {showErrorBanner && (
-          <ErrorBanner
-            failed={!!dataFetchFailed}
-            onDismiss={() => setBannerDismissed(true)}
-          />
-        )}
+        <Header
+          title="Your finalists — side by side"
+          sub="Pick at least one plan in Swipe Mode first."
+        />
         <Nav onBack={onBack} />
       </Container>
     );
@@ -248,12 +234,6 @@ export function CompareScreen({
         title="Your finalists — side by side"
         sub="Current plan vs your top options."
       />
-      {showErrorBanner && (
-        <ErrorBanner
-          failed={!!dataFetchFailed}
-          onDismiss={() => setBannerDismissed(true)}
-        />
-      )}
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         <div
           style={{
@@ -499,47 +479,4 @@ function statusToGlyph(s: 'in' | 'out' | 'unknown'): string {
   if (s === 'in') return '✓';
   if (s === 'out') return '✕';
   return '?';
-}
-
-function ErrorBanner({ failed, onDismiss }: { failed: boolean; onDismiss: () => void }) {
-  const message = failed
-    ? "Couldn't load network data — results may be incomplete. Try refreshing."
-    : 'Some plan data may be incomplete — results may not reflect every option. Try refreshing.';
-  return (
-    <div
-      role="alert"
-      style={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 10,
-        margin: '0 0 12px',
-        padding: '10px 12px',
-        background: '#fef3c7',
-        border: '1px solid #f59e0b',
-        borderRadius: 8,
-        color: '#78350f',
-        fontSize: 12,
-        fontWeight: 500,
-      }}
-    >
-      <span style={{ flex: 1, lineHeight: 1.4 }}>{message}</span>
-      <button
-        type="button"
-        onClick={onDismiss}
-        aria-label="Dismiss"
-        style={{
-          background: 'transparent',
-          border: 0,
-          color: '#78350f',
-          cursor: 'pointer',
-          fontSize: 16,
-          lineHeight: 1,
-          padding: 0,
-          fontWeight: 700,
-        }}
-      >
-        ×
-      </button>
-    </div>
-  );
 }

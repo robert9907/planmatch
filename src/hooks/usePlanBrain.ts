@@ -71,21 +71,13 @@ export type ConditionKey = DetectedConditionKey;
 // PlanBrainData — agent /api/plan-brain-data payload. Lookup helpers
 // (lookupDrugCost in QuoteDeliveryV4) read this verbatim, so its shape
 // can't shift.
-//
-// BenefitRow mirrors pm_plan_benefits (the canonical merged table) —
-// NOT the raw pbp_benefits split feed. The split feed lacks
-// coverage_amount/max_coverage, which silently zeroed every extras
-// allowance in the brain (dental, vision, OTC) before this was fixed.
 export interface BenefitRow {
-  contract_id: string;
-  plan_id: string;
-  segment_id: string;
-  benefit_category: string;
-  benefit_description: string | null;
-  coverage_amount: number | null;
+  benefit_type: string;
+  tier_id: string | null;
   copay: number | null;
   coinsurance: number | null;
-  max_coverage: number | null;
+  description: string | null;
+  source: string;
 }
 export interface DrugCostCacheRow {
   plan_id: string;
@@ -266,10 +258,6 @@ interface State {
   data: PlanBrainData | null;
   loading: boolean;
   error: string | null;
-  /** Set when the /api/plan-brain-data fetch threw (timeout, 5xx, etc).
-   *  Lets the UI distinguish "empty Top 4 because data failed" from
-   *  "empty Top 4 because filters disqualified every plan." */
-  dataFetchFailed: boolean;
   /** True when (a) plans, (b) /api/plan-brain-data has returned, and
    *  (c) we're not currently fetching. The brain runs ONCE per stable
    *  input set after this is true; consumers should show a loading
@@ -323,11 +311,11 @@ function planToPmRow(plan: Plan, county: string, idx: number): PmPlanRow {
 }
 
 // ─── BenefitRow → PlanBenefitRow translation ────────────────────────
-// Both shapes already mirror pm_plan_benefits, so this is now mostly
-// a pass-through. We rebuild a synthetic React-key id (the upstream
-// row's numeric id isn't carried through the API payload) and stamp
-// the source as 'pbp' — pm_plan_benefits doesn't track per-row source
-// since it's already the merged/canonicalized view.
+// Agent's benefit row uses (benefit_type, tier_id, description, source)
+// while consumer's PlanBenefitRow uses (benefit_category, benefit_description,
+// coverage_amount, max_coverage). Map field-by-field; missing data
+// becomes null. tier_id is encoded into the synthetic id so React
+// keys stay unique when the brain rebuilds the list.
 function benefitToBrain(
   contract: string,
   planNum: string,
@@ -335,18 +323,26 @@ function benefitToBrain(
   row: BenefitRow,
   i: number,
 ): PlanBenefitRow {
+  const allowedSource =
+    row.source === 'medicare_gov' || row.source === 'pbp_federal'
+      ? 'pbp'
+      : row.source === 'sb_ocr' || row.source === 'manual'
+        ? row.source
+        : 'pbp';
   return {
-    id: `agent:${contract}-${planNum}-${segment}:${row.benefit_category}:${i}`,
-    contract_id: row.contract_id || contract,
-    plan_id: row.plan_id || planNum,
-    segment_id: row.segment_id || segment,
-    benefit_category: row.benefit_category,
-    benefit_description: row.benefit_description,
-    coverage_amount: row.coverage_amount,
+    id: `agent:${contract}-${planNum}-${segment}:${row.benefit_type}:${row.tier_id ?? i}`,
+    contract_id: contract,
+    plan_id: planNum,
+    segment_id: segment,
+    benefit_category: row.tier_id
+      ? `${row.benefit_type}_${row.tier_id}`
+      : row.benefit_type,
+    benefit_description: row.description,
+    coverage_amount: null,
     copay: row.copay,
     coinsurance: row.coinsurance,
-    max_coverage: row.max_coverage,
-    source: 'pbp',
+    max_coverage: null,
+    source: allowedSource as 'pbp' | 'sb_ocr' | 'manual',
   };
 }
 
@@ -856,7 +852,6 @@ export function usePlanBrain(args: Args): State {
   const [data, setData] = useState<PlanBrainData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [dataFetchFailed, setDataFetchFailed] = useState(false);
 
   useEffect(() => {
     if (!planIds) {
@@ -866,7 +861,6 @@ export function usePlanBrain(args: Args): State {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    setDataFetchFailed(false);
     const qs = new URLSearchParams({ ids: planIds });
     if (rxcuis) qs.set('rxcuis', rxcuis);
     if (npis) qs.set('npis', npis);
@@ -881,7 +875,6 @@ export function usePlanBrain(args: Args): State {
       .catch((err) => {
         if ((err as { name?: string })?.name === 'AbortError') return;
         setError((err as Error).message);
-        setDataFetchFailed(true);
         // Degrade gracefully — score with empty data rather than render nothing.
         setData({
           benefitsByPlan: {},
@@ -947,5 +940,5 @@ export function usePlanBrain(args: Args): State {
     agentPlanByTriple,
   ]);
 
-  return { result, data, loading, error, dataFetchFailed, ready };
+  return { result, data, loading, error, ready };
 }

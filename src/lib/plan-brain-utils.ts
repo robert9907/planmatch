@@ -541,18 +541,8 @@ export function extractCategoryAnnualValue(
   if (filed == null) return 0;
   if (category === 'vision') return filed;
   if (category === 'partb_giveback') return filed * 12;
-  // Fitness rows in pm_plan_benefits use coverage_amount=1 as a
-  // presence flag — there's no per-plan dollar value filed for gym
-  // benefits. Treat the sentinel as "included" and credit the
-  // EXTRAS_DEFAULT_VALUE.fitness equivalent so the brain stops
-  // scoring a real fitness benefit as $1/yr.
-  if (category === 'fitness' && filed === 1) return FITNESS_PRESENCE_VALUE;
   return filed;
 }
-
-/** Sentinel-replacement value when pm_plan_benefits.fitness reports
- *  coverage_amount=1 (the "included" flag — see extractCategoryAnnualValue). */
-const FITNESS_PRESENCE_VALUE = 500;
 
 export function partBGivebackAnnual(benefits: PlanBenefitRow[]): number {
   const b = benefitByCategory(benefits, 'partb_giveback');
