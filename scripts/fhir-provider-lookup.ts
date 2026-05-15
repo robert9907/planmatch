@@ -144,6 +144,18 @@ const CARRIERS: CarrierConfig[] = [
     notes: 'HAPI FHIR 5.4.1, full PDEX Plan-Net resources, Open Access (no auth). Discovered after the unrelated /fhir/metadata path on api.bcbst.com 401d — directory lives under /r4/providerdirectory/BCBST.',
   },
   {
+    name: 'bcbs-nc',
+    baseUrl: 'https://apiservices-ext.bcbsnc.com/fhir/prod/R4/providerdirectory',
+    enabled: true,
+    strategy: 'role-by-identifier',
+    npiSystem: 'http://hl7.org/fhir/sid/us-npi',
+    notes:
+      'PDEX Plan-Net v1.0.0 (2021), no auth. CapabilityStatement omits identifier on Practitioner (only family/given/name/_id are searchable) AND lists identifier only on InsurancePlan — but PractitionerRole?identifier=<NPI> (bare value, no system) works in practice. ' +
+      'PractitionerRole.extension carries network-reference (standard PDEX URL) so the regular extractNetworkRefs path captures network memberships. ' +
+      'InsurancePlan resource is empty (0 results on any filter); MA networks live as Organization resources (S-10 "Medicare Advantage HMO", S-11 "Medicare Advantage PPO", S-37 "Healthy Blue + Medicare", S-36 "Experience Health Medicare Advantage HMO") with no H-contract identifiers. ' +
+      'Plan resolution therefore needs a Wellcare-style network-map module (scripts/bcbsnc-network-map.ts — TODO) before this carrier contributes rows to pm_provider_network_cache; for now the lookup reports networks and exits with 0 plans.',
+  },
+  {
     name: 'clover',
     baseUrl: 'https://public-api.cloverhealth.com/providerdirectory/api',
     enabled: true,
