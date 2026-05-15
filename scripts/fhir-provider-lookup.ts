@@ -774,16 +774,57 @@ interface CacheRow {
 }
 
 async function upsertCache(sb: SupabaseClient, rows: CacheRow[]) {
-  if (rows.length === 0) return { wrote: 0 };
+  if (rows.length === 0) return { wrote: 0, inserted: 0, refreshed: 0 };
   // De-dupe on (plan_id, segment_id, npi).
   const dedup = new Map<string, CacheRow>();
   for (const r of rows) dedup.set(`${r.plan_id}|${r.segment_id}|${r.npi}`, r);
   const final = Array.from(dedup.values());
-  const { error } = await sb
-    .from('pm_provider_network_cache')
-    .upsert(final, { onConflict: 'plan_id,segment_id,npi' });
-  if (error) throw error;
-  return { wrote: final.length };
+
+  // pm_provider_network_cache has no unique constraint on
+  // (plan_id, segment_id, npi) — its rows are keyed per-county /
+  // per-location from the medicare.gov scrape. Postgres rejects
+  // ON CONFLICT without a matching constraint, so we do a manual
+  // select → branch instead of .upsert(). Existing rows just get
+  // their checked_at bumped (we preserve the medicare.gov source
+  // and location_id); rows with no match get a fresh insert tagged
+  // source='fhir_aggregator'.
+  const now = new Date().toISOString();
+  let inserted = 0;
+  let refreshed = 0;
+  for (const row of final) {
+    const { data: existing, error: selErr } = await sb
+      .from('pm_provider_network_cache')
+      .select('plan_id, segment_id, npi')
+      .eq('plan_id', row.plan_id)
+      .eq('segment_id', row.segment_id)
+      .eq('npi', row.npi)
+      .limit(1);
+    if (selErr) throw selErr;
+    if ((existing ?? []).length > 0) {
+      const { error } = await sb
+        .from('pm_provider_network_cache')
+        .update({ checked_at: now })
+        .eq('plan_id', row.plan_id)
+        .eq('segment_id', row.segment_id)
+        .eq('npi', row.npi);
+      if (error) throw error;
+      refreshed++;
+    } else {
+      const { error } = await sb
+        .from('pm_provider_network_cache')
+        .insert({
+          plan_id: row.plan_id,
+          segment_id: row.segment_id,
+          npi: row.npi,
+          covered: row.covered,
+          source: 'fhir_aggregator',
+          checked_at: now,
+        });
+      if (error) throw error;
+      inserted++;
+    }
+  }
+  return { wrote: inserted + refreshed, inserted, refreshed };
 }
 
 // ─── Main ─────────────────────────────────────────────────────────
@@ -871,8 +912,8 @@ async function main() {
     console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY — cannot write. Use --dry-run to skip.');
     process.exit(1);
   }
-  const { wrote } = await upsertCache(sb, cacheRows);
-  console.log(`# wrote ${wrote} row(s) to pm_provider_network_cache.`);
+  const { wrote, inserted, refreshed } = await upsertCache(sb, cacheRows);
+  console.log(`# wrote ${wrote} row(s) to pm_provider_network_cache (${inserted} inserted, ${refreshed} refreshed).`);
 }
 
 main().catch((err) => {
