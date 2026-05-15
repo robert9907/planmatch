@@ -226,7 +226,12 @@ export function CompareScreen({
 
   const displayRows = showAll ? [...rows, ...expandedRows] : rows;
 
-  const cols = `140px 1fr repeat(${finalists.length}, 1fr)`;
+  // clamp() lets the label column shrink on narrow viewports (down to
+  // ~70px) while keeping its desktop width. minmax(0, 1fr) on the data
+  // columns is the key fix: bare `1fr` resolves to `minmax(auto, 1fr)`,
+  // so long carrier names or "Save $X/yr" chips can blow past the
+  // viewport. minmax(0, ...) lets cells shrink and wrap instead.
+  const cols = `clamp(70px, 22vw, 140px) minmax(0, 1fr) repeat(${finalists.length}, minmax(0, 1fr))`;
 
   return (
     <Container wide>
@@ -242,12 +247,15 @@ export function CompareScreen({
             background: 'linear-gradient(135deg, #0d2f5e, #1a4a8a)',
           }}
         >
-          <div style={{ padding: 12 }} />
+          <div style={{ padding: '12px 6px', minWidth: 0 }} />
           <div
             style={{
-              padding: 12,
+              padding: '12px 6px',
               borderLeft: '1px solid rgba(255,255,255,0.06)',
               textAlign: 'center',
+              minWidth: 0,
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
             }}
           >
             <div
@@ -269,9 +277,12 @@ export function CompareScreen({
             <div
               key={p.id}
               style={{
-                padding: 12,
+                padding: '12px 6px',
                 borderLeft: '1px solid rgba(255,255,255,0.06)',
                 textAlign: 'center',
+                minWidth: 0,
+                overflowWrap: 'break-word',
+                wordBreak: 'break-word',
               }}
             >
               {i === 0 && brainPick && (
@@ -337,16 +348,29 @@ export function CompareScreen({
                 borderTop: '1px solid rgba(13,47,94,0.03)',
               }}
             >
-              <div style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: '#475569' }}>
+              <div
+                style={{
+                  padding: '9px 8px',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: '#475569',
+                  minWidth: 0,
+                  overflowWrap: 'break-word',
+                  wordBreak: 'break-word',
+                }}
+              >
                 {r.l}
               </div>
               <div
                 style={{
-                  padding: '9px 12px',
+                  padding: '9px 6px',
                   textAlign: 'center',
                   fontSize: 11,
                   color: '#94a3b8',
                   borderLeft: '1px solid rgba(13,47,94,0.03)',
+                  minWidth: 0,
+                  overflowWrap: 'break-word',
+                  wordBreak: 'break-word',
                 }}
               >
                 {r.c}
@@ -362,13 +386,16 @@ export function CompareScreen({
                   <div
                     key={p.id}
                     style={{
-                      padding: '9px 12px',
+                      padding: '9px 6px',
                       textAlign: 'center',
                       fontSize: 11,
                       fontWeight: isBest ? 700 : 500,
                       color: isBest ? '#059669' : '#0d2f5e',
                       borderLeft: '1px solid rgba(13,47,94,0.03)',
                       background: isBest ? 'rgba(5,150,105,0.04)' : 'transparent',
+                      minWidth: 0,
+                      overflowWrap: 'break-word',
+                      wordBreak: 'break-word',
                     }}
                   >
                     {r.g(p)}
@@ -388,17 +415,30 @@ export function CompareScreen({
             borderTop: '2px solid #0d2f5e',
           }}
         >
-          <div style={{ padding: 14, fontWeight: 800, fontSize: 12, color: '#0d2f5e' }}>
+          <div
+            style={{
+              padding: '14px 8px',
+              fontWeight: 800,
+              fontSize: 12,
+              color: '#0d2f5e',
+              minWidth: 0,
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
+            }}
+          >
             Est. Annual
           </div>
           <div
             style={{
-              padding: 14,
+              padding: '14px 6px',
               textAlign: 'center',
               fontWeight: 700,
               fontSize: 14,
               color: '#ef4444',
               borderLeft: '1px solid rgba(13,47,94,0.06)',
+              minWidth: 0,
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
             }}
           >
             {current
@@ -418,9 +458,12 @@ export function CompareScreen({
               <div
                 key={p.id}
                 style={{
-                  padding: 14,
+                  padding: '14px 6px',
                   textAlign: 'center',
                   borderLeft: '1px solid rgba(13,47,94,0.06)',
+                  minWidth: 0,
+                  overflowWrap: 'break-word',
+                  wordBreak: 'break-word',
                 }}
               >
                 <div

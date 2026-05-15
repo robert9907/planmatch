@@ -132,15 +132,16 @@ export function CompareModal({
         <div
           style={{
             background: 'linear-gradient(135deg,#0d2f5e,#1a4a8a)',
-            padding: '16px 20px',
+            padding: '16px 16px',
             borderRadius: '16px 16px 0 0',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            gap: 14,
+            gap: 10,
+            flexWrap: 'wrap',
           }}
         >
-          <div>
+          <div style={{ flex: '1 1 160px', minWidth: 0 }}>
             <div
               style={{
                 color: '#83f0f9',
@@ -159,6 +160,8 @@ export function CompareModal({
                 fontSize: 16,
                 fontWeight: 700,
                 marginTop: 3,
+                overflowWrap: 'break-word',
+                wordBreak: 'break-word',
               }}
             >
               {current.carrier} vs {candidate.carrier}
@@ -170,14 +173,15 @@ export function CompareModal({
                 background: '#059669',
                 color: 'white',
                 borderRadius: 7,
-                padding: '6px 14px',
+                padding: '6px 12px',
                 textAlign: 'center',
+                flexShrink: 0,
               }}
             >
               <div style={{ fontSize: 9, opacity: 0.85 }}>Annual Savings</div>
               <div
                 style={{
-                  fontSize: 20,
+                  fontSize: 18,
                   fontWeight: 800,
                   fontFamily: "'Fraunces', Georgia, serif",
                 }}
@@ -198,6 +202,7 @@ export function CompareModal({
               height: 32,
               borderRadius: 7,
               cursor: 'pointer',
+              flexShrink: 0,
             }}
           >
             ✕
@@ -207,13 +212,23 @@ export function CompareModal({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: '150px 1fr 1fr',
-            padding: '10px 16px',
+            gridTemplateColumns: 'clamp(70px, 24vw, 150px) minmax(0, 1fr) minmax(0, 1fr)',
+            gap: 8,
+            padding: '10px 12px',
             background: '#f8fafc',
             borderBottom: '1px solid #e2e8f0',
           }}
         >
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b' }}>
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color: '#64748b',
+              minWidth: 0,
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
+            }}
+          >
             Benefit
           </div>
           <div
@@ -223,6 +238,9 @@ export function CompareModal({
               color: '#ef4444',
               fontWeight: 700,
               textTransform: 'uppercase',
+              minWidth: 0,
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
             }}
           >
             Current — {current.plan_name}
@@ -234,6 +252,9 @@ export function CompareModal({
               color: '#059669',
               fontWeight: 700,
               textTransform: 'uppercase',
+              minWidth: 0,
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
             }}
           >
             {candidate.plan_name}
@@ -245,16 +266,35 @@ export function CompareModal({
             key={r.l}
             style={{
               display: 'grid',
-              gridTemplateColumns: '150px 1fr 1fr',
-              padding: '8px 16px',
+              gridTemplateColumns: 'clamp(70px, 24vw, 150px) minmax(0, 1fr) minmax(0, 1fr)',
+              gap: 8,
+              padding: '8px 12px',
               background: i % 2 === 0 ? 'white' : '#fafbfc',
               borderBottom: '1px solid rgba(13,47,94,0.03)',
             }}
           >
-            <div style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#475569',
+                minWidth: 0,
+                overflowWrap: 'break-word',
+                wordBreak: 'break-word',
+              }}
+            >
               {r.l}
             </div>
-            <div style={{ textAlign: 'center', fontSize: 11, color: '#94a3b8' }}>
+            <div
+              style={{
+                textAlign: 'center',
+                fontSize: 11,
+                color: '#94a3b8',
+                minWidth: 0,
+                overflowWrap: 'break-word',
+                wordBreak: 'break-word',
+              }}
+            >
               {r.a}
             </div>
             <div
@@ -266,6 +306,9 @@ export function CompareModal({
                 background: r.w ? 'rgba(5,150,105,0.04)' : 'transparent',
                 borderRadius: 3,
                 padding: '1px 0',
+                minWidth: 0,
+                overflowWrap: 'break-word',
+                wordBreak: 'break-word',
               }}
             >
               {r.b}
