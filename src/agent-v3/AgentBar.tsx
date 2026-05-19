@@ -38,13 +38,9 @@ export type ScreenId =
   | 'priorities'
   | 'swipe'
   | 'compare'
-  | 'comparison'
   | 'compliance'
   | 'enroll';
 
-// 'comparison' is the head-to-head detail launched from Top 4 — it has
-// its own minimal client-facing header, so it intentionally doesn't get
-// a nav button here.
 export const SCREENS: ScreenId[] = [
   'intake',
   'meds',
@@ -62,8 +58,7 @@ const LABELS: Record<ScreenId, string> = {
   providers: 'Providers',
   priorities: 'Priorities',
   swipe: 'Plans',
-  compare: 'Top 4',
-  comparison: 'Compare',
+  compare: 'Compare',
   compliance: 'Compliance',
   enroll: 'Enroll',
 };

@@ -40,7 +40,6 @@ import { CompareModal } from './CompareModal';
 import { PlanDetailModal } from './PlanDetailModal';
 import { ComplianceScreen } from './ComplianceScreen';
 import { CompareScreen } from './CompareScreen';
-import { PlanComparisonScreen } from './PlanComparisonScreen';
 import { EnrollScreen } from './EnrollScreen';
 import { IntakeScreen } from './IntakeScreen';
 import { MedsScreen } from './MedsScreen';
@@ -106,26 +105,12 @@ const DEFAULT_PRIORITIES: PriorityKey[] = [
 
 export function AgentV3App() {
   const [screen, setScreen] = useState<ScreenId>('intake');
-  // Single-step history. The Top 4 + Comparison screens have a minimal
-  // header with an X-close; tapping X needs to return to whichever
-  // screen launched them. The shell wraps setScreen with a navigator
-  // that captures the *previous* id, so X-close on Top 4 returns to
-  // 'swipe' and X-close on Comparison returns to 'compare'.
-  const [prevScreen, setPrevScreen] = useState<ScreenId>('intake');
-  const navigate = (next: ScreenId) => {
-    setPrevScreen(screen);
-    setScreen(next);
-  };
   const [clientView, setClientView] = useState(false);
   const [priorities, setPriorities] = useState<PriorityKey[]>(DEFAULT_PRIORITIES);
   const [kept, setKept] = useState<Plan[]>([]);
   const [eliminated, setEliminated] = useState<Plan[]>([]);
   const [compareTarget, setCompareTarget] = useState<Plan | null>(null);
   const [detailTarget, setDetailTarget] = useState<Plan | null>(null);
-  // The challenger plan selected on Top 4 to drive PlanComparisonScreen.
-  // Distinct from compareTarget (which still feeds the legacy swipe-card
-  // CompareModal) so the two flows don't fight over the same slot.
-  const [comparisonChallenger, setComparisonChallenger] = useState<Plan | null>(null);
 
   const client = useSession((s) => s.client);
   const medications = useSession((s) => s.medications);
@@ -584,58 +569,51 @@ export function AgentV3App() {
     );
   }
 
-  // Hide the agent chrome on the two client-facing redesign screens —
-  // the spec replaces it with a GenerationHealth.me brand + X-close so
-  // Margaret sees nothing but plans.
-  const hideAgentBar = screen === 'compare' || screen === 'comparison';
-
   return (
     <div className="pma3">
       <style>{AGENT_V3_CSS}</style>
 
-      {!hideAgentBar && (
-        <AgentBar
-          screen={screen}
-          onNav={navigate}
-          clientView={clientView}
-          onToggleView={() => setClientView((v) => !v)}
-          shareOn={shareActive}
-          shareStarting={shareStarting}
-          shareSmsFailed={Boolean(shareResult?.smsFailed)}
-          shareSmsTo={shareResult?.smsTo ?? null}
-          shareError={shareError}
-          shareLink={shareResult?.link ?? null}
-          onCycleShare={onCycleShare}
-          complianceProgress={complianceProgress}
-          finalistCount={finalistCount}
-        />
-      )}
+      <AgentBar
+        screen={screen}
+        onNav={setScreen}
+        clientView={clientView}
+        onToggleView={() => setClientView((v) => !v)}
+        shareOn={shareActive}
+        shareStarting={shareStarting}
+        shareSmsFailed={Boolean(shareResult?.smsFailed)}
+        shareSmsTo={shareResult?.smsTo ?? null}
+        shareError={shareError}
+        shareLink={shareResult?.link ?? null}
+        onCycleShare={onCycleShare}
+        complianceProgress={complianceProgress}
+        finalistCount={finalistCount}
+      />
 
       <div>
         {screen === 'intake' && (
-          <IntakeScreen onNext={() => navigate('meds')} />
+          <IntakeScreen onNext={() => setScreen('meds')} />
         )}
         {screen === 'meds' && (
           <MedsScreen
             clientView={clientView}
-            onBack={() => navigate('intake')}
-            onNext={() => navigate('providers')}
+            onBack={() => setScreen('intake')}
+            onNext={() => setScreen('providers')}
           />
         )}
         {screen === 'providers' && (
           <ProvidersScreen
             clientView={clientView}
             rankedPlanIds={rankedPlanIds}
-            onBack={() => navigate('meds')}
-            onNext={() => navigate('priorities')}
+            onBack={() => setScreen('meds')}
+            onNext={() => setScreen('priorities')}
           />
         )}
         {screen === 'priorities' && (
           <PrioritiesScreen
             selected={priorities}
             onToggle={togglePriority}
-            onBack={() => navigate('providers')}
-            onNext={() => navigate('swipe')}
+            onBack={() => setScreen('providers')}
+            onNext={() => setScreen('swipe')}
           />
         )}
         {screen === 'swipe' && (
@@ -649,8 +627,8 @@ export function AgentV3App() {
             onEliminate={eliminatePlan}
             onCompare={setCompareTarget}
             onShowDetail={setDetailTarget}
-            onNext={() => navigate('compare')}
-            onBack={() => navigate('priorities')}
+            onNext={() => setScreen('compare')}
+            onBack={() => setScreen('priorities')}
             annualDrugByPlanId={annualDrugByPlanId}
             monthlyDrugByPlanId={monthlyDrugByPlanId}
             brainScoreByPlanId={brainScoreByPlanId}
@@ -662,35 +640,17 @@ export function AgentV3App() {
         {screen === 'compare' && (
           <CompareScreen
             current={currentPlan}
-            currentMissingInCounty={Boolean(currentPlanId) && !currentPlan}
-            finalists={[brainPick, ...kept].filter((p): p is Plan => !!p).slice(0, FINALIST_CAP)}
-            hasBrainPick={Boolean(brainPick)}
+            brainPick={brainPick}
+            kept={kept}
             annualDrugByPlanId={annualDrugByPlanId}
-            brainScoreByPlanId={brainScoreByPlanId}
-            onClose={() => navigate(prevScreen)}
-            onCompare={(plan) => {
-              setComparisonChallenger(plan);
-              navigate('comparison');
-            }}
-            onBack={() => navigate('swipe')}
-            onNext={() => navigate('compliance')}
-          />
-        )}
-        {screen === 'comparison' && currentPlan && comparisonChallenger && (
-          <PlanComparisonScreen
-            current={currentPlan}
-            challenger={comparisonChallenger}
-            annualDrugByPlanId={annualDrugByPlanId}
-            brainScoreByPlanId={brainScoreByPlanId}
-            onClose={() => navigate(prevScreen)}
-            onBackToTop4={() => navigate('compare')}
-            onEnroll={() => navigate('enroll')}
+            onBack={() => setScreen('swipe')}
+            onNext={() => setScreen('compliance')}
           />
         )}
         {screen === 'compliance' && (
           <ComplianceScreen
-            onBack={() => navigate('compare')}
-            onNext={() => navigate('enroll')}
+            onBack={() => setScreen('compare')}
+            onNext={() => setScreen('enroll')}
           />
         )}
         {screen === 'enroll' && (
@@ -698,7 +658,7 @@ export function AgentV3App() {
             current={currentPlan}
             brainPick={brainPick}
             annualDrugByPlanId={annualDrugByPlanId}
-            onBack={() => navigate('compliance')}
+            onBack={() => setScreen('compliance')}
           />
         )}
       </div>
