@@ -1093,7 +1093,14 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       }
       allInNet = inNet === userProviderNpis.length;
       anyOut = outOrAbsent > 0;
-      allOut = inNet === 0;
+      // "All out" only when we have positive evidence every provider is
+      // out-of-network. Cache misses (anyUnverified) used to silently
+      // count toward inNet=0, hard-filtering plans via the loose
+      // provider gate at L1610 whenever the scrape had gaps — which is
+      // common (Alleghany NC: 36.5% NPI coverage). Plans with unknown
+      // network status now stay in the pool and surface a "call to
+      // verify" banner instead of being eliminated.
+      allOut = inNet === 0 && anyDefinitelyOut && !anyUnverified;
       if (primaryProviderNpi) {
         primaryInNet = providerCache.get(primaryProviderNpi)?.covered === true;
       }
