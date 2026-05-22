@@ -284,7 +284,16 @@ function planToPmRow(plan: Plan, county: string, idx: number): PmPlanRow {
   // that representation so brain key generation matches the agent's
   // existing triple ids verbatim.
   const segment = segRaw.replace(/^0+/, '') || '0';
-  const isSnp = plan.plan_type === 'DSNP';
+  // SNP type is carried through the agent's PlanType enum. classifySnp
+  // in plan-brain.ts substring-matches on snp_type, so stamp the canonical
+  // hyphenated form ("C-SNP" / "D-SNP" / "I-SNP") rather than the enum
+  // value so the brain bucketing matches the pm_plans schema.
+  const snpKind: 'C-SNP' | 'D-SNP' | 'I-SNP' | null =
+    plan.plan_type === 'DSNP' ? 'D-SNP'
+    : plan.plan_type === 'CSNP' ? 'C-SNP'
+    : plan.plan_type === 'ISNP' ? 'I-SNP'
+    : null;
+  const isSnp = snpKind != null;
   return {
     id: idx,
     contract_id: contract,
@@ -303,7 +312,7 @@ function planToPmRow(plan: Plan, county: string, idx: number): PmPlanRow {
     drug_deductible: plan.drug_deductible,
     star_rating: plan.star_rating,
     snp: isSnp,
-    snp_type: isSnp ? 'D-SNP' : null,
+    snp_type: snpKind,
     sanctioned: false,
     enrollment_count: null,
     enrollment_as_of: null,

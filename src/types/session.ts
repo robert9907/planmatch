@@ -6,7 +6,7 @@ export type SessionMode = 'new_quote' | 'annual_review';
 
 export type StateCode = 'NC' | 'TX' | 'GA';
 
-export type PlanType = 'MA' | 'MAPD' | 'DSNP' | 'PDP' | 'MEDSUPP';
+export type PlanType = 'MA' | 'MAPD' | 'DSNP' | 'CSNP' | 'ISNP' | 'PDP' | 'MEDSUPP';
 
 export interface Client {
   name: string;

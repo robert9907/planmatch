@@ -189,6 +189,10 @@ function planTypeLong(planType: PlanType | null): string {
   switch (planType) {
     case 'DSNP':
       return 'Dual Special Needs Plans (D-SNP)';
+    case 'CSNP':
+      return 'Chronic Condition Special Needs Plans (C-SNP)';
+    case 'ISNP':
+      return 'Institutional Special Needs Plans (I-SNP)';
     case 'MAPD':
       return 'Medicare Advantage with Prescription Drug coverage (MA-PD)';
     case 'MA':

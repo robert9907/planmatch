@@ -4,9 +4,9 @@
 //   state?       2-letter state code (NC / GA / TX).
 //   county?      free-text county name, normalized and matched against
 //                pm_plans.county_name plus "All Counties" (PDPs).
-//   planType?    app's PlanType enum ('MA' | 'MAPD' | 'DSNP' | 'PDP' |
-//                'MEDSUPP'). Filters by a translation from the
-//                landscape plan_type + SNP flags.
+//   planType?    app's PlanType enum ('MA' | 'MAPD' | 'DSNP' | 'CSNP' |
+//                'ISNP' | 'PDP' | 'MEDSUPP'). Filters by a translation
+//                from the landscape plan_type + SNP flags.
 //   ids?         comma-separated list of Plan ids (contract-plan-segment)
 //                for the Step 6 finalist refetch path. When provided,
 //                state/county/planType filters are ignored — the client
@@ -24,7 +24,7 @@ import {
 } from './_lib/non-commissionable.js';
 import { supabase } from './_lib/supabase.js';
 
-type AppPlanType = 'MA' | 'MAPD' | 'DSNP' | 'PDP' | 'MEDSUPP';
+type AppPlanType = 'MA' | 'MAPD' | 'DSNP' | 'CSNP' | 'ISNP' | 'PDP' | 'MEDSUPP';
 
 // Keep aligned with src/types/plans.ts — the API is the single source
 // of truth for Plan shape as far as the UI is concerned.
@@ -422,10 +422,12 @@ function mapPlanType(raw: string | null, snp: boolean, snpType: string | null): 
   // condition attestation for C-SNP).
   if (snp) {
     const s = (snpType ?? '').toUpperCase();
-    if (s.includes('D-SNP') || s.includes('DSNP')) return 'DSNP';
-    // C-SNP and I-SNP aren't in the app's PlanType enum yet; tag them
-    // as DSNP so the MAPD filter excludes them. A downstream follow-up
-    // can split C-SNP/I-SNP into their own buckets.
+    if (s.includes('D-SNP') || s.includes('DSNP') || s.includes('DUAL')) return 'DSNP';
+    if (s.includes('C-SNP') || s.includes('CSNP') || s.includes('CHRONIC')) return 'CSNP';
+    if (s.includes('I-SNP') || s.includes('ISNP') || s.includes('INSTITUTIONAL')) return 'ISNP';
+    // snp=true but snp_type missing or unrecognized — treat as DSNP so
+    // MAPD/CSNP filters exclude it. The brain still sees plan_type
+    // contains "SNP" via the raw passthrough.
     return 'DSNP';
   }
   if (t === 'PDP') return 'PDP';
