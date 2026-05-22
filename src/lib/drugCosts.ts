@@ -1,6 +1,8 @@
-// drugCosts — browser-side client for /api/drug-ndcs and /api/drug-costs.
+// drugCosts — browser-side client for /api/drug-ndcs and /api/drug-costs,
+// plus the shared monthly-cost helper used by every per-drug $ display
+// path (Compare table, Medications screen, Quote table).
 //
-// Two calls chained:
+// Two API calls chained:
 //   1. /api/drug-ndcs  →  resolve rxcuis to representative NDCs
 //   2. /api/drug-costs →  Medicare.gov drug-cost call (Playwright server
 //                         side) for a list of plans + NDCs
@@ -8,6 +10,64 @@
 // The Quote page fires both once per (plans × rxcuis × pharmacy mode)
 // tuple; the server caches 24h so toggling retail↔mail within a session
 // only hits upstream twice.
+
+// CMS-typical retail prices per Part D tier, used to convert
+// coinsurance-only formulary rows (no flat copay filed — e.g. Ozempic at
+// Tier 3 with 25% coinsurance on most NC plans) into an estimated
+// monthly $ amount. Matches the table in broker-rules.ts so the broker
+// score and the consumer/agent UI use the same notional. Tiers 6-8 are
+// carrier-specific buckets that map back to generic / brand / specialty
+// equivalents.
+const TIER_NOTIONAL_RETAIL_MONTHLY: Record<number, number> = {
+  1: 8,
+  2: 30,
+  3: 200,
+  4: 500,
+  5: 1500,
+  6: 8,
+  7: 30,
+  8: 200,
+};
+
+/**
+ * Compute a monthly $ cost from a formulary row's cost-share. Used by
+ * the Compare / Medications / Quote per-drug displays so coinsurance-
+ * only drugs (Ozempic + Tier 3 + 25% coinsurance, etc.) show ~$50/mo
+ * instead of $0.
+ *
+ * Inputs:
+ *   - copay:        flat $/fill from pm_formulary.copay_default
+ *   - coinsurance:  fraction from pm_formulary.coinsurance_default
+ *                   (0.25 = 25%); values > 1 are auto-normalized as
+ *                   percentages for callers that mix pm_plan_benefits'
+ *                   percent-integer convention with pm_formulary's
+ *                   fraction convention.
+ *   - tier:         Part D tier (1-8); required for the coinsurance
+ *                   branch since the notional retail depends on tier.
+ *
+ * Returns 0 only when both copay and coinsurance are absent or zero
+ * (the call site should treat 0 as "no per-drug $ signal" and render
+ * "—" rather than "$0" to stay compliance-safe).
+ */
+export function monthlyCostFromFormulary(args: {
+  tier: number | null;
+  copay: number | null;
+  coinsurance: number | null;
+}): number {
+  if (typeof args.copay === 'number' && args.copay >= 0) {
+    return args.copay;
+  }
+  if (
+    typeof args.coinsurance === 'number' &&
+    args.coinsurance > 0 &&
+    args.tier != null
+  ) {
+    const notional = TIER_NOTIONAL_RETAIL_MONTHLY[args.tier] ?? 200;
+    const frac = args.coinsurance > 1 ? args.coinsurance / 100 : args.coinsurance;
+    return Math.round(notional * frac);
+  }
+  return 0;
+}
 
 export interface PlanDrugCost {
   contract_id: string;

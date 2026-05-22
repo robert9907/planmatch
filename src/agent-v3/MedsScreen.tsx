@@ -39,6 +39,7 @@ import {
   bulkLookupFormulary,
   getCachedFormulary,
 } from '@/lib/formularyLookup';
+import { monthlyCostFromFormulary } from '@/lib/drugCosts';
 import { fetchPlansForClient } from '@/lib/planCatalog';
 import type { Plan } from '@/types/plans';
 import type { Medication } from '@/types/session';
@@ -284,8 +285,17 @@ function perDrugBest(
     if (tierNum != null && (bestTier == null || tierNum < bestTier)) {
       bestTier = tierNum;
     }
-    if (typeof hit.copay === 'number') {
-      if (minCopay == null || hit.copay < minCopay) minCopay = hit.copay;
+    // Per-fill cost: flat copay when filed, else coinsurance × tier
+    // notional retail. Without the coinsurance branch a Tier 3 25%
+    // coinsurance row (Ozempic on most NC plans) rendered as null and
+    // the row showed "copay TBD" with no estimate.
+    const monthly = monthlyCostFromFormulary({
+      tier: tierNum,
+      copay: hit.copay,
+      coinsurance: hit.coinsurance,
+    });
+    if (monthly > 0 && (minCopay == null || monthly < minCopay)) {
+      minCopay = monthly;
     }
   }
   return {

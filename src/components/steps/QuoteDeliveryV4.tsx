@@ -58,6 +58,7 @@ import {
   type CompatRealAnnualCost,
 } from '@/hooks/usePlanBrain';
 import { useDrugCosts, lookupPlanCost } from '@/hooks/useDrugCosts';
+import { monthlyCostFromFormulary } from '@/lib/drugCosts';
 import {
   useManufacturerAssistance,
   type AssistanceRow,
@@ -2869,18 +2870,34 @@ function lookupDrugCost(
     };
   }
 
-  // Path 3 — pm_formulary coinsurance populated. Real percentage.
+  // Path 3 — pm_formulary coinsurance populated. Real percentage,
+  // converted to an estimated $ amount via tier-notional retail so the
+  // Compare/Quote cell shows a usable monthly figure (Ozempic Tier 3
+  // 25% → ~$50/mo) instead of "0.25%" or a null cell. is_estimate=true
+  // so the UI prefixes "est." and the consumer knows it's not a
+  // Medicare.gov real-cost lookup.
   if (formulary?.coinsurance != null) {
-    return {
+    const monthlyBase = monthlyCostFromFormulary({
       tier,
-      label: `${formulary.coinsurance}%`,
-      monthly: null,
-      annual: null,
-      source: 'formulary',
-      is_estimate: false,
-      pa: formulary.prior_auth === true,
-      st: formulary.step_therapy === true,
-    };
+      copay: null,
+      coinsurance: formulary.coinsurance,
+    });
+    if (monthlyBase > 0) {
+      const monthly = pharmacyFill === 'mail_90' ? monthlyBase * 3 : monthlyBase;
+      const pctLabel = Math.round(
+        formulary.coinsurance > 1 ? formulary.coinsurance : formulary.coinsurance * 100,
+      );
+      return {
+        tier,
+        label: `est. $${monthly} (${pctLabel}%)`,
+        monthly,
+        annual: monthlyBase * 12,
+        source: 'formulary',
+        is_estimate: true,
+        pa: formulary.prior_auth === true,
+        st: formulary.step_therapy === true,
+      };
+    }
   }
 
   // Path 4 — plan-level tier copay from pbp_benefits.rx_tiers. Real

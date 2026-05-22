@@ -33,6 +33,7 @@ import { fetchClientSession } from '@/lib/agentbase';
 import { bulkLookupFormulary, getCachedFormulary } from '@/lib/formularyLookup';
 import { fetchPlansForClient } from '@/lib/planCatalog';
 import { totalComplianceItems } from '@/lib/compliance';
+import { monthlyCostFromFormulary } from '@/lib/drugCosts';
 import type { Plan } from '@/types/plans';
 import type { StateCode } from '@/types/session';
 import { AgentBar, FINALIST_CAP, type ScreenId } from './AgentBar';
@@ -414,9 +415,17 @@ export function AgentV3App() {
         if (tierNum != null) {
           ceilingTotal += TIER_ANNUAL_CEILING[tierNum] ?? 1800;
         }
-        if (typeof hit.copay === 'number') {
-          formularyTotal += hit.copay * 12;
-        }
+        // Per-fill cost: flat copay when filed, else coinsurance × tier
+        // notional retail. Pre-fix, the coinsurance branch was missing
+        // and Ozempic (Tier 3, ~25% coinsurance on most NC plans) added
+        // $0 to formularyTotal, surfacing as "Annual Drugs $0/yr" on
+        // Compare when pm_drug_cost_cache had no row for the plan.
+        const monthly = monthlyCostFromFormulary({
+          tier: tierNum,
+          copay: hit.copay,
+          coinsurance: hit.coinsurance,
+        });
+        formularyTotal += monthly * 12;
       }
 
       if (!anyCache) {
