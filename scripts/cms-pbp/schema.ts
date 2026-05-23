@@ -11,10 +11,11 @@
 // segment_id — plus county_code for PlanArea), and a flag for whether
 // the file is in v1 scope.
 //
-// Skipped from v1 (commented out at the bottom): pharmacy / MRX
-// (covered by SPUF), Section C / OON (out-of-network — separate
-// effort), step files (long-format detail), VBID (discontinued in
-// 2026), B3 / B5 / B11 / B12 / B19 / B20.
+// Skipped from v1 (commented out at the bottom): pharmacy / MRX header
+// + monthly (mrx_p, mrx) — covered by SPUF; only pbp_mrx_tier is loaded
+// here for Part D tier cost-share. Section C / OON (out-of-network —
+// separate effort), step files (long-format detail), VBID (discontinued
+// in 2026), B3 / B5 / B11 / B12 / B19 / B20.
 
 export interface PbpFileSpec {
   // Internal short name for logging and the --skip CLI flag.
@@ -178,6 +179,16 @@ export const B18_HEARING_EXAMS_AIDS: PbpFileSpec = {
   pkColumns: STD_PK,
 };
 
+// pbp_mrx_tier — Part D tier cost-share. Long (one row per plan-segment
+// per tier 1..6), unlike Section B files which are wide. PK includes
+// mrx_tier_id to keep each tier on its own row.
+export const MRX_TIER: PbpFileSpec = {
+  name: 'mrx_tier',
+  fileName: 'pbp_mrx_tier.txt',
+  landingTable: 'pbp_mrx_tier',
+  pkColumns: [...STD_PK, 'mrx_tier_id'],
+};
+
 // All files in canonical load order. plan_information equivalent
 // (Section A) loads first; PlanArea last because it's the largest.
 export const ALL_FILES: PbpFileSpec[] = [
@@ -198,6 +209,7 @@ export const ALL_FILES: PbpFileSpec[] = [
   B16_DENTAL,
   B17_EYE_EXAMS_WEAR,
   B18_HEARING_EXAMS_AIDS,
+  MRX_TIER,
   PLANAREA,
 ];
 
@@ -226,7 +238,8 @@ export const FORCED_TEXT_COLUMNS: ReadonlySet<string> = new Set([
 //   pbp_b12_renal_dialysis.txt
 //   pbp_b19_model_test.txt        (mostly empty in 2026)
 //   pbp_b20.txt                    (cost-plan enhanced Rx)
-//   pbp_mrx*.txt                   (Part D — covered by SPUF)
+//   pbp_mrx.txt / pbp_mrx_p.txt    (Part D plan-level header — covered by SPUF;
+//                                   only pbp_mrx_tier.txt is loaded here)
 //   pbp_Section_C*.txt             (out-of-network — separate effort)
 //   pbp_step*.txt                  (long-format detail companions)
 //   *_vbid_uf*.txt                 (VBID discontinued in 2026)

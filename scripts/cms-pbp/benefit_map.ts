@@ -354,11 +354,58 @@ export const BENEFIT_MAP: BenefitMapEntry[] = [
   },
 ];
 
+// ─── pbp_mrx_tier — Part D Rx tiers ──────────────────────────────────
+//
+// pbp_mrx_tier is structurally different from Section B files: each plan-
+// segment has UP TO 6 rows (one per Part D tier 1..6), keyed by the
+// mrx_tier_id column. The standard BenefitMapEntry assumes a wide source
+// table with one row per plan, so promote.ts handles MRX via a dedicated
+// branch (parallel to the interval-tiered inpatient/SNF branches) that
+// consumes the data declared here.
+//
+// Each plan exposes the same Part D tier copay under two pharmacy
+// channels — retail STANDARD (any in-network pharmacy) and retail
+// PREFERRED (the carrier's preferred-network pharmacies, typically a
+// lower copay). Plan-match brokers compare both. We emit each as a
+// distinct pbp_benefits_v2 row, distinguished by tier_id:
+//
+//   benefit_type = 'rx_tier_<N>'  for N in 1..6
+//   tier_id      = 'retail_standard' | 'retail_preferred'
+//
+// 30-day supply (_1m) only — 60- and 90-day variants exist on the source
+// table (_2m / _3m) but the broker UI compares the monthly headline.
+// Mail-order, OON, and LTC channels (mostd/mosplt/mospfd/oonp/ltcp) are
+// not surfaced here; brokers handle those separately.
+//
+// Column-naming convention on pbp_mrx_tier:
+//   mrx_tier_rstd_copay_1m  →  retail standard, 30-day copay
+//   mrx_tier_rstd_coins_1m  →  retail standard, 30-day coinsurance pct
+//   mrx_tier_rspfd_copay_1m →  retail preferred, 30-day copay
+//   mrx_tier_rspfd_coins_1m →  retail preferred, 30-day coinsurance pct
+
+export interface RxTierPharmacy {
+  // tier_id literal written to pbp_benefits_v2.tier_id.
+  tier_id: 'retail_standard' | 'retail_preferred';
+  copay_col: string;
+  coinsurance_col: string;
+}
+
+export const RX_TIER_PHARMACIES: readonly RxTierPharmacy[] = [
+  { tier_id: 'retail_standard',  copay_col: 'mrx_tier_rstd_copay_1m',  coinsurance_col: 'mrx_tier_rstd_coins_1m'  },
+  { tier_id: 'retail_preferred', copay_col: 'mrx_tier_rspfd_copay_1m', coinsurance_col: 'mrx_tier_rspfd_coins_1m' },
+];
+
+// CMS-defined Part D tier numbers — 1..6 is the universal range in 2026.
+// Plans that don't use all six leave the row absent for those tiers, so
+// emission is naturally bounded by the source data.
+export const RX_TIER_NUMBERS: readonly number[] = [1, 2, 3, 4, 5, 6];
+export const RX_TIER_SOURCE_TABLE = 'pbp_mrx_tier';
+export const RX_TIER_ID_COLUMN = 'mrx_tier_id';
+
 // Deferred to v1.1 (need multi-row tier emission):
 //   inpatient_acute        — b1a interval × tier (3 intervals × up to 3 tiers)
 //   inpatient_psych        — b1b same shape
 //   snf                    — b2 same shape
-//   rx_tier_1..6           — pbp_mrx_tier per Part D tier (covered by SPUF too)
 //
 // Deferred to v1.2 (allowance/cap shape, not standard cost-share):
 //   otc_quarter, food_card_month, fitness, transportation_trips,

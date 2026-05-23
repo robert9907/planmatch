@@ -13,7 +13,14 @@
 // there) survive the swap.
 
 import { withTransaction, withClient } from '../cms-spuf/pg.js';
-import { BENEFIT_MAP, resolveColumns } from './benefit_map.js';
+import {
+  BENEFIT_MAP,
+  resolveColumns,
+  RX_TIER_PHARMACIES,
+  RX_TIER_NUMBERS,
+  RX_TIER_SOURCE_TABLE,
+  RX_TIER_ID_COLUMN,
+} from './benefit_map.js';
 
 // Pre-fetches the actual column list for every source_table referenced
 // by BENEFIT_MAP, so the SQL builder can replace references to missing
@@ -22,8 +29,19 @@ import { BENEFIT_MAP, resolveColumns } from './benefit_map.js';
 // columns or use suffixed variants (b9a_auth_ohs_yn vs the assumed
 // b9a_auth_yn). Querying the schema once per promote is cheap and
 // keeps the benefit_map declarative.
+// Tables referenced by interval-tiered inpatient/SNF logic in promote.
+// Loaded alongside BENEFIT_MAP tables so column-existence checks work
+// for the multi-row emission branches.
+const INTERVAL_TABLES = ['pbp_b1a_inpat_hosp', 'pbp_b1b_inpat_hosp', 'pbp_b2_snf'];
+
 async function loadTableColumnSets(): Promise<Map<string, Set<string>>> {
-  const tables = [...new Set(BENEFIT_MAP.map((b) => b.source_table))];
+  const tables = [
+    ...new Set([
+      ...BENEFIT_MAP.map((b) => b.source_table),
+      ...INTERVAL_TABLES,
+      RX_TIER_SOURCE_TABLE,
+    ]),
+  ];
   const out = new Map<string, Set<string>>();
   await withClient(async (c) => {
     for (const t of tables) {
@@ -81,22 +99,26 @@ export async function promote(opts: {
         $1::smallint             AS plan_year,
         d.pbp_d_mplusc_premium::numeric(10,2)        AS premium_part_c,
         d.pbp_d_mplusc_bonly_premium::numeric(10,2)  AS premium_b_only,
-        CASE WHEN d.pbp_d_mco_pay_reduct_yn = 'Y'
+        -- CMS Section D _yn flags use '1' (yes) / '2' (no), NOT 'Y'/'N'
+        -- like the per-benefit flags in Section B. Verified across 2026
+        -- distribution: pbp_d_out_pocket_amt_yn='1' for 6,964 plans,
+        -- '2' for 36, null for 420.
+        CASE WHEN d.pbp_d_mco_pay_reduct_yn = '1'
              THEN d.pbp_d_mco_pay_reduct_amt::numeric(10,2)
         END                                            AS part_b_giveback,
-        CASE WHEN d.pbp_d_out_pocket_amt_yn = 'Y'
+        CASE WHEN d.pbp_d_out_pocket_amt_yn = '1'
              THEN d.pbp_d_out_pocket_amt::numeric(12,2)
         END                                            AS moop_in_network,
-        CASE WHEN d.pbp_d_comb_max_enr_amt_yn = 'Y'
+        CASE WHEN d.pbp_d_comb_max_enr_amt_yn = '1'
              THEN d.pbp_d_comb_max_enr_amt::numeric(12,2)
         END                                            AS moop_combined,
-        CASE WHEN d.pbp_d_oon_max_enr_oopc_yn = 'Y'
+        CASE WHEN d.pbp_d_oon_max_enr_oopc_yn = '1'
              THEN d.pbp_d_oon_max_enr_oopc_amt::numeric(12,2)
         END                                            AS moop_oon,
-        CASE WHEN d.pbp_d_maxenr_oopc_yn = 'Y'
+        CASE WHEN d.pbp_d_maxenr_oopc_yn = '1'
              THEN d.pbp_d_maxenr_oopc_amt::numeric(12,2)
         END                                            AS moop_non_network,
-        CASE WHEN d.pbp_d_ann_deduct_yn = 'Y'
+        CASE WHEN d.pbp_d_ann_deduct_yn = '1'
              THEN d.pbp_d_ann_deduct_amt::numeric(10,2)
         END                                            AS annual_deductible,
         NULL::numeric(10,2)                            AS rx_deductible,
@@ -203,6 +225,131 @@ export async function promote(opts: {
         console.log(`[promote] benefit_map: skipped ${skippedEntries.length} entries (col mismatch): ${skippedEntries.join('; ')}`);
       }
 
+      // ─── Interval-tiered inpatient + SNF ──────────────────────────
+      //
+      // CMS PBP stores inpatient (b1a acute, b1b psych) and SNF (b2)
+      // cost-share by day-range: e.g. $325/day days 1-8, then $0/day
+      // days 9-90. Each plan can declare up to 3 intervals × 3 tiers
+      // (most plans use tier 1 only). We emit one v2 row per non-null
+      // interval, with tier_id = 'days_{bgnd}-{endd}' to match the
+      // legacy scrape-medicare-gov pattern (inpatient_day_stage_*).
+      //
+      // Three benefit_types — inpatient_acute, inpatient_psych, snf —
+      // each generated from 3 interval branches (tier 1 only). Plans
+      // using tier 2/3 (SNF with multiple tiers) are a follow-up.
+      const intervalSpecs = [
+        { benefit_type: 'inpatient_acute',  table: 'pbp_b1a_inpat_hosp', prefix: 'pbp_b1a' },
+        { benefit_type: 'inpatient_psych',  table: 'pbp_b1b_inpat_hosp', prefix: 'pbp_b1b' },
+        { benefit_type: 'snf',              table: 'pbp_b2_snf',         prefix: 'pbp_b2'  },
+      ];
+      const intervalBranches: string[] = [];
+      for (const spec of intervalSpecs) {
+        const tableCols = liveCols.get(spec.table) ?? new Set<string>();
+        for (let i = 1; i <= 3; i++) {
+          const amtCol  = `${spec.prefix}_copay_mcs_amt_int${i}_t1`;
+          const bgndCol = `${spec.prefix}_copay_mcs_bgnd_int${i}_t1`;
+          const enddCol = `${spec.prefix}_copay_mcs_endd_int${i}_t1`;
+          const coinsCol = `${spec.prefix}_coins_mcs_pct_int${i}_t1`;
+          // Skip if the copay-amt column doesn't exist for this benefit
+          // (b1b in particular may have fewer interval columns).
+          if (!tableCols.has(amtCol)) continue;
+          const authCol = `${spec.prefix}_auth_yn`;
+          const referCol = `${spec.prefix}_refer_yn`;
+          const authExpr = tableCols.has(authCol) ? `(t.${authCol} = '1')` : 'NULL::boolean';
+          const referExpr = tableCols.has(referCol) ? `(t.${referCol} = '1')` : 'NULL::boolean';
+          const coinsExpr = tableCols.has(coinsCol) ? `t.${coinsCol}::numeric(6,3)` : 'NULL::numeric(6,3)';
+          intervalBranches.push(`
+            SELECT
+              t.pbp_a_hnumber                                        AS contract_id,
+              t.pbp_a_plan_identifier                                AS plan_id,
+              t.segment_id,
+              $1::smallint                                            AS plan_year,
+              '${spec.benefit_type}'::text                            AS benefit_type,
+              ('days_' || regexp_replace(t.${bgndCol}::text, '\\.0+$', '')
+                       || '-' ||
+                regexp_replace(t.${enddCol}::text, '\\.0+$', ''))::text AS tier_id,
+              t.${amtCol}::numeric(10,2)                              AS copay,
+              NULL::numeric(10,2)                                     AS copay_max,
+              ${coinsExpr}                                            AS coinsurance,
+              NULL::numeric(6,3)                                      AS coinsurance_max,
+              ${authExpr}                                             AS prior_auth,
+              ${referExpr}                                            AS referral_required,
+              'cms_pbp'::text                                         AS source,
+              $2::bigint                                              AS release_id
+            FROM ${spec.table} t
+            WHERE t.release_id = $2
+              AND t.${amtCol} IS NOT NULL
+              AND t.${bgndCol} IS NOT NULL
+              AND t.${enddCol} IS NOT NULL
+          `);
+        }
+      }
+
+      // ─── Part D Rx tiers (pbp_mrx_tier) ───────────────────────────
+      //
+      // pbp_mrx_tier is long: one row per (plan, mrx_tier_id) instead of
+      // one wide row per plan. We emit 6 tiers × 2 pharmacy variants =
+      // up to 12 branches, each filtering by mrx_tier_id = N and
+      // projecting the retail standard or retail preferred 30-day
+      // columns. tier_id encodes the pharmacy variant
+      // ('retail_standard' / 'retail_preferred'); the Part D tier
+      // number lives in benefit_type ('rx_tier_1' .. 'rx_tier_6').
+      // Each branch only fires when at least one of (copay, coins) is
+      // populated for that pharmacy variant — plans that file only
+      // standard cost-share won't get a phantom preferred row.
+      const rxTierCols = liveCols.get(RX_TIER_SOURCE_TABLE) ?? new Set<string>();
+      const rxTierBranches: string[] = [];
+      const rxSkipped: string[] = [];
+      if (rxTierCols.size === 0) {
+        rxSkipped.push(`${RX_TIER_SOURCE_TABLE} (table missing — skipping all rx_tier branches)`);
+      } else if (!rxTierCols.has(RX_TIER_ID_COLUMN)) {
+        rxSkipped.push(`${RX_TIER_SOURCE_TABLE}.${RX_TIER_ID_COLUMN} (filter column missing)`);
+      } else {
+        for (const tier of RX_TIER_NUMBERS) {
+          for (const ph of RX_TIER_PHARMACIES) {
+            const copayExists = rxTierCols.has(ph.copay_col);
+            const coinsExists = rxTierCols.has(ph.coinsurance_col);
+            if (!copayExists && !coinsExists) {
+              rxSkipped.push(`rx_tier_${tier}/${ph.tier_id} (no copay/coins col match)`);
+              continue;
+            }
+            const copayExpr = copayExists ? `t.${ph.copay_col}::numeric(10,2)` : 'NULL::numeric(10,2)';
+            const coinsExpr = coinsExists ? `t.${ph.coinsurance_col}::numeric(6,3)` : 'NULL::numeric(6,3)';
+            const whereTerms: string[] = [];
+            if (copayExists) whereTerms.push(`t.${ph.copay_col} IS NOT NULL`);
+            if (coinsExists) whereTerms.push(`t.${ph.coinsurance_col} IS NOT NULL`);
+            // mrx_tier_id is stored as numeric in the landing table (the
+            // dictionary types it as NUM); cast to int for the equality
+            // filter so '1' / '01' / 1 all match.
+            rxTierBranches.push(`
+              SELECT
+                t.pbp_a_hnumber                  AS contract_id,
+                t.pbp_a_plan_identifier          AS plan_id,
+                t.segment_id,
+                $1::smallint                      AS plan_year,
+                'rx_tier_${tier}'::text           AS benefit_type,
+                '${ph.tier_id}'::text             AS tier_id,
+                ${copayExpr}                      AS copay,
+                NULL::numeric(10,2)               AS copay_max,
+                ${coinsExpr}                      AS coinsurance,
+                NULL::numeric(6,3)                AS coinsurance_max,
+                NULL::boolean                     AS prior_auth,
+                NULL::boolean                     AS referral_required,
+                'cms_pbp'::text                   AS source,
+                $2::bigint                        AS release_id
+              FROM ${RX_TIER_SOURCE_TABLE} t
+              WHERE t.release_id = $2
+                AND t.${RX_TIER_ID_COLUMN}::int = ${tier}
+                AND (${whereTerms.join(' OR ')})
+            `);
+          }
+        }
+      }
+      if (rxSkipped.length > 0) {
+        console.log(`[promote] rx_tier: skipped ${rxSkipped.length} branch(es): ${rxSkipped.join('; ')}`);
+      }
+
+      const allBranches = [...branches, ...intervalBranches, ...rxTierBranches];
       // ON CONFLICT works against the unique INDEX, not a PRIMARY KEY,
       // so the COALESCE-on-tier_id index needs a matching ON CONFLICT
       // expression. Since the index column-list includes a function
@@ -215,10 +362,16 @@ export async function promote(opts: {
           prior_auth, referral_required,
           source, release_id
         )
-        ${branches.length === 0 ? `SELECT NULL::text, NULL::text, NULL::text, NULL::smallint, NULL::text, NULL::text, NULL::numeric, NULL::numeric, NULL::numeric, NULL::numeric, NULL::boolean, NULL::boolean, NULL::text, NULL::bigint WHERE false` : branches.join('\nUNION ALL\n')}
+        ${allBranches.length === 0 ? `SELECT NULL::text, NULL::text, NULL::text, NULL::smallint, NULL::text, NULL::text, NULL::numeric, NULL::numeric, NULL::numeric, NULL::numeric, NULL::boolean, NULL::boolean, NULL::text, NULL::bigint WHERE false` : allBranches.join('\nUNION ALL\n')}
       `;
       const br = await c.query(sql, [planYear, releaseId]);
       counts.pbp_benefits_v2 = br.rowCount ?? 0;
+      if (intervalBranches.length > 0) {
+        console.log(`[promote] interval-tiered: ${intervalBranches.length} branches across inpatient_acute / inpatient_psych / snf`);
+      }
+      if (rxTierBranches.length > 0) {
+        console.log(`[promote] rx_tier: ${rxTierBranches.length} branches across tiers 1..6 × {retail_standard, retail_preferred}`);
+      }
     }
 
     // ─── pbp_planarea_v2 ──────────────────────────────────────────────
