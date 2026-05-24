@@ -466,6 +466,17 @@ export function AgentV3App() {
     () => scoredPlans.map((p) => p.id),
     [scoredPlans],
   );
+  // Ribbon assignment per plan id (LOWEST_DRUG_COST, BEST_EXTRAS, etc.).
+  // Brain's ribbon pass decorates only category leaders; most plans get
+  // null. CompareScreen surfaces these as colored chips on bench cards.
+  const ribbonByPlanId = useMemo<Record<string, string | null>>(() => {
+    if (!brain.result) return {};
+    const out: Record<string, string | null> = {};
+    for (const s of brain.result.scored) {
+      out[s.plan.id] = (s.ribbon as string | null) ?? null;
+    }
+    return out;
+  }, [brain.result]);
 
   // ── Current plan lookup ──────────────────────────────────────────
   const currentPlan = useMemo<Plan | null>(() => {
@@ -587,6 +598,7 @@ export function AgentV3App() {
           <CompareScreen
             current={currentPlan}
             scoredPlans={scoredPlans}
+            ribbonByPlanId={ribbonByPlanId}
             annualDrugByPlanId={annualDrugByPlanId}
             onRecommend={onRecommend}
             onBack={() => setScreen('priorities')}

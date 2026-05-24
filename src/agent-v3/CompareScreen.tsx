@@ -64,6 +64,11 @@ interface Props {
    * lands on the bench in brain-rank order.
    */
   scoredPlans: Plan[];
+  /** Brain-assigned ribbon per plan id ('LOWEST_DRUG_COST', 'BEST_EXTRAS',
+   *  etc.). Plans without an assigned ribbon are null/absent. Drives the
+   *  ribbon chip on bench cards. Optional so older callers still
+   *  type-check. */
+  ribbonByPlanId?: Record<string, string | null>;
   annualDrugByPlanId: Record<string, number | null>;
   /**
    * Fire-and-forget AgentBase write-back. CompareScreen calls this with
@@ -366,6 +371,7 @@ function initSlots(pool: Plan[]): (Plan | null)[] {
 export function CompareScreen({
   current,
   scoredPlans,
+  ribbonByPlanId,
   annualDrugByPlanId,
   onRecommend,
   onBack,
@@ -513,6 +519,26 @@ export function CompareScreen({
     });
   }
 
+  // Bench card "Add to board" — drop the plan into the first empty
+  // slot. When every slot is occupied, swap with slot 4 (the least-
+  // priority position by convention; the displaced plan returns to
+  // the bench automatically because the reconciliation memo recomputes
+  // bench = pool − slot occupants).
+  function addToBoard(plan: Plan) {
+    setSlots((s) => {
+      const next = [...s];
+      // No-op if already on board.
+      if (next.some((x) => x?.id === plan.id)) return s;
+      const emptyIdx = next.findIndex((x) => x == null);
+      if (emptyIdx >= 0) {
+        next[emptyIdx] = plan;
+      } else {
+        next[3] = plan;
+      }
+      return next;
+    });
+  }
+
   function openH2H(plan: Plan) {
     if (!baseline || plan.id === baseline.id) return;
     setChallenger(plan);
@@ -552,6 +578,10 @@ export function CompareScreen({
         bench={bench}
         baseline={baseline}
         annualDrugByPlanId={annualDrugByPlanId}
+        ribbonByPlanId={ribbonByPlanId ?? {}}
+        providers={providers}
+        onAddToBoard={addToBoard}
+        onOpenH2H={openH2H}
       />
 
       <div
@@ -643,15 +673,53 @@ function ModeToggle({
 }
 
 // ── Bench (horizontal scrollable pills) ────────────────────────
+// Brain ribbon → chip styling. The brain's ribbon pass decorates
+// category leaders only; most plans return null. Unknown ribbon
+// strings render with the default seafoam treatment so a future brain
+// ribbon doesn't blank-render here.
+const RIBBON_STYLE: Record<string, { label: string; bg: string; color: string }> = {
+  BEST_OVERALL: { label: '★ Top Pick', bg: '#a78bfa', color: 'white' },
+  LOWEST_DRUG_COST: { label: 'Lowest Rx', bg: TEAL, color: 'white' },
+  LOWEST_OOP: { label: 'Lowest OOP', bg: GOLD, color: 'white' },
+  BEST_EXTRAS: { label: 'Best Extras', bg: GREEN, color: 'white' },
+  PART_B_SAVINGS: { label: 'Giveback', bg: SEAFOAM, color: NAVY },
+  ZERO_PREMIUM: { label: '$0 Premium', bg: '#93c5fd', color: NAVY },
+  ALL_MEDS_COVERED: { label: 'All Meds', bg: '#86efac', color: '#14532d' },
+  ALL_DOCS_IN_NETWORK: { label: 'All Docs', bg: '#5eead4', color: '#134e4a' },
+};
+
+type BenchFilter = 'all' | 'hmo' | 'ppo' | 'zero';
+
 function Bench({
   bench,
   baseline,
   annualDrugByPlanId,
+  ribbonByPlanId,
+  providers,
+  onAddToBoard,
+  onOpenH2H,
 }: {
   bench: Plan[];
   baseline: Plan | null;
   annualDrugByPlanId: Record<string, number | null>;
+  ribbonByPlanId: Record<string, string | null>;
+  providers: ProviderRow[];
+  onAddToBoard: (plan: Plan) => void;
+  onOpenH2H: (plan: Plan) => void;
 }) {
+  const [filter, setFilter] = useState<BenchFilter>('all');
+
+  const filtered = useMemo(() => {
+    return bench.filter((p) => {
+      if (filter === 'all') return true;
+      const t = (p.plan_type ?? '').toUpperCase();
+      if (filter === 'hmo') return t.includes('HMO');
+      if (filter === 'ppo') return t.includes('PPO');
+      if (filter === 'zero') return p.premium === 0;
+      return true;
+    });
+  }, [bench, filter]);
+
   if (bench.length === 0) {
     return (
       <div
@@ -669,56 +737,180 @@ function Bench({
       </div>
     );
   }
+
   return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 8,
-        overflowX: 'auto',
-        padding: '4px 2px 10px',
-        alignItems: 'center',
-      }}
-    >
+    <div>
       <div
         style={{
-          flexShrink: 0,
-          fontFamily: FONT_LABEL,
-          fontSize: 9,
-          fontWeight: 700,
-          color: MUTED,
-          textTransform: 'uppercase',
-          letterSpacing: 0.6,
-          marginRight: 6,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: 8,
+          gap: 12,
+          flexWrap: 'wrap',
         }}
       >
-        Bench
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span
+            style={{
+              fontFamily: FONT_LABEL,
+              fontSize: 10,
+              fontWeight: 700,
+              color: NAVY,
+              textTransform: 'uppercase',
+              letterSpacing: 0.8,
+            }}
+          >
+            Bench — plans not on the board
+          </span>
+          <span
+            style={{
+              background: NAVY,
+              color: SEAFOAM,
+              fontFamily: FONT_NUM,
+              fontSize: 10,
+              fontWeight: 700,
+              padding: '2px 7px',
+              borderRadius: 10,
+            }}
+          >
+            {filter === 'all' ? bench.length : `${filtered.length}/${bench.length}`}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {([
+            ['all', 'All'],
+            ['hmo', 'HMO'],
+            ['ppo', 'PPO'],
+            ['zero', '$0 only'],
+          ] as Array<[BenchFilter, string]>).map(([key, label]) => {
+            const active = filter === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setFilter(key)}
+                style={{
+                  background: active ? NAVY : 'white',
+                  color: active ? 'white' : NAVY,
+                  border: `1px solid ${active ? NAVY : BORDER}`,
+                  borderRadius: 14,
+                  padding: '4px 10px',
+                  fontFamily: FONT_LABEL,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  letterSpacing: 0.3,
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
       </div>
-      {bench.map((p) => (
-        <BenchPill
-          key={p.id}
-          plan={p}
-          baseline={baseline}
-          annualDrugByPlanId={annualDrugByPlanId}
-        />
-      ))}
+
+      <div
+        style={{
+          display: 'flex',
+          gap: 12,
+          overflowX: 'auto',
+          padding: '4px 2px 12px',
+          scrollSnapType: 'x mandatory',
+        }}
+      >
+        {filtered.length === 0 ? (
+          <div
+            style={{
+              fontFamily: FONT_LABEL,
+              fontSize: 11,
+              color: MUTED,
+              padding: '12px 14px',
+              background: PANEL,
+              border: `1px dashed ${BORDER}`,
+              borderRadius: 10,
+              flex: 1,
+            }}
+          >
+            No bench plans match this filter.
+          </div>
+        ) : (
+          filtered.map((p) => (
+            <BenchCard
+              key={p.id}
+              plan={p}
+              baseline={baseline}
+              annualDrugByPlanId={annualDrugByPlanId}
+              ribbon={ribbonByPlanId[p.id] ?? null}
+              providers={providers}
+              onAddToBoard={onAddToBoard}
+              onOpenH2H={onOpenH2H}
+            />
+          ))
+        )}
+      </div>
     </div>
   );
 }
 
-function BenchPill({
+function BenchCard({
   plan,
   baseline,
   annualDrugByPlanId,
+  ribbon,
+  providers,
+  onAddToBoard,
+  onOpenH2H,
 }: {
   plan: Plan;
   baseline: Plan | null;
   annualDrugByPlanId: Record<string, number | null>;
+  ribbon: string | null;
+  providers: ProviderRow[];
+  onAddToBoard: (plan: Plan) => void;
+  onOpenH2H: (plan: Plan) => void;
 }) {
-  const t = annualEstimate(plan, annualDrugByPlanId[plan.id] ?? null).total;
-  const ct = baseline
-    ? annualEstimate(baseline, annualDrugByPlanId[baseline.id] ?? null).total
-    : null;
-  const savings = t != null && ct != null ? ct - t : null;
+  const [expanded, setExpanded] = useState(false);
+  const [hover, setHover] = useState(false);
+
+  const drug = annualDrugByPlanId[plan.id] ?? null;
+  const baseDrug = baseline ? annualDrugByPlanId[baseline.id] ?? null : null;
+
+  // "Wins vs baseline" — lower-is-better numeric comparison. Used to
+  // tint each metric green when this bench plan beats the client's
+  // current plan (or fallback top pick).
+  const winsLower = (a: number | null, b: number | null) =>
+    baseline != null && a != null && b != null && a < b;
+  const winsHigher = (a: number | null, b: number | null) =>
+    baseline != null && a != null && b != null && a > b;
+
+  const premiumWins = baseline != null && plan.premium < baseline.premium;
+  const moopWins = baseline != null && plan.moop_in_network < baseline.moop_in_network;
+  const drugWins = winsLower(drug, baseDrug);
+  const starsWins = winsHigher(plan.star_rating, baseline?.star_rating ?? null);
+  const dentalWins =
+    baseline != null &&
+    plan.benefits.dental.annual_max > baseline.benefits.dental.annual_max;
+
+  // 6th cell — Doctors in-network when the broker entered providers,
+  // otherwise Part B giveback. "Whichever is more notable" per spec.
+  const inNetCount = providers.filter(
+    (p) => p.networkStatus?.[plan.id] === 'in',
+  ).length;
+  const showGiveback = providers.length === 0;
+  const sixthLabel = showGiveback ? 'Part B back' : 'Docs in-net';
+  const sixthValue = showGiveback
+    ? plan.part_b_giveback > 0
+      ? `$${plan.part_b_giveback}/mo`
+      : 'Not available'
+    : `${inNetCount}/${providers.length}`;
+  const sixthWins = showGiveback
+    ? baseline != null && plan.part_b_giveback > baseline.part_b_giveback
+    : providers.length > 0 && inNetCount === providers.length;
+
+  const isBaseline = baseline != null && plan.id === baseline.id;
+  const ribbonChip = ribbon ? RIBBON_STYLE[ribbon] : null;
+
   return (
     <div
       draggable
@@ -726,41 +918,289 @@ function BenchPill({
         e.dataTransfer.setData('text/plan-id', plan.id);
         e.dataTransfer.effectAllowed = 'move';
       }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       style={{
         flexShrink: 0,
+        width: 220,
+        scrollSnapAlign: 'start',
         background: 'white',
-        border: `1px solid ${BORDER}`,
-        borderRadius: 18,
-        padding: '6px 12px',
+        border: `1px solid ${hover ? TEAL : BORDER}`,
+        borderRadius: 12,
+        overflow: 'hidden',
+        boxShadow: '0 1px 4px rgba(13,47,94,0.05)',
         cursor: 'grab',
-        boxShadow: '0 1px 2px rgba(13,47,94,0.04)',
+        display: 'flex',
+        flexDirection: 'column',
       }}
       title={`${plan.carrier} ${plan.plan_name} — drag to a slot`}
     >
       <div
         style={{
-          fontFamily: FONT_LABEL,
-          fontSize: 9,
-          fontWeight: 700,
-          color: NAVY,
-          textTransform: 'uppercase',
-          letterSpacing: 0.4,
+          background: NAVY,
+          color: 'white',
+          padding: '10px 12px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
         }}
       >
-        {plan.carrier}
+        {ribbonChip && (
+          <span
+            style={{
+              display: 'inline-block',
+              alignSelf: 'flex-start',
+              background: ribbonChip.bg,
+              color: ribbonChip.color,
+              fontFamily: FONT_LABEL,
+              fontSize: 8,
+              fontWeight: 800,
+              letterSpacing: 0.8,
+              padding: '2px 6px',
+              borderRadius: 3,
+              textTransform: 'uppercase',
+            }}
+          >
+            {ribbonChip.label}
+          </span>
+        )}
+        <div
+          style={{
+            fontFamily: FONT_LABEL,
+            fontSize: 10,
+            fontWeight: 700,
+            color: SEAFOAM,
+            letterSpacing: 0.4,
+            textTransform: 'uppercase',
+          }}
+        >
+          {plan.carrier}
+        </div>
+        <div
+          style={{
+            fontFamily: FONT_LABEL,
+            fontSize: 12,
+            fontWeight: 700,
+            color: 'white',
+            lineHeight: 1.2,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {plan.plan_name}
+        </div>
+      </div>
+
+      <div style={{ padding: 10 }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: 6,
+          }}
+        >
+          <MetricMini label="Premium" value={`$${plan.premium}/mo`} winning={premiumWins} />
+          <MetricMini label="MOOP" value={fmt(plan.moop_in_network)} winning={moopWins} />
+          <MetricMini
+            label="Drug / yr"
+            value={drug == null ? 'Not available' : fmt(drug)}
+            winning={drugWins}
+          />
+          <MetricMini label="Stars" value={`${plan.star_rating} ★`} winning={starsWins} />
+          <MetricMini
+            label="Dental"
+            value={planDisplay(plan).dentalMax}
+            winning={dentalWins}
+          />
+          <MetricMini label={sixthLabel} value={sixthValue} winning={sixthWins} />
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          style={{
+            marginTop: 8,
+            width: '100%',
+            background: 'transparent',
+            border: `1px solid ${BORDER}`,
+            borderRadius: 6,
+            padding: '5px 8px',
+            fontFamily: FONT_LABEL,
+            fontSize: 10,
+            fontWeight: 700,
+            color: NAVY,
+            cursor: 'pointer',
+            letterSpacing: 0.4,
+            textTransform: 'uppercase',
+          }}
+        >
+          {expanded ? 'Hide preview' : 'Quick preview'}
+        </button>
+
+        {expanded && (
+          <div
+            style={{
+              marginTop: 8,
+              borderTop: `1px solid ${BORDER}`,
+              paddingTop: 8,
+            }}
+          >
+            <PreviewRow label="PCP" value={formatPcp(plan)} />
+            <PreviewRow label="Specialist" value={formatSpecialist(plan)} />
+            <PreviewRow
+              label="Urgent care"
+              value={formatCostShare(plan.benefits.medical.urgent_care)}
+            />
+            <PreviewRow
+              label="Emergency"
+              value={formatCostShare(plan.benefits.medical.emergency)}
+            />
+            <PreviewRow
+              label="Inpatient"
+              value={formatCostShare(plan.benefits.medical.inpatient)}
+            />
+            <PreviewRow
+              label="OTC / qtr"
+              value={
+                plan.benefits.otc.allowance_per_quarter > 0
+                  ? `$${plan.benefits.otc.allowance_per_quarter}`
+                  : 'Not avail.'
+              }
+            />
+            <PreviewRow label="Vision" value={planDisplay(plan).visionAllowance} />
+            <PreviewRow label="Fitness" value={planDisplay(plan).fitness} />
+            <PreviewRow
+              label="Part B back"
+              value={plan.part_b_giveback > 0 ? `$${plan.part_b_giveback}/mo` : 'Not avail.'}
+            />
+            <PreviewRow
+              label="Part D ded."
+              value={plan.drug_deductible == null ? 'Not avail.' : `$${plan.drug_deductible}`}
+            />
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: 6,
+          padding: 10,
+          borderTop: `1px solid ${BORDER}`,
+          background: PANEL,
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => onAddToBoard(plan)}
+          style={{
+            background: NAVY,
+            color: 'white',
+            border: 'none',
+            borderRadius: 6,
+            padding: '7px 0',
+            fontFamily: FONT_LABEL,
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 0.4,
+            textTransform: 'uppercase',
+            cursor: 'pointer',
+          }}
+        >
+          Add to board
+        </button>
+        <button
+          type="button"
+          onClick={() => onOpenH2H(plan)}
+          disabled={isBaseline || !baseline}
+          style={{
+            background: 'white',
+            color: NAVY,
+            border: `1px solid ${BORDER}`,
+            borderRadius: 6,
+            padding: '7px 0',
+            fontFamily: FONT_LABEL,
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 0.4,
+            textTransform: 'uppercase',
+            cursor: isBaseline || !baseline ? 'default' : 'pointer',
+            opacity: isBaseline || !baseline ? 0.4 : 1,
+          }}
+        >
+          H2H
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MetricMini({
+  label,
+  value,
+  winning,
+}: {
+  label: string;
+  value: string;
+  winning: boolean;
+}) {
+  return (
+    <div
+      style={{
+        background: winning ? 'rgba(34,197,94,0.08)' : PANEL,
+        borderRadius: 6,
+        padding: '5px 7px',
+        border: `1px solid ${winning ? 'rgba(34,197,94,0.25)' : BORDER}`,
+        minWidth: 0,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: FONT_LABEL,
+          fontSize: 8,
+          fontWeight: 700,
+          color: MUTED,
+          textTransform: 'uppercase',
+          letterSpacing: 0.4,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {label}
       </div>
       <div
         style={{
           fontFamily: FONT_NUM,
           fontSize: 11,
-          fontWeight: 600,
-          color: savings != null && savings > 0 ? GREEN : MUTED,
+          fontWeight: 700,
+          color: winning ? '#15803d' : TEXT,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
         }}
       >
-        {savings != null && savings > 0
-          ? `Save ${fmt(savings)}/yr`
-          : `$${plan.premium}/mo`}
+        {value}
       </div>
+    </div>
+  );
+}
+
+function PreviewRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        padding: '3px 0',
+        fontFamily: FONT_LABEL,
+        fontSize: 10,
+      }}
+    >
+      <span style={{ color: MUTED }}>{label}</span>
+      <span style={{ fontFamily: FONT_NUM, fontWeight: 600, color: TEXT }}>{value}</span>
     </div>
   );
 }
