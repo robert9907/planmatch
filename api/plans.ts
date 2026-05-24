@@ -425,6 +425,31 @@ function dollarFromDesc(desc: string | null | undefined): number | null {
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 2000;
 
+// PostgREST hard-caps every query at db-max-rows (1000 on this
+// project). The benefit-row fetches for a busy county can easily
+// exceed that — Durham alone holds ~4,000 pm_plan_benefits rows and
+// ~7,500 pbp_benefits rows across the 74-plan pool, so without
+// pagination the API silently returns partial data and plans whose
+// rows sort past the boundary look like they have no benefits filed.
+// .range() pagination clears the cap; we keep pulling until a page
+// returns fewer than PAGE rows.
+const SUPABASE_PAGE = 1000;
+const MAX_PAGES = 20;
+
+async function fetchAllRows<T>(
+  pageFn: (from: number, to: number) => Promise<T[]>,
+): Promise<T[]> {
+  const out: T[] = [];
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const from = page * SUPABASE_PAGE;
+    const to = from + SUPABASE_PAGE - 1;
+    const rows = await pageFn(from, to);
+    out.push(...rows);
+    if (rows.length < SUPABASE_PAGE) break;
+  }
+  return out;
+}
+
 function normalizeCounty(raw: string): string {
   return raw
     .toLowerCase()
@@ -617,19 +642,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ─── Step 3: fetch pm_plan_benefits for these triples ───────────
+    //
+    // Pagination is critical: PostgREST caps every query at
+    // db-max-rows (1000 on this project, hard cap regardless of
+    // .range/.limit). A Durham fetch (74 plans × ~30 categories) holds
+    // ~4,000 benefit rows total — a single fetch returns the first
+    // 1000 and silently truncates the rest, dropping benefit data for
+    // plans whose rows happen to sort past the boundary (BCBS NC
+    // H3404-004 was the canary plan that surfaced this).
     const contractIds = [...new Set([...byTriple.values()].map((v) => v.row.contract_id))];
     const planIds = [...new Set([...byTriple.values()].map((v) => v.row.plan_id))];
-    const { data: benefitRows, error: benefitErr } = await sb
-      .from('pm_plan_benefits')
-      .select(
-        'contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage',
-      )
-      .in('contract_id', contractIds)
-      .in('plan_id', planIds);
-    if (benefitErr) throw benefitErr;
+    const benefitRows = await fetchAllRows<BenefitRow>(async (from, to) => {
+      const { data, error } = await sb
+        .from('pm_plan_benefits')
+        .select(
+          'contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage',
+        )
+        .in('contract_id', contractIds)
+        .in('plan_id', planIds)
+        .range(from, to);
+      if (error) throw error;
+      return (data ?? []) as BenefitRow[];
+    });
 
     const benefitsByTriple = new Map<string, BenefitRow[]>();
-    for (const b of (benefitRows ?? []) as BenefitRow[]) {
+    for (const b of benefitRows) {
       const key = `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}`;
       const list = benefitsByTriple.get(key) ?? [];
       list.push(b);
@@ -660,13 +697,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
     const pbpTypes = [...PBP_FALLBACK_TYPES, PBP_DENTAL_MAX_TYPE, PBP_OTC_TYPE, PBP_FOOD_CARD_TYPE];
-    const { data: pbpRows, error: pbpErr } = await sb
-      .from('pbp_benefits')
-      .select('plan_id, benefit_type, copay, coinsurance, tier_id, description')
-      .in('plan_id', [...pbpKeyVariants])
-      .in('benefit_type', pbpTypes);
-    if (pbpErr) throw pbpErr;
-    const pbpFallback = buildPbpFallback((pbpRows ?? []) as PbpBenefitRow[]);
+    const pbpRows = await fetchAllRows<PbpBenefitRow>(async (from, to) => {
+      const { data, error } = await sb
+        .from('pbp_benefits')
+        .select('plan_id, benefit_type, copay, coinsurance, tier_id, description')
+        .in('plan_id', [...pbpKeyVariants])
+        .in('benefit_type', pbpTypes)
+        .range(from, to);
+      if (error) throw error;
+      return (data ?? []) as PbpBenefitRow[];
+    });
+    const pbpFallback = buildPbpFallback(pbpRows);
 
     // ─── Step 3c: broad pbp_benefits merge (parity with consumer) ────
     // The narrow Step 3b above only feeds mental_health / PT /
@@ -682,13 +723,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // backfill from landscape + description-dollar parse, then merge
     // with PBP winning on (triple, category). buildBenefits below
     // operates on the merged set.
-    const { data: broadPbpRaw, error: broadPbpErr } = await sb
-      .from('pbp_benefits')
-      .select('plan_id, benefit_type, copay, copay_max, coinsurance, tier_id, description, source')
-      .in('plan_id', [...pbpKeyVariants])
-      .in('source', ['medicare_gov', 'sb_ocr', 'cms_pbp', 'manual']);
-    if (broadPbpErr) throw broadPbpErr;
-    const broadPbpRows = (broadPbpRaw ?? []) as PbpRichRow[];
+    const broadPbpRows = await fetchAllRows<PbpRichRow>(async (from, to) => {
+      const { data, error } = await sb
+        .from('pbp_benefits')
+        .select(
+          'plan_id, benefit_type, copay, copay_max, coinsurance, tier_id, description, source',
+        )
+        .in('plan_id', [...pbpKeyVariants])
+        .in('source', ['medicare_gov', 'sb_ocr', 'cms_pbp', 'manual'])
+        .range(from, to);
+      if (error) throw error;
+      return (data ?? []) as PbpRichRow[];
+    });
 
     // Source-priority dedup: when multiple sources file the same
     // (plan_id, benefit_type, tier_id), keep the highest-rank row.
@@ -733,7 +779,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // marketing description for non-allowance categories like
     // dental_comprehensive — see plans-with-extras for the full
     // rationale).
-    const landscapeRows = (benefitRows ?? []) as BenefitRow[];
+    const landscapeRows = benefitRows;
     const landscapeByKey = new Map<string, BenefitRow>();
     for (const b of landscapeRows) {
       const triple = `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}`;
