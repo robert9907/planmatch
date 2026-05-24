@@ -35,6 +35,7 @@ import type { StateCode } from '@/types/session';
 import { AgentBar, type ScreenId } from './AgentBar';
 import { ComplianceScreen } from './ComplianceScreen';
 import { CompareScreen } from './CompareScreen';
+import { DisclaimersScreen } from './DisclaimersScreen';
 import { EnrollScreen } from './EnrollScreen';
 import { IntakeScreen } from './IntakeScreen';
 import { MedsScreen } from './MedsScreen';
@@ -515,12 +516,22 @@ export function AgentV3App() {
 
       <div>
         {screen === 'intake' && (
-          <IntakeScreen onNext={() => setScreen('meds')} />
+          <IntakeScreen
+            eligiblePlans={eligiblePlans}
+            onNext={() => setScreen('disclaimers')}
+          />
+        )}
+        {screen === 'disclaimers' && (
+          <DisclaimersScreen
+            eligiblePlans={eligiblePlans}
+            onBack={() => setScreen('intake')}
+            onNext={() => setScreen('meds')}
+          />
         )}
         {screen === 'meds' && (
           <MedsScreen
             clientView={clientView}
-            onBack={() => setScreen('intake')}
+            onBack={() => setScreen('disclaimers')}
             onNext={() => setScreen('providers')}
           />
         )}

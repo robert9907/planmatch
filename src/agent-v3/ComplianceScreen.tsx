@@ -1,12 +1,14 @@
 // ComplianceScreen — agent-v3 screen 7.
 //
 // Reads the canonical 16-item set from src/lib/compliance.ts:
-//   • 3 verbatim disclaimers (TPMO, call recording, SOA) — yellow chip
-//     "Verbatim Required", show full body text, "I read this verbatim"
-//     button writes to useSession.disclaimersConfirmed.
-//   • 13 discussion-topic checkboxes across 6 sections — checkbox writes
-//     to useSession.complianceChecked. 2 items flagged "NEW 2026" per
-//     CMS marketing rules (LIS/MSP eligibility, Medigap GI rights).
+//   • 3 verbatim disclaimers (TPMO, call recording, SOA) — confirmed
+//     earlier on DisclaimersScreen (screen 2). This screen shows them
+//     as a read-only status row so the broker can see complete
+//     compliance picture; the SunFire gate still requires all 3.
+//   • 13 discussion-topic checkboxes across 6 sections — checkbox
+//     writes to useSession.complianceChecked. 2 items flagged
+//     "NEW 2026" per CMS marketing rules (LIS/MSP eligibility,
+//     Medigap GI rights).
 //
 // SunFire Matrix Enrollment Gate is locked until ALL 16 items are
 // confirmed. The gate's "Open SunFire Matrix" CTA is the same final
@@ -17,7 +19,6 @@ import { useSession } from '@/hooks/useSession';
 import {
   DISCLAIMERS,
   SECTIONS,
-  renderDisclaimerBody,
   totalComplianceItems,
 } from '@/lib/compliance';
 import { Container, Nav } from './atoms';
@@ -28,22 +29,15 @@ interface Props {
 }
 
 export function ComplianceScreen({ onBack, onNext }: Props) {
-  const planType = useSession((s) => s.client.planType);
   const checked = useSession((s) => s.complianceChecked);
   const confirmed = useSession((s) => s.disclaimersConfirmed);
   const toggleItem = useSession((s) => s.toggleComplianceItem);
-  const confirmDisclaimer = useSession((s) => s.confirmDisclaimer);
 
   const total = totalComplianceItems();
   const done = new Set(checked).size + new Set(confirmed).size;
   const allDone = done >= total;
-
-  // TPMO requires org_count + plan_count substitutions. We don't have
-  // a live count here, so we hard-code the spec's "1 / 1" placeholder
-  // and let the broker hand-edit when reading. A future pass can wire
-  // these to the eligible-plan list (length + unique carriers).
-  const orgCount = 1;
-  const planCount = 1;
+  const disclaimersDone = DISCLAIMERS.filter((d) => confirmed.includes(d.id)).length;
+  const disclaimersAllDone = disclaimersDone >= DISCLAIMERS.length;
 
   return (
     <Container>
@@ -119,108 +113,55 @@ export function ComplianceScreen({ onBack, onNext }: Props) {
         </div>
       </div>
 
-      {/* Verbatim disclaimers section */}
-      <div style={{ marginBottom: 16 }}>
-        <SectionHeader
-          title="Required Disclaimers"
-          sub="Verbatim — no paraphrase."
-          done={DISCLAIMERS.filter((d) => confirmed.includes(d.id)).length}
-          total={DISCLAIMERS.length}
-        />
-        {DISCLAIMERS.map((def) => {
-          const isDone = confirmed.includes(def.id);
-          const body = renderDisclaimerBody(def, { orgCount, planCount, planType });
-          return (
-            <div key={def.id} style={ROW_STYLE(isDone)}>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                <button
-                  type="button"
-                  onClick={() => confirmDisclaimer(def.id)}
-                  style={CHECKBOX_STYLE(isDone, true)}
-                >
-                  {isDone ? '✓' : '!'}
-                </button>
-                <div style={{ flex: 1 }}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      flexWrap: 'wrap',
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontWeight: 700,
-                        fontSize: 13,
-                        color: isDone ? '#059669' : '#0d2f5e',
-                      }}
-                    >
-                      {def.title}
-                    </span>
-                    <span
-                      style={{
-                        background: '#fef3c7',
-                        color: '#92400e',
-                        fontSize: 8,
-                        fontWeight: 700,
-                        padding: '1px 5px',
-                        borderRadius: 3,
-                        letterSpacing: 0.5,
-                        textTransform: 'uppercase',
-                      }}
-                    >
-                      Verbatim Required
-                    </span>
-                  </div>
-                  <div style={{ color: '#64748b', fontSize: 10, marginTop: 1 }}>
-                    {def.when}
-                  </div>
-                  <div
-                    style={{
-                      background: 'rgba(13,47,94,0.03)',
-                      borderLeft: '3px solid #0d2f5e',
-                      borderRadius: '0 7px 7px 0',
-                      padding: '8px 12px',
-                      marginTop: 8,
-                      fontSize: 12,
-                      color: '#1e293b',
-                      lineHeight: 1.6,
-                    }}
-                  >
-                    {body}
-                  </div>
-                  {!isDone && (
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'flex-end',
-                        marginTop: 6,
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => confirmDisclaimer(def.id)}
-                        style={{
-                          background: '#0d2f5e',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: 5,
-                          padding: '5px 12px',
-                          fontSize: 11,
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        I read this verbatim
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
+      {/* Verbatim disclaimers — confirmed earlier on the Disclaimers
+          screen (screen 2). Show as read-only status so the broker
+          can see the complete compliance picture; the gate below
+          still requires all 3 confirmed before SunFire unlocks. */}
+      <div
+        style={{
+          background: disclaimersAllDone ? 'rgba(5,150,105,0.04)' : '#fffbeb',
+          border: disclaimersAllDone
+            ? '1px solid rgba(5,150,105,0.18)'
+            : '1px solid rgba(245,158,11,0.3)',
+          borderRadius: 10,
+          padding: '12px 16px',
+          marginBottom: 16,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 12,
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color: '#475569',
+              letterSpacing: 1,
+              textTransform: 'uppercase',
+            }}
+          >
+            Required Disclaimers
+          </div>
+          <div style={{ fontSize: 12, color: '#0d2f5e', marginTop: 2 }}>
+            {disclaimersAllDone
+              ? 'All 3 verbatim disclaimers confirmed on the Disclaimers screen.'
+              : `${DISCLAIMERS.length - disclaimersDone} disclaimer${
+                  DISCLAIMERS.length - disclaimersDone === 1 ? '' : 's'
+                } still need to be confirmed — go back to the Disclaimers screen.`}
+          </div>
+        </div>
+        <div
+          style={{
+            fontFamily: "'Fraunces', Georgia, serif",
+            fontSize: 20,
+            fontWeight: 800,
+            color: disclaimersAllDone ? '#059669' : '#d97706',
+          }}
+        >
+          {disclaimersDone}/{DISCLAIMERS.length}
+        </div>
       </div>
 
       {/* Discussion-topic sections */}

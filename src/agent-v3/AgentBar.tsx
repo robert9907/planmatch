@@ -27,12 +27,17 @@
 
 import { useState } from 'react';
 
-// 7-screen agent flow: Client → Meds → Providers → Priorities →
-// Compare (4-up grid + H2H toggle) → Compliance → Enroll. The earlier
-// Tinder-style Plans/Swipe deck collapsed into the Compare board,
-// which now seeds slots directly from the brain's ranked scoring.
+// 8-screen agent flow: Client → Disclaimers → Meds → Providers →
+// Priorities → Compare (4-up grid + H2H toggle) → Compliance →
+// Enroll. The Disclaimers screen sits between Client and Meds —
+// CMS requires the TPMO / call-recording / SOA verbatim reads to
+// happen BEFORE any plan discussion (meds inventory counts as plan
+// discussion). The Plans/Swipe deck collapsed into the Compare
+// board, which now seeds slots directly from the brain's elimination
+// funnel.
 export type ScreenId =
   | 'intake'
+  | 'disclaimers'
   | 'meds'
   | 'providers'
   | 'priorities'
@@ -42,6 +47,7 @@ export type ScreenId =
 
 export const SCREENS: ScreenId[] = [
   'intake',
+  'disclaimers',
   'meds',
   'providers',
   'priorities',
@@ -52,6 +58,7 @@ export const SCREENS: ScreenId[] = [
 
 const LABELS: Record<ScreenId, string> = {
   intake: 'Client',
+  disclaimers: 'Disclaimers',
   meds: 'Meds',
   providers: 'Providers',
   priorities: 'Priorities',
