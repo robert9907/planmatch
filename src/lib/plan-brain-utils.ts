@@ -159,6 +159,19 @@ const NOTIONAL_TIER_FULL_COST: Record<number, number> = {
   5: 1500,
 };
 
+// CMS national-average monthly cost-share by tier. Fallback when a
+// plan's rx_tier_N row exists in pm_plan_benefits but carries null
+// for both copay AND coinsurance (data gap — cost-share filed only
+// in the description text). Without this, a Tier 3+ brand like
+// Ozempic returns $0/mo and poisons the funnel's drug-cost ranking.
+export const CMS_TYPICAL_MONTHLY_BY_TIER: Readonly<Record<number, number>> = {
+  1: 2,
+  2: 15,
+  3: 47,
+  4: 100,
+  5: 300,
+};
+
 interface EstimateDrugInput {
   rxcui?: string;
   name: string;
@@ -213,6 +226,202 @@ export function estimateDrugYearlyCost(d: EstimateDrugInput): DrugYearlyEstimate
   // Not in formulary — heavy penalty per spec: assume full retail.
   const fullCost = NOTIONAL_TIER_FULL_COST[3] * 12; // ~$2,400 if uncovered brand-tier guess
   return { rxcui: d.rxcui, name: d.name, tier: null, yearlyCost: fullCost, covered: false };
+}
+
+// ─── Bundle drug cost — Part D deductible-aware ──────────────────────
+//
+// Per-drug estimateDrugYearlyCost can't model the Part D drug deductible
+// because the deductible is shared across the bundle: every Tier 3-5
+// brand/specialty drug the user fills burns the same pot down. This
+// bundle function reads the plan's drug_deductible once, computes how
+// many months of full retail it takes to clear it, then mixes
+// post-deductible copay/coinsurance for the remaining months.
+//
+//   - Tier 1-2 generics       → deductible-exempt; pay copay × 12.
+//   - Tier 3-5 brand/specialty → share the deductible pot pro-rata by
+//                                each drug's monthly retail. After the
+//                                pot is empty, switch to copay /
+//                                coinsurance × remaining_months.
+//   - Insulin (IRA cap)        → flat $35/mo Part B-side cap supersedes
+//                                the deductible (regulatory floor).
+//
+// Per-drug attribution: the deductible_paid bundle dollar is split
+// across Tier 3-5 drugs by relative retail contribution, so the sum
+// of per-drug yearlyCost equals the bundle total (drug_deductible +
+// sum of copay × remaining_months + tier 1-2 copay × 12).
+//
+// Returns one DrugYearlyEstimate per input drug, in input order.
+
+interface EstimateBundleInput {
+  drugs: ReadonlyArray<{ rxcui?: string; name: string }>;
+  formulary: Map<string, FormularyCoverage>;
+  benefits: PlanBenefitRow[];
+  drugDeductible: number | null;
+  cache?: Map<string, DrugCostCacheEntry>;
+  rxcuiToNdc?: Map<string, string>;
+}
+
+interface DrugInfo {
+  input: { rxcui?: string; name: string };
+  tier: number | null;
+  retailMonthly: number;
+  postDeductibleMonthly: number;
+  covered: boolean;
+  isInsulin: boolean;
+  cacheOverride: number | null;
+}
+
+export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyEstimate[] {
+  const infos: DrugInfo[] = args.drugs.map((d) => {
+    const cov = d.rxcui ? args.formulary.get(d.rxcui) : undefined;
+    const tier = cov?.tier ?? null;
+    const isInsulin = INSULIN_NAME_RE.test(d.name);
+
+    let cacheOverride: number | null = null;
+    let cachedFullCost: number | null = null;
+    let cachedTier: number | null = null;
+    let cachedCovered: boolean | null = null;
+    if (d.rxcui && args.cache && args.rxcuiToNdc) {
+      const ndc = args.rxcuiToNdc.get(d.rxcui);
+      const hit = ndc ? args.cache.get(ndc) : undefined;
+      if (hit) {
+        cachedTier = hit.tier;
+        cachedCovered = hit.covered;
+        cachedFullCost = hit.full_cost;
+        if (hit.estimated_yearly_total != null) {
+          const yearly = isInsulin
+            ? Math.min(hit.estimated_yearly_total, INSULIN_MONTHLY_CAP_2026 * 12)
+            : hit.estimated_yearly_total;
+          cacheOverride = Math.max(0, Math.round(yearly));
+        }
+      }
+    }
+
+    if (cacheOverride != null) {
+      return {
+        input: d,
+        tier: cachedTier ?? tier,
+        retailMonthly: 0,
+        postDeductibleMonthly: 0,
+        covered: cachedCovered ?? true,
+        isInsulin,
+        cacheOverride,
+      };
+    }
+
+    const effectiveTier = cachedTier ?? tier;
+    if (effectiveTier == null && !cov && cachedCovered !== true) {
+      const retailMonthly = NOTIONAL_TIER_FULL_COST[3];
+      return {
+        input: d,
+        tier: null,
+        retailMonthly,
+        postDeductibleMonthly: retailMonthly,
+        covered: false,
+        isInsulin,
+        cacheOverride: null,
+      };
+    }
+
+    const retailMonthly =
+      cachedFullCost && cachedFullCost > 0
+        ? cachedFullCost
+        : NOTIONAL_TIER_FULL_COST[effectiveTier ?? 3] ?? NOTIONAL_TIER_FULL_COST[3];
+    const tierBenefit = benefitByCategory(args.benefits, `rx_tier_${effectiveTier}`);
+    let postDeductibleMonthly = 0;
+    if (tierBenefit?.copay != null) postDeductibleMonthly = tierBenefit.copay;
+    else if (tierBenefit?.coinsurance != null) {
+      postDeductibleMonthly = Math.round(retailMonthly * (tierBenefit.coinsurance / 100));
+    } else if (effectiveTier != null && !isInsulin) {
+      const typical = CMS_TYPICAL_MONTHLY_BY_TIER[effectiveTier];
+      postDeductibleMonthly = typical ?? 0;
+    }
+    return {
+      input: d,
+      tier: effectiveTier,
+      retailMonthly,
+      postDeductibleMonthly,
+      covered: true,
+      isInsulin,
+      cacheOverride: null,
+    };
+  });
+
+  const drugDeductible = Math.max(0, args.drugDeductible ?? 0);
+  const tier3plus = infos.filter(
+    (i) =>
+      i.cacheOverride == null &&
+      i.tier != null &&
+      i.tier >= 3 &&
+      !i.isInsulin &&
+      i.covered,
+  );
+  const tier3plusRetailMonthly = tier3plus.reduce((s, i) => s + i.retailMonthly, 0);
+  let monthsToDeductible = 0;
+  let deductiblePaid = 0;
+  if (drugDeductible > 0 && tier3plusRetailMonthly > 0) {
+    monthsToDeductible = Math.min(12, Math.ceil(drugDeductible / tier3plusRetailMonthly));
+    deductiblePaid = Math.min(drugDeductible, tier3plusRetailMonthly * 12);
+  }
+  const remainingMonths = 12 - monthsToDeductible;
+
+  return infos.map((info) => {
+    if (info.cacheOverride != null) {
+      return {
+        rxcui: info.input.rxcui,
+        name: info.input.name,
+        tier: info.tier,
+        yearlyCost: info.cacheOverride,
+        covered: info.covered,
+      };
+    }
+    if (!info.covered) {
+      const yearly = info.isInsulin
+        ? INSULIN_MONTHLY_CAP_2026 * 12
+        : info.retailMonthly * 12;
+      return {
+        rxcui: info.input.rxcui,
+        name: info.input.name,
+        tier: null,
+        yearlyCost: Math.max(0, Math.round(yearly)),
+        covered: false,
+      };
+    }
+    if (info.isInsulin) {
+      const yearly = Math.min(info.postDeductibleMonthly * 12, INSULIN_MONTHLY_CAP_2026 * 12);
+      return {
+        rxcui: info.input.rxcui,
+        name: info.input.name,
+        tier: info.tier,
+        yearlyCost: Math.max(0, Math.round(yearly)),
+        covered: true,
+      };
+    }
+    if (info.tier != null && info.tier <= 2) {
+      return {
+        rxcui: info.input.rxcui,
+        name: info.input.name,
+        tier: info.tier,
+        yearlyCost: Math.max(0, Math.round(info.postDeductibleMonthly * 12)),
+        covered: true,
+      };
+    }
+    let yearly: number;
+    if (tier3plusRetailMonthly > 0 && deductiblePaid > 0) {
+      const share = (info.retailMonthly / tier3plusRetailMonthly) * deductiblePaid;
+      const postDeductible = info.postDeductibleMonthly * remainingMonths;
+      yearly = share + postDeductible;
+    } else {
+      yearly = info.postDeductibleMonthly * 12;
+    }
+    return {
+      rxcui: info.input.rxcui,
+      name: info.input.name,
+      tier: info.tier,
+      yearlyCost: Math.max(0, Math.round(yearly)),
+      covered: true,
+    };
+  });
 }
 
 // Compute monthly cost from a tier and a full retail price. Uses the
