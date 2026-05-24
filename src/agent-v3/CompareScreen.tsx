@@ -396,6 +396,24 @@ export function CompareScreen({
     [rxcuis, providers, annualDrugByPlanId],
   );
 
+  // Data-quality counts driving the warning banner. When the broker
+  // captured meds without RxNorm match (manual entry past autocomplete,
+  // photo capture without resolution, AgentBase CRM hydration with
+  // null rxcui), the formulary lookup has nothing to match — every
+  // plan reports 0 covered. Same for providers without NPI: the
+  // pm_provider_network_cache key is the NPI, so no NPI = no network
+  // signal anywhere. Surface both as a banner so the broker sees WHY
+  // 0/N is showing and can act (re-pick the med, look up NPI on
+  // npiregistry.cms.hhs.gov, etc.).
+  const unresolvedMedCount = useMemo(
+    () => medications.filter((m) => !m.rxcui).length,
+    [medications],
+  );
+  const missingNpiCount = useMemo(
+    () => providers.filter((p) => !p.npi).length,
+    [providers],
+  );
+
   // Baseline = the plan every slot is compared against. The client's
   // current plan when one is on file; otherwise the brain's #1 pick
   // (an AEP shopper with no incumbent still gets a useful diff column).
@@ -477,6 +495,10 @@ export function CompareScreen({
         pool={pool.filter((p) => p.id !== baseline.id)}
         metrics={metrics}
         annualDrugByPlanId={annualDrugByPlanId}
+        unresolvedMedCount={unresolvedMedCount}
+        totalMedCount={medications.length}
+        missingNpiCount={missingNpiCount}
+        totalProviderCount={providers.length}
         onPickChallenger={setChallenger}
         onBackToGrid={() => setMode('grid')}
         onEnroll={recommendAndAdvance(challenger)}
@@ -573,6 +595,13 @@ export function CompareScreen({
         sub="Drag plans between the bench and the 4-up board, or flip to Head-to-Head for the screen share."
       />
 
+      <DataQualityBanner
+        unresolvedMedCount={unresolvedMedCount}
+        totalMedCount={medications.length}
+        missingNpiCount={missingNpiCount}
+        totalProviderCount={providers.length}
+      />
+
       <ModeToggle
         mode={mode}
         h2hDisabled={!topChallenger}
@@ -625,6 +654,88 @@ export function CompareScreen({
 
       <Nav onBack={onBack} onNext={onNext} nextLabel="CMS Compliance →" />
     </Container>
+  );
+}
+
+// ── Data quality warning banner ────────────────────────────────
+//
+// Renders above the grid + H2H mode contents when the session holds
+// meds without rxcui or providers without NPI. Drug-coverage and
+// network signals rely on those identifiers; without them the brain
+// has nothing to match in pm_formulary / pm_provider_network_cache
+// and the "Meds covered" / "Doctors in-network" rows correctly
+// (but unhelpfully) show 0/N on every plan. Banner explains why and
+// points the broker to the upstream screen to fix.
+function DataQualityBanner({
+  unresolvedMedCount,
+  totalMedCount,
+  missingNpiCount,
+  totalProviderCount,
+}: {
+  unresolvedMedCount: number;
+  totalMedCount: number;
+  missingNpiCount: number;
+  totalProviderCount: number;
+}) {
+  if (unresolvedMedCount === 0 && missingNpiCount === 0) return null;
+  return (
+    <div
+      style={{
+        background: '#fffbeb',
+        border: '1px solid #fcd34d',
+        borderLeft: `4px solid ${GOLD}`,
+        borderRadius: 8,
+        padding: '10px 14px',
+        marginBottom: 12,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+      }}
+      role="alert"
+    >
+      <div
+        style={{
+          fontFamily: FONT_LABEL,
+          fontSize: 9,
+          fontWeight: 800,
+          color: '#92400e',
+          letterSpacing: 0.8,
+          textTransform: 'uppercase',
+        }}
+      >
+        Data quality — coverage signals unreliable
+      </div>
+      {unresolvedMedCount > 0 && (
+        <div
+          style={{
+            fontFamily: FONT_LABEL,
+            fontSize: 12,
+            fontWeight: 600,
+            color: '#78350f',
+          }}
+        >
+          ⚠ {unresolvedMedCount} of {totalMedCount} medication
+          {totalMedCount === 1 ? '' : 's'} couldn't resolve to an RxNorm
+          rxcui — drug coverage shows 0/N on every plan. Open the{' '}
+          <strong>Meds</strong> screen and re-pick from the autocomplete.
+        </div>
+      )}
+      {missingNpiCount > 0 && (
+        <div
+          style={{
+            fontFamily: FONT_LABEL,
+            fontSize: 12,
+            fontWeight: 600,
+            color: '#78350f',
+          }}
+        >
+          ⚠ {missingNpiCount} of {totalProviderCount} provider
+          {totalProviderCount === 1 ? '' : 's'} missing NPI — network
+          status unavailable. Open the <strong>Providers</strong> screen
+          and re-pick from the NPPES search to attach an NPI.
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1656,6 +1767,10 @@ function H2HView({
   pool,
   metrics,
   annualDrugByPlanId,
+  unresolvedMedCount,
+  totalMedCount,
+  missingNpiCount,
+  totalProviderCount,
   onPickChallenger,
   onBackToGrid,
   onEnroll,
@@ -1667,6 +1782,10 @@ function H2HView({
   pool: Plan[];
   metrics: Metric[];
   annualDrugByPlanId: Record<string, number | null>;
+  unresolvedMedCount: number;
+  totalMedCount: number;
+  missingNpiCount: number;
+  totalProviderCount: number;
   onPickChallenger: (p: Plan) => void;
   onBackToGrid: () => void;
   onEnroll: () => void;
@@ -1691,6 +1810,13 @@ function H2HView({
       <Header
         title="Head to Head"
         sub="Side-by-side view tuned for the screen share."
+      />
+
+      <DataQualityBanner
+        unresolvedMedCount={unresolvedMedCount}
+        totalMedCount={totalMedCount}
+        missingNpiCount={missingNpiCount}
+        totalProviderCount={totalProviderCount}
       />
 
       <div
