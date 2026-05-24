@@ -145,6 +145,50 @@ export function formatCostShare(
   return '—';
 }
 
+// Range-aware CostShare formatter. Carriers commonly file ranged
+// copays for advanced imaging / outpatient surgery / diagnostic
+// procedures where the actual member cost depends on the specific
+// CPT code; pm_plan_benefits.copay stores only the minimum of the
+// range, but the benefit_description carries the full span ("MRI /
+// CT / PET · $0–$325 copay"). Surfacing just "$0" misleads the
+// broker into thinking the worst case is $0 too. When a parsable
+// range is in the description AND its low end matches the stored
+// copay, render the full "$LOW–$HIGH" instead.
+const COST_RANGE_RE = /\$(\d[\d,]*)\s*[–\-—to]+\s*\$(\d[\d,]*)/i;
+
+export function formatCostShareWithRange(
+  cs:
+    | {
+        copay: number | null;
+        coinsurance: number | null;
+        description: string | null;
+      }
+    | undefined
+    | null,
+): string {
+  if (!cs) return '—';
+  if (cs.copay != null) {
+    if (cs.description) {
+      const m = cs.description.match(COST_RANGE_RE);
+      if (m) {
+        const low = parseInt(m[1].replace(/,/g, ''), 10);
+        const high = parseInt(m[2].replace(/,/g, ''), 10);
+        if (
+          Number.isFinite(low) &&
+          Number.isFinite(high) &&
+          high > low &&
+          low === cs.copay
+        ) {
+          return `$${low}–$${high}`;
+        }
+      }
+    }
+    return `$${cs.copay}`;
+  }
+  if (cs.coinsurance != null) return `${cs.coinsurance}%`;
+  return '—';
+}
+
 export function costShareNumeric(
   cs: { copay: number | null; coinsurance: number | null } | undefined | null,
 ): number | null {

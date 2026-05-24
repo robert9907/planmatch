@@ -26,7 +26,7 @@ import { Container, Header, Nav, fmt } from './atoms';
 import {
   annualEstimate,
   costShareNumeric,
-  formatCostShare,
+  formatCostShareWithRange,
   formatPcp,
   formatPremium,
   formatSpecialist,
@@ -112,11 +112,17 @@ function providersInNetwork(plan: Plan, providers: ProviderRow[]): number {
 
 // Cost-share metric factory — keeps the 21 medical / Rx-tier rows from
 // dragging the array out to 100+ lines of boilerplate.
+//
+// Uses the range-aware formatter so ranged copays (advanced imaging,
+// outpatient surgery, diagnostic procedures) surface as "$0–$325"
+// instead of just "$0". CMS files the minimum in the structured copay
+// column with the high end only in the description text; flattening
+// to "$0" misleads the broker about real exposure.
 function csMetric(key: string, label: string, get: (p: Plan) => CostShare): Metric {
   return {
     key,
     label,
-    format: (p) => safeCostShare(formatCostShare(get(p))),
+    format: (p) => safeCostShare(formatCostShareWithRange(get(p))),
     numeric: (p) => costShareNumeric(get(p)),
     higherIsBetter: false,
   };
@@ -1050,15 +1056,15 @@ function BenchCard({
             <PreviewRow label="Specialist" value={formatSpecialist(plan)} />
             <PreviewRow
               label="Urgent care"
-              value={formatCostShare(plan.benefits.medical.urgent_care)}
+              value={formatCostShareWithRange(plan.benefits.medical.urgent_care)}
             />
             <PreviewRow
               label="Emergency"
-              value={formatCostShare(plan.benefits.medical.emergency)}
+              value={formatCostShareWithRange(plan.benefits.medical.emergency)}
             />
             <PreviewRow
               label="Inpatient"
-              value={formatCostShare(plan.benefits.medical.inpatient)}
+              value={formatCostShareWithRange(plan.benefits.medical.inpatient)}
             />
             <PreviewRow
               label="OTC / qtr"
