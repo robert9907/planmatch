@@ -2,10 +2,9 @@
 //
 // Two modes the broker toggles between mid-call:
 //   • grid (default) — 2×2 board of up to 4 finalist plans with a
-//     drag-to-swap bench above. Each card shows 11 headline metrics
-//     plus a delta arrow vs. the client's current plan, an inline
-//     expander for the full benefit ladder, and Detail / H2H /
-//     Enroll buttons.
+//     drag-to-swap bench above. Each card renders the full 37-row
+//     benefit ladder by default (no hidden Detail expander) with a
+//     delta arrow vs. the baseline plan, plus H2H / Enroll buttons.
 //   • h2h — full-bleed head-to-head with the current plan on the
 //     left and one challenger on the right, sized for the screen
 //     share. Pill switcher lets the broker swap challengers without
@@ -21,15 +20,25 @@ import {
   type CSSProperties,
   type DragEvent,
 } from 'react';
-import type { Plan } from '@/types/plans';
+import type { CostShare, Plan } from '@/types/plans';
 import { useSession } from '@/hooks/useSession';
 import { Container, Header, Nav, fmt } from './atoms';
 import {
   annualEstimate,
+  costShareNumeric,
   formatCostShare,
+  formatPcp,
   formatPremium,
+  formatSpecialist,
   planDisplay,
 } from './planDisplay';
+
+// Carriers that didn't file a value get "Not available" instead of the
+// formatCostShare/formatPcp default "—". Per project rule, every
+// benefit row stays visible — change the text, not the row.
+function safeCostShare(s: string): string {
+  return s === '—' ? 'Not available' : s;
+}
 
 // ── Design tokens ──────────────────────────────────────────────
 const NAVY = '#0d2f5e';
@@ -87,6 +96,18 @@ function providersInNetwork(plan: Plan, providers: ProviderRow[]): number {
     if (p.networkStatus?.[plan.id] === 'in') n += 1;
   }
   return n;
+}
+
+// Cost-share metric factory — keeps the 21 medical / Rx-tier rows from
+// dragging the array out to 100+ lines of boilerplate.
+function csMetric(key: string, label: string, get: (p: Plan) => CostShare): Metric {
+  return {
+    key,
+    label,
+    format: (p) => safeCostShare(formatCostShare(get(p))),
+    numeric: (p) => costShareNumeric(get(p)),
+    higherIsBetter: false,
+  };
 }
 
 function buildMetrics(args: {
@@ -185,6 +206,100 @@ function buildMetrics(args: {
       label: 'Star rating',
       format: (p) => `${p.star_rating} ★`,
       numeric: (p) => p.star_rating,
+      higherIsBetter: true,
+    },
+    // ── Medical copays + Part D deductible ───────────────────────
+    {
+      key: 'pcp',
+      label: 'PCP copay',
+      format: (p) => safeCostShare(formatPcp(p)),
+      numeric: (p) => costShareNumeric(p.benefits.medical.primary_care),
+      higherIsBetter: false,
+    },
+    {
+      key: 'specialist',
+      label: 'Specialist',
+      format: (p) => safeCostShare(formatSpecialist(p)),
+      numeric: (p) => costShareNumeric(p.benefits.medical.specialist),
+      higherIsBetter: false,
+    },
+    {
+      key: 'partd_ded',
+      label: 'Part D Ded.',
+      format: (p) =>
+        p.drug_deductible == null ? 'Not available' : `$${p.drug_deductible}`,
+      numeric: (p) => p.drug_deductible,
+      higherIsBetter: false,
+    },
+    csMetric('urgent_care', 'Urgent care', (p) => p.benefits.medical.urgent_care),
+    csMetric('emergency', 'Emergency', (p) => p.benefits.medical.emergency),
+    csMetric('inpatient', 'Inpatient (per stay)', (p) => p.benefits.medical.inpatient),
+    csMetric(
+      'out_surg_hosp',
+      'Outpatient surg. (hosp)',
+      (p) => p.benefits.medical.outpatient_surgery_hospital,
+    ),
+    csMetric(
+      'out_surg_asc',
+      'Outpatient surg. (ASC)',
+      (p) => p.benefits.medical.outpatient_surgery_asc,
+    ),
+    csMetric(
+      'out_obs',
+      'Outpatient observation',
+      (p) => p.benefits.medical.outpatient_observation,
+    ),
+    csMetric('lab', 'Lab services', (p) => p.benefits.medical.lab_services),
+    csMetric('diag_tests', 'Diagnostic tests', (p) => p.benefits.medical.diagnostic_tests),
+    csMetric('xray', 'X-ray', (p) => p.benefits.medical.xray),
+    csMetric(
+      'diag_radiology',
+      'Diagnostic radiology',
+      (p) => p.benefits.medical.diagnostic_radiology,
+    ),
+    csMetric(
+      'ther_radiology',
+      'Therapeutic radiology',
+      (p) => p.benefits.medical.therapeutic_radiology,
+    ),
+    csMetric(
+      'mh_indiv',
+      'Mental health (indiv.)',
+      (p) => p.benefits.medical.mental_health_individual,
+    ),
+    csMetric(
+      'mh_group',
+      'Mental health (group)',
+      (p) => p.benefits.medical.mental_health_group,
+    ),
+    csMetric('pt', 'Physical therapy', (p) => p.benefits.medical.physical_therapy),
+    csMetric('telehealth', 'Telehealth', (p) => p.benefits.medical.telehealth),
+    // ── Rx tiers 1–5 ─────────────────────────────────────────────
+    csMetric('rx_t1', 'Rx Tier 1', (p) => p.benefits.rx_tiers.tier_1),
+    csMetric('rx_t2', 'Rx Tier 2', (p) => p.benefits.rx_tiers.tier_2),
+    csMetric('rx_t3', 'Rx Tier 3', (p) => p.benefits.rx_tiers.tier_3),
+    csMetric('rx_t4', 'Rx Tier 4', (p) => p.benefits.rx_tiers.tier_4),
+    csMetric('rx_t5', 'Rx Tier 5', (p) => p.benefits.rx_tiers.tier_5),
+    // ── Supplemental (string output, no winner highlighting) ─────
+    {
+      key: 'transport',
+      label: 'Transportation',
+      format: (p) => planDisplay(p).transport,
+      numeric: () => null,
+      higherIsBetter: true,
+    },
+    {
+      key: 'food',
+      label: 'Food card',
+      format: (p) => planDisplay(p).meals,
+      numeric: () => null,
+      higherIsBetter: true,
+    },
+    {
+      key: 'hearing',
+      label: 'Hearing',
+      format: (p) => planDisplay(p).hearing,
+      numeric: () => null,
       higherIsBetter: true,
     },
   ];
@@ -667,7 +782,6 @@ function SlotCell({
   onOpenH2H: (p: Plan) => void;
   onEnroll: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
   function onDragOverHandler(e: DragEvent<HTMLDivElement>) {
@@ -835,33 +949,18 @@ function SlotCell({
             best={bestByMetric[m.key] ?? null}
           />
         ))}
-
-        {expanded && (
-          <div
-            style={{
-              marginTop: 10,
-              borderTop: `1px solid ${BORDER}`,
-              paddingTop: 10,
-            }}
-          >
-            <ExpandedBenefits plan={plan} />
-          </div>
-        )}
       </div>
 
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr 1fr',
+          gridTemplateColumns: '1fr 1fr',
           gap: 6,
           padding: 10,
           borderTop: `1px solid ${BORDER}`,
           background: PANEL,
         }}
       >
-        <button type="button" onClick={() => setExpanded((v) => !v)} style={cardBtn('ghost')}>
-          {expanded ? 'Hide' : 'Detail'}
-        </button>
         <button
           type="button"
           onClick={() => onOpenH2H(plan)}
@@ -987,86 +1086,6 @@ function MetricRow({
           </span>
         )}
       </div>
-    </div>
-  );
-}
-
-// ── Expanded benefits (full ladder, inline behind Detail) ──────
-function ExpandedBenefits({ plan }: { plan: Plan }) {
-  const rows: { l: string; v: string }[] = [
-    { l: 'Urgent care', v: formatCostShare(plan.benefits.medical.urgent_care) },
-    { l: 'Emergency', v: formatCostShare(plan.benefits.medical.emergency) },
-    { l: 'Inpatient (per stay)', v: formatCostShare(plan.benefits.medical.inpatient) },
-    {
-      l: 'Outpatient surg. (hosp)',
-      v: formatCostShare(plan.benefits.medical.outpatient_surgery_hospital),
-    },
-    {
-      l: 'Outpatient surg. (ASC)',
-      v: formatCostShare(plan.benefits.medical.outpatient_surgery_asc),
-    },
-    {
-      l: 'Outpatient observation',
-      v: formatCostShare(plan.benefits.medical.outpatient_observation),
-    },
-    { l: 'Lab services', v: formatCostShare(plan.benefits.medical.lab_services) },
-    { l: 'Diagnostic tests', v: formatCostShare(plan.benefits.medical.diagnostic_tests) },
-    { l: 'X-ray', v: formatCostShare(plan.benefits.medical.xray) },
-    {
-      l: 'Diagnostic radiology',
-      v: formatCostShare(plan.benefits.medical.diagnostic_radiology),
-    },
-    {
-      l: 'Therapeutic radiology',
-      v: formatCostShare(plan.benefits.medical.therapeutic_radiology),
-    },
-    {
-      l: 'Mental health (indiv.)',
-      v: formatCostShare(plan.benefits.medical.mental_health_individual),
-    },
-    {
-      l: 'Mental health (group)',
-      v: formatCostShare(plan.benefits.medical.mental_health_group),
-    },
-    {
-      l: 'Physical therapy',
-      v: formatCostShare(plan.benefits.medical.physical_therapy),
-    },
-    { l: 'Telehealth', v: formatCostShare(plan.benefits.medical.telehealth) },
-    { l: 'Rx Tier 1', v: formatCostShare(plan.benefits.rx_tiers.tier_1) },
-    { l: 'Rx Tier 2', v: formatCostShare(plan.benefits.rx_tiers.tier_2) },
-    { l: 'Rx Tier 3', v: formatCostShare(plan.benefits.rx_tiers.tier_3) },
-    { l: 'Rx Tier 4', v: formatCostShare(plan.benefits.rx_tiers.tier_4) },
-    { l: 'Rx Tier 5', v: formatCostShare(plan.benefits.rx_tiers.tier_5) },
-    { l: 'Transportation', v: planDisplay(plan).transport },
-    { l: 'Food card', v: planDisplay(plan).meals },
-    { l: 'Hearing', v: planDisplay(plan).hearing },
-  ];
-  return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr 1fr',
-        gap: '2px 12px',
-      }}
-    >
-      {rows.map((r) => (
-        <div
-          key={r.l}
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            padding: '3px 0',
-            fontFamily: FONT_LABEL,
-            fontSize: 10,
-          }}
-        >
-          <span style={{ color: MUTED }}>{r.l}</span>
-          <span style={{ fontFamily: FONT_NUM, fontWeight: 600, color: TEXT }}>
-            {r.v}
-          </span>
-        </div>
-      ))}
     </div>
   );
 }
