@@ -862,37 +862,45 @@ function pickBenefitNumber(
 
 // Several Plan-type field names diverge from the canonical
 // pm_plan_benefits.benefit_category strings. Probed against the live
-// table on plan-match-prod, the DB uses these short keys — every
-// alias here was historically failing to find its row, leaving copay
-// and coinsurance as null and the agent quote screen rendering '—'
-// for Labs / Imaging / Outpatient Surgery.
+// table via scripts/audit-plan-benefits.ts, the real taxonomy is
+// richer than earlier inference assumed:
 //
 //   Plan field                    →  pm_plan_benefits.benefit_category
-//   --------------------------------------------------------------
-//   lab_services                  →  lab                (712 rows)
-//   diagnostic_radiology          →  imaging            (748 rows)
-//   outpatient_surgery_hospital   →  outpatient_surgery (748 rows)
+//   ------------------------------------------------------------------
+//   lab_services                  →  lab
+//   outpatient_surgery_hospital   →  outpatient_surgery
+//   outpatient_surgery_asc        →  asc
+//   diagnostic_radiology          →  advanced_imaging   (MRI/CT/PET)
+//   diagnostic_tests              →  diagnostic_procedures
+//   therapeutic_radiology         →  advanced_imaging   (best-fit; no
+//                                                        separate row)
+//   mental_health_individual      →  mental_health_outpatient_individual
+//   mental_health_group           →  mental_health_outpatient_group
+//   physical_therapy              →  physical_speech_therapy
 //
-// pm_plan_benefits doesn't distinguish ASC vs Hospital outpatient
-// surgery, and stores X-ray / diagnostic tests / therapeutic
-// radiology all under a single `imaging` row. Multiple Plan fields
-// alias the same source row so the Compare screen surfaces the
-// carrier-filed value across all related rows instead of leaving
-// them blank — same copay across rows is preferable to "Not
-// available" when the carrier did file a value, just at a coarser
-// granularity than the Plan type exposes.
+// Direct matches (no alias needed): primary_care, specialist,
+// urgent_care, emergency, inpatient, outpatient_observation, xray,
+// telehealth, rx_tier_1..5.
 //
-// physical_therapy and mental_health_individual have NO rows in
-// pm_plan_benefits at all — those categories fall back to
-// pbp_benefits via the PBP_FALLBACK_TYPES path in buildBenefits.
+// The earlier aliases (xray → imaging, diagnostic_radiology → imaging,
+// outpatient_surgery_asc → outpatient_surgery) were wrong against
+// real data and masked the carrier-filed copays — `imaging` isn't a
+// pm category, and ASC is a separate row from hospital outpatient
+// surgery.
+//
+// physical_therapy + mental_health_* still fall back to pbp_benefits
+// via PBP_FALLBACK_TYPES if no pm row exists (rare on real plans now
+// that the alias is correct).
 const CATEGORY_ALIAS: Record<string, string> = {
   lab_services: 'lab',
-  diagnostic_radiology: 'imaging',
   outpatient_surgery_hospital: 'outpatient_surgery',
-  outpatient_surgery_asc: 'outpatient_surgery',
-  xray: 'imaging',
-  diagnostic_tests: 'imaging',
-  therapeutic_radiology: 'imaging',
+  outpatient_surgery_asc: 'asc',
+  diagnostic_radiology: 'advanced_imaging',
+  diagnostic_tests: 'diagnostic_procedures',
+  therapeutic_radiology: 'advanced_imaging',
+  mental_health_individual: 'mental_health_outpatient_individual',
+  mental_health_group: 'mental_health_outpatient_group',
+  physical_therapy: 'physical_speech_therapy',
 };
 
 function costShareFor(
