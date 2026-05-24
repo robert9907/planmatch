@@ -22,6 +22,33 @@ import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { supabase } from './_lib/supabase.js';
 import { expandRxcui } from './formulary.js';
 
+// PostgREST on this project caps every query at 1000 rows
+// (db-max-rows). The formulary fetch can easily exceed that — Durham
+// alone returns 681 Ozempic-family rows across 72 plans, and a real
+// drug list (Ozempic + Metformin + Lisinopril + Atorvastatin) pushes
+// well past the cap. Truncation silently drops per-(plan, rxcui) tier
+// rows; downstream brain logic falls back to "not covered" or grabs
+// the wrong tier. Paginated fetch defuses the trap.
+async function paginatedFetch<T>(
+  pageFn: (
+    from: number,
+    to: number,
+  ) => PromiseLike<{ data: T[] | null; error: unknown }>,
+): Promise<{ data: T[]; error: unknown }> {
+  const out: T[] = [];
+  const PAGE = 1000;
+  for (let pageNum = 0; pageNum < 20; pageNum += 1) {
+    const from = pageNum * PAGE;
+    const to = from + PAGE - 1;
+    const { data, error } = await pageFn(from, to);
+    if (error) return { data: [], error };
+    if (!data || data.length === 0) break;
+    out.push(...data);
+    if (data.length < PAGE) break;
+  }
+  return { data: out, error: null };
+}
+
 interface BenefitRow {
   plan_id: string;
   benefit_type: string;
@@ -148,14 +175,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         : Promise.resolve({ data: [], error: null }),
       // Query the EXPANDED rxcui set, not just the originals. The
       // index step below maps each returned row back to whichever
-      // original rxcui claims it.
+      // original rxcui claims it. Paginated because (plans × rxcuis)
+      // for a typical Durham-sized county + multi-drug user exceeds
+      // PostgREST's 1000-row cap — un-paginated, plans whose formulary
+      // rows sort past the boundary silently lose tier info and the
+      // MedsScreen badge picks the wrong tier.
       expandedRxcuiList.length > 0
-        ? sb
-            .from('pm_formulary')
-            .select('contract_id, plan_id, rxcui, tier, copay, coinsurance, prior_auth, step_therapy')
-            .in('contract_id', contracts)
-            .in('plan_id', planNumbers)
-            .in('rxcui', expandedRxcuiList)
+        ? paginatedFetch<FormularyRow>((from, to) =>
+            sb
+              .from('pm_formulary')
+              .select(
+                'contract_id, plan_id, rxcui, tier, copay, coinsurance, prior_auth, step_therapy',
+              )
+              .in('contract_id', contracts)
+              .in('plan_id', planNumbers)
+              .in('rxcui', expandedRxcuiList)
+              .range(from, to),
+          )
         : Promise.resolve({ data: [], error: null }),
       rxcuis.length > 0
         ? sb

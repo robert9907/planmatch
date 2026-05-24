@@ -272,7 +272,17 @@ function perDrugBest(
     };
   }
   let minCopay: number | null = null;
-  let bestTier: number | null = null;
+  // Tier count map → drives modal-tier selection. Showing the LOWEST
+  // tier across the pool used to surface Tier 1 for Ozempic in
+  // counties with I-SNP / D-SNP plans (Longevity, PruittHealth, Liberty
+  // file Ozempic at Tier 1 because their dual / institutional residents
+  // pay Medicaid-floor copays regardless of tier). A broker quoting a
+  // standard MAPD would then see "T1" on the meds screen and expect
+  // cheap Ozempic, when in reality it's Tier 3 / 25% coinsurance on
+  // 666 of 681 Durham plans (98%). Modal (most-common) tier is the
+  // honest broker-aligned answer; the rare SNP override no longer
+  // poisons the badge.
+  const tierCounts = new Map<number, number>();
   let covered = 0;
   let anyHit = false;
   for (const p of plans) {
@@ -282,8 +292,8 @@ function perDrugBest(
     if (hit.tier === 'not_covered' || hit.tier === 'excluded') continue;
     covered += 1;
     const tierNum = typeof hit.tier === 'number' ? hit.tier : null;
-    if (tierNum != null && (bestTier == null || tierNum < bestTier)) {
-      bestTier = tierNum;
+    if (tierNum != null) {
+      tierCounts.set(tierNum, (tierCounts.get(tierNum) ?? 0) + 1);
     }
     // Per-fill cost: flat copay when filed, else coinsurance × tier
     // notional retail. Without the coinsurance branch a Tier 3 25%
@@ -296,6 +306,17 @@ function perDrugBest(
     });
     if (monthly > 0 && (minCopay == null || monthly < minCopay)) {
       minCopay = monthly;
+    }
+  }
+  // Modal tier — most common across the pool. Ties broken by tier
+  // number ascending (so a 50/50 T1/T3 split prefers T1, surfacing
+  // the broker-relevant lower number when populations actually align).
+  let bestTier: number | null = null;
+  let modalCount = 0;
+  for (const [tier, count] of [...tierCounts.entries()].sort((a, b) => a[0] - b[0])) {
+    if (count > modalCount) {
+      modalCount = count;
+      bestTier = tier;
     }
   }
   return {
