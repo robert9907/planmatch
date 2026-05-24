@@ -54,6 +54,13 @@ export function IntakeScreen({ eligiblePlans, onNext }: Props) {
   // Debounced ZIP → county/state lookup. Mirrors the v4 IntakePage
   // wiring — same /api/zip-county route, same abort-on-change behavior
   // so a fast typist doesn't race a stale response over a fresh one.
+  //
+  // Always writes county + state from the API response (instead of
+  // diffing against the current session value) so a persisted-session
+  // mismatch ("" or null vs the real county) can never get stuck
+  // showing "—" after the lookup lands. console.info breadcrumbs make
+  // a failure visible in the broker's dev tools without surfacing a
+  // user-facing message — the rightHint already covers explicit errors.
   useEffect(() => {
     if (!client.zip || !/^\d{5}$/.test(client.zip)) return;
     const ctl = new AbortController();
@@ -63,18 +70,28 @@ export function IntakeScreen({ eligiblePlans, onNext }: Props) {
       setZipLoading(true);
       setZipError(null);
       try {
+        console.info(`[intake] zip-county fetch zip=${client.zip}`);
         const res = await fetch(`/api/zip-county?zip=${client.zip}`, {
           signal: ctl.signal,
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const body = (await res.json()) as { county?: string; state?: StateCode };
         if (ctl.signal.aborted) return;
+        console.info(
+          `[intake] zip-county response zip=${client.zip} → county=${body.county ?? 'null'} state=${body.state ?? 'null'}`,
+        );
         const patch: Partial<typeof client> = {};
-        if (body.county && body.county !== client.county) patch.county = body.county;
-        if (body.state && body.state !== client.state) patch.state = body.state;
+        if (body.county) patch.county = body.county;
+        if (body.state) patch.state = body.state;
         if (Object.keys(patch).length > 0) updateClient(patch);
       } catch (err) {
-        if (!ctl.signal.aborted) setZipError((err as Error).message);
+        if (!ctl.signal.aborted) {
+          console.warn(
+            `[intake] zip-county failed zip=${client.zip}:`,
+            (err as Error).message,
+          );
+          setZipError((err as Error).message);
+        }
       } finally {
         if (!ctl.signal.aborted) setZipLoading(false);
       }

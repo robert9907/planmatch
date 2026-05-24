@@ -17,6 +17,11 @@ interface Props {
   /** Full brain-ranked plan list, descending by composite score. */
   scoredPlans: Plan[];
   annualDrugByPlanId: Record<string, number | null>;
+  /** Fire-and-forget AgentBase write-back. Called when broker clicks
+   *  Open SunFire so the CRM has the final enrollment plan synced
+   *  before the broker leaves the tab. The hook is idempotent for
+   *  same-plan re-clicks; the SunFire link still opens immediately. */
+  onRecommend?: (plan: Plan) => void;
   onBack: () => void;
 }
 
@@ -24,6 +29,7 @@ export function EnrollScreen({
   current,
   scoredPlans,
   annualDrugByPlanId,
+  onRecommend,
   onBack,
 }: Props) {
   const client = useSession((s) => s.client);
@@ -169,6 +175,12 @@ export function EnrollScreen({
           })}
           target="_blank"
           rel="noreferrer"
+          onClick={() => {
+            // Fire-and-forget AgentBase write-back before SunFire opens.
+            // The new tab loads in parallel; sync runs on the original
+            // tab and posts its 1-2s round-trip in the background.
+            onRecommend?.(recommendedPlan);
+          }}
           style={{
             display: 'inline-block',
             background: 'linear-gradient(135deg, #059669, #047857)',

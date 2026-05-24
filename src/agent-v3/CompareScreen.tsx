@@ -65,6 +65,13 @@ interface Props {
    */
   scoredPlans: Plan[];
   annualDrugByPlanId: Record<string, number | null>;
+  /**
+   * Fire-and-forget AgentBase write-back. CompareScreen calls this with
+   * the picked plan when the broker clicks Enroll on a card or the
+   * summary bar. The hook on the shell handles state + retries; this
+   * screen never blocks on it.
+   */
+  onRecommend?: (plan: Plan) => void;
   onBack: () => void;
   onNext: () => void;
 }
@@ -360,6 +367,7 @@ export function CompareScreen({
   current,
   scoredPlans,
   annualDrugByPlanId,
+  onRecommend,
   onBack,
   onNext,
 }: Props) {
@@ -440,6 +448,13 @@ export function CompareScreen({
     );
   }
 
+  // Wrap onNext with the AgentBase write-back. Fire-and-forget — the
+  // hook handles state + retry, the screen advances immediately.
+  const recommendAndAdvance = (plan: Plan | null) => () => {
+    if (plan) onRecommend?.(plan);
+    onNext();
+  };
+
   // ── H2H mode ───────────────────────────────────────────────
   if (mode === 'h2h' && challenger && baseline) {
     return (
@@ -452,7 +467,7 @@ export function CompareScreen({
         annualDrugByPlanId={annualDrugByPlanId}
         onPickChallenger={setChallenger}
         onBackToGrid={() => setMode('grid')}
-        onEnroll={onNext}
+        onEnroll={recommendAndAdvance(challenger)}
         onBack={onBack}
       />
     );
@@ -561,7 +576,7 @@ export function CompareScreen({
             onClear={() => clearSlot(i)}
             onFill={() => fillEmptySlot(i)}
             onOpenH2H={openH2H}
-            onEnroll={onNext}
+            onEnroll={recommendAndAdvance(plan)}
           />
         ))}
       </div>
@@ -569,7 +584,7 @@ export function CompareScreen({
       <SummaryBar
         headline={topChallenger}
         savings={headlineSavings}
-        onEnroll={onNext}
+        onEnroll={recommendAndAdvance(topChallenger)}
       />
 
       <Nav onBack={onBack} onNext={onNext} nextLabel="CMS Compliance →" />

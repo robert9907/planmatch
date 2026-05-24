@@ -32,6 +32,7 @@ import { totalComplianceItems } from '@/lib/compliance';
 import { monthlyCostFromFormulary } from '@/lib/drugCosts';
 import type { Plan } from '@/types/plans';
 import type { StateCode } from '@/types/session';
+import { useAgentBaseRecommend } from '@/hooks/useAgentBaseRecommend';
 import { AgentBar, type ScreenId } from './AgentBar';
 import { ComplianceScreen } from './ComplianceScreen';
 import { CompareScreen } from './CompareScreen';
@@ -39,6 +40,7 @@ import { DisclaimersScreen } from './DisclaimersScreen';
 import { EnrollScreen } from './EnrollScreen';
 import { IntakeScreen } from './IntakeScreen';
 import { MedsScreen } from './MedsScreen';
+import { buildAgentV3SyncInput } from './agentbaseSync';
 import { PrioritiesScreen, type PriorityKey } from './PrioritiesScreen';
 import { ProvidersScreen } from './ProvidersScreen';
 import {
@@ -111,6 +113,13 @@ export function AgentV3App() {
   const updateProvider = useSession((s) => s.updateProvider);
   const checked = useSession((s) => s.complianceChecked);
   const confirmed = useSession((s) => s.disclaimersConfirmed);
+  const sessionId = useSession((s) => s.sessionId);
+  const startedAt = useSession((s) => s.startedAt);
+
+  // AgentBase write-back. Fires from CompareScreen's Enroll buttons
+  // and EnrollScreen's SunFire CTA. Hook handles idempotent same-plan
+  // re-clicks + auto-retry; UI never blocks waiting for it.
+  const agentbaseSync = useAgentBaseRecommend();
 
   // Backfill rxcuis on any seeded / hydrated meds that lack one — the
   // formulary + drug-cost lookups all key on rxcui, so without this hook
@@ -495,6 +504,29 @@ export function AgentV3App() {
     );
   }
 
+  // Fire-and-forget AgentBase write-back. Called from CompareScreen's
+  // Enroll buttons (card + summary bar) and from EnrollScreen's
+  // SunFire CTA. The hook is idempotent for same-plan re-clicks and
+  // auto-retries on first failure — UI never waits on it.
+  function onRecommend(plan: Plan) {
+    const input = buildAgentV3SyncInput({
+      plan,
+      client,
+      medications,
+      providers,
+      brainResult: brain.result,
+      sessionId,
+      startedAt,
+    });
+    if (!input) {
+      console.warn(
+        '[agent-v3] recommend skipped — brain.result not ready or plan not in scored set',
+      );
+      return;
+    }
+    void agentbaseSync.sync(input);
+  }
+
   return (
     <div className="pma3">
       <style>{AGENT_V3_CSS}</style>
@@ -556,6 +588,7 @@ export function AgentV3App() {
             current={currentPlan}
             scoredPlans={scoredPlans}
             annualDrugByPlanId={annualDrugByPlanId}
+            onRecommend={onRecommend}
             onBack={() => setScreen('priorities')}
             onNext={() => setScreen('compliance')}
           />
@@ -569,6 +602,7 @@ export function AgentV3App() {
         {screen === 'enroll' && (
           <EnrollScreen
             current={currentPlan}
+            onRecommend={onRecommend}
             scoredPlans={scoredPlans}
             annualDrugByPlanId={annualDrugByPlanId}
             onBack={() => setScreen('compliance')}
