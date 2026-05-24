@@ -14,14 +14,15 @@ import { annualEstimate } from './planDisplay';
 
 interface Props {
   current: Plan | null;
-  brainPick: Plan | null;
+  /** Full brain-ranked plan list, descending by composite score. */
+  scoredPlans: Plan[];
   annualDrugByPlanId: Record<string, number | null>;
   onBack: () => void;
 }
 
 export function EnrollScreen({
   current,
-  brainPick,
+  scoredPlans,
   annualDrugByPlanId,
   onBack,
 }: Props) {
@@ -29,19 +30,25 @@ export function EnrollScreen({
   const providers = useSession((s) => s.providers);
   const medications = useSession((s) => s.medications);
 
-  if (!brainPick) {
+  // Top brain-ranked plan that isn't the client's current — falls
+  // back to scoredPlans[0] when there's no current on file (e.g.
+  // an AEP shopper with no incumbent).
+  const recommendedPlan: Plan | null =
+    scoredPlans.find((p) => p.id !== current?.id) ?? scoredPlans[0] ?? null;
+
+  if (!recommendedPlan) {
     return (
       <Container>
         <Header
           title="Pick a finalist first"
-          sub="Run the Swipe and Compare screens to surface a recommendation."
+          sub="Run the Compare screen to surface a recommendation."
         />
         <Nav onBack={onBack} />
       </Container>
     );
   }
 
-  const candAnnual = annualEstimate(brainPick, annualDrugByPlanId[brainPick.id] ?? null).total;
+  const candAnnual = annualEstimate(recommendedPlan, annualDrugByPlanId[recommendedPlan.id] ?? null).total;
   const curAnnual = current
     ? annualEstimate(current, annualDrugByPlanId[current.id] ?? null).total
     : null;
@@ -72,7 +79,7 @@ export function EnrollScreen({
                 textTransform: 'uppercase',
               }}
             >
-              {brainPick.carrier}
+              {recommendedPlan.carrier}
             </div>
             <div
               style={{
@@ -82,7 +89,7 @@ export function EnrollScreen({
                 color: '#0d2f5e',
               }}
             >
-              {brainPick.plan_name}
+              {recommendedPlan.plan_name}
             </div>
           </div>
           <span
@@ -107,12 +114,12 @@ export function EnrollScreen({
             marginBottom: 14,
           }}
         >
-          <Stat label="Premium" value={brainPick.premium === 0 ? '$0' : `$${brainPick.premium}`} green={brainPick.premium === 0} />
+          <Stat label="Premium" value={recommendedPlan.premium === 0 ? '$0' : `$${recommendedPlan.premium}`} green={recommendedPlan.premium === 0} />
           <Stat
             label="Est. Annual Drugs"
             value={
-              annualDrugByPlanId[brainPick.id] != null
-                ? fmt(annualDrugByPlanId[brainPick.id]!)
+              annualDrugByPlanId[recommendedPlan.id] != null
+                ? fmt(annualDrugByPlanId[recommendedPlan.id]!)
                 : '—'
             }
           />
@@ -158,7 +165,7 @@ export function EnrollScreen({
         <a
           href={buildSunFireLink({
             client,
-            plan: brainPick,
+            plan: recommendedPlan,
           })}
           target="_blank"
           rel="noreferrer"

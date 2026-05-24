@@ -27,16 +27,15 @@
 
 import { useState } from 'react';
 
-// Aligned with reference/plan-match-agent-full.jsx: 8 screens. The
-// previous waterfall (Results → Report → Compare) collapses into a
-// Tinder-style Swipe screen pinned with the current plan and the
-// Broker Brain pick, then a single Compare Finalists table.
+// 7-screen agent flow: Client → Meds → Providers → Priorities →
+// Compare (4-up grid + H2H toggle) → Compliance → Enroll. The earlier
+// Tinder-style Plans/Swipe deck collapsed into the Compare board,
+// which now seeds slots directly from the brain's ranked scoring.
 export type ScreenId =
   | 'intake'
   | 'meds'
   | 'providers'
   | 'priorities'
-  | 'swipe'
   | 'compare'
   | 'compliance'
   | 'enroll';
@@ -46,7 +45,6 @@ export const SCREENS: ScreenId[] = [
   'meds',
   'providers',
   'priorities',
-  'swipe',
   'compare',
   'compliance',
   'enroll',
@@ -57,14 +55,10 @@ const LABELS: Record<ScreenId, string> = {
   meds: 'Meds',
   providers: 'Providers',
   priorities: 'Priorities',
-  swipe: 'Plans',
   compare: 'Compare',
   compliance: 'Compliance',
   enroll: 'Enroll',
 };
-
-// Finalist cap from the spec: Brain pick + up to 3 user-kept plans.
-export const FINALIST_CAP = 4;
 
 interface Props {
   screen: ScreenId;
@@ -85,8 +79,6 @@ interface Props {
   shareLink: string | null;
   onCycleShare: () => void;
   complianceProgress: number;
-  /** Brain pick + user-kept plans, capped at FINALIST_CAP. */
-  finalistCount: number;
   /** href for the "AgentBase ↗" jump link AND the new "Call" button.
    *  Defaults to the prod CRM where the broker actually places the
    *  call. */
@@ -106,7 +98,6 @@ export function AgentBar({
   shareLink,
   onCycleShare,
   complianceProgress,
-  finalistCount,
   agentBaseHref = 'https://agentbase-crm.vercel.app/',
 }: Props) {
   const [linkCopied, setLinkCopied] = useState(false);
@@ -354,21 +345,6 @@ export function AgentBar({
             {Math.round(complianceProgress)}%
           </span>
         </div>
-
-        {/* Finalist counter — Brain pick + kept plans, capped at 4.
-            Renders the live count off the swipe state so the broker
-            can see how close they are to the cap from any screen. */}
-        <span
-          title={`${finalistCount} of ${FINALIST_CAP} finalists selected`}
-          style={{
-            color: 'rgba(255,255,255,0.35)',
-            fontSize: 10,
-            fontWeight: 600,
-            letterSpacing: 0.3,
-          }}
-        >
-          ✓{Math.min(finalistCount, FINALIST_CAP)}/{FINALIST_CAP}
-        </span>
 
         {/* AgentBase link */}
         <a

@@ -1,23 +1,19 @@
 // AgentV3App — top-level shell for the agent quoting flow.
 //
-// Screen list and chrome track reference/plan-match-agent-full.jsx
-// (8 screens: intake → meds → providers → priorities → swipe →
-// compare → compliance → enroll).
+// 7-screen flow: intake → meds → providers → priorities → compare →
+// compliance → enroll. The Plans/Swipe deck collapsed into Compare,
+// which now seeds slots directly from the brain's ranked scoring
+// (current + top 3 brain-ranked, bench = the rest).
 //
 // State that lives at this layer (lifted out of individual screens so
-// the AgentBar counters and downstream screens stay coherent):
+// downstream screens stay coherent):
 //   • screen           — current page id
 //   • clientView       — Agent vs Client display toggle
 //   • eligiblePlans    — county/state plan catalog (one fetch)
 //   • brainResult      — usePlanBrain output (one ranking)
-//   • drugCosts        — useDrugCosts output (one prime)
 //   • priorities       — 8-toggle output from PrioritiesScreen
-//   • kept[] / eliminated[] — swipe selections (drives Compare + Enroll)
-//   • compareTarget    — currently-open CompareModal candidate
 //
-// Compliance progress + finalist counter are derived (not stored) off
-// the same useSession + local state the screens read, so the AgentBar
-// chrome stays in sync without an extra reducer.
+// Compliance progress derives off useSession in render.
 //
 // Voice calls are not handled here — the broker dials from AgentBase
 // (the AgentBar "Call" button is now a deep-link to the CRM). PlanMatch
@@ -36,9 +32,7 @@ import { totalComplianceItems } from '@/lib/compliance';
 import { monthlyCostFromFormulary } from '@/lib/drugCosts';
 import type { Plan } from '@/types/plans';
 import type { StateCode } from '@/types/session';
-import { AgentBar, FINALIST_CAP, type ScreenId } from './AgentBar';
-import { CompareModal } from './CompareModal';
-import { PlanDetailModal } from './PlanDetailModal';
+import { AgentBar, type ScreenId } from './AgentBar';
 import { ComplianceScreen } from './ComplianceScreen';
 import { CompareScreen } from './CompareScreen';
 import { EnrollScreen } from './EnrollScreen';
@@ -46,7 +40,6 @@ import { IntakeScreen } from './IntakeScreen';
 import { MedsScreen } from './MedsScreen';
 import { PrioritiesScreen, type PriorityKey } from './PrioritiesScreen';
 import { ProvidersScreen } from './ProvidersScreen';
-import { SwipeScreen } from './SwipeScreen';
 import {
   applyClientSeed,
   isSeedRequested,
@@ -108,10 +101,6 @@ export function AgentV3App() {
   const [screen, setScreen] = useState<ScreenId>('intake');
   const [clientView, setClientView] = useState(false);
   const [priorities, setPriorities] = useState<PriorityKey[]>(DEFAULT_PRIORITIES);
-  const [kept, setKept] = useState<Plan[]>([]);
-  const [eliminated, setEliminated] = useState<Plan[]>([]);
-  const [compareTarget, setCompareTarget] = useState<Plan | null>(null);
-  const [detailTarget, setDetailTarget] = useState<Plan | null>(null);
 
   const client = useSession((s) => s.client);
   const medications = useSession((s) => s.medications);
@@ -454,76 +443,19 @@ export function AgentV3App() {
     }
     return out;
   }, [brain.data, eligiblePlans, medications]);
-  const monthlyDrugByPlanId = useMemo<Record<string, number | null>>(() => {
-    const out: Record<string, number | null> = {};
-    for (const [planId, annual] of Object.entries(annualDrugByPlanId)) {
-      out[planId] = annual != null ? Math.round(annual / 12) : null;
-    }
-    return out;
-  }, [annualDrugByPlanId]);
-
   // ── Brain rank derivatives ───────────────────────────────────────
-  // Brain pick = highest-ranked plan that ISN'T the client's current
-  // plan. If the brain happens to rank the current plan #1 the user
-  // would see "Brain pick = your current plan" which is meaningless;
-  // falling to rank #2 surfaces an actual switch recommendation.
-  const brainPick: Plan | null = useMemo(() => {
-    if (!brain.result) return null;
-    return (
-      brain.result.scored.find((s) => s.plan.id !== currentPlanId)?.plan ?? null
-    );
-  }, [brain.result, currentPlanId]);
-
-  const swipePool: Plan[] = useMemo(() => {
+  // scoredPlans = the brain's ranked plan list (descending by composite
+  // score). CompareScreen consumes this directly to seed slot 0 with
+  // `current` (or the top plan as fallback) and slots 1–3 with the top
+  // challengers. ProvidersScreen still wants the id-only list.
+  const scoredPlans = useMemo<Plan[]>(() => {
     if (!brain.result) return [];
-    const eliminatedIds = new Set(eliminated.map((p) => p.id));
-    const keptIds = new Set(kept.map((p) => p.id));
-    return brain.result.scored
-      .map((s) => s.plan)
-      .filter(
-        (p) =>
-          p.id !== currentPlanId &&
-          p.id !== brainPick?.id &&
-          !eliminatedIds.has(p.id) &&
-          !keptIds.has(p.id),
-      );
-  }, [brain.result, brainPick, eliminated, kept, currentPlanId]);
-
-  // Lowest-Rx plan in the swipe-eligible set (excludes current + brain
-  // pick). Computed once over the full ranked list — not the live
-  // pool — so the gold border doesn't shift as the broker keeps /
-  // eliminates plans. Stays null until useDrugCosts has populated the
-  // monthly map.
-  const goldPlanId: string | null = useMemo(() => {
-    if (!brain.result || !brainPick) return null;
-    const candidates = brain.result.scored
-      .map((s) => s.plan)
-      .filter((p) => p.id !== currentPlanId && p.id !== brainPick.id);
-    let best: { id: string; cost: number } | null = null;
-    for (const p of candidates) {
-      const c = monthlyDrugByPlanId[p.id];
-      if (c == null) continue;
-      if (!best || c < best.cost) best = { id: p.id, cost: c };
-    }
-    return best?.id ?? null;
-  }, [brain.result, brainPick, currentPlanId, monthlyDrugByPlanId]);
-
-  const brainScoreByPlanId = useMemo<Record<string, number>>(() => {
-    const out: Record<string, number> = {};
-    if (!brain.result) return out;
-    for (const s of brain.result.scored) out[s.plan.id] = s.composite;
-    return out;
+    return brain.result.scored.map((s) => s.plan);
   }, [brain.result]);
-  const brainReasonByPlanId = useMemo<Record<string, string>>(() => {
-    const out: Record<string, string> = {};
-    if (!brain.result) return out;
-    for (const s of brain.result.scored) out[s.plan.id] = s.whySwitchCopy;
-    return out;
-  }, [brain.result]);
-  const rankedPlanIds = useMemo<string[]>(() => {
-    if (!brain.result) return [];
-    return brain.result.scored.map((s) => s.plan.id);
-  }, [brain.result]);
+  const rankedPlanIds = useMemo<string[]>(
+    () => scoredPlans.map((p) => p.id),
+    [scoredPlans],
+  );
 
   // ── Current plan lookup ──────────────────────────────────────────
   const currentPlan = useMemo<Plan | null>(() => {
@@ -535,13 +467,6 @@ export function AgentV3App() {
   const complianceTotal = totalComplianceItems();
   const complianceDone = new Set(checked).size + new Set(confirmed).size;
   const complianceProgress = (complianceDone / complianceTotal) * 100;
-
-  // ── Finalist counter ─────────────────────────────────────────────
-  // Brain pick (when present) + each user-kept plan, capped at 4.
-  const finalistCount = Math.min(
-    (brainPick ? 1 : 0) + kept.length,
-    FINALIST_CAP,
-  );
 
   function onCycleShare() {
     if (shareStarting) return;
@@ -569,15 +494,6 @@ export function AgentV3App() {
     );
   }
 
-  function keepPlan(plan: Plan) {
-    setKept((k) => (k.find((p) => p.id === plan.id) ? k : [...k, plan]));
-  }
-  function eliminatePlan(plan: Plan) {
-    setEliminated((e) =>
-      e.find((p) => p.id === plan.id) ? e : [...e, plan],
-    );
-  }
-
   return (
     <div className="pma3">
       <style>{AGENT_V3_CSS}</style>
@@ -595,7 +511,6 @@ export function AgentV3App() {
         shareLink={shareResult?.link ?? null}
         onCycleShare={onCycleShare}
         complianceProgress={complianceProgress}
-        finalistCount={finalistCount}
       />
 
       <div>
@@ -622,38 +537,15 @@ export function AgentV3App() {
             selected={priorities}
             onToggle={togglePriority}
             onBack={() => setScreen('providers')}
-            onNext={() => setScreen('swipe')}
-          />
-        )}
-        {screen === 'swipe' && (
-          <SwipeScreen
-            current={currentPlan}
-            brainPick={brainPick}
-            pool={swipePool}
-            kept={kept}
-            eliminated={eliminated}
-            onKeep={keepPlan}
-            onEliminate={eliminatePlan}
-            onCompare={setCompareTarget}
-            onShowDetail={setDetailTarget}
             onNext={() => setScreen('compare')}
-            onBack={() => setScreen('priorities')}
-            annualDrugByPlanId={annualDrugByPlanId}
-            monthlyDrugByPlanId={monthlyDrugByPlanId}
-            brainScoreByPlanId={brainScoreByPlanId}
-            brainReasonByPlanId={brainReasonByPlanId}
-            brainReady={brain.ready}
-            goldPlanId={goldPlanId}
           />
         )}
         {screen === 'compare' && (
           <CompareScreen
             current={currentPlan}
-            brainPick={brainPick}
-            kept={kept}
-            rankedPool={swipePool}
+            scoredPlans={scoredPlans}
             annualDrugByPlanId={annualDrugByPlanId}
-            onBack={() => setScreen('swipe')}
+            onBack={() => setScreen('priorities')}
             onNext={() => setScreen('compliance')}
           />
         )}
@@ -666,32 +558,12 @@ export function AgentV3App() {
         {screen === 'enroll' && (
           <EnrollScreen
             current={currentPlan}
-            brainPick={brainPick}
+            scoredPlans={scoredPlans}
             annualDrugByPlanId={annualDrugByPlanId}
             onBack={() => setScreen('compliance')}
           />
         )}
       </div>
-
-      {compareTarget && currentPlan && (
-        <CompareModal
-          current={currentPlan}
-          candidate={compareTarget}
-          annualDrugByPlanId={annualDrugByPlanId}
-          onClose={() => setCompareTarget(null)}
-        />
-      )}
-
-      {detailTarget && (
-        <PlanDetailModal
-          plan={detailTarget}
-          annualDrug={annualDrugByPlanId[detailTarget.id] ?? null}
-          brainScore={brainScoreByPlanId[detailTarget.id] ?? null}
-          brainReason={brainReasonByPlanId[detailTarget.id] ?? null}
-          providers={providers}
-          onClose={() => setDetailTarget(null)}
-        />
-      )}
 
       {/* AgentBase hydration banner — only renders for clientId loads.
           Loading: faint top-right toast. Error: red, sticky until the

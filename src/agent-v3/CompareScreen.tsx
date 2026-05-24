@@ -47,16 +47,14 @@ const FONT_NUM = "'JetBrains Mono', ui-monospace, monospace";
 
 interface Props {
   current: Plan | null;
-  brainPick: Plan | null;
-  kept: Plan[];
   /**
-   * Additional brain-ranked plans (typically AgentV3App's swipePool —
-   * already excludes current, brainPick, kept, eliminated). Used to
-   * fill the board to 4 when the broker skipped Swipe Mode. Anything
-   * past the 4th slot lands on the bench in brain-rank order.
-   * Optional so the prior call-site contract still type-checks.
+   * Full brain-ranked plan list, sorted by composite score descending.
+   * The board seeds slot 0 with `current` (or the top scored plan as a
+   * fallback when there's no incumbent) and slots 1–3 with the top
+   * three plans excluding the baseline. Anything past the 4th slot
+   * lands on the bench in brain-rank order.
    */
-  rankedPool?: Plan[];
+  scoredPlans: Plan[];
   annualDrugByPlanId: Record<string, number | null>;
   onBack: () => void;
   onNext: () => void;
@@ -245,9 +243,7 @@ function initSlots(pool: Plan[]): (Plan | null)[] {
 
 export function CompareScreen({
   current,
-  brainPick,
-  kept,
-  rankedPool,
+  scoredPlans,
   annualDrugByPlanId,
   onBack,
   onNext,
@@ -265,32 +261,22 @@ export function CompareScreen({
     [rxcuis, providers, annualDrugByPlanId],
   );
 
-  // Finalist pool — brain pick first (lands in slot 0 by default),
-  // then every kept plan, then the rest of the brain-ranked pool to
-  // ensure the 4-up board has candidates even when the broker tabbed
-  // straight into Compare without swiping. Dedup across all three
-  // sources is defensive — swipePool already excludes brainPick + kept.
+  // Baseline = the plan every slot is compared against. The client's
+  // current plan when one is on file; otherwise the brain's #1 pick
+  // (an AEP shopper with no incumbent still gets a useful diff column).
+  // CURRENT ribbon means "this is the client's current plan"; when
+  // we've fallen back to scoredPlans[0] the ribbon flips to TOP PICK.
+  const baseline: Plan | null = current ?? scoredPlans[0] ?? null;
+  const baselineIsCurrent = current != null;
+
+  // Pool = baseline first (always slot 0), then every other scored
+  // plan in brain-rank order. Slot 1–3 take the top three challengers;
+  // the rest go to the bench.
   const pool: Plan[] = useMemo(() => {
-    const seen = new Set<string>();
-    const out: Plan[] = [];
-    if (brainPick) {
-      out.push(brainPick);
-      seen.add(brainPick.id);
-    }
-    for (const p of kept) {
-      if (!seen.has(p.id)) {
-        out.push(p);
-        seen.add(p.id);
-      }
-    }
-    for (const p of rankedPool ?? []) {
-      if (!seen.has(p.id)) {
-        out.push(p);
-        seen.add(p.id);
-      }
-    }
-    return out;
-  }, [brainPick, kept, rankedPool]);
+    if (!baseline) return scoredPlans;
+    const others = scoredPlans.filter((p) => p.id !== baseline.id);
+    return [baseline, ...others];
+  }, [baseline, scoredPlans]);
 
   const [slots, setSlots] = useState<(Plan | null)[]>(() => initSlots(pool));
   const [mode, setMode] = useState<'grid' | 'h2h'>('grid');
@@ -332,7 +318,7 @@ export function CompareScreen({
       <Container wide>
         <Header
           title="Your finalists — workspace"
-          sub="Pick at least one plan in Swipe Mode first."
+          sub="Brain ranking hasn't returned any plans yet. Check Meds and Providers."
         />
         <Nav onBack={onBack} />
       </Container>
@@ -340,12 +326,13 @@ export function CompareScreen({
   }
 
   // ── H2H mode ───────────────────────────────────────────────
-  if (mode === 'h2h' && challenger && current) {
+  if (mode === 'h2h' && challenger && baseline) {
     return (
       <H2HView
-        current={current}
+        baseline={baseline}
+        baselineIsCurrent={baselineIsCurrent}
         challenger={challenger}
-        pool={pool.filter((p) => p.id !== current.id)}
+        pool={pool.filter((p) => p.id !== baseline.id)}
         metrics={metrics}
         annualDrugByPlanId={annualDrugByPlanId}
         onPickChallenger={setChallenger}
@@ -397,27 +384,43 @@ export function CompareScreen({
   }
 
   function openH2H(plan: Plan) {
+    if (!baseline || plan.id === baseline.id) return;
     setChallenger(plan);
     setMode('h2h');
   }
 
-  const headline = visibleSlotPlans[0] ?? null;
+  // Top challenger = first slot plan that isn't the baseline. Headline
+  // savings on the navy summary bar are baseline.annual − challenger.annual
+  // (positive when the recommendation costs less than what the client has).
+  const topChallenger =
+    visibleSlotPlans.find((p) => baseline == null || p.id !== baseline.id) ?? null;
   const headlineSavings =
-    headline && current
-      ? (annualEstimate(current, annualDrugByPlanId[current.id] ?? null).total ?? 0) -
-        (annualEstimate(headline, annualDrugByPlanId[headline.id] ?? null).total ?? 0)
+    topChallenger && baseline
+      ? (annualEstimate(baseline, annualDrugByPlanId[baseline.id] ?? null).total ?? 0) -
+        (annualEstimate(topChallenger, annualDrugByPlanId[topChallenger.id] ?? null).total ?? 0)
       : 0;
+
+  function enterH2HFromToggle() {
+    if (topChallenger) openH2H(topChallenger);
+  }
 
   return (
     <Container wide>
       <Header
         title="Your finalists — workspace"
-        sub="Drag plans between the bench and the 4-up board, or open Head-to-Head for the screen share."
+        sub="Drag plans between the bench and the 4-up board, or flip to Head-to-Head for the screen share."
+      />
+
+      <ModeToggle
+        mode={mode}
+        h2hDisabled={!topChallenger}
+        onGrid={() => setMode('grid')}
+        onH2H={enterH2HFromToggle}
       />
 
       <Bench
         bench={bench}
-        current={current}
+        baseline={baseline}
         annualDrugByPlanId={annualDrugByPlanId}
       />
 
@@ -434,8 +437,9 @@ export function CompareScreen({
             key={i}
             slotIdx={i}
             plan={plan}
-            isTop={i === 0}
-            current={current}
+            isBaseline={plan != null && baseline != null && plan.id === baseline.id}
+            baselineIsCurrent={baselineIsCurrent}
+            baseline={baseline}
             metrics={metrics}
             bestByMetric={bestByMetric}
             onDrop={handleDrop}
@@ -448,7 +452,7 @@ export function CompareScreen({
       </div>
 
       <SummaryBar
-        headline={headline}
+        headline={topChallenger}
         savings={headlineSavings}
         onEnroll={onNext}
       />
@@ -458,14 +462,64 @@ export function CompareScreen({
   );
 }
 
+// ── Mode toggle pill (rendered in grid mode header) ────────────
+function ModeToggle({
+  mode,
+  h2hDisabled,
+  onGrid,
+  onH2H,
+}: {
+  mode: 'grid' | 'h2h';
+  h2hDisabled: boolean;
+  onGrid: () => void;
+  onH2H: () => void;
+}) {
+  const pill = (active: boolean, disabled: boolean): CSSProperties => ({
+    background: active ? NAVY : 'white',
+    color: active ? 'white' : NAVY,
+    border: `1px solid ${active ? NAVY : BORDER}`,
+    borderRadius: 18,
+    padding: '6px 16px',
+    fontFamily: FONT_LABEL,
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    cursor: disabled ? 'default' : 'pointer',
+    opacity: disabled ? 0.4 : 1,
+  });
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 6,
+        justifyContent: 'center',
+        marginBottom: 12,
+      }}
+    >
+      <button type="button" onClick={onGrid} style={pill(mode === 'grid', false)}>
+        4-up grid
+      </button>
+      <button
+        type="button"
+        onClick={onH2H}
+        disabled={h2hDisabled}
+        style={pill(mode === 'h2h', h2hDisabled)}
+      >
+        Head-to-head
+      </button>
+    </div>
+  );
+}
+
 // ── Bench (horizontal scrollable pills) ────────────────────────
 function Bench({
   bench,
-  current,
+  baseline,
   annualDrugByPlanId,
 }: {
   bench: Plan[];
-  current: Plan | null;
+  baseline: Plan | null;
   annualDrugByPlanId: Record<string, number | null>;
 }) {
   if (bench.length === 0) {
@@ -481,7 +535,7 @@ function Bench({
           color: MUTED,
         }}
       >
-        Bench is empty — every kept plan is on the board.
+        Bench is empty — every brain-ranked plan is on the board.
       </div>
     );
   }
@@ -513,7 +567,7 @@ function Bench({
         <BenchPill
           key={p.id}
           plan={p}
-          current={current}
+          baseline={baseline}
           annualDrugByPlanId={annualDrugByPlanId}
         />
       ))}
@@ -523,16 +577,16 @@ function Bench({
 
 function BenchPill({
   plan,
-  current,
+  baseline,
   annualDrugByPlanId,
 }: {
   plan: Plan;
-  current: Plan | null;
+  baseline: Plan | null;
   annualDrugByPlanId: Record<string, number | null>;
 }) {
   const t = annualEstimate(plan, annualDrugByPlanId[plan.id] ?? null).total;
-  const ct = current
-    ? annualEstimate(current, annualDrugByPlanId[current.id] ?? null).total
+  const ct = baseline
+    ? annualEstimate(baseline, annualDrugByPlanId[baseline.id] ?? null).total
     : null;
   const savings = t != null && ct != null ? ct - t : null;
   return (
@@ -585,8 +639,9 @@ function BenchPill({
 function SlotCell({
   slotIdx,
   plan,
-  isTop,
-  current,
+  isBaseline,
+  baselineIsCurrent,
+  baseline,
   metrics,
   bestByMetric,
   onDrop,
@@ -597,8 +652,13 @@ function SlotCell({
 }: {
   slotIdx: number;
   plan: Plan | null;
-  isTop: boolean;
-  current: Plan | null;
+  /** True when this slot holds the baseline plan (slot 0). */
+  isBaseline: boolean;
+  /** True when the baseline is the client's actual current plan (vs.
+   *  fallen back to scoredPlans[0] because no current was on file). */
+  baselineIsCurrent: boolean;
+  /** The plan all challengers are compared against — used for deltas. */
+  baseline: Plan | null;
   metrics: Metric[];
   bestByMetric: Record<string, number | null>;
   onDrop: (slotIdx: number, draggedPlanId: string) => void;
@@ -654,9 +714,16 @@ function SlotCell({
     );
   }
 
-  const ribbon = isTop ? '★ TOP PICK' : `SLOT ${slotIdx + 1}`;
-  const ribbonBg = isTop ? GOLD : SEAFOAM;
-  const ribbonColor = isTop ? 'white' : NAVY;
+  // Slot 0 = baseline. Ribbon flips between CURRENT (coral, "this is
+  // the client's plan") and TOP PICK (gold, "no current on file — we
+  // promoted the brain's #1 here"). All other slots are seafoam SLOT N.
+  const ribbon = isBaseline
+    ? baselineIsCurrent
+      ? 'CURRENT'
+      : '★ TOP PICK'
+    : `SLOT ${slotIdx + 1}`;
+  const ribbonBg = isBaseline ? (baselineIsCurrent ? CORAL : GOLD) : SEAFOAM;
+  const ribbonColor = isBaseline ? 'white' : NAVY;
 
   return (
     <div
@@ -763,7 +830,8 @@ function SlotCell({
             key={m.key}
             metric={m}
             plan={plan}
-            current={current}
+            baseline={baseline}
+            isBaseline={isBaseline}
             best={bestByMetric[m.key] ?? null}
           />
         ))}
@@ -797,8 +865,9 @@ function SlotCell({
         <button
           type="button"
           onClick={() => onOpenH2H(plan)}
-          disabled={!current}
-          style={{ ...cardBtn('outline'), opacity: current ? 1 : 0.4 }}
+          disabled={isBaseline || !baseline}
+          style={{ ...cardBtn('outline'), opacity: isBaseline || !baseline ? 0.4 : 1 }}
+          title={isBaseline ? 'This is the baseline plan' : 'Open head-to-head'}
         >
           H2H
         </button>
@@ -840,18 +909,22 @@ function cardBtn(variant: 'primary' | 'outline' | 'ghost'): CSSProperties {
 function MetricRow({
   metric,
   plan,
-  current,
+  baseline,
+  isBaseline,
   best,
 }: {
   metric: Metric;
   plan: Plan;
-  current: Plan | null;
+  baseline: Plan | null;
+  /** True when this row is in the baseline slot — suppresses the
+   *  delta-vs-self arrow (always 0). */
+  isBaseline: boolean;
   best: number | null;
 }) {
   const num = metric.numeric(plan);
   const isBest = best != null && num != null && num === best;
-  const dir = deltaVs(metric, plan, current);
-  const deltaLabel = deltaText(metric, plan, current);
+  const dir = isBaseline ? null : deltaVs(metric, plan, baseline);
+  const deltaLabel = isBaseline ? null : deltaText(metric, plan, baseline);
 
   const arrow = dir === 'better' ? '▲' : dir === 'worse' ? '▼' : null;
   const arrowColor = dir === 'better' ? GREEN : dir === 'worse' ? CORAL : MUTED;
@@ -1097,7 +1170,8 @@ function SummaryBar({
 
 // ── H2H mode view ──────────────────────────────────────────────
 function H2HView({
-  current,
+  baseline,
+  baselineIsCurrent,
   challenger,
   pool,
   metrics,
@@ -1107,7 +1181,8 @@ function H2HView({
   onEnroll,
   onBack,
 }: {
-  current: Plan;
+  baseline: Plan;
+  baselineIsCurrent: boolean;
   challenger: Plan;
   pool: Plan[];
   metrics: Metric[];
@@ -1117,17 +1192,19 @@ function H2HView({
   onEnroll: () => void;
   onBack: () => void;
 }) {
-  const curAnnual = annualEstimate(current, annualDrugByPlanId[current.id] ?? null).total ?? 0;
+  const baseAnnual = annualEstimate(baseline, annualDrugByPlanId[baseline.id] ?? null).total ?? 0;
   const chAnnual = annualEstimate(challenger, annualDrugByPlanId[challenger.id] ?? null).total ?? 0;
-  const savings = curAnnual - chAnnual;
+  const savings = baseAnnual - chAnnual;
 
   let wins = 0;
   let losses = 0;
   for (const m of metrics) {
-    const d = deltaVs(m, challenger, current);
+    const d = deltaVs(m, challenger, baseline);
     if (d === 'better') wins += 1;
     else if (d === 'worse') losses += 1;
   }
+  const baselineLabel = baselineIsCurrent ? 'Current' : 'Top Pick';
+  const baselineColor = baselineIsCurrent ? CORAL : GOLD;
 
   return (
     <Container wide>
@@ -1208,12 +1285,12 @@ function H2HView({
                 fontFamily: FONT_LABEL,
                 fontSize: 9,
                 fontWeight: 700,
-                color: CORAL,
+                color: baselineColor,
                 textTransform: 'uppercase',
                 letterSpacing: 0.8,
               }}
             >
-              Current
+              {baselineLabel}
             </div>
             <div
               style={{
@@ -1222,7 +1299,7 @@ function H2HView({
                 fontWeight: 700,
               }}
             >
-              {current.carrier}
+              {baseline.carrier}
             </div>
             <div
               style={{
@@ -1231,7 +1308,7 @@ function H2HView({
                 color: 'rgba(255,255,255,0.7)',
               }}
             >
-              {current.plan_name}
+              {baseline.plan_name}
             </div>
           </div>
           <div style={{ display: 'flex', justifyContent: 'center' }}>
@@ -1290,8 +1367,8 @@ function H2HView({
         </div>
 
         {metrics.map((m, i) => {
-          const dir = deltaVs(m, challenger, current);
-          const deltaLabel = deltaText(m, challenger, current);
+          const dir = deltaVs(m, challenger, baseline);
+          const deltaLabel = deltaText(m, challenger, baseline);
           const arrow = dir === 'better' ? '▲' : dir === 'worse' ? '▼' : null;
           const winBg =
             dir === 'better'
@@ -1319,7 +1396,7 @@ function H2HView({
                   color: TEXT,
                 }}
               >
-                {m.format(current)}
+                {m.format(baseline)}
               </div>
               <div
                 style={{
@@ -1433,7 +1510,7 @@ function H2HView({
               marginTop: 4,
             }}
           >
-            {challenger.carrier} wins {wins}, current wins {losses}
+            {challenger.carrier} wins {wins}, {baselineLabel.toLowerCase()} wins {losses}
           </div>
         </div>
         {savings > 0 && (
@@ -1480,7 +1557,7 @@ function H2HView({
               textTransform: 'uppercase',
             }}
           >
-            Keep Current
+            Keep {baselineLabel}
           </button>
           <button
             type="button"
