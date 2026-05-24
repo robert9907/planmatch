@@ -869,9 +869,18 @@ function pickBenefitNumber(
 //
 //   Plan field                    →  pm_plan_benefits.benefit_category
 //   --------------------------------------------------------------
-//   lab_services                  →  lab            (712 rows)
-//   diagnostic_radiology          →  imaging        (748 rows)
+//   lab_services                  →  lab                (712 rows)
+//   diagnostic_radiology          →  imaging            (748 rows)
 //   outpatient_surgery_hospital   →  outpatient_surgery (748 rows)
+//
+// pm_plan_benefits doesn't distinguish ASC vs Hospital outpatient
+// surgery, and stores X-ray / diagnostic tests / therapeutic
+// radiology all under a single `imaging` row. Multiple Plan fields
+// alias the same source row so the Compare screen surfaces the
+// carrier-filed value across all related rows instead of leaving
+// them blank — same copay across rows is preferable to "Not
+// available" when the carrier did file a value, just at a coarser
+// granularity than the Plan type exposes.
 //
 // physical_therapy and mental_health_individual have NO rows in
 // pm_plan_benefits at all — those categories fall back to
@@ -880,6 +889,10 @@ const CATEGORY_ALIAS: Record<string, string> = {
   lab_services: 'lab',
   diagnostic_radiology: 'imaging',
   outpatient_surgery_hospital: 'outpatient_surgery',
+  outpatient_surgery_asc: 'outpatient_surgery',
+  xray: 'imaging',
+  diagnostic_tests: 'imaging',
+  therapeutic_radiology: 'imaging',
 };
 
 function costShareFor(
