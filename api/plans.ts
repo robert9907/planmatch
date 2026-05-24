@@ -262,6 +262,20 @@ const PBP_TYPE_TO_CATEGORY: Record<string, string> = {
   rx_tier_4: 'rx_tier_4',
   rx_tier_5: 'rx_tier_5',
   rx_tier_6: 'rx_tier_6',
+  // cms_pbp benefit_type names that the medicare_gov scraper doesn't
+  // emit. The pm_plan_benefits canonical category names align with
+  // CompareScreen's metric labels via CATEGORY_ALIAS (e.g. plan field
+  // `outpatient_surgery_asc` is aliased to pm category `asc`).
+  outpatient_surgery_asc: 'asc',
+  outpatient_surgery_hospital: 'outpatient_surgery',
+  outpatient_observation: 'outpatient_observation',
+  mental_health_individual: 'mental_health_outpatient_individual',
+  mental_health_group: 'mental_health_outpatient_group',
+  physical_therapy: 'physical_speech_therapy',
+  inpatient_psych: 'mental_health_inpatient',
+  chiropractic: 'chiropractic',
+  occupational_therapy: 'occupational_therapy',
+  podiatry: 'podiatry',
 };
 
 // pbp.copay holds different meanings per benefit_type. For these
@@ -278,9 +292,16 @@ const PBP_ALLOWANCE_TYPES = new Set([
 ]);
 
 // Source priority — keep in sync with consumer plans-with-extras.
+// cms_pbp sits between sb_ocr and manual: the structured CMS PBP
+// extract carries categories Plan Finder doesn't surface (asc,
+// outpatient_observation, mental_health_outpatient_*,
+// physical_speech_therapy via 'physical_therapy' upstream name, etc.),
+// but where Plan Finder or carrier-authoritative OCR has data, those
+// remain authoritative.
 const SOURCE_PRIORITY: Readonly<Record<string, number>> = {
-  medicare_gov: 4,
-  sb_ocr: 3,
+  medicare_gov: 5,
+  sb_ocr: 4,
+  cms_pbp: 3,
   manual: 2,
   pbp_federal: 1,
 };
@@ -665,7 +686,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .from('pbp_benefits')
       .select('plan_id, benefit_type, copay, copay_max, coinsurance, tier_id, description, source')
       .in('plan_id', [...pbpKeyVariants])
-      .in('source', ['medicare_gov', 'sb_ocr', 'manual']);
+      .in('source', ['medicare_gov', 'sb_ocr', 'cms_pbp', 'manual']);
     if (broadPbpErr) throw broadPbpErr;
     const broadPbpRows = (broadPbpRaw ?? []) as PbpRichRow[];
 
