@@ -651,6 +651,7 @@ export function AgentV3App() {
             current={currentPlan}
             brainPick={brainPick}
             kept={kept}
+            rankedPool={swipePool}
             annualDrugByPlanId={annualDrugByPlanId}
             onBack={() => setScreen('swipe')}
             onNext={() => setScreen('compliance')}

@@ -49,6 +49,14 @@ interface Props {
   current: Plan | null;
   brainPick: Plan | null;
   kept: Plan[];
+  /**
+   * Additional brain-ranked plans (typically AgentV3App's swipePool —
+   * already excludes current, brainPick, kept, eliminated). Used to
+   * fill the board to 4 when the broker skipped Swipe Mode. Anything
+   * past the 4th slot lands on the bench in brain-rank order.
+   * Optional so the prior call-site contract still type-checks.
+   */
+  rankedPool?: Plan[];
   annualDrugByPlanId: Record<string, number | null>;
   onBack: () => void;
   onNext: () => void;
@@ -239,6 +247,7 @@ export function CompareScreen({
   current,
   brainPick,
   kept,
+  rankedPool,
   annualDrugByPlanId,
   onBack,
   onNext,
@@ -257,7 +266,10 @@ export function CompareScreen({
   );
 
   // Finalist pool — brain pick first (lands in slot 0 by default),
-  // then every kept plan, deduped.
+  // then every kept plan, then the rest of the brain-ranked pool to
+  // ensure the 4-up board has candidates even when the broker tabbed
+  // straight into Compare without swiping. Dedup across all three
+  // sources is defensive — swipePool already excludes brainPick + kept.
   const pool: Plan[] = useMemo(() => {
     const seen = new Set<string>();
     const out: Plan[] = [];
@@ -271,8 +283,14 @@ export function CompareScreen({
         seen.add(p.id);
       }
     }
+    for (const p of rankedPool ?? []) {
+      if (!seen.has(p.id)) {
+        out.push(p);
+        seen.add(p.id);
+      }
+    }
     return out;
-  }, [brainPick, kept]);
+  }, [brainPick, kept, rankedPool]);
 
   const [slots, setSlots] = useState<(Plan | null)[]>(() => initSlots(pool));
   const [mode, setMode] = useState<'grid' | 'h2h'>('grid');
