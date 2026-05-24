@@ -1,7 +1,7 @@
 // IntakeScreen — agent-v3 screen 1.
 //
 // Mockup intent: a calm, client-facing-feeling form that collects
-// name / dob / zip / county / phone / email / MBI. Reads & writes
+// name / dob / zip / county / phone / email. Reads & writes
 // useSession.client so anything hydrated from AgentBase (Landing →
 // Recent Clients) shows up pre-filled and any edits persist for the
 // downstream screens (Meds, Providers, etc).
@@ -12,14 +12,9 @@
 //   • DOB string is left as raw text the broker types; the mockup
 //     used MM/DD/YYYY display, the existing v4 stores YYYY-MM-DD.
 //     We accept either — broker types what the carrier portal shows.
-//   • MBI gets a "✓ Verified" badge once a non-empty value is present.
-//     A real MBI Eligibility lookup is out of scope for v1; the badge
-//     just confirms "captured" so the broker can read it back to the
-//     client. Promote to a real lookup when MEDIC is wired.
 
 import { useEffect, useRef, useState } from 'react';
 import { useSession } from '@/hooks/useSession';
-import { isValidMbi, normalizeMbi } from '@/lib/mbiValidation';
 import type { StateCode } from '@/types/session';
 import {
   Card,
@@ -77,37 +72,14 @@ export function IntakeScreen({ onNext }: Props) {
     };
   }, [client.zip]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // MBI is optional, but if the broker types one it must conform to
-  // the CMS character-class spec — same regex the consumer widget
-  // enforces (see src/lib/mbiValidation.ts). Empty string = ok,
-  // partially-typed (<11 chars) = ok (still in progress), 11+ chars
-  // that don't validate = blocked. Continue stays disabled until
-  // either the field is empty or the value is fully valid.
-  const mbiRaw = client.mbi ?? '';
-  const mbiNormalized = normalizeMbi(mbiRaw);
-  const mbiEmpty = mbiNormalized.length === 0;
-  const mbiValid = mbiEmpty || isValidMbi(mbiNormalized);
-  const mbiBadge = mbiEmpty
-    ? undefined
-    : mbiValid
-      ? '✓ Verified'
-      : mbiNormalized.length < 11
-        ? `${mbiNormalized.length}/11`
-        : 'Invalid format';
-  const mbiBadgeTone: 'success' | 'error' =
-    !mbiEmpty && mbiNormalized.length >= 11 && !mbiValid ? 'error' : 'success';
-
   // Continue requires the four fields the rest of the workflow can't
-  // function without. Email + MBI are nice-to-have but not blocking;
-  // the broker often captures them mid-call after the SOA. If a value
-  // IS entered for MBI, it must validate — otherwise downstream
-  // SunFire deep-links and AgentBase records receive a malformed ID.
+  // function without. Email is nice-to-have but not blocking; the
+  // broker often captures it mid-call after the SOA.
   const canContinue = Boolean(
     client.name &&
       client.dob &&
       /^\d{5}$/.test(client.zip) &&
-      client.phone &&
-      mbiValid,
+      client.phone,
   );
 
   const countyValue = client.county
@@ -179,16 +151,6 @@ export function IntakeScreen({ onNext }: Props) {
             inputMode="email"
             placeholder="rjohnson58@gmail.com"
           />
-          <div style={{ gridColumn: '1 / -1' }}>
-            <FieldInput
-              label="Medicare Beneficiary ID"
-              value={client.mbi ?? ''}
-              onChange={(v) => updateClient({ mbi: v.toUpperCase() })}
-              placeholder="1EG4-TE5-MK72"
-              badge={mbiBadge}
-              badgeTone={mbiBadgeTone}
-            />
-          </div>
         </div>
       </Card>
       <Nav onNext={onNext} nextDisabled={!canContinue} />

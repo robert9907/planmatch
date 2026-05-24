@@ -2,7 +2,7 @@
 //
 // Final summary of the recommended plan plus the SunFire deep link
 // CTA. Pre-populates SunFire's "Open Quote" URL with as much of the
-// session payload as possible (carrier, plan id, MBI, ZIP, etc.). The
+// session payload as possible (carrier, plan id, ZIP, etc.). The
 // link itself is a placeholder; the live deep-link contract sits in
 // scripts/sunfire-deeplink.md (or wherever ops drops it) — wire that
 // up by replacing buildSunFireLink().
@@ -138,10 +138,6 @@ export function EnrollScreen({
             <strong>{client.name || '—'}</strong>
           </div>
           <div>
-            <span style={{ color: '#64748b' }}>MBI:</span>{' '}
-            <strong>{client.mbi ?? '—'}</strong>
-          </div>
-          <div>
             <span style={{ color: '#64748b' }}>County:</span>{' '}
             <strong>
               {client.county ? `${client.county}, ${client.state}` : '—'}
@@ -247,7 +243,6 @@ function buildSunFireLink({
   qs.set('contract', plan.contract_id);
   qs.set('plan_no', plan.plan_number);
   qs.set('carrier', plan.carrier);
-  if (client.mbi) qs.set('mbi', client.mbi);
   if (client.zip) qs.set('zip', client.zip);
   if (client.dob) qs.set('dob', client.dob);
   if (client.name) qs.set('name', client.name);
