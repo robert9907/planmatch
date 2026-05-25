@@ -60,6 +60,72 @@ function getClientIdParam(): string | null {
   return v && v.trim() ? v.trim() : null;
 }
 
+/** Explicit client fields the AgentBase "Quote in Plan Match" button
+ *  packs into the URL so the Client screen lands fully populated before
+ *  any async hydration resolves. All optional — only the keys that are
+ *  present get applied. */
+interface ClientFieldParams {
+  name: string | null;
+  dob: string | null;
+  zip: string | null;
+  county: string | null;
+  state: StateCode | null;
+  phone: string | null;
+  email: string | null;
+  currentPlanId: string | null;
+  currentPlanName: string | null;
+}
+
+function getClientFieldParams(): ClientFieldParams {
+  const empty: ClientFieldParams = {
+    name: null,
+    dob: null,
+    zip: null,
+    county: null,
+    state: null,
+    phone: null,
+    email: null,
+    currentPlanId: null,
+    currentPlanName: null,
+  };
+  if (typeof window === 'undefined') return empty;
+  const q = new URLSearchParams(window.location.search);
+  const trim = (k: string): string | null => {
+    const v = q.get(k);
+    return v && v.trim() ? v.trim() : null;
+  };
+  const rawState = trim('state');
+  const stateCode: StateCode | null =
+    rawState && /^[A-Z]{2}$/i.test(rawState)
+      ? (rawState.toUpperCase() as StateCode)
+      : null;
+  return {
+    name: trim('name'),
+    dob: trim('dob'),
+    zip: trim('zip'),
+    county: trim('county'),
+    state: stateCode,
+    phone: trim('phone'),
+    email: trim('email'),
+    currentPlanId: trim('current_plan_id'),
+    currentPlanName: trim('current_plan_name'),
+  };
+}
+
+function hasAnyClientFieldParam(p: ClientFieldParams): boolean {
+  return Boolean(
+    p.name ||
+      p.dob ||
+      p.zip ||
+      p.county ||
+      p.state ||
+      p.phone ||
+      p.email ||
+      p.currentPlanId ||
+      p.currentPlanName,
+  );
+}
+
 // Annual-cost ceiling per Part D tier — used by the sanity layer over
 // pm_drug_cost_cache. Module-scope so it isn't re-created every render
 // (would invalidate the annualDrugByPlanId memo).
@@ -139,10 +205,60 @@ export function AgentV3App() {
   // exactly as before.
   const [hydration, setHydration] = useState<HydrationState>({ kind: 'idle' });
 
+  // Carrier-prefixed plan label captured from ?current_plan_name=… on
+  // mount. Used by IntakeScreen as a fallback render while the eligible
+  // plan catalog is still loading — so the broker sees the plan
+  // pre-selected instantly instead of an empty picker that fills in a
+  // second later. Cleared once eligiblePlans resolves the real Plan row.
+  const [presetCurrentPlanLabel, setPresetCurrentPlanLabel] = useState<
+    string | null
+  >(null);
+
+  // Apply URL-passed client field params synchronously on first render
+  // so the Client screen renders fully populated. AgentBase's "Quote in
+  // Plan Match" button packs every field it has — name, dob, zip,
+  // county, state, phone, email, current_plan_id, current_plan_name —
+  // and the broker should land on intake with nothing left to type.
+  //
+  // Runs BEFORE the async clientId fetch below so we never flash an
+  // empty form. The clientId fetch then layers meds + providers on top;
+  // since it writes the same client fields, the values are unchanged.
+  //
+  // Using useState's lazy initializer guarantees this fires exactly
+  // once, before paint — useEffect would let an empty form render
+  // first.
+  useState(() => {
+    const fields = getClientFieldParams();
+    if (!hasAnyClientFieldParam(fields)) return undefined;
+    const store = useSession.getState();
+    const patch: Parameters<typeof store.updateClient>[0] = {};
+    if (fields.name) patch.name = fields.name;
+    if (fields.dob) patch.dob = fields.dob;
+    if (fields.zip) patch.zip = fields.zip;
+    if (fields.county) patch.county = fields.county;
+    if (fields.state) patch.state = fields.state;
+    if (fields.phone) patch.phone = fields.phone;
+    if (fields.email) patch.email = fields.email;
+    // Default planType when the deep-link path runs without a clientId
+    // fetch — without it the eligible-plan catalog never fires (the
+    // fetch is gated on state+county+planType). 'MAPD' mirrors the
+    // clientId hydration's same fallback below.
+    if (!store.client.planType) patch.planType = 'MAPD';
+    if (Object.keys(patch).length > 0) store.updateClient(patch);
+    if (fields.currentPlanId) {
+      store.setCurrentPlanId(fields.currentPlanId);
+    }
+    if (fields.currentPlanName) {
+      setPresetCurrentPlanLabel(fields.currentPlanName);
+    }
+    return undefined;
+  });
+
   useEffect(() => {
     const clientId = getClientIdParam();
     if (!clientId) {
       // No CRM hydration requested — fall through to the seed path.
+      // (URL-passed field params were applied above, before render.)
       if (isSeedRequested()) applyClientSeed(useSession.getState());
       return;
     }
@@ -561,6 +677,7 @@ export function AgentV3App() {
         {screen === 'intake' && (
           <IntakeScreen
             eligiblePlans={eligiblePlans}
+            presetCurrentPlanLabel={presetCurrentPlanLabel}
             onNext={() => setScreen('disclaimers')}
           />
         )}

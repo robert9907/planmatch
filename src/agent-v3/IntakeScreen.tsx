@@ -37,10 +37,20 @@ interface Props {
    *  Empty array when ZIP hasn't resolved yet — the picker stays hidden
    *  until at least one plan lands. */
   eligiblePlans: Plan[];
+  /** Carrier-prefixed label captured from `?current_plan_name=…` on
+   *  mount (AgentBase "Quote in Plan Match" deep-link). Used as a
+   *  fallback render for the Current Plan picker while eligiblePlans is
+   *  still loading — so the broker sees the plan pre-selected instantly
+   *  on landing instead of an empty input that fills a beat later. */
+  presetCurrentPlanLabel?: string | null;
   onNext: () => void;
 }
 
-export function IntakeScreen({ eligiblePlans, onNext }: Props) {
+export function IntakeScreen({
+  eligiblePlans,
+  presetCurrentPlanLabel,
+  onNext,
+}: Props) {
   const client = useSession((s) => s.client);
   const updateClient = useSession((s) => s.updateClient);
   const currentPlanId = useSession((s) => s.currentPlanId);
@@ -50,6 +60,17 @@ export function IntakeScreen({ eligiblePlans, onNext }: Props) {
   const [zipLoading, setZipLoading] = useState(false);
   const [zipError, setZipError] = useState<string | null>(null);
   const zipInFlight = useRef<AbortController | null>(null);
+
+  // Captures the ZIP value that was present on first render. If the
+  // session arrived from AgentBase's "Quote in Plan Match" deep-link
+  // (county + state pre-populated alongside the ZIP), we skip the
+  // initial zip-county lookup so a slow response can't overwrite the
+  // CRM-authoritative county. Once the broker types a different ZIP,
+  // the lookup runs normally.
+  const initialZipRef = useRef<string | null>(null);
+  if (initialZipRef.current === null) {
+    initialZipRef.current = client.zip;
+  }
 
   // Debounced ZIP → county/state lookup. Mirrors the v4 IntakePage
   // wiring — same /api/zip-county route, same abort-on-change behavior
@@ -63,6 +84,18 @@ export function IntakeScreen({ eligiblePlans, onNext }: Props) {
   // user-facing message — the rightHint already covers explicit errors.
   useEffect(() => {
     if (!client.zip || !/^\d{5}$/.test(client.zip)) return;
+    // Skip the auto-lookup when the deep-link already carried county +
+    // state for this exact ZIP. Without this guard the API result would
+    // race the URL-passed values and could overwrite them with stale or
+    // empty data. Editing the ZIP clears the guard by changing the ref
+    // condition (client.zip !== initialZipRef.current).
+    if (
+      client.zip === initialZipRef.current &&
+      client.county &&
+      client.state
+    ) {
+      return;
+    }
     const ctl = new AbortController();
     zipInFlight.current?.abort();
     zipInFlight.current = ctl;
@@ -121,8 +154,13 @@ export function IntakeScreen({ eligiblePlans, onNext }: Props) {
   );
   const selectedLabel = useMemo<string>(() => {
     if (selectedPlan) return `${selectedPlan.carrier} · ${selectedPlan.plan_name}`;
+    // Fallback: AgentBase deep-link supplied currentPlanId + a plan-name
+    // hint via URL params. Until eligiblePlans resolves the matching row
+    // we render that hint so the broker sees the plan "locked in"
+    // instead of staring at an empty picker that fills a moment later.
+    if (currentPlanId && presetCurrentPlanLabel) return presetCurrentPlanLabel;
     return '';
-  }, [selectedPlan]);
+  }, [selectedPlan, currentPlanId, presetCurrentPlanLabel]);
 
   const [planQuery, setPlanQuery] = useState('');
   const [planOpen, setPlanOpen] = useState(false);
@@ -170,7 +208,13 @@ export function IntakeScreen({ eligiblePlans, onNext }: Props) {
     setPlanOpen(false);
   }
 
-  const showPicker = eligiblePlans.length > 0 && Boolean(client.county);
+  // Render the picker when eligiblePlans has loaded (the usual path) OR
+  // when the deep-link pre-supplied a current plan and the catalog is
+  // still in flight (so the broker sees the locked-in plan immediately
+  // instead of a missing field that pops in seconds later).
+  const showPicker =
+    (eligiblePlans.length > 0 && Boolean(client.county)) ||
+    Boolean(currentPlanId && presetCurrentPlanLabel);
 
   const countyValue = client.county
     ? (
@@ -264,7 +308,9 @@ export function IntakeScreen({ eligiblePlans, onNext }: Props) {
                     color: '#94a3b8',
                   }}
                 >
-                  {eligiblePlans.length} plans in {client.county} County
+                  {eligiblePlans.length > 0
+                  ? `${eligiblePlans.length} plans in ${client.county} County`
+                  : `loading plans…`}
                 </span>
               </label>
               <div style={{ position: 'relative' }}>
