@@ -61,17 +61,6 @@ export function IntakeScreen({
   const [zipError, setZipError] = useState<string | null>(null);
   const zipInFlight = useRef<AbortController | null>(null);
 
-  // Captures the ZIP value that was present on first render. If the
-  // session arrived from AgentBase's "Quote in Plan Match" deep-link
-  // (county + state pre-populated alongside the ZIP), we skip the
-  // initial zip-county lookup so a slow response can't overwrite the
-  // CRM-authoritative county. Once the broker types a different ZIP,
-  // the lookup runs normally.
-  const initialZipRef = useRef<string | null>(null);
-  if (initialZipRef.current === null) {
-    initialZipRef.current = client.zip;
-  }
-
   // Debounced ZIP → county/state lookup. Mirrors the v4 IntakePage
   // wiring — same /api/zip-county route, same abort-on-change behavior
   // so a fast typist doesn't race a stale response over a fresh one.
@@ -79,23 +68,19 @@ export function IntakeScreen({
   // Always writes county + state from the API response (instead of
   // diffing against the current session value) so a persisted-session
   // mismatch ("" or null vs the real county) can never get stuck
-  // showing "—" after the lookup lands. console.info breadcrumbs make
-  // a failure visible in the broker's dev tools without surfacing a
-  // user-facing message — the rightHint already covers explicit errors.
+  // showing "—" after the lookup lands. The deep-link path (AgentBase
+  // "Quote in Plan Match") pre-writes county+state via URL params; the
+  // lookup just re-confirms them with the authoritative pm_zip_county
+  // value. We intentionally do NOT skip the lookup when the session
+  // already has county/state populated — earlier attempts to do that
+  // caused fresh broker ZIP entries to silently no-op, leaving the
+  // County field stuck at "—" for 27713.
+  //
+  // console.info breadcrumbs make a runtime failure visible in the
+  // broker's dev tools without surfacing a user-facing message — the
+  // rightHint already covers explicit errors.
   useEffect(() => {
     if (!client.zip || !/^\d{5}$/.test(client.zip)) return;
-    // Skip the auto-lookup when the deep-link already carried county +
-    // state for this exact ZIP. Without this guard the API result would
-    // race the URL-passed values and could overwrite them with stale or
-    // empty data. Editing the ZIP clears the guard by changing the ref
-    // condition (client.zip !== initialZipRef.current).
-    if (
-      client.zip === initialZipRef.current &&
-      client.county &&
-      client.state
-    ) {
-      return;
-    }
     const ctl = new AbortController();
     zipInFlight.current?.abort();
     zipInFlight.current = ctl;
