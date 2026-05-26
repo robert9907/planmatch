@@ -249,16 +249,27 @@ function unionUtilizationConditions(
 
 // ─── Gate 1 — providers ──────────────────────────────────────────────
 //
-// Three-state semantics: covered=true (in), covered=false (eliminate),
-// cache absent (unverified — stay + flag). Eliminate only on
-// definitive-out — bulk unverified rows would otherwise wipe carriers
-// whose provider networks haven't been scraped yet.
+// STRICT BINARY. The pm_provider_network_cache lookup yields three
+// states per (plan, npi):
+//
+//   • covered=true      — verified in-network → PASS
+//   • covered=false     — verified OUT of network → ELIMINATED
+//   • cache row absent  — UNVERIFIED (carrier not yet scraped) → ELIMINATED
+//
+// Product rule: if we can't confirm the provider is in-network, the
+// plan is out. Zero pass-throughs. Every Top-4 plan has every user
+// provider on a confirmed-in-network row.
+//
+// Trade-off: carriers whose provider networks haven't been scraped
+// drop out of Top 4 until the cache backfills. We accept that —
+// surfacing "your doctor might be in network, we're not sure" is
+// worse than narrowing the pool to plans we can stand behind.
 function applyProviderGate(
   pool: ReadonlyArray<BrainScoredPlan>,
   userHasProviders: boolean,
 ): BrainScoredPlan[] {
   if (!userHasProviders) return [...pool];
-  return pool.filter((s) => !s.score.anyProviderDefinitivelyOut);
+  return pool.filter((s) => s.score.allProvidersInNetwork);
 }
 
 // ─── Gate 2 — medications ────────────────────────────────────────────
@@ -282,9 +293,28 @@ function applyMedicationGate(
 }
 
 // ─── Gate 3 — user-selected benefit floors ───────────────────────────
+//
+// Each preference the user picked is a hard floor. Plans split into:
+//   • fullMatch — meets EVERY floor → Top 4 candidate.
+//   • nearMiss  — misses EXACTLY ONE floor → fills Top 4 only when
+//                 fewer than 4 full_match plans exist. The plan's
+//                 BrainScore.nearMiss carries which pref + by how much.
+//   • multiMiss — misses 2+ floors → out.
+// Empty priorities ⇒ every plan is a full_match.
+
+interface ExtrasPredicate {
+  /** Preference key the user selected (e.g. 'dental'). */
+  key: string;
+  /** User-selected dollar threshold; null for binary prefs. */
+  userThreshold: number | null;
+  /** Returns plan's actual value + whether the plan meets the floor. */
+  evaluate: (s: BrainScoredPlan) => { meets: boolean; planValue: number };
+}
 
 interface ExtrasGateResult {
-  survivors: BrainScoredPlan[];          // cost-sorted
+  fullMatch: BrainScoredPlan[];          // cost+tiebreakers sorted
+  nearMiss: BrainScoredPlan[];           // cost+tiebreakers sorted
+  multiMiss: BrainScoredPlan[];          // unsorted — eliminated, surfaced for diagnostics
   selectedExtras: ReadonlyArray<string>;
 }
 
@@ -294,74 +324,168 @@ function applyExtrasGate(
   thresholds: Partial<Record<'dental' | 'vision' | 'otc' | 'partb_giveback', number>>,
 ): ExtrasGateResult {
   const selectedExtras: string[] = [];
-  const predicates: Array<(s: BrainScoredPlan) => boolean> = [];
+  const predicates: ExtrasPredicate[] = [];
   for (const pri of priorities) {
     if (pri === 'dental') {
       const t = thresholds.dental ?? 0;
       selectedExtras.push(t > 0 ? `dental ${fmtUSD(t)}+` : 'dental');
-      predicates.push((s) => {
-        const v = extractCategoryAnnualValue(s.benefits, 'dental');
-        return t > 0 ? v >= t : v > 0;
+      predicates.push({
+        key: 'dental',
+        userThreshold: t > 0 ? t : null,
+        evaluate: (s) => {
+          const v = extractCategoryAnnualValue(s.benefits, 'dental');
+          return { meets: t > 0 ? v >= t : v > 0, planValue: v };
+        },
       });
     } else if (pri === 'vision') {
       const t = thresholds.vision ?? 0;
       selectedExtras.push(t > 0 ? `vision ${fmtUSD(t)}+` : 'vision');
-      predicates.push((s) => {
-        const v = extractCategoryAnnualValue(s.benefits, 'vision');
-        return t > 0 ? v >= t : v > 0;
+      predicates.push({
+        key: 'vision',
+        userThreshold: t > 0 ? t : null,
+        evaluate: (s) => {
+          const v = extractCategoryAnnualValue(s.benefits, 'vision');
+          return { meets: t > 0 ? v >= t : v > 0, planValue: v };
+        },
       });
     } else if (pri === 'otc') {
       const t = thresholds.otc ?? 0;
       selectedExtras.push(t > 0 ? `OTC ${fmtUSD(t)}+/qtr` : 'OTC');
-      predicates.push((s) => {
-        const q = extractOtcQuarterly(s.benefits).quarterly;
-        return t > 0 ? q >= t : q > 0;
+      predicates.push({
+        key: 'otc',
+        userThreshold: t > 0 ? t : null,
+        evaluate: (s) => {
+          const q = extractOtcQuarterly(s.benefits).quarterly;
+          return { meets: t > 0 ? q >= t : q > 0, planValue: q };
+        },
       });
     } else if (pri === 'partb_giveback') {
       const t = thresholds.partb_giveback ?? 0;
       selectedExtras.push(t > 0 ? `Part B giveback ${fmtUSD(t)}+/mo` : 'Part B giveback');
-      predicates.push((s) => {
-        const m = extractGivebackMonthly(s.benefits);
-        return t > 0 ? m >= t : m > 0;
+      predicates.push({
+        key: 'partb_giveback',
+        userThreshold: t > 0 ? t : null,
+        evaluate: (s) => {
+          const m = extractGivebackMonthly(s.benefits);
+          return { meets: t > 0 ? m >= t : m > 0, planValue: m };
+        },
       });
     } else if (pri === 'fitness') {
       selectedExtras.push('fitness');
-      predicates.push((s) => s.benefits.some((b) => b.benefit_category === 'fitness'));
+      predicates.push({
+        key: 'fitness',
+        userThreshold: null,
+        evaluate: (s) => {
+          const has = s.benefits.some((b) => b.benefit_category === 'fitness');
+          return { meets: has, planValue: has ? 1 : 0 };
+        },
+      });
     } else if (pri === 'hearing') {
       selectedExtras.push('hearing');
-      predicates.push((s) => s.benefits.some(
-        (b) => b.benefit_category === 'hearing' || b.benefit_category === 'hearing_exam',
-      ));
+      predicates.push({
+        key: 'hearing',
+        userThreshold: null,
+        evaluate: (s) => {
+          const has = s.benefits.some(
+            (b) => b.benefit_category === 'hearing' || b.benefit_category === 'hearing_exam',
+          );
+          return { meets: has, planValue: has ? 1 : 0 };
+        },
+      });
     } else if (pri === 'transportation') {
       selectedExtras.push('transportation');
-      predicates.push((s) => s.benefits.some((b) => b.benefit_category === 'transportation'));
+      predicates.push({
+        key: 'transportation',
+        userThreshold: null,
+        evaluate: (s) => {
+          const has = s.benefits.some((b) => b.benefit_category === 'transportation');
+          return { meets: has, planValue: has ? 1 : 0 };
+        },
+      });
     } else if (pri === 'telehealth') {
       selectedExtras.push('telehealth');
-      predicates.push((s) => s.benefits.some((b) => b.benefit_category === 'telehealth'));
+      predicates.push({
+        key: 'telehealth',
+        userThreshold: null,
+        evaluate: (s) => {
+          const has = s.benefits.some((b) => b.benefit_category === 'telehealth');
+          return { meets: has, planValue: has ? 1 : 0 };
+        },
+      });
     } else if (pri === 'healthy_foods') {
       selectedExtras.push('healthy foods');
-      predicates.push((s) => s.benefits.some((b) => b.benefit_category === 'meals'));
+      predicates.push({
+        key: 'healthy_foods',
+        userThreshold: null,
+        evaluate: (s) => {
+          const has = s.benefits.some((b) => b.benefit_category === 'meals');
+          return { meets: has, planValue: has ? 1 : 0 };
+        },
+      });
     } else if (pri === 'low_moop') {
       selectedExtras.push('low MOOP');
-      predicates.push((s) => {
-        const m = s.row.moop ?? null;
-        return m != null && m > 0 && m <= 5500;
+      predicates.push({
+        key: 'low_moop',
+        userThreshold: 5500,
+        evaluate: (s) => {
+          const m = s.row.moop ?? null;
+          const meets = m != null && m > 0 && m <= 5500;
+          return { meets, planValue: m ?? 0 };
+        },
       });
     } else if (pri === 'low_drug_costs') {
       selectedExtras.push('low drug costs');
       const drugCosts = pool.map((s) => s.score.totalAnnualDrugCost).sort((a, b) => a - b);
       const cutoffIdx = Math.max(0, Math.floor(drugCosts.length / 3) - 1);
       const cutoff = drugCosts[cutoffIdx] ?? Infinity;
-      predicates.push((s) => s.score.totalAnnualDrugCost <= cutoff);
+      predicates.push({
+        key: 'low_drug_costs',
+        userThreshold: cutoff === Infinity ? null : cutoff,
+        evaluate: (s) => ({
+          meets: s.score.totalAnnualDrugCost <= cutoff,
+          planValue: s.score.totalAnnualDrugCost,
+        }),
+      });
     }
   }
 
   if (predicates.length === 0) {
-    return { survivors: [...pool].sort(compareByCostThenTiebreakers), selectedExtras };
+    return {
+      fullMatch: [...pool].sort(compareByCostThenTiebreakers),
+      nearMiss: [],
+      multiMiss: [],
+      selectedExtras,
+    };
   }
 
-  const passes = (s: BrainScoredPlan) => predicates.every((p) => p(s));
-  return { survivors: pool.filter(passes).sort(compareByCostThenTiebreakers), selectedExtras };
+  const fullMatch: BrainScoredPlan[] = [];
+  const nearMiss: BrainScoredPlan[] = [];
+  const multiMiss: BrainScoredPlan[] = [];
+  for (const s of pool) {
+    const misses: Array<{ pred: ExtrasPredicate; planValue: number }> = [];
+    for (const pred of predicates) {
+      const r = pred.evaluate(s);
+      if (!r.meets) misses.push({ pred, planValue: r.planValue });
+    }
+    if (misses.length === 0) {
+      fullMatch.push(s);
+    } else if (misses.length === 1) {
+      const { pred, planValue } = misses[0];
+      s.score.nearMiss = {
+        preference: pred.key,
+        userThreshold: pred.userThreshold,
+        planValue,
+        shortfall:
+          pred.userThreshold != null ? pred.userThreshold - planValue : null,
+      };
+      nearMiss.push(s);
+    } else {
+      multiMiss.push(s);
+    }
+  }
+  fullMatch.sort(compareByCostThenTiebreakers);
+  nearMiss.sort(compareByCostThenTiebreakers);
+  return { fullMatch, nearMiss, multiMiss, selectedExtras };
 }
 
 // ─── LiveTop3 mapping ────────────────────────────────────────────────
@@ -636,6 +760,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       suppliesGaps,
       medicationBackfill: false,
       csnpReservedSlot: false,
+      nearMiss: null,
       ribbon: null,
       costBreakdown,
       partBGivebackAnnual,
@@ -695,77 +820,61 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   debugLog(`Gate 2: ${gate2Sorted.length}/${gate1.length} survived meds` +
     (gate2Result.relaxedDataGap ? ' (data-gap relax)' : ''));
 
-  // ── Gate 3 — benefit floors ───────────────────────────────────────
+  // ── Gate 3 — preferences (full_match / near_miss / multi-miss) ────
   const extrasGate = applyExtrasGate(gate2Sorted, userPriorities, userThresholds);
-  debugLog(`Gate 3: ${extrasGate.survivors.length} survivors (selected=[${extrasGate.selectedExtras.join(',')}])`);
+  debugLog(
+    `Gate 3: fullMatch=${extrasGate.fullMatch.length} nearMiss=${extrasGate.nearMiss.length} ` +
+    `multiMiss=${extrasGate.multiMiss.length} (selected=[${extrasGate.selectedExtras.join(',')}])`,
+  );
 
-  // ── Top 4 — strict first, then chained backfill ────────────────────
-  // Backfill fires whenever fewer than 4 plans survived, regardless of
-  // whether the user picked priorities. Two-tier candidate chain so
-  // covers-all-meds plans are preferred over medication near-misses:
+  // ── Gate 4 — Top 4 selection ──────────────────────────────────────
   //
-  //   Tier A — Gate 2 survivors not in strictTop. These passed
-  //            provider + meds gates but failed the priority floor
-  //            (or were trimmed off when priorities was empty and
-  //            the gate3 cost-sort already promoted them).
-  //   Tier B — Gate 1 survivors that failed Gate 2. They cover the
-  //            provider network but miss at least one user med;
-  //            flagged with medicationBackfill=true so the UI can
-  //            render "this plan doesn't cover all your medications"
-  //            on the card.
+  // 1. Fill from fullMatch (cost+tiebreakers).
+  // 2. If fewer than 4 full_match plans, fill remaining slots from
+  //    nearMiss (cost+tiebreakers). Each near-miss carries its
+  //    score.nearMiss detail (preference key + plan value + user's
+  //    threshold + shortfall) so the UI can render "Covers your
+  //    doctor and meds · $1,500 dental (you asked for $2,000)".
+  // 3. multi-miss plans (2+ failed preferences) are NEVER eligible.
+  // 4. After fill, if userQualifiesForCsnp AND no C-SNP made the
+  //    Top 4 naturally, swap the worst (last) slot for the cheapest
+  //    C-SNP that passed Gates 1+2 (any G3 status). Sets that pick's
+  //    score.csnpReservedSlot = true.
   //
-  // Both tiers sorted by the same cost+tiebreakers comparator the
-  // strict top uses. Tier B candidates only appear after Tier A is
-  // exhausted, so a "covers all meds, missed priorities" plan
-  // outranks a "cheap but missing a drug" plan in the relaxed slots.
-  const strictTop = extrasGate.survivors.slice(0, 4);
-  const strictKeys = new Set(strictTop.map(planKeyNoSegment2));
-  let backfillNeeded = 4 - strictTop.length;
-  const backfills: BrainScoredPlan[] = [];
-  if (backfillNeeded > 0) {
-    const tierA = gate2Sorted
-      .filter((s) => !strictKeys.has(planKeyNoSegment2(s)))
-      .sort(compareByCostThenTiebreakers)
-      .slice(0, backfillNeeded);
-    backfills.push(...tierA);
-    backfillNeeded -= tierA.length;
-    for (const t of tierA) strictKeys.add(planKeyNoSegment2(t));
+  // No Tier-B medication backfill — Gate 2 is strict by product rule.
+  // Drug coverage is non-negotiable; misses are out.
+  const diversified: BrainScoredPlan[] = [];
+  for (const p of extrasGate.fullMatch) {
+    if (diversified.length >= 4) break;
+    diversified.push(p);
   }
-  if (backfillNeeded > 0) {
-    const gate2Keys = new Set(gate2Sorted.map(planKeyNoSegment2));
-    const tierB = gate1
-      .filter((s) => !strictKeys.has(planKeyNoSegment2(s)) && !gate2Keys.has(planKeyNoSegment2(s)))
-      .sort(compareByCostThenTiebreakers)
-      .slice(0, backfillNeeded);
-    for (const t of tierB) {
-      t.score.medicationBackfill = true;
-      backfills.push(t);
-    }
+  for (const p of extrasGate.nearMiss) {
+    if (diversified.length >= 4) break;
+    diversified.push(p);
   }
-  const diversified = [...strictTop, ...backfills];
 
   // ── C-SNP reserved slot ──────────────────────────────────────────
-  // When the user qualifies for a Chronic Special Needs Plan (self-
-  // reported conditions OR med-detected diabetes/CHF/COPD/CKD/etc with
-  // confidence stronger than 'possible') the Top 4 must contain at
-  // least one C-SNP so the broker has a condition-targeted option to
-  // discuss. The natural cost+tiebreakers ranking can hide C-SNPs
-  // behind zero-premium MAPDs with giveback — Durham 27713 has 30+
-  // plans tied at $0/yr and standard MAPDs win on the tiebreaker
-  // before the first C-SNP shows up. Force-insert the cheapest C-SNP
-  // that passed both Gates 1 and 2 (provider OK, all meds covered),
-  // replacing the worst-ranked Top-4 slot. When no C-SNP cleared
-  // Gates 1+2 in this county, record a note instead of forcing a
-  // non-viable plan — the UI surfaces this as context.
+  // When the user qualifies (self-reported OR med-detected) and no
+  // C-SNP landed in the Top 4 naturally, swap the last slot for the
+  // cheapest C-SNP that passed Gates 1+2 (preferring fullMatch C-SNP
+  // > nearMiss C-SNP > multiMiss C-SNP). If no C-SNP cleared Gates
+  // 1+2 in this county, set csnpNote.
   let csnpNote: string | null = null;
   if (userQualifiesForCsnp) {
+    const top4Keys = new Set(diversified.map(planKeyNoSegment2));
     const hasCsnpInTop4 = diversified.some((s) => classifySnp(s.row) === 'C');
     if (!hasCsnpInTop4) {
-      const csnpCandidates = gate2Sorted
-        .filter((s) => classifySnp(s.row) === 'C')
-        .sort(compareByCostThenTiebreakers);
-      if (csnpCandidates.length > 0) {
-        const bestCsnp = csnpCandidates[0];
+      const csnpFullMatch = extrasGate.fullMatch
+        .filter((s) => classifySnp(s.row) === 'C' && !top4Keys.has(planKeyNoSegment2(s)));
+      const csnpNearMiss = extrasGate.nearMiss
+        .filter((s) => classifySnp(s.row) === 'C' && !top4Keys.has(planKeyNoSegment2(s)));
+      const csnpMultiMiss = extrasGate.multiMiss
+        .filter((s) => classifySnp(s.row) === 'C' && !top4Keys.has(planKeyNoSegment2(s)));
+      const bestCsnp =
+        [...csnpFullMatch].sort(compareByCostThenTiebreakers)[0] ??
+        [...csnpNearMiss].sort(compareByCostThenTiebreakers)[0] ??
+        [...csnpMultiMiss].sort(compareByCostThenTiebreakers)[0];
+      if (bestCsnp) {
         bestCsnp.score.csnpReservedSlot = true;
         if (diversified.length >= 4) {
           diversified[diversified.length - 1] = bestCsnp;
@@ -807,7 +916,10 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     qualifyingPlanCount: eligible.length,
     providerFilterFellBack: userHasProviders && gate1.length < rawScored.length && diversified.length < 4,
     highMoopFilterFellBack: false,
-    priorityGateRelaxation: backfills.length > 0 ? 'half' : undefined,
+    priorityGateRelaxation:
+      diversified.some((p) => p.score.nearMiss != null || p.score.csnpReservedSlot)
+        ? 'half'
+        : undefined,
     picks: diversified.map((s, i) => {
       const basePick = brainToLiveTop3Pick(s, i, population, input);
       let ribbonText = '';
@@ -838,10 +950,15 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     )[0] ?? null;
   }
 
+  const nearMissCount = diversified.filter((p) => p.score.nearMiss != null).length;
+  const csnpResCount = diversified.filter((p) => p.score.csnpReservedSlot).length;
   debugLog(
     `Final: eligible=${eligible.length} → gate1=${gate1.length} → gate2=${gate2Sorted.length} → ` +
-    `gate3=${extrasGate.survivors.length} → picks=${diversified.length}` +
-    (backfills.length > 0 ? ` (relaxed: ${backfills.length} backfilled)` : ''),
+    `gate3 fullMatch=${extrasGate.fullMatch.length} nearMiss=${extrasGate.nearMiss.length} multiMiss=${extrasGate.multiMiss.length} → ` +
+    `picks=${diversified.length}` +
+    (nearMissCount > 0 || csnpResCount > 0
+      ? ` (near_miss=${nearMissCount}, csnp_reserved=${csnpResCount})`
+      : ''),
   );
 
   return {

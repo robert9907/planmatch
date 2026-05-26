@@ -121,14 +121,13 @@ export interface BrainScore {
     humanLabel: string;
     reason: 'not_covered' | 'brand_mismatch';
   }>;
-  // True when this plan was added to the Top 4 by the medication-
-  // backfill pass — i.e. it failed Gate 2 (one or more user drugs not
-  // on its formulary) but was pulled in because Gate 3 had fewer than
-  // 4 survivors and the pool needed filling. Lets the UI surface "this
-  // plan doesn't cover all your medications" on backfilled cards
-  // without recomputing the gate disposition. False on every plan that
-  // wasn't backfilled, including plans that legitimately fail to cover
-  // all meds but didn't make the Top 4.
+  // DEPRECATED (always false). Previously flagged Tier-B backfill
+  // picks — plans that failed Gate 2 (missing user drugs) but were
+  // pulled into the Top 4 to fill the count. After the strict-gates
+  // rewrite, Gate 2 is a hard elimination: no medication backfill
+  // ever fires. The field is retained for compat with the
+  // usePlanBrain adapter + ScoredPlan shape (callers like
+  // QuoteDeliveryV4 still read `medicationBackfill`).
   medicationBackfill: boolean;
   // True when this plan was force-inserted into the Top 4 by the
   // C-SNP reserved-slot pass — the user qualifies for a Chronic
@@ -139,6 +138,30 @@ export interface BrainScore {
   // C-SNP that landed in the Top 4 naturally on cost, and on every
   // standard MAPD.
   csnpReservedSlot: boolean;
+  // Near-miss detail. Set when this plan was added to the Top 4 as a
+  // gate-3 near-miss — passed Gates 1+2 but missed EXACTLY ONE user
+  // preference (e.g., dental allowance below the user's threshold).
+  // Plans that miss 2+ preferences are eliminated and never reach the
+  // Top 4. The UI uses these fields to render copy like "Covers your
+  // doctor and meds · $1,500 dental (you asked for $2,000)".
+  // Null on full_match plans, csnp_reserved swaps, and any plan not
+  // in the Top 4.
+  nearMiss: {
+    /** User-priority key the plan missed (e.g. 'dental', 'vision',
+     *  'otc', 'hearing', 'fitness', 'transportation', 'partb_giveback',
+     *  'low_moop', 'low_drug_costs'). */
+    preference: string;
+    /** User's dollar threshold (e.g. 2000 when they picked
+     *  "dental ≥ $2,000"). Null when the preference is binary
+     *  (vision/fitness/hearing/etc. picked without a $ floor). */
+    userThreshold: number | null;
+    /** Plan's actual value for that preference. 0 when the plan
+     *  doesn't file anything for the category. */
+    planValue: number;
+    /** userThreshold − planValue for dollar prefs; null for binary
+     *  prefs (where the miss is just "absent"). */
+    shortfall: number | null;
+  } | null;
   // Ribbon assignment (filled in by ribbon pass — null until then)
   ribbon: RibbonType | null;
   // Plain-English summary of the year on this plan, condition-aware

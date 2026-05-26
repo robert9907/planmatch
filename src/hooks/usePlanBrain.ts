@@ -220,10 +220,21 @@ export interface ScoredPlan {
    *  slot pass (see plan-brain.ts). UI badges this as "Recommended
    *  for your condition." */
   csnpReservedSlot: boolean;
-  /** True when added to the Top 4 via Tier-B medication backfill —
-   *  plan covers providers but misses ≥1 user drug. UI surfaces
-   *  "doesn't cover all your medications" on the card. */
+  /** DEPRECATED — always false after the strict-gates rewrite. Gate 2
+   *  now hard-eliminates any plan missing a user drug; no medication
+   *  backfill ever fires. Field kept for caller compat. */
   medicationBackfill: boolean;
+  /** Set when this plan was added to the Top 4 as a near_miss — passed
+   *  Gates 1+2 but missed exactly ONE user preference. The UI uses
+   *  these fields to render copy like "Covers your doctor and meds ·
+   *  $1,500 dental (you asked for $2,000)". Null on full_match,
+   *  csnp_reserved swaps, and plans not in the Top 4. */
+  nearMiss: {
+    preference: string;
+    userThreshold: number | null;
+    planValue: number;
+    shortfall: number | null;
+  } | null;
   realAnnualCost: CompatRealAnnualCost | null;
   redFlags: CompatRedFlag[];
   disqualified: boolean;
@@ -666,6 +677,7 @@ function adaptScored(
     isCsnp,
     csnpReservedSlot: score.csnpReservedSlot,
     medicationBackfill: score.medicationBackfill,
+    nearMiss: score.nearMiss,
     realAnnualCost: realAnnual,
     redFlags,
     disqualified: score.disqualifiedByRedFlag || score.allProvidersOutOfNetwork,
