@@ -264,6 +264,11 @@ interface State {
    *  state until then to avoid rendering a partial scoring pass that
    *  flickers as provider-network rows arrive late. */
   ready: boolean;
+  /** Names of providers entered without an NPI that NPPES could not
+   *  resolve. Consumers MUST surface this — when non-empty, Gate 1 had
+   *  no NPI to check for those providers, so the ranking does not
+   *  reflect their network status. */
+  unresolvedProviderNames: string[];
 }
 
 // ─── PmPlanRow synthesis from agent's Plan ──────────────────────────
@@ -853,9 +858,91 @@ export function usePlanBrain(args: Args): State {
     () => medications.map((m) => m.rxcui).filter((x): x is string => !!x).sort().join(','),
     [medications],
   );
+
+  // ── NPPES resolution for providers entered without an NPI ─────────
+  // History: any provider lacking an NPI (CapturePanel-extracted, manual
+  // typing, hydration with missing field) was silently dropped by the
+  // `npis` filter below — Gate 1 ran with `userHasProviders=false` and
+  // returned the whole pool unchanged, letting OON plans win on cost
+  // alone. We now resolve the missing NPI via NPPES before the brain
+  // run; unresolved providers surface as `unresolvedProviderNames` so
+  // the UI can warn the user that network status is unknown.
+  const [resolvedNpiById, setResolvedNpiById] = useState<Record<string, string>>({});
+  const [unresolvedProviderNames, setUnresolvedProviderNames] = useState<string[]>([]);
+
+  // Stable key for the resolution effect: any provider lacking an
+  // intrinsic NPI gets keyed by id+name+state so re-renders don't
+  // refire NPPES unless the unresolved set itself changes.
+  const missingNpiKey = useMemo(() => {
+    const missing = providers.filter((p) => !p.npi);
+    return missing.map((p) => `${p.id}|${p.name}`).sort().join(',') + `|${client.state ?? ''}`;
+  }, [providers, client.state]);
+
+  useEffect(() => {
+    const missing = providers.filter(
+      (p) => !p.npi && !resolvedNpiById[p.id],
+    );
+    if (missing.length === 0) {
+      // Recompute the unresolved-names list against current providers.
+      const stillUnresolved = providers
+        .filter((p) => !p.npi && !resolvedNpiById[p.id])
+        .map((p) => p.name);
+      setUnresolvedProviderNames((prev) =>
+        prev.length === stillUnresolved.length &&
+        prev.every((n, i) => n === stillUnresolved[i])
+          ? prev
+          : stillUnresolved,
+      );
+      return;
+    }
+    const controller = new AbortController();
+    (async () => {
+      const newlyResolved: Record<string, string> = {};
+      const stillUnresolved: string[] = [];
+      for (const p of missing) {
+        try {
+          const qs = new URLSearchParams({ name: p.name, limit: '1' });
+          if (client.state) qs.set('state', client.state);
+          const r = await fetch(`/api/npi-search?${qs.toString()}`, {
+            signal: controller.signal,
+          });
+          if (!r.ok) {
+            stillUnresolved.push(p.name);
+            continue;
+          }
+          const body = (await r.json()) as { results?: Array<{ number?: string | number }> };
+          const first = body.results?.[0]?.number;
+          if (first != null) {
+            newlyResolved[p.id] = String(first);
+          } else {
+            stillUnresolved.push(p.name);
+          }
+        } catch (err) {
+          if ((err as { name?: string })?.name === 'AbortError') return;
+          stillUnresolved.push(p.name);
+        }
+      }
+      if (controller.signal.aborted) return;
+      if (Object.keys(newlyResolved).length > 0) {
+        setResolvedNpiById((prev) => ({ ...prev, ...newlyResolved }));
+      }
+      setUnresolvedProviderNames(stillUnresolved);
+    })();
+    return () => controller.abort();
+    // missingNpiKey changes when the set of unresolved providers
+    // changes; that's the only thing that should refire NPPES.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missingNpiKey]);
+
+  // Effective NPI list: union of intrinsic + NPPES-resolved.
   const npis = useMemo(
-    () => providers.map((p) => p.npi).filter((x): x is string => !!x).sort().join(','),
-    [providers],
+    () =>
+      providers
+        .map((p) => p.npi ?? resolvedNpiById[p.id])
+        .filter((x): x is string => !!x)
+        .sort()
+        .join(','),
+    [providers, resolvedNpiById],
   );
 
   const [data, setData] = useState<PlanBrainData | null>(null);
@@ -883,15 +970,12 @@ export function usePlanBrain(args: Args): State {
       })
       .catch((err) => {
         if ((err as { name?: string })?.name === 'AbortError') return;
+        // No silent degradation — empty `networkByPlan` would let every
+        // OON plan compete on cost alone (Mode B in the brain-funnel
+        // diagnostic). Surface the error and clear `data` so consumers
+        // render a banner instead of a misleading ranking.
         setError((err as Error).message);
-        // Degrade gracefully — score with empty data rather than render nothing.
-        setData({
-          benefitsByPlan: {},
-          drugCostCache: {},
-          formularyByContractPlan: {},
-          ndcByRxcui: {},
-          networkByPlan: {},
-        });
+        setData(null);
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
@@ -919,11 +1003,16 @@ export function usePlanBrain(args: Args): State {
             extras: weightOverride.extras,
           }
         : null;
+    // Substitute NPPES-resolved NPIs into providers without one so the
+    // brain's Gate 1 actually runs against a populated NPI list.
+    const effectiveProviders: Provider[] = providers.map((p) =>
+      p.npi || !resolvedNpiById[p.id] ? p : { ...p, npi: resolvedNpiById[p.id] },
+    );
     const brainInputs = adaptToBrainInputs({
       plans,
       client,
       medications,
-      providers,
+      providers: effectiveProviders,
       data,
       conditionProfile,
       userPriorities,
@@ -943,11 +1032,12 @@ export function usePlanBrain(args: Args): State {
     client,
     medications,
     providers,
+    resolvedNpiById,
     conditionProfile,
     userPriorities,
     weightOverride,
     agentPlanByTriple,
   ]);
 
-  return { result, data, loading, error, ready };
+  return { result, data, loading, error, ready, unresolvedProviderNames };
 }

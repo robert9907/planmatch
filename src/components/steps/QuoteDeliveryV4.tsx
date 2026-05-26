@@ -465,11 +465,38 @@ export function QuoteDeliveryV4({
     return has ? finalists : [currentPlan, ...finalists];
   }, [currentPlan, finalists]);
 
-  const { result, data: brainData, loading } = usePlanBrain({
+  // Mode C parity: pass userPriorities + conditionProfile so this
+  // surface and AgentV3App produce identical rankings for the same
+  // inputs. Priorities come from session.benefitFilters (set in Step 5);
+  // conditionProfile is currently undefined because neither surface
+  // has a UI for self-reported conditions — the brain still detects
+  // from medications via detectConditionsFromMeds().
+  const benefitFilters = useSession((s) => s.benefitFilters);
+  const userPriorityKeys = useMemo<string[]>(() => {
+    const out: string[] = [];
+    if (benefitFilters.dental?.enabled) out.push('dental');
+    if (benefitFilters.vision?.enabled) out.push('vision');
+    if (benefitFilters.hearing?.enabled) out.push('hearing');
+    if (benefitFilters.transportation?.enabled) out.push('transportation');
+    if (benefitFilters.otc?.enabled) out.push('otc');
+    if (benefitFilters.food_card?.enabled) out.push('healthy_foods');
+    if (benefitFilters.fitness?.enabled) out.push('fitness');
+    return out;
+  }, [benefitFilters]);
+
+  const {
+    result,
+    data: brainData,
+    loading,
+    error: brainError,
+    unresolvedProviderNames,
+  } = usePlanBrain({
     plans: plansForBrain,
     client,
     medications,
     providers,
+    userPriorities: userPriorityKeys,
+    conditionProfile: null,
     weightOverride,
   });
 
@@ -1309,6 +1336,16 @@ export function QuoteDeliveryV4({
   }, [result, presetKey]);
 
   // ── Early returns (after every hook, per Rules of Hooks) ──────────
+  if (brainError) {
+    return (
+      <div style={{ padding: 16, color: '#7f1d1d', fontSize: 13, background: '#fef2f2', border: `1px solid #fecaca`, borderRadius: 12 }}>
+        <strong>Plan Brain data unavailable.</strong>{' '}
+        Could not load /api/plan-brain-data ({brainError}). Network status, drug coverage,
+        and benefit data are missing — the ranking would be unreliable, so it is not shown.
+        Refresh or check the API logs.
+      </div>
+    );
+  }
   if (loading && !result) {
     return (
       <div style={{ padding: 28, textAlign: 'center', color: COL.inkSub, fontSize: 13, background: '#fff', border: `1px dashed ${COL.rule}`, borderRadius: 12 }}>
@@ -1378,6 +1415,29 @@ export function QuoteDeliveryV4({
 
   return (
     <div style={{ fontFamily: FONT.body, color: COL.ink }}>
+      {/* Unresolved-provider warning — NPPES couldn't find an NPI for
+          one or more providers, so Gate 1 had nothing to check against
+          for them and the ranking does not reflect their network. */}
+      {unresolvedProviderNames.length > 0 && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: '10px 12px',
+            background: '#fff8e1',
+            border: '1px solid #f5d479',
+            borderRadius: 8,
+            color: '#7a5b00',
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: FONT.body,
+          }}
+        >
+          ⚠ Provider NPI could not be resolved for:{' '}
+          {unresolvedProviderNames.join(', ')} — network status unknown for all
+          plans. Re-pick the provider from the search results or add the NPI
+          manually so Gate 1 can rank against the real network.
+        </div>
+      )}
       {/* Current-plan picker — small link when no current plan; opens
           an inline panel with CurrentPlanPicker. Once a plan is set,
           the picker shows the selected plan with a Change button and

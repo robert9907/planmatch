@@ -621,6 +621,21 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
 
   // ── Gate 1 — providers ────────────────────────────────────────────
   const gate1 = applyProviderGate(rawScored, userHasProviders);
+  // Unconditional diagnostic — surfaces silent provider-gate bypass.
+  // userHasProviders=false means Gate 1 returns the whole pool
+  // unchanged; cacheSize=0 with userHasProviders=true means every
+  // plan flagged unverified and Gate 1 still passed all through.
+  const g1In = rawScored.filter((s) => s.score.allProvidersInNetwork).length;
+  const g1Out = rawScored.filter((s) => s.score.anyProviderDefinitivelyOut).length;
+  const g1Absent = rawScored.filter(
+    (s) => !s.score.allProvidersInNetwork && !s.score.anyProviderDefinitivelyOut,
+  ).length;
+  if (typeof console !== 'undefined' && console.info) {
+    console.info(
+      `[brain-funnel] userHasProviders=${userHasProviders} cacheSize=${input.providerNetworkByPlanKey?.size ?? 0} ` +
+      `gate1: in=${g1In} out=${g1Out} absent=${g1Absent} (pool=${rawScored.length}, survived=${gate1.length})`,
+    );
+  }
   debugLog(`Gate 1: ${gate1.length}/${rawScored.length} survived providers`);
 
   // ── Gate 2 — medications ──────────────────────────────────────────

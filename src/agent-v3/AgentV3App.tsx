@@ -673,6 +673,44 @@ export function AgentV3App() {
         complianceProgress={complianceProgress}
       />
 
+      {brain.error && (
+        <div
+          style={{
+            margin: '8px 0',
+            padding: '10px 12px',
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            borderRadius: 8,
+            color: '#7f1d1d',
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          ⚠ Plan Brain data unavailable ({brain.error}). The ranking would be
+          unreliable without network/formulary/benefit data, so it is not
+          shown. Refresh or check the API logs.
+        </div>
+      )}
+      {brain.unresolvedProviderNames.length > 0 && (
+        <div
+          style={{
+            margin: '8px 0',
+            padding: '10px 12px',
+            background: '#fff8e1',
+            border: '1px solid #f5d479',
+            borderRadius: 8,
+            color: '#7a5b00',
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          ⚠ Provider NPI could not be resolved for:{' '}
+          {brain.unresolvedProviderNames.join(', ')} — network status unknown
+          for all plans. Re-pick from the Providers search or add an NPI so
+          Gate 1 can run against the real network.
+        </div>
+      )}
+
       <div>
         {screen === 'intake' && (
           <IntakeScreen
