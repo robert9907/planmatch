@@ -130,6 +130,15 @@ export interface BrainScore {
   // wasn't backfilled, including plans that legitimately fail to cover
   // all meds but didn't make the Top 4.
   medicationBackfill: boolean;
+  // True when this plan was force-inserted into the Top 4 by the
+  // C-SNP reserved-slot pass — the user qualifies for a Chronic
+  // Special Needs Plan (self-reported conditions or med-detected
+  // diabetes/CHF/COPD/CKD/etc) but no C-SNP made the natural Top 4,
+  // and this plan is the best C-SNP that passed Gates 1+2. The UI
+  // can badge it "Recommended for your condition." False on every
+  // C-SNP that landed in the Top 4 naturally on cost, and on every
+  // standard MAPD.
+  csnpReservedSlot: boolean;
   // Ribbon assignment (filled in by ribbon pass — null until then)
   ribbon: RibbonType | null;
   // Plain-English summary of the year on this plan, condition-aware
@@ -447,4 +456,14 @@ export interface BrainOutput {
   // the agent dashboard and console diagnostics; the Report Card
   // copy reads them when generating archetype-aware narratives.
   medicationPatterns: ReadonlyArray<MedicationPattern>;
+  // C-SNP reserved-slot status. Three states:
+  //   • null   — user did not qualify (no conditions, no med signal),
+  //              reservation logic did not run.
+  //   • ''     — empty/no note (C-SNP either landed naturally OR was
+  //              force-inserted via reserved slot; check
+  //              score.csnpReservedSlot on each pick to tell which).
+  //   • <msg>  — user qualified, but no C-SNP passed Gates 1+2 in this
+  //              county, so the Top 4 contains zero C-SNPs. Surfaced
+  //              on the UI as a context note.
+  csnpNote: string | null;
 }

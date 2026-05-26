@@ -216,6 +216,14 @@ export interface ScoredPlan {
   appliedRules: CompatRuleApplication[];
   brokerRuleAdjustment: number;
   isCsnp: boolean;
+  /** True when force-inserted into the Top 4 by the C-SNP reserved-
+   *  slot pass (see plan-brain.ts). UI badges this as "Recommended
+   *  for your condition." */
+  csnpReservedSlot: boolean;
+  /** True when added to the Top 4 via Tier-B medication backfill —
+   *  plan covers providers but misses ≥1 user drug. UI surfaces
+   *  "doesn't cover all your medications" on the card. */
+  medicationBackfill: boolean;
   realAnnualCost: CompatRealAnnualCost | null;
   redFlags: CompatRedFlag[];
   disqualified: boolean;
@@ -234,6 +242,11 @@ export interface PlanBrainResult {
   detectedConditions: CompatDetectedCondition[];
   medicationPatterns: CompatMedicationPattern[];
   archetype: CompatArchetype;
+  /** Set when the user qualifies for a C-SNP but no C-SNP plan in
+   *  this county passed Gates 1+2. UI surfaces this as a context
+   *  note explaining why the Top 4 contains zero C-SNPs. Null when
+   *  the user did not qualify or a C-SNP is in the Top 4. */
+  csnpNote: string | null;
 }
 
 // ─── Adapter input ──────────────────────────────────────────────────
@@ -651,6 +664,8 @@ function adaptScored(
     appliedRules,
     brokerRuleAdjustment,
     isCsnp,
+    csnpReservedSlot: score.csnpReservedSlot,
+    medicationBackfill: score.medicationBackfill,
     realAnnualCost: realAnnual,
     redFlags,
     disqualified: score.disqualifiedByRedFlag || score.allProvidersOutOfNetwork,
@@ -837,6 +852,7 @@ function adaptBrainOutput(
     detectedConditions: adaptDetectedConditions(brain.detectedConditions),
     medicationPatterns: adaptMedicationPatterns(brain.medicationPatterns),
     archetype: adaptArchetype(brain.archetype),
+    csnpNote: brain.csnpNote,
   };
 }
 

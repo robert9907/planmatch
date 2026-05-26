@@ -472,6 +472,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       detectedConditions,
       archetype: 'general',
       medicationPatterns: [],
+      csnpNote: null,
     };
   }
 
@@ -634,6 +635,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       suppliesTotal,
       suppliesGaps,
       medicationBackfill: false,
+      csnpReservedSlot: false,
       ribbon: null,
       costBreakdown,
       partBGivebackAnnual,
@@ -742,6 +744,45 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   }
   const diversified = [...strictTop, ...backfills];
 
+  // ── C-SNP reserved slot ──────────────────────────────────────────
+  // When the user qualifies for a Chronic Special Needs Plan (self-
+  // reported conditions OR med-detected diabetes/CHF/COPD/CKD/etc with
+  // confidence stronger than 'possible') the Top 4 must contain at
+  // least one C-SNP so the broker has a condition-targeted option to
+  // discuss. The natural cost+tiebreakers ranking can hide C-SNPs
+  // behind zero-premium MAPDs with giveback — Durham 27713 has 30+
+  // plans tied at $0/yr and standard MAPDs win on the tiebreaker
+  // before the first C-SNP shows up. Force-insert the cheapest C-SNP
+  // that passed both Gates 1 and 2 (provider OK, all meds covered),
+  // replacing the worst-ranked Top-4 slot. When no C-SNP cleared
+  // Gates 1+2 in this county, record a note instead of forcing a
+  // non-viable plan — the UI surfaces this as context.
+  let csnpNote: string | null = null;
+  if (userQualifiesForCsnp) {
+    const hasCsnpInTop4 = diversified.some((s) => classifySnp(s.row) === 'C');
+    if (!hasCsnpInTop4) {
+      const csnpCandidates = gate2Sorted
+        .filter((s) => classifySnp(s.row) === 'C')
+        .sort(compareByCostThenTiebreakers);
+      if (csnpCandidates.length > 0) {
+        const bestCsnp = csnpCandidates[0];
+        bestCsnp.score.csnpReservedSlot = true;
+        if (diversified.length >= 4) {
+          diversified[diversified.length - 1] = bestCsnp;
+        } else {
+          diversified.push(bestCsnp);
+        }
+        debugLog(
+          `C-SNP reserved slot: inserted ${bestCsnp.row.carrier} ${bestCsnp.row.plan_name} ` +
+            `(${bestCsnp.row.contract_id}-${bestCsnp.row.plan_id}-${bestCsnp.row.segment_id})`,
+        );
+      } else {
+        csnpNote = 'No C-SNP plans cover your providers and medications in this county.';
+        debugLog(`C-SNP reserved slot: ${csnpNote}`);
+      }
+    }
+  }
+
   // ── Rank by cost (entire pool) ────────────────────────────────────
   const rankedByCost = [...rawScored].sort(compareByCostThenTiebreakers);
   const N = rankedByCost.length;
@@ -812,5 +853,6 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     detectedConditions,
     archetype: 'general',
     medicationPatterns: [],
+    csnpNote,
   };
 }
