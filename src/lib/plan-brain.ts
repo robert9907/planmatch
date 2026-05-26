@@ -148,6 +148,51 @@ function totalAnnualCost(s: BrainScoredPlan): number {
   return premiumAnnual + s.score.totalAnnualDrugCost - s.score.partBGivebackAnnual;
 }
 
+// ─── Cost-tie tiebreaker chain ──────────────────────────────────────
+//
+// Durham 27713 has 30+ plans tied at $0/yr net cost (zero-premium MAPDs
+// + giveback offsetting drug copays). Without a tiebreaker the Top 4
+// was determined by database row order — non-deterministic across
+// runs. The chain is broker-judgment-driven, not arbitrary:
+//
+//   1. More providers in-network — closes the same network reach gap
+//      Gate 1 catches in extreme cases (definitively-OON eliminations)
+//      but not in the partial-match middle ground.
+//   2. All meds covered, then cheapest drug subtotal — between two
+//      otherwise-equal plans, "all your prescriptions on formulary at
+//      lower cost" wins.
+//   3. Lower MOOP — caps catastrophic exposure; a $4k MOOP plan beats
+//      an $8k one when everything else is identical.
+//   4. Higher star rating — CMS quality signal.
+//   5. Carrier name alphabetical — pure stability, last resort, so
+//      runs are reproducible across DB row-order shuffles.
+function compareByCostThenTiebreakers(a: BrainScoredPlan, b: BrainScoredPlan): number {
+  const costDiff = totalAnnualCost(a) - totalAnnualCost(b);
+  if (costDiff !== 0) return costDiff;
+  // 1. More providers in-network first.
+  const inNetDiff = b.score.providersInNetworkCount - a.score.providersInNetworkCount;
+  if (inNetDiff !== 0) return inNetDiff;
+  // 2. All meds covered first (true ranks before false), then lowest
+  //    drug subtotal among same-coverage plans.
+  const aAllMeds = a.score.totalCount === 0 || a.score.coveredCount === a.score.totalCount;
+  const bAllMeds = b.score.totalCount === 0 || b.score.coveredCount === b.score.totalCount;
+  if (aAllMeds !== bAllMeds) return aAllMeds ? -1 : 1;
+  const drugDiff = a.score.totalAnnualDrugCost - b.score.totalAnnualDrugCost;
+  if (drugDiff !== 0) return drugDiff;
+  // 3. Lower MOOP.
+  const aMoop = a.row.moop ?? Number.POSITIVE_INFINITY;
+  const bMoop = b.row.moop ?? Number.POSITIVE_INFINITY;
+  if (aMoop !== bMoop) return aMoop - bMoop;
+  // 4. Higher star rating.
+  const aStars = a.row.star_rating ?? 0;
+  const bStars = b.row.star_rating ?? 0;
+  if (aStars !== bStars) return bStars - aStars;
+  // 5. Carrier name alphabetical (stable).
+  const aCarrier = a.row.carrier ?? '';
+  const bCarrier = b.row.carrier ?? '';
+  return aCarrier.localeCompare(bCarrier);
+}
+
 function fmtUSD(n: number): string {
   return `$${Math.max(0, Math.round(n)).toLocaleString()}`;
 }
@@ -311,14 +356,12 @@ function applyExtrasGate(
     }
   }
 
-  const byCost = (a: BrainScoredPlan, b: BrainScoredPlan) => totalAnnualCost(a) - totalAnnualCost(b);
-
   if (predicates.length === 0) {
-    return { survivors: [...pool].sort(byCost), selectedExtras };
+    return { survivors: [...pool].sort(compareByCostThenTiebreakers), selectedExtras };
   }
 
   const passes = (s: BrainScoredPlan) => predicates.every((p) => p(s));
-  return { survivors: pool.filter(passes).sort(byCost), selectedExtras };
+  return { survivors: pool.filter(passes).sort(compareByCostThenTiebreakers), selectedExtras };
 }
 
 // ─── LiveTop3 mapping ────────────────────────────────────────────────
@@ -510,29 +553,30 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     let allOut = false;
     let anyDefinitelyOut = false;
     let anyUnverified = false;
+    let inNetCount = 0;
     const primaryProviderNpi = input.userProfile.providers?.[0]?.npi ?? null;
     let primaryInNet = false;
     if (providerCache && userProviderNpis.length > 0) {
-      let inNet = 0;
       let outOrAbsent = 0;
       for (const npi of userProviderNpis) {
         const c = providerCache.get(npi);
         if (c?.covered === true) {
-          inNet += 1;
+          inNetCount += 1;
         } else {
           outOrAbsent += 1;
           if (c && c.covered === false) anyDefinitelyOut = true;
           else anyUnverified = true;
         }
       }
-      allInNet = inNet === userProviderNpis.length;
+      allInNet = inNetCount === userProviderNpis.length;
       anyOut = outOrAbsent > 0;
-      allOut = inNet === 0;
+      allOut = inNetCount === 0;
       if (primaryProviderNpi) {
         primaryInNet = providerCache.get(primaryProviderNpi)?.covered === true;
       }
     } else if (input.verifiedInNetworkContracts && userProviderNpis.length > 0) {
       allInNet = input.verifiedInNetworkContracts.has(row.contract_id);
+      if (allInNet) inNetCount = userProviderNpis.length;
       primaryInNet = allInNet && primaryProviderNpi != null;
       if (!allInNet) anyUnverified = true;
     } else if (userProviderNpis.length > 0) {
@@ -580,6 +624,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       totalCount,
       lowTierCount,
       allProvidersInNetwork: allInNet,
+      providersInNetworkCount: inNetCount,
       anyProviderOutOfNetwork: anyOut,
       allProvidersOutOfNetwork: allOut,
       anyProviderDefinitivelyOut: anyDefinitelyOut,
@@ -588,6 +633,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       suppliesCovered,
       suppliesTotal,
       suppliesGaps,
+      medicationBackfill: false,
       ribbon: null,
       costBreakdown,
       partBGivebackAnnual,
@@ -651,21 +697,53 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   const extrasGate = applyExtrasGate(gate2Sorted, userPriorities, userThresholds);
   debugLog(`Gate 3: ${extrasGate.survivors.length} survivors (selected=[${extrasGate.selectedExtras.join(',')}])`);
 
-  // ── Top 4 — strict first, then backfill from Gate 2 near-misses ──
+  // ── Top 4 — strict first, then chained backfill ────────────────────
+  // Backfill fires whenever fewer than 4 plans survived, regardless of
+  // whether the user picked priorities. Two-tier candidate chain so
+  // covers-all-meds plans are preferred over medication near-misses:
+  //
+  //   Tier A — Gate 2 survivors not in strictTop. These passed
+  //            provider + meds gates but failed the priority floor
+  //            (or were trimmed off when priorities was empty and
+  //            the gate3 cost-sort already promoted them).
+  //   Tier B — Gate 1 survivors that failed Gate 2. They cover the
+  //            provider network but miss at least one user med;
+  //            flagged with medicationBackfill=true so the UI can
+  //            render "this plan doesn't cover all your medications"
+  //            on the card.
+  //
+  // Both tiers sorted by the same cost+tiebreakers comparator the
+  // strict top uses. Tier B candidates only appear after Tier A is
+  // exhausted, so a "covers all meds, missed priorities" plan
+  // outranks a "cheap but missing a drug" plan in the relaxed slots.
   const strictTop = extrasGate.survivors.slice(0, 4);
   const strictKeys = new Set(strictTop.map(planKeyNoSegment2));
-  const backfillNeeded = 4 - strictTop.length;
-  const willRelax = backfillNeeded > 0 && userPriorities.size > 0;
+  let backfillNeeded = 4 - strictTop.length;
   const backfills: BrainScoredPlan[] = [];
-  if (willRelax) {
-    const candidates = gate2Sorted.filter((s) => !strictKeys.has(planKeyNoSegment2(s)));
-    candidates.sort((a, b) => totalAnnualCost(a) - totalAnnualCost(b));
-    backfills.push(...candidates.slice(0, backfillNeeded));
+  if (backfillNeeded > 0) {
+    const tierA = gate2Sorted
+      .filter((s) => !strictKeys.has(planKeyNoSegment2(s)))
+      .sort(compareByCostThenTiebreakers)
+      .slice(0, backfillNeeded);
+    backfills.push(...tierA);
+    backfillNeeded -= tierA.length;
+    for (const t of tierA) strictKeys.add(planKeyNoSegment2(t));
+  }
+  if (backfillNeeded > 0) {
+    const gate2Keys = new Set(gate2Sorted.map(planKeyNoSegment2));
+    const tierB = gate1
+      .filter((s) => !strictKeys.has(planKeyNoSegment2(s)) && !gate2Keys.has(planKeyNoSegment2(s)))
+      .sort(compareByCostThenTiebreakers)
+      .slice(0, backfillNeeded);
+    for (const t of tierB) {
+      t.score.medicationBackfill = true;
+      backfills.push(t);
+    }
   }
   const diversified = [...strictTop, ...backfills];
 
   // ── Rank by cost (entire pool) ────────────────────────────────────
-  const rankedByCost = [...rawScored].sort((a, b) => totalAnnualCost(a) - totalAnnualCost(b));
+  const rankedByCost = [...rawScored].sort(compareByCostThenTiebreakers);
   const N = rankedByCost.length;
   rankedByCost.forEach((s, i) => {
     s.score.composite = N > 1 ? Math.round(((N - 1 - i) / (N - 1)) * 10000) / 100 : 100;

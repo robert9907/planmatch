@@ -80,6 +80,11 @@ export interface BrainScore {
   lowTierCount: number;        // tier 1 or 2
   // Provider integration — soft adjuster, not an axis
   allProvidersInNetwork: boolean;
+  /** Count of user-listed providers confirmed in-network on this plan
+   *  via pm_provider_network_cache. 0 when the user has no providers
+   *  or the cache had no rows for any of them. Drives the cost-tie
+   *  tiebreaker so plans with stronger network coverage win ties. */
+  providersInNetworkCount: number;
   anyProviderOutOfNetwork: boolean;
   // Hard disqualifier: every provider the user entered is
   // out-of-network on this plan (or absent from the cache, which per
@@ -116,6 +121,15 @@ export interface BrainScore {
     humanLabel: string;
     reason: 'not_covered' | 'brand_mismatch';
   }>;
+  // True when this plan was added to the Top 4 by the medication-
+  // backfill pass — i.e. it failed Gate 2 (one or more user drugs not
+  // on its formulary) but was pulled in because Gate 3 had fewer than
+  // 4 survivors and the pool needed filling. Lets the UI surface "this
+  // plan doesn't cover all your medications" on backfilled cards
+  // without recomputing the gate disposition. False on every plan that
+  // wasn't backfilled, including plans that legitimately fail to cover
+  // all meds but didn't make the Top 4.
+  medicationBackfill: boolean;
   // Ribbon assignment (filled in by ribbon pass — null until then)
   ribbon: RibbonType | null;
   // Plain-English summary of the year on this plan, condition-aware
