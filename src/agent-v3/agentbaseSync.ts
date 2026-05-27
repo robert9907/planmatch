@@ -16,6 +16,7 @@ import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
 import type { PlanBrainResult } from '@/hooks/usePlanBrain';
 import type { SyncInput } from '@/hooks/useAgentBaseRecommend';
+import { dedupeMedContext, dedupeProviderContext } from '@/lib/agentbaseSyncDedup';
 
 // Rob's broker identity. Matches the values surfaced on
 // ComplianceScreen + EnrollScreen disclaimers. Hardcoded because
@@ -80,7 +81,7 @@ export function buildAgentV3SyncInput(args: BuildArgs): SyncInput | null {
     medications,
     providers,
     brainResult,
-    medContext,
-    providerContext,
+    medContext: dedupeMedContext(medContext),
+    providerContext: dedupeProviderContext(providerContext),
   };
 }

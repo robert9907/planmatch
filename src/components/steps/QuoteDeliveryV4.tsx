@@ -131,6 +131,7 @@ import { useAgentBaseSyncSnapshot } from '@/hooks/useAgentBaseSyncSnapshot';
 import { BROKER } from '@/lib/constants';
 import { buildSunfireRecommendationText } from '@/lib/clipboardFormat';
 import { parseDrugName } from '@/lib/parseDrugName';
+import { dedupeMedContext, dedupeProviderContext } from '@/lib/agentbaseSyncDedup';
 
 // Single source of truth for the SunFire workspace URL — see
 // src/lib/constants.ts BROKER.sunfire. The previous in-file constant
@@ -1298,8 +1299,8 @@ export function QuoteDeliveryV4({
       medications,
       providers,
       brainResult: result,
-      medContext,
-      providerContext,
+      medContext: dedupeMedContext(medContext),
+      providerContext: dedupeProviderContext(providerContext),
     };
   }
 
