@@ -21,6 +21,7 @@
 // session.
 
 import { useEffect, useMemo, useState } from 'react';
+import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { usePlanBrain } from '@/hooks/usePlanBrain';
 import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
@@ -186,6 +187,12 @@ export function AgentV3App() {
   // and EnrollScreen's SunFire CTA. Hook handles idempotent same-plan
   // re-clicks + auto-retry; UI never blocks waiting for it.
   const agentbaseSync = useAgentBaseRecommend();
+
+  // Snap-to-Session: shared capture session for the whole agent-v3
+  // shell. Hoisted here so IntakeScreen (trigger), MedsScreen (med
+  // inbox) and ProvidersScreen (provider inbox) all observe the same
+  // queue. The hook is a no-op until SnapTrigger calls capture.start().
+  const capture = useCaptureSession();
 
   // Backfill rxcuis on any seeded / hydrated meds that lack one — the
   // formulary + drug-cost lookups all key on rxcui, so without this hook
@@ -716,6 +723,7 @@ export function AgentV3App() {
           <IntakeScreen
             eligiblePlans={eligiblePlans}
             presetCurrentPlanLabel={presetCurrentPlanLabel}
+            capture={capture}
             onNext={() => setScreen('disclaimers')}
           />
         )}
@@ -729,6 +737,7 @@ export function AgentV3App() {
         {screen === 'meds' && (
           <MedsScreen
             clientView={clientView}
+            capture={capture}
             onBack={() => setScreen('disclaimers')}
             onNext={() => setScreen('providers')}
           />
@@ -737,6 +746,7 @@ export function AgentV3App() {
           <ProvidersScreen
             clientView={clientView}
             rankedPlanIds={rankedPlanIds}
+            capture={capture}
             onBack={() => setScreen('meds')}
             onNext={() => setScreen('priorities')}
           />

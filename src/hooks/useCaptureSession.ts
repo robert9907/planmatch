@@ -21,7 +21,13 @@ export interface UseCaptureSessionResult {
   approvedCount: number;
   isStarting: boolean;
   startError: string | null;
-  start: (input: { client_name?: string; client_phone: string; send_sms?: boolean }) => Promise<CaptureStartResponse | null>;
+  start: (input: {
+    client_name?: string;
+    client_phone: string;
+    send_sms?: boolean;
+    agent_session_id?: string;
+    sms_variant?: 'capture' | 'snap';
+  }) => Promise<CaptureStartResponse | null>;
   approve: (itemId: string) => IncomingQueueItem | null;
   reject: (itemId: string) => void;
   reset: () => void;
@@ -91,7 +97,13 @@ export function useCaptureSession(): UseCaptureSessionResult {
   }, [queue]);
 
   const start = useCallback(
-    async (input: { client_name?: string; client_phone: string; send_sms?: boolean }) => {
+    async (input: {
+      client_name?: string;
+      client_phone: string;
+      send_sms?: boolean;
+      agent_session_id?: string;
+      sms_variant?: 'capture' | 'snap';
+    }) => {
       setIsStarting(true);
       setStartError(null);
       try {

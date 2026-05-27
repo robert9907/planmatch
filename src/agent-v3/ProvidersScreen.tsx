@@ -23,6 +23,7 @@
 //     final state is the colored badge, not "Verified".
 
 import { useEffect, useMemo, useState } from 'react';
+import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
 import { useProviderSearch } from '@/hooks/useProviderSearch';
 import { useSession } from '@/hooks/useSession';
 import { checkNetworkBatch, type NetworkStatus } from '@/lib/networkCheck';
@@ -30,6 +31,7 @@ import { fetchPlansForClient } from '@/lib/planCatalog';
 import type { Plan } from '@/types/plans';
 import type { Provider } from '@/types/session';
 import { AgentInsight, Card, Container, Header, Nav } from './atoms';
+import { SnapInbox } from './SnapInbox';
 import { FADE_SLIDE_IN } from './styles';
 
 interface Props {
@@ -39,6 +41,7 @@ interface Props {
   /** Plans pre-sorted by brain composite, optional. Falls back to raw
    *  fetchPlansForClient ordering when the brain hasn't run yet. */
   rankedPlanIds?: string[];
+  capture: UseCaptureSessionResult;
 }
 
 type RowState = 'queued' | 'checking' | NetworkStatus;
@@ -53,6 +56,7 @@ export function ProvidersScreen({
   onBack,
   clientView,
   rankedPlanIds,
+  capture,
 }: Props) {
   const client = useSession((s) => s.client);
   const providers = useSession((s) => s.providers);
@@ -100,6 +104,9 @@ export function ProvidersScreen({
         title="Your doctors"
         sub="Verifying network status across all recommended plans…"
       />
+
+      <SnapInbox capture={capture} accept="provider" />
+
       <AddProviderPanel
         state={client.state}
         excludeNpis={providers

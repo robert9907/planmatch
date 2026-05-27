@@ -64,6 +64,10 @@ export interface CaptureSessionRow {
   client_name: string | null;
   client_phone: string | null;
   started_by: string | null;
+  // Set when the capture session was launched from agent-v3's
+  // "Send Snap Link" button. Lets the broker reconcile snapped items
+  // back to the quoting session that asked for them.
+  agent_session_id: string | null;
   payload: CaptureItem[];
   item_count: number;
   last_item_at: string | null;

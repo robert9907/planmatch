@@ -20,6 +20,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Plan } from '@/types/plans';
+import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
 import { useSession } from '@/hooks/useSession';
 import type { StateCode } from '@/types/session';
 import {
@@ -31,6 +32,7 @@ import {
   Header,
   Nav,
 } from './atoms';
+import { SnapTrigger } from './SnapTrigger';
 
 interface Props {
   /** Plan catalog fetched by AgentV3App for the client's county+state.
@@ -43,12 +45,17 @@ interface Props {
    *  still loading — so the broker sees the plan pre-selected instantly
    *  on landing instead of an empty input that fills a beat later. */
   presetCurrentPlanLabel?: string | null;
+  /** Shared capture session — lifted to AgentV3App so the Meds and
+   *  Providers screens can observe the same queue. SnapTrigger uses it
+   *  to send the SMS link and surface the live status pill. */
+  capture: UseCaptureSessionResult;
   onNext: () => void;
 }
 
 export function IntakeScreen({
   eligiblePlans,
   presetCurrentPlanLabel,
+  capture,
   onNext,
 }: Props) {
   const client = useSession((s) => s.client);
@@ -439,6 +446,9 @@ export function IntakeScreen({
           )}
         </div>
       </Card>
+      <div style={{ marginTop: 14 }}>
+        <SnapTrigger capture={capture} />
+      </div>
       <Nav onNext={onNext} nextDisabled={!canContinue} />
     </Container>
   );

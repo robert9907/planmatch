@@ -33,12 +33,18 @@ export async function sendCaptureSms(params: {
   to: string;
   clientFirstName: string;
   link: string;
+  /** 'capture' = original async "photograph your bottles before our
+   *  call" flow. 'snap' = mid-call Snap-to-Session — copy is shorter,
+   *  acknowledges the active call, and emphasizes the 2-minute window. */
+  variant?: 'capture' | 'snap';
 }): Promise<{ sid: string }> {
   const greeting = params.clientFirstName ? `Hi ${params.clientFirstName}! ` : 'Hi! ';
   const body =
-    `${greeting}Rob Simm (Generation Health) asked you to photograph your medication bottles. ` +
-    `Tap the link and follow the prompts — it only takes a minute:\n${params.link}\n\n` +
-    `This link expires in 24 hours. Reply STOP to opt out.`;
+    params.variant === 'snap'
+      ? `${greeting}Rob from Generation Health here. Tap this link to snap photos of your pill bottles so I can find you the best plan: ${params.link}\n\nTakes 2 minutes. Reply STOP to opt out.`
+      : `${greeting}Rob Simm (Generation Health) asked you to photograph your medication bottles. ` +
+        `Tap the link and follow the prompts — it only takes a minute:\n${params.link}\n\n` +
+        `This link expires in 24 hours. Reply STOP to opt out.`;
 
   const msg = await twilio().messages.create({
     to: normalizePhone(params.to),

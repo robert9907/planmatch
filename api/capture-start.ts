@@ -10,13 +10,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const body = req.body as
-      | { client_name?: string; client_phone?: string; started_by?: string; send_sms?: boolean }
+      | {
+          client_name?: string;
+          client_phone?: string;
+          started_by?: string;
+          send_sms?: boolean;
+          agent_session_id?: string;
+          sms_variant?: 'capture' | 'snap';
+        }
       | undefined;
 
     const clientName = (body?.client_name ?? '').trim();
     const clientPhone = (body?.client_phone ?? '').trim();
     const startedBy = (body?.started_by ?? '').trim() || null;
+    const agentSessionId = (body?.agent_session_id ?? '').trim() || null;
     const sendSms = body?.send_sms !== false;
+    const smsVariant = body?.sms_variant === 'snap' ? 'snap' : 'capture';
 
     if (!clientPhone) return badRequest(res, 'client_phone is required');
 
@@ -32,6 +41,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         client_name: clientName || null,
         client_phone: normalizedPhone,
         started_by: startedBy,
+        agent_session_id: agentSessionId,
       })
       .select('id, token, status, created_at, expires_at')
       .single();
@@ -45,6 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           to: normalizedPhone,
           clientFirstName: firstName(clientName),
           link,
+          variant: smsVariant,
         });
       } catch (err) {
         smsResult = { error: err instanceof Error ? err.message : String(err) };

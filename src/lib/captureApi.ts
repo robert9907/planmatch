@@ -26,6 +26,13 @@ export function startCapture(input: {
   client_phone: string;
   started_by?: string;
   send_sms?: boolean;
+  /** Agent-v3 session id — opt-in so the row in capture_sessions can
+   *  be reconciled back to the quoting session that asked for it. */
+  agent_session_id?: string;
+  /** Pick the SMS body copy: 'capture' is the original async flow,
+   *  'snap' is the mid-call Snap-to-Session variant. Defaults to
+   *  'capture' on the server when omitted. */
+  sms_variant?: 'capture' | 'snap';
 }): Promise<CaptureStartResponse> {
   return postJson('/api/capture-start', input);
 }

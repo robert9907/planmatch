@@ -32,6 +32,7 @@
 //     implementation as-is or restyle.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
 import { useDrugCosts } from '@/hooks/useDrugCosts';
 import { useDrugSearch } from '@/hooks/useDrugSearch';
 import { useSession } from '@/hooks/useSession';
@@ -53,12 +54,14 @@ import {
   TierBadge,
   fmt,
 } from './atoms';
+import { SnapInbox } from './SnapInbox';
 import { FADE_SLIDE_IN } from './styles';
 
 interface Props {
   onNext: () => void;
   onBack: () => void;
   clientView: boolean;
+  capture: UseCaptureSessionResult;
 }
 
 // Pure-visual icon picker — falls back to a generic capsule if nothing
@@ -75,7 +78,7 @@ function iconForMed(med: Medication): string {
   return '💊';
 }
 
-export function MedsScreen({ onNext, onBack, clientView }: Props) {
+export function MedsScreen({ onNext, onBack, clientView, capture }: Props) {
   const client = useSession((s) => s.client);
   const medications = useSession((s) => s.medications);
   const addMedication = useSession((s) => s.addMedication);
@@ -163,6 +166,8 @@ export function MedsScreen({ onNext, onBack, clientView }: Props) {
         title="Your medications"
         sub="Checking coverage and costs across all plans…"
       />
+
+      <SnapInbox capture={capture} accept="medication" />
 
       <AddMedPanel
         excludeRxcuis={medications
