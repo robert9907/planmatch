@@ -1,14 +1,12 @@
-// Verify the 4-gate brain funnel against real Durham NC data.
+// Verify the 4-gate brain funnel against real Durham NC data, running
+// three priority scenarios to exercise the new Gate 3:
 //
-// Client profile: Christopher Eckstein MD (NPI 1003023201, Durham,
-// neurology) + 2 common drugs (metformin + atorvastatin generics) +
-// priorities = dental + OTC.
+//   A. dental + otc                    — pure richness rank
+//   B. dental + vision + partb_giveback— 3-way richness rank
+//   C. dental + transportation         — richness + binary filter
 //
-// Reports:
-//   • Pool size + Gate 1 / 2 / 3 survivors
-//   • Top 4 after Gate 3 (richness)
-//   • Gate 4 cost sort
-//   • Side-by-side: old 3-term cost vs new full-bucket cost per pick
+// Client: Christopher Eckstein MD (NPI 1003023201, Durham, neurology)
+// + 2 widely-covered Tier 1/2 generics.
 //
 // Read-only.
 
@@ -49,7 +47,7 @@ async function paginate<T>(
   return out;
 }
 
-// ── 1. Load Durham plans ─────────────────────────────────────────
+// ── Load shared inputs ───────────────────────────────────────────
 const plans = await paginate<PmPlanRow>((f, t) =>
   sb.from('pm_plans')
     .select(
@@ -58,9 +56,6 @@ const plans = await paginate<PmPlanRow>((f, t) =>
     .eq('state', 'NC').ilike('county_name', 'Durham')
     .range(f, t),
 );
-console.log(`Pool: ${plans.length} Durham plan-segments`);
-
-// ── 2. Benefits ─────────────────────────────────────────────────
 const contractIds = [...new Set(plans.map((p) => p.contract_id))];
 const benefits = await paginate<PlanBenefitRow>((f, t) =>
   sb.from('pm_plan_benefits')
@@ -76,11 +71,7 @@ for (const b of benefits) {
   list.push(b);
   benefitsByPlanKey.set(key, list);
 }
-console.log(`Benefits rows: ${benefits.length} across ${benefitsByPlanKey.size} plan keys`);
 
-// ── 3. Pick 2 widely-stocked rxcuis ─────────────────────────────
-// Two widely-covered Durham generics — picked by sampling H1914-009's
-// formulary and confirming both appear on 64/74 Durham plans.
 const drugRxcuis = ['313096', '1010739'];
 const formularyHits = await paginate<{ contract_id: string; plan_id: string; rxcui: string; tier: number | null; copay: number | null; coinsurance: number | null }>(
   (f, t) =>
@@ -105,9 +96,7 @@ for (const r of formularyHits) {
   } as unknown as FormularyCoverage);
   formularyByPlanKey.set(key, map);
 }
-console.log(`Formulary hits: ${formularyHits.length} across ${formularyByPlanKey.size} plan keys`);
 
-// ── 4. Provider cache for NPI 1003023201 (Eckstein, Durham) ─────
 const providerNpi = '1003023201';
 const provRows = await paginate<{ plan_id: string; npi: string; covered: boolean }>(
   (f, t) =>
@@ -123,80 +112,128 @@ for (const r of provRows) {
   map.set(String(r.npi), { npi: String(r.npi), covered: r.covered });
   providerNetworkByPlanKey.set(r.plan_id, map);
 }
-console.log(`Provider rows for NPI ${providerNpi}: ${provRows.length}`);
 
-// MAPD set so the brain doesn't drop MA-only plans on the no-VA path
 const mapdContractPlanIds = new Set<string>();
 for (const key of formularyByPlanKey.keys()) mapdContractPlanIds.add(key);
 
-// ── 5. Build BrainInputs ────────────────────────────────────────
-const userProfile = {
+// ── Probe each scenario ──────────────────────────────────────────
+const baseProfile = {
   drugs: drugRxcuis.map((rxcui) => ({ rxcui, name: `drug-${rxcui}` })),
   providers: [{ npi: providerNpi, name: 'Eckstein, Christopher MD' }],
-  priorities: new Set<string>(['dental', 'otc']),
-  csnpConditions: [],
-  conditionSupplies: [],
+  csnpConditions: [] as ReadonlyArray<never>,
+  conditionSupplies: [] as ReadonlyArray<string>,
   age: 67,
   hasVaDrugCoverage: false,
 };
-const input: BrainInputs = {
-  plans,
-  benefitsByPlanKey,
-  formularyByPlanKey,
-  userProfile,
-  county: 'Durham',
-  providerNetworkByPlanKey,
-  mapdContractPlanIds,
-};
 
-// ── 6. Run the brain ────────────────────────────────────────────
-console.log('\nRunning brain…\n');
-const output = runPlanBrain(input);
-console.log(`Final ranked plans: ${output.ranked.length}`);
-console.log(`liveTop3 picks: ${output.liveTop3?.picks.length ?? 0}\n`);
+function runScenario(label: string, priorities: string[]) {
+  const input: BrainInputs = {
+    plans,
+    benefitsByPlanKey,
+    formularyByPlanKey,
+    userProfile: { ...baseProfile, priorities: new Set<string>(priorities) },
+    county: 'Durham',
+    providerNetworkByPlanKey,
+    mapdContractPlanIds,
+  };
+  const output = runPlanBrain(input);
+  console.log(`\n══════════ ${label} ══════════`);
+  console.log(`priorities: [${priorities.join(', ')}]`);
+  console.log(`pool=${plans.length} → eligible+ranked=${output.ranked.length}`);
+  console.log(`top picks: ${output.liveTop3?.picks.length ?? 0}`);
 
-const top4 = output.liveTop3?.picks.map((p) => p.plan.row) ?? [];
+  const picks = output.liveTop3?.picks ?? [];
+  if (picks.length === 0) {
+    console.log('(no picks)');
+    return { label, priorities, top4: [] };
+  }
+  // Pull per-priority dollar values so we can show WHY each plan ranked.
+  console.log('\nTop 4:');
+  const head: string[] = ['#', 'plan', 'name'.padEnd(36)];
+  for (const p of priorities) {
+    if (p === 'transportation') continue; // binary filter, not scored
+    head.push(`${p}/yr`);
+  }
+  head.push('Σ rich', 'cost/yr');
+  console.log('  ' + head.join(' │ '));
+  const rows: any[] = [];
+  for (let i = 0; i < picks.length; i += 1) {
+    const pick = picks[i];
+    const scored = output.ranked.find(
+      (s) =>
+        s.row.contract_id === pick.plan.row.contract_id &&
+        s.row.plan_id === pick.plan.row.plan_id &&
+        s.row.segment_id === pick.plan.row.segment_id,
+    )!;
+    const b = scored.benefits;
+    const dental = (() => {
+      const r = b.find((x) => x.benefit_category === 'dental');
+      return r ? r.coverage_amount ?? r.max_coverage ?? 0 : 0;
+    })();
+    const vision = (() => {
+      const r = b.find((x) => x.benefit_category === 'vision');
+      return r ? r.coverage_amount ?? r.max_coverage ?? 0 : 0;
+    })();
+    const otcAnnual = (() => {
+      const r = b.find((x) => x.benefit_category === 'otc');
+      return r ? (r.coverage_amount ?? 0) * 4 : 0;
+    })();
+    const giveback = (() => {
+      const r = b.find((x) => x.benefit_category === 'partb_giveback');
+      return r ? (r.coverage_amount ?? r.max_coverage ?? 0) * 12 : 0;
+    })();
+    const valMap: Record<string, number> = {
+      dental, vision, otc: otcAnnual, partb_giveback: giveback,
+    };
+    const sum = priorities
+      .filter((p) => p !== 'transportation')
+      .reduce((acc, p) => acc + (valMap[p] ?? 0), 0);
+    const row: any = {
+      n: i + 1,
+      plan: `${pick.plan.row.contract_id}-${pick.plan.row.plan_id}`,
+      name: String(pick.plan.row.plan_name).slice(0, 36),
+    };
+    for (const p of priorities) {
+      if (p === 'transportation') continue;
+      row[p] = `$${valMap[p] ?? 0}`;
+    }
+    row.richness = `$${sum}`;
+    row.cost = `$${scored.score.realAnnualCost.netAnnual}`;
+    rows.push(row);
+  }
+  console.table(rows);
 
-// ── 7. Side-by-side cost: old 3-term vs new full bucket ─────────
-function oldCost(s: { score: { totalAnnualDrugCost: number; partBGivebackAnnual: number }; row: { monthly_premium: number | null } }): number {
-  return (s.row.monthly_premium ?? 0) * 12 + s.score.totalAnnualDrugCost - s.score.partBGivebackAnnual;
+  // Confirm transportation filter behavior when applicable.
+  if (priorities.includes('transportation')) {
+    const passTransport = output.ranked.filter((s) =>
+      s.benefits.some((b) => b.benefit_category === 'transportation'),
+    );
+    const failTransport = output.ranked.filter(
+      (s) => !s.benefits.some((b) => b.benefit_category === 'transportation'),
+    );
+    console.log(
+      `\nTransportation filter: ${passTransport.length} kept, ${failTransport.length} would have been dropped (the "ranked" list shows pre-filter pool, but Top picks should NEVER include a plan from the dropped set).`,
+    );
+    const top4Set = new Set(picks.map((p) => `${p.plan.row.contract_id}-${p.plan.row.plan_id}`));
+    const violations = failTransport.filter((s) =>
+      top4Set.has(`${s.row.contract_id}-${s.row.plan_id}`),
+    );
+    if (violations.length > 0) {
+      console.log(`⚠️  ${violations.length} top picks lack transportation — filter failed.`);
+    } else {
+      console.log(`✓ All top picks file transportation.`);
+    }
+  }
+  return {
+    label,
+    priorities,
+    top4: picks.map((p) => `${p.plan.row.contract_id}-${p.plan.row.plan_id}`),
+  };
 }
 
-console.log('Top 4 after Gate 3 (richness DESC) — Gate 4 cost columns side-by-side:');
-console.log();
-const head = ['#', 'plan', 'name', 'premium/yr', 'drugs', 'med bucket', 'ded', 'snf+amb+dme', 'giveback', 'old 3-term', 'new full', 'Δ'];
-console.log('  ' + head.join(' │ '));
-for (let i = 0; i < top4.length; i += 1) {
-  const row = top4[i];
-  const scored = output.ranked.find(
-    (s) => s.row.contract_id === row.contract_id && s.row.plan_id === row.plan_id && s.row.segment_id === row.segment_id,
-  )!;
-  const r = scored.score.realAnnualCost;
-  const old = oldCost(scored);
-  const nu = r.netAnnual;
-  const extras = r.snfExpected + r.ambulanceExpected + r.dmeExpected;
-  console.log(`  ${i + 1} │ ${row.contract_id}-${row.plan_id} │ ${String(row.plan_name).slice(0, 32).padEnd(32)} │ $${r.premium} │ $${r.drugCost} │ $${r.cappedMedicalBucket - r.deductibleCost - extras} │ $${r.deductibleCost} │ $${extras} │ -$${r.partBGivebackSavings} │ $${old} │ $${nu} │ ${nu - old >= 0 ? '+' : ''}$${nu - old}`);
-}
+const a = runScenario('A. dental + OTC', ['dental', 'otc']);
+const b = runScenario('B. dental + vision + partb_giveback', ['dental', 'vision', 'partb_giveback']);
+const c = runScenario('C. dental + transportation (binary filter)', ['dental', 'transportation']);
 
-// ── 8. Show Gate funnel stats from console.info (we captured them above) ──
-console.log('\nGate funnel summary from runPlanBrain (see prior [brain-funnel] lines).');
-
-// ── 9. Cost-rank comparison: how does the top 4 ORDER change? ───
-console.log('\nRank changes between old and new cost formula (top 10):');
-const allScored = output.ranked.slice(0, 30);
-const oldRank = [...allScored].sort((a, b) => oldCost(a) - oldCost(b));
-const newRank = [...allScored].sort((a, b) => a.score.realAnnualCost.netAnnual - b.score.realAnnualCost.netAnnual);
-const rows = [];
-for (let i = 0; i < Math.min(10, oldRank.length); i += 1) {
-  const oldPick = oldRank[i];
-  const newPick = newRank[i];
-  rows.push({
-    rank: i + 1,
-    old_plan: `${oldPick.row.contract_id}-${oldPick.row.plan_id}`,
-    old_cost: oldCost(oldPick),
-    new_plan: `${newPick.row.contract_id}-${newPick.row.plan_id}`,
-    new_cost: newPick.score.realAnnualCost.netAnnual,
-    changed: oldPick.row.contract_id !== newPick.row.contract_id || oldPick.row.plan_id !== newPick.row.plan_id ? 'YES' : '',
-  });
-}
-console.table(rows);
+console.log('\n══════════ TOP-4 COMPARISON ACROSS SCENARIOS ══════════');
+console.table([a, b, c].map((s) => ({ scenario: s.label, picks: s.top4.join(', ') })));

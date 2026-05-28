@@ -324,131 +324,100 @@ function applyMedicationGate(
 
 // ─── Gate 3 — extras richness rank ───────────────────────────────────
 //
-// Per the 4-gate philosophy: rank survivors by RICHNESS of the user's
-// selected priority categories, top 4 advance. NOT a binary floor.
+// Two phases, in order:
 //
-// For dollar-allowance categories (dental, vision, hearing, OTC,
-// meals, transportation, giveback) the contribution is the filed
-// annual value. For binary-presence categories (fitness, telehealth,
-// meal_benefit) we use a category-specific default value when the row
-// is present. For copay categories (chiropractic, acupuncture,
-// podiatry, diabetic_supplies) richness inverts the copay against a
-// notional baseline so $0 copay outranks $30 copay. Sum across the
-// user's selected priorities → one comparable score per plan.
+// Phase A — TRANSPORTATION BINARY FILTER. When the user selects
+// transportation as a need, any plan that doesn't file a
+// transportation benefit row is eliminated. Carriers don't all offer
+// transport; it's the only "true binary" need in the priority menu
+// because it's bus rides to dialysis or you walk.
 //
-// Empty priorities ⇒ rank by cost (compareByFullCost). With no
-// preferences, lower cost is the only signal worth ranking on.
+// Phase B — RICHNESS RANK by combined dollar value of the user's
+// selected categories. The menu is exactly 4:
+//
+//   dental         — annual allowance (extractCategoryAnnualValue)
+//   vision         — annual allowance (extractCategoryAnnualValue)
+//   otc            — quarterly × 4 (extractOtcQuarterly)
+//   partb_giveback — monthly × 12 (extractGivebackMonthly)
+//
+// Sum across selected. Sort DESC. Top 4 advance to Gate 4.
+//
+// Rationale: every other supplemental benefit (fitness, hearing,
+// chiropractic, telehealth, meals, low_moop, low_drug_costs, etc.) is
+// either nearly universal (so it doesn't differentiate) or it belongs
+// in Gate 4 (cost). Brokers and seniors converge on these 4 in real
+// conversations.
+//
+// Empty priorities ⇒ rank by cost so Gate 4's sort isn't a no-op.
 
-const RICHNESS_COPAY_BASELINE: Record<string, number> = {
-  chiropractic: 50,
-  acupuncture: 50,
-  podiatry: 50,
-  diabetic_supplies: 35,    // IRA cap on insulin
-};
-const RICHNESS_BINARY_VALUE: Record<string, number> = {
-  fitness: 300,
-  telehealth: 100,
-  meal_benefit: 150,
-};
+const RANKING_PRIORITY_KEYS = ['dental', 'vision', 'otc', 'partb_giveback'] as const;
+type RankingPriorityKey = (typeof RANKING_PRIORITY_KEYS)[number];
 
 interface ExtrasRichnessDetail {
   totalValue: number;
   byPriority: Record<string, number>;
-  /** Priorities where the plan filed zero — used to populate
-   *  BrainScore.nearMiss / tradeoffWarnings without eliminating. */
-  missing: ReadonlyArray<string>;
+}
+
+function valueForPriority(s: BrainScoredPlan, pri: RankingPriorityKey): number {
+  if (pri === 'dental') return extractCategoryAnnualValue(s.benefits, 'dental');
+  if (pri === 'vision') return extractCategoryAnnualValue(s.benefits, 'vision');
+  if (pri === 'otc') return extractOtcQuarterly(s.benefits).quarterly * 4;
+  return extractGivebackMonthly(s.benefits) * 12;
 }
 
 function extrasRichness(
   s: BrainScoredPlan,
   priorities: ReadonlySet<string>,
-  pool: ReadonlyArray<BrainScoredPlan>,
-  thresholds: Partial<Record<'dental' | 'vision' | 'otc' | 'partb_giveback', number>>,
+  thresholds: Partial<Record<RankingPriorityKey, number>>,
 ): ExtrasRichnessDetail {
   const byPriority: Record<string, number> = {};
-  const missing: string[] = [];
   let total = 0;
-  for (const pri of priorities) {
-    let v = 0;
-    if (pri === 'dental') {
-      v = extractCategoryAnnualValue(s.benefits, 'dental');
-    } else if (pri === 'vision') {
-      v = extractCategoryAnnualValue(s.benefits, 'vision');
-    } else if (pri === 'hearing') {
-      v = extractCategoryAnnualValue(s.benefits, 'hearing');
-    } else if (pri === 'otc') {
-      v = extractOtcQuarterly(s.benefits).quarterly * 4;
-    } else if (pri === 'partb_giveback') {
-      v = extractGivebackMonthly(s.benefits) * 12;
-    } else if (pri === 'transportation') {
-      v = extractCategoryAnnualValue(s.benefits, 'transportation');
-      if (v === 0 && s.benefits.some((b) => b.benefit_category === 'transportation')) {
-        v = 100; // presence floor when filed without a dollar amount
-      }
-    } else if (pri === 'healthy_foods') {
-      v = extractCategoryAnnualValue(s.benefits, 'meals');
-    } else if (pri === 'fitness' || pri === 'telehealth' || pri === 'meal_benefit') {
-      const cat = pri === 'meal_benefit' ? 'meals' : pri;
-      const has = s.benefits.some((b) => b.benefit_category === cat);
-      v = has ? (RICHNESS_BINARY_VALUE[pri] ?? 0) : 0;
-    } else if (pri in RICHNESS_COPAY_BASELINE) {
-      const row = s.benefits.find((b) => b.benefit_category === pri);
-      if (!row) v = 0;
-      else {
-        const copay = row.copay ?? null;
-        const base = RICHNESS_COPAY_BASELINE[pri];
-        v = copay != null ? Math.max(0, base - copay) : base / 2;
-      }
-    } else if (pri === 'low_moop') {
-      const moops = pool.map((p) => p.row.moop ?? Number.POSITIVE_INFINITY);
-      const maxMoop = Math.max(...moops.filter((m) => Number.isFinite(m)), 0);
-      const planMoop = s.row.moop ?? maxMoop;
-      v = maxMoop > 0 ? Math.round(((maxMoop - planMoop) / maxMoop) * 1000) : 0;
-    } else if (pri === 'low_drug_costs') {
-      const costs = pool.map((p) => p.score.totalAnnualDrugCost);
-      const maxCost = Math.max(...costs, 0);
-      v = maxCost > 0 ? Math.round(((maxCost - s.score.totalAnnualDrugCost) / maxCost) * 1000) : 0;
-    }
-    byPriority[pri] = v;
+  for (const key of RANKING_PRIORITY_KEYS) {
+    if (!priorities.has(key)) continue;
+    const v = valueForPriority(s, key);
+    byPriority[key] = v;
     total += v;
-    if (v === 0) missing.push(pri);
-    // Capture user's stated threshold gap for nearMiss display, but
-    // do NOT eliminate. The philosophy is rank-not-floor.
-    const t = (thresholds as Record<string, number | undefined>)[pri];
+    // Threshold shortfall stays available for the UI's "you asked for
+    // $2,000 dental, this plan files $1,500" copy. We do NOT eliminate
+    // on threshold — Gate 3 is rank, not floor.
+    const t = thresholds[key];
     if (t != null && t > 0 && v < t && s.score.nearMiss == null) {
       s.score.nearMiss = {
-        preference: pri,
+        preference: key,
         userThreshold: t,
         planValue: v,
         shortfall: t - v,
       };
     }
   }
-  return { totalValue: total, byPriority, missing };
+  return { totalValue: total, byPriority };
 }
 
-// Backward-compatible bucket labels for downstream consumers — the
-// post-rebuild buckets are degenerate (`fullMatch` = ranked top set,
-// `nearMiss`/`multiMiss` = []), kept so the LiveTop3 + ribbon code
-// doesn't need to change shape.
+// Backward-compatible bucket shape kept so downstream LiveTop3 + C-SNP
+// reserved-slot code doesn't need rewiring. fullMatch = the ranked
+// pool; nearMiss/multiMiss stay empty.
 interface ExtrasGateResult {
-  fullMatch: BrainScoredPlan[];          // richness DESC
+  fullMatch: BrainScoredPlan[];
   nearMiss: BrainScoredPlan[];
   multiMiss: BrainScoredPlan[];
   selectedExtras: ReadonlyArray<string>;
-  /** Per-plan richness breakdown, keyed by `${contract}-${plan}-${segment}`.
-   *  Used by debug logging and probe scripts to show why a plan ranked. */
   richnessByPlanKey: Map<string, ExtrasRichnessDetail>;
+  /** Plans eliminated by Phase A transportation filter — surfaced for
+   *  diagnostics. Empty unless the user selected transportation. */
+  filteredByTransportation: BrainScoredPlan[];
+}
+
+function planHasTransportation(s: BrainScoredPlan): boolean {
+  return s.benefits.some((b) => b.benefit_category === 'transportation');
 }
 
 function applyExtrasGate(
   pool: ReadonlyArray<BrainScoredPlan>,
   priorities: ReadonlySet<string>,
-  thresholds: Partial<Record<'dental' | 'vision' | 'otc' | 'partb_giveback', number>>,
+  thresholds: Partial<Record<RankingPriorityKey, number>>,
 ): ExtrasGateResult {
+  // Build the user-facing label list for the LiveTop3 ribbon UI.
   const selectedExtras: string[] = [];
-  // Build the user-facing label list for each priority so the LiveTop3
-  // ribbon UI can render "fullfilled: dental $2,000+, OTC, fitness".
   for (const pri of priorities) {
     if (pri === 'dental') {
       const t = thresholds.dental ?? 0;
@@ -462,64 +431,59 @@ function applyExtrasGate(
     } else if (pri === 'partb_giveback') {
       const t = thresholds.partb_giveback ?? 0;
       selectedExtras.push(t > 0 ? `Part B giveback ${fmtUSD(t)}+/mo` : 'Part B giveback');
-    } else if (pri === 'healthy_foods') {
-      selectedExtras.push('healthy foods');
-    } else if (pri === 'low_moop') {
-      selectedExtras.push('low MOOP');
-    } else if (pri === 'low_drug_costs') {
-      selectedExtras.push('low drug costs');
-    } else if (pri === 'meal_benefit') {
-      selectedExtras.push('post-discharge meals');
-    } else if (pri === 'diabetic_supplies') {
-      selectedExtras.push('diabetic supplies');
-    } else {
-      // generic single-word priorities: fitness, hearing, transportation,
-      // telehealth, chiropractic, acupuncture, podiatry
-      selectedExtras.push(pri);
+    } else if (pri === 'transportation') {
+      selectedExtras.push('transportation');
     }
+    // Any other priority is silently ignored — the 5-key menu is the
+    // contract. Future menu additions need an explicit branch here.
   }
 
-  // Empty priorities ⇒ rank by full cost (Gate 4 logic — no preference
-  // signal to differentiate). compareByCostThenTiebreakers gets called
-  // by Gate 4 later, but we still need to emit a ranked pool here so
-  // the existing C-SNP reserved-slot code (which reads fullMatch /
-  // nearMiss) keeps working.
-  if (priorities.size === 0) {
+  // Phase A — transportation binary filter.
+  const filteredByTransportation: BrainScoredPlan[] = [];
+  let survivors: BrainScoredPlan[] = [...pool];
+  if (priorities.has('transportation')) {
+    const kept: BrainScoredPlan[] = [];
+    for (const s of survivors) {
+      if (planHasTransportation(s)) kept.push(s);
+      else filteredByTransportation.push(s);
+    }
+    survivors = kept;
+  }
+
+  // Phase B — richness rank.
+  const ranksSelected = RANKING_PRIORITY_KEYS.filter((k) => priorities.has(k));
+  const richnessByPlanKey = new Map<string, ExtrasRichnessDetail>();
+
+  if (ranksSelected.length === 0) {
+    // No richness priorities selected (either nothing chosen, or only
+    // transportation). Cost-sort and let Gate 4 take it from here.
     return {
-      fullMatch: [...pool].sort(compareByCostThenTiebreakers),
+      fullMatch: [...survivors].sort(compareByCostThenTiebreakers),
       nearMiss: [],
       multiMiss: [],
       selectedExtras,
-      richnessByPlanKey: new Map(),
+      richnessByPlanKey,
+      filteredByTransportation,
     };
   }
 
-  const richnessByPlanKey = new Map<string, ExtrasRichnessDetail>();
-  for (const s of pool) {
-    const detail = extrasRichness(s, priorities, pool, thresholds);
-    richnessByPlanKey.set(planKeyNoSegment2(s), detail);
+  for (const s of survivors) {
+    richnessByPlanKey.set(planKeyNoSegment2(s), extrasRichness(s, priorities, thresholds));
   }
-
-  // Rank by richness DESC. Tiebreak on cost (lower cost wins amongst
-  // equally-rich plans) so the Gate 4 sort doesn't have to reshuffle
-  // the top 4.
-  const ranked = [...pool].sort((a, b) => {
+  const ranked = [...survivors].sort((a, b) => {
     const ra = richnessByPlanKey.get(planKeyNoSegment2(a))?.totalValue ?? 0;
     const rb = richnessByPlanKey.get(planKeyNoSegment2(b))?.totalValue ?? 0;
     if (ra !== rb) return rb - ra;
     return compareByCostThenTiebreakers(a, b);
   });
 
-  // Backward-compat: keep the fullMatch/nearMiss/multiMiss surface
-  // populated for the LiveTop3 + C-SNP code paths. fullMatch is the
-  // ranked top set (everyone advanced from Gate 2 is now ranked, not
-  // floored). nearMiss/multiMiss stay empty.
   return {
     fullMatch: ranked,
     nearMiss: [],
     multiMiss: [],
     selectedExtras,
     richnessByPlanKey,
+    filteredByTransportation,
   };
 }
 
@@ -863,11 +827,12 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   debugLog(`Gate 2: ${gate2Sorted.length}/${gate1.length} survived meds` +
     (gate2Result.relaxedDataGap ? ' (data-gap relax)' : ''));
 
-  // ── Gate 3 — preferences (full_match / near_miss / multi-miss) ────
+  // ── Gate 3 — transportation filter + dental/vision/OTC/giveback rank
   const extrasGate = applyExtrasGate(gate2Sorted, userPriorities, userThresholds);
   debugLog(
-    `Gate 3: fullMatch=${extrasGate.fullMatch.length} nearMiss=${extrasGate.nearMiss.length} ` +
-    `multiMiss=${extrasGate.multiMiss.length} (selected=[${extrasGate.selectedExtras.join(',')}])`,
+    `Gate 3: ${extrasGate.fullMatch.length}/${gate2Sorted.length} survived ` +
+    `(filtered by transportation: ${extrasGate.filteredByTransportation.length}, ` +
+    `selected=[${extrasGate.selectedExtras.join(',')}])`,
   );
 
   // ── Gate 4 — Top 4 selection ──────────────────────────────────────
