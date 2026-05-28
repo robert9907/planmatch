@@ -766,6 +766,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
+    // medical_deductible isn't in PBP_TYPE_TO_CATEGORY (no
+    // pm_plan_benefits row stores it as a benefit), but pbp_benefits
+    // does carry it from medicare_gov. Build a per-plan lookup so the
+    // Plan.annual_deductible fallback below can read it. Source-
+    // priority dedup already happened in bestByKey, so the first match
+    // here is the highest-rank source. Real data: 25/74 Durham plans
+    // have pbp_benefits.medical_deductible vs 2/74 in pm_plans —
+    // ~12× more coverage. Where both exist they sometimes disagree
+    // (H9725-015: pm=$365, pbp medicare_gov=$325) — we prefer PBP per
+    // the audit recommendation.
+    const medicalDeductibleByPlanKey = new Map<string, number>();
+    for (const row of bestByKey.values()) {
+      if (row.benefit_type !== 'medical_deductible') continue;
+      if (typeof row.copay !== 'number') continue;
+      const canonical = normalizePbpKey(row.plan_id);
+      // Skip duplicates — bestByKey already keeps the highest-rank row
+      // per (plan_id, benefit_type, tier_id), but a plan could file
+      // medical_deductible at multiple tier_ids. Take the smallest non-
+      // null copay as the headline deductible (Plan Finder convention).
+      const prior = medicalDeductibleByPlanKey.get(canonical);
+      if (prior == null || row.copay < prior) {
+        medicalDeductibleByPlanKey.set(canonical, row.copay);
+      }
+    }
+
     const synthBenefits: BenefitRow[] = [];
     for (const row of bestByKey.values()) {
       const canonical = normalizePbpKey(row.plan_id);
@@ -890,7 +915,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         counties: [...counties].sort(),
         plan_type: mapPlanType(row.plan_type, row.snp, row.snp_type),
         premium: row.monthly_premium ?? 0,
-        annual_deductible: row.annual_deductible,
+        // pm_plans.annual_deductible is sparsely populated (3% of Durham
+        // plans) while pbp_benefits.medical_deductible from medicare_gov
+        // hits 34%. Prefer PBP when it has a value — it's more current
+        // and authoritative than the landscape extract.
+        annual_deductible:
+          medicalDeductibleByPlanKey.get(normalizePbpKey(key)) ?? row.annual_deductible,
         moop_in_network: row.moop ?? 0,
         // pm_plans only carries in-network MOOP; OON isn't in the
         // landscape extract, so we leave it null and let the UI render
