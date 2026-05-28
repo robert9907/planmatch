@@ -112,6 +112,30 @@ export async function promote(opts: {
     );
     counts.pm_formulary_v2 = fr.rowCount ?? 0;
 
+    // ─── pm_rxcui_meta sync ───────────────────────────────────────────
+    //
+    // pm_formulary is a view: pm_formulary_v2 LEFT JOIN pm_rxcui_meta
+    // USING (rxcui). pm_formulary_v2 carries no drug_name; names live
+    // in pm_rxcui_meta. If that table isn't kept current, every
+    // formulary read returns drug_name = null (which is what caused the
+    // 19M-row backfill in scripts/backfill-formulary-drug-name.ts).
+    //
+    // Sync every rxcui present in pm_drugs into pm_rxcui_meta. This is
+    // a no-op for unchanged rows and an upsert otherwise — keeps the
+    // two name sources from drifting after each SPUF refresh. The
+    // RxNorm import (pm_drugs source) runs independently; this step
+    // just ensures the view's join target is current.
+    const mr = await c.query(
+      `
+      INSERT INTO pm_rxcui_meta (rxcui, drug_name, fetched_at)
+      SELECT rxcui, name, now() FROM pm_drugs
+      ON CONFLICT (rxcui) DO UPDATE
+        SET drug_name  = EXCLUDED.drug_name,
+            fetched_at = EXCLUDED.fetched_at
+      `,
+    );
+    counts.pm_rxcui_meta = mr.rowCount ?? 0;
+
     // ─── pm_beneficiary_cost_v2 (wide → long) ─────────────────────────
 
     await c.query(`DELETE FROM pm_beneficiary_cost_v2 WHERE plan_year = $1`, [planYear]);
