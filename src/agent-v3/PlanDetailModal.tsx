@@ -76,14 +76,28 @@ export function PlanDetailModal({
     { l: 'Outpatient surg. (ASC)', v: formatCostShare(plan.benefits.medical.outpatient_surgery_asc) },
     { l: 'Outpatient observation', v: formatCostShare(plan.benefits.medical.outpatient_observation) },
     { l: 'Lab services', v: formatCostShare(plan.benefits.medical.lab_services) },
-    { l: 'Diagnostic tests', v: formatCostShare(plan.benefits.medical.diagnostic_tests) },
+    { l: 'Diagnostic procedures', v: formatCostShare(plan.benefits.medical.diagnostic_procedures) },
     { l: 'X-ray', v: formatCostShare(plan.benefits.medical.xray) },
-    { l: 'Diagnostic radiology', v: formatCostShare(plan.benefits.medical.diagnostic_radiology) },
-    { l: 'Therapeutic radiology', v: formatCostShare(plan.benefits.medical.therapeutic_radiology) },
+    // Old diagnostic_radiology + therapeutic_radiology merged into the
+    // single PBP-aligned advanced_imaging category.
+    { l: 'Advanced imaging', v: formatCostShare(plan.benefits.medical.advanced_imaging) },
     { l: 'Mental health (indiv.)', v: formatCostShare(plan.benefits.medical.mental_health_individual) },
     { l: 'Mental health (group)', v: formatCostShare(plan.benefits.medical.mental_health_group) },
-    { l: 'Physical therapy', v: formatCostShare(plan.benefits.medical.physical_therapy) },
+    { l: 'Physical / speech therapy', v: formatCostShare(plan.benefits.medical.physical_speech_therapy) },
+    { l: 'Occupational therapy', v: formatCostShare(plan.benefits.medical.occupational_therapy) },
     { l: 'Telehealth', v: formatCostShare(plan.benefits.medical.telehealth) },
+    { l: 'Ambulance', v: formatCostShare(plan.benefits.medical.ambulance) },
+    { l: 'Air ambulance', v: formatCostShare(plan.benefits.medical.air_transportation) },
+    { l: 'Chiropractic', v: formatCostShare(plan.benefits.medical.chiropractic) },
+    { l: 'Acupuncture', v: formatCostShare(plan.benefits.medical.acupuncture) },
+    { l: 'Podiatry', v: formatCostShare(plan.benefits.medical.podiatry) },
+    { l: 'Substance abuse', v: formatCostShare(plan.benefits.medical.substance_abuse) },
+    { l: 'DME / prosthetics', v: formatCostShare(plan.benefits.medical.dme_prosthetics) },
+    { l: 'Part B drugs', v: formatCostShare(plan.benefits.medical.partb_drugs) },
+    { l: 'Diabetic supplies', v: formatCostShare(plan.benefits.medical.diabetic_supplies) },
+    { l: 'Part B insulin', v: formatCostShare(plan.benefits.medical.insulin) },
+    { l: 'Home health', v: formatCostShare(plan.benefits.medical.home_health) },
+    { l: 'Renal dialysis', v: formatCostShare(plan.benefits.medical.renal_dialysis) },
   ];
 
   const rxRows: DetailRow[] = [

@@ -302,18 +302,13 @@ function buildMetrics(args: {
       (p) => p.benefits.medical.outpatient_observation,
     ),
     csMetric('lab', 'Lab services', (p) => p.benefits.medical.lab_services),
-    csMetric('diag_tests', 'Diagnostic tests', (p) => p.benefits.medical.diagnostic_tests),
+    csMetric(
+      'diag_proc',
+      'Diagnostic procedures',
+      (p) => p.benefits.medical.diagnostic_procedures,
+    ),
     csMetric('xray', 'X-ray', (p) => p.benefits.medical.xray),
-    csMetric(
-      'diag_radiology',
-      'Diagnostic radiology',
-      (p) => p.benefits.medical.diagnostic_radiology,
-    ),
-    csMetric(
-      'ther_radiology',
-      'Therapeutic radiology',
-      (p) => p.benefits.medical.therapeutic_radiology,
-    ),
+    csMetric('imaging', 'Advanced imaging', (p) => p.benefits.medical.advanced_imaging),
     csMetric(
       'mh_indiv',
       'Mental health (indiv.)',
@@ -324,14 +319,47 @@ function buildMetrics(args: {
       'Mental health (group)',
       (p) => p.benefits.medical.mental_health_group,
     ),
-    csMetric('pt', 'Physical therapy', (p) => p.benefits.medical.physical_therapy),
+    csMetric(
+      'pst',
+      'Physical / speech therapy',
+      (p) => p.benefits.medical.physical_speech_therapy,
+    ),
+    csMetric('ot', 'Occupational therapy', (p) => p.benefits.medical.occupational_therapy),
     csMetric('telehealth', 'Telehealth', (p) => p.benefits.medical.telehealth),
-    // ── Rx tiers 1–5 ─────────────────────────────────────────────
+    // ── Transport ────────────────────────────────────────────────
+    csMetric('ambulance', 'Ambulance (ground)', (p) => p.benefits.medical.ambulance),
+    csMetric('air_amb', 'Air ambulance', (p) => p.benefits.medical.air_transportation),
+    // ── Specialty visit copays ───────────────────────────────────
+    csMetric('chiro', 'Chiropractic', (p) => p.benefits.medical.chiropractic),
+    csMetric('acu', 'Acupuncture', (p) => p.benefits.medical.acupuncture),
+    csMetric('pod', 'Podiatry', (p) => p.benefits.medical.podiatry),
+    csMetric('sa', 'Substance abuse', (p) => p.benefits.medical.substance_abuse),
+    // ── Equipment / Part B drugs / diabetic ──────────────────────
+    csMetric('dme', 'DME / prosthetics', (p) => p.benefits.medical.dme_prosthetics),
+    csMetric('partb_rx', 'Part B drugs', (p) => p.benefits.medical.partb_drugs),
+    csMetric(
+      'diab_sup',
+      'Diabetic supplies',
+      (p) => p.benefits.medical.diabetic_supplies,
+    ),
+    csMetric('insulin', 'Part B insulin', (p) => p.benefits.medical.insulin),
+    // ── Long-term / home ─────────────────────────────────────────
+    csMetric('hh', 'Home health', (p) => p.benefits.medical.home_health),
+    csMetric('dialysis', 'Renal dialysis', (p) => p.benefits.medical.renal_dialysis),
+    // ── Rx tiers ─────────────────────────────────────────────────
     csMetric('rx_t1', 'Rx Tier 1', (p) => p.benefits.rx_tiers.tier_1),
     csMetric('rx_t2', 'Rx Tier 2', (p) => p.benefits.rx_tiers.tier_2),
     csMetric('rx_t3', 'Rx Tier 3', (p) => p.benefits.rx_tiers.tier_3),
     csMetric('rx_t4', 'Rx Tier 4', (p) => p.benefits.rx_tiers.tier_4),
     csMetric('rx_t5', 'Rx Tier 5', (p) => p.benefits.rx_tiers.tier_5),
+    // Tier 6 is carrier-specific (Wellcare "Select Care" $0 generics,
+    // CSNP buckets). Optional on RxTierCopays; skip the row when the
+    // plan didn't file it.
+    csMetric(
+      'rx_t6',
+      'Rx Tier 6',
+      (p) => p.benefits.rx_tiers.tier_6 ?? { copay: null, coinsurance: null, description: null },
+    ),
     // ── Supplemental (string output, no winner highlighting) ─────
     {
       key: 'transport',

@@ -3107,12 +3107,12 @@ const MEDICAL_DEFS: MedicalDef[] = [
   { label: 'PCP',                pick: (p) => p.benefits?.medical?.primary_care },
   { label: 'Specialist',         pick: (p) => p.benefits?.medical?.specialist },
   { label: 'Labs',               pick: (p) => p.benefits?.medical?.lab_services },
-  { label: 'Imaging / MRI',      pick: (p) => p.benefits?.medical?.diagnostic_radiology },
+  { label: 'Imaging / MRI',      pick: (p) => p.benefits?.medical?.advanced_imaging },
   { label: 'ER',                 pick: (p) => p.benefits?.medical?.emergency },
   { label: 'Urgent Care',        pick: (p) => p.benefits?.medical?.urgent_care },
   { label: 'Outpatient Surgery', pick: (p) => p.benefits?.medical?.outpatient_surgery_hospital },
   { label: 'Mental Health',      pick: (p) => p.benefits?.medical?.mental_health_individual },
-  { label: 'PT / OT',            pick: (p) => p.benefits?.medical?.physical_therapy },
+  { label: 'PT / OT',            pick: (p) => p.benefits?.medical?.physical_speech_therapy },
   { label: 'Inpatient',          pick: (p) => p.benefits?.medical?.inpatient },
 ];
 

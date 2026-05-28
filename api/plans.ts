@@ -77,14 +77,26 @@ interface PlanBenefits {
     outpatient_surgery_asc: CostShare;
     outpatient_observation: CostShare;
     lab_services: CostShare;
-    diagnostic_tests: CostShare;
+    diagnostic_procedures: CostShare;
     xray: CostShare;
-    diagnostic_radiology: CostShare;
-    therapeutic_radiology: CostShare;
+    advanced_imaging: CostShare;
     mental_health_individual: CostShare;
     mental_health_group: CostShare;
-    physical_therapy: CostShare;
+    physical_speech_therapy: CostShare;
+    occupational_therapy: CostShare;
     telehealth: CostShare;
+    ambulance: CostShare;
+    air_transportation: CostShare;
+    chiropractic: CostShare;
+    acupuncture: CostShare;
+    podiatry: CostShare;
+    substance_abuse: CostShare;
+    dme_prosthetics: CostShare;
+    partb_drugs: CostShare;
+    diabetic_supplies: CostShare;
+    insulin: CostShare;
+    home_health: CostShare;
+    renal_dialysis: CostShare;
   };
   rx_tiers: {
     tier_1: CostShare;
@@ -994,12 +1006,8 @@ const CATEGORY_ALIAS: Record<string, string> = {
   lab_services: 'lab',
   outpatient_surgery_hospital: 'outpatient_surgery',
   outpatient_surgery_asc: 'asc',
-  diagnostic_radiology: 'advanced_imaging',
-  diagnostic_tests: 'diagnostic_procedures',
-  therapeutic_radiology: 'advanced_imaging',
   mental_health_individual: 'mental_health_outpatient_individual',
   mental_health_group: 'mental_health_outpatient_group',
-  physical_therapy: 'physical_speech_therapy',
 };
 
 function costShareFor(
@@ -1288,14 +1296,26 @@ function buildBenefits(
       outpatient_surgery_asc: costShareFor(rows, 'outpatient_surgery_asc'),
       outpatient_observation: costShareFor(rows, 'outpatient_observation'),
       lab_services: costShareFor(rows, 'lab_services'),
-      diagnostic_tests: costShareFor(rows, 'diagnostic_tests'),
+      diagnostic_procedures: costShareFor(rows, 'diagnostic_procedures'),
       xray: costShareFor(rows, 'xray'),
-      diagnostic_radiology: costShareFor(rows, 'diagnostic_radiology'),
-      therapeutic_radiology: costShareFor(rows, 'therapeutic_radiology'),
+      advanced_imaging: costShareFor(rows, 'advanced_imaging'),
       mental_health_individual: costShareFor(rows, 'mental_health_individual', pbpFallback),
       mental_health_group: costShareFor(rows, 'mental_health_group', pbpFallback),
-      physical_therapy: costShareFor(rows, 'physical_therapy', pbpFallback),
+      physical_speech_therapy: costShareFor(rows, 'physical_speech_therapy', pbpFallback),
+      occupational_therapy: costShareFor(rows, 'occupational_therapy'),
       telehealth: costShareFor(rows, 'telehealth'),
+      ambulance: costShareFor(rows, 'ambulance'),
+      air_transportation: costShareFor(rows, 'air_transportation'),
+      chiropractic: costShareFor(rows, 'chiropractic'),
+      acupuncture: costShareFor(rows, 'acupuncture'),
+      podiatry: costShareFor(rows, 'podiatry'),
+      substance_abuse: costShareFor(rows, 'substance_abuse'),
+      dme_prosthetics: costShareFor(rows, 'dme_prosthetics'),
+      partb_drugs: costShareFor(rows, 'partb_drugs'),
+      diabetic_supplies: costShareFor(rows, 'diabetic_supplies'),
+      insulin: costShareFor(rows, 'insulin'),
+      home_health: costShareFor(rows, 'home_health'),
+      renal_dialysis: costShareFor(rows, 'renal_dialysis'),
     },
     rx_tiers: {
       tier_1: costShareFor(rows, 'rx_tier_1'),

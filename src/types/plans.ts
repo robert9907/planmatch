@@ -79,22 +79,38 @@ export interface MedicalCopays {
   // render every tier — see [[feedback_inpatient_full_ladder]].
   mental_health_inpatient: CostShare;
   snf: CostShare;
-  // New categories imported from PBP b7/b8/b9 for v4 Quote & Delivery.
-  // Every field is still optional-by-nullness — a plan that didn't file a
-  // given row shows `{copay:null, coinsurance:null}` and the UI renders $0
-  // (Original Medicare default) or the coinsurance percent accordingly.
+  // Field names match pm_plan_benefits.benefit_category exactly so the
+  // loader doesn't need alias entries. Where a category wasn't filed
+  // the value is `{copay:null, coinsurance:null}` and the UI renders
+  // "Not available".
   outpatient_surgery_hospital: CostShare;
   outpatient_surgery_asc: CostShare;
   outpatient_observation: CostShare;
   lab_services: CostShare;
-  diagnostic_tests: CostShare;
+  diagnostic_procedures: CostShare;
   xray: CostShare;
-  diagnostic_radiology: CostShare;
-  therapeutic_radiology: CostShare;
+  advanced_imaging: CostShare;
   mental_health_individual: CostShare;
   mental_health_group: CostShare;
-  physical_therapy: CostShare;
+  physical_speech_therapy: CostShare;
+  occupational_therapy: CostShare;
   telehealth: CostShare;
+  // Transport
+  ambulance: CostShare;
+  air_transportation: CostShare;
+  // Specialty
+  chiropractic: CostShare;
+  acupuncture: CostShare;
+  podiatry: CostShare;
+  substance_abuse: CostShare;
+  // Equipment / drugs filed under medical
+  dme_prosthetics: CostShare;
+  partb_drugs: CostShare;
+  diabetic_supplies: CostShare;
+  insulin: CostShare;
+  // Long-term / home
+  home_health: CostShare;
+  renal_dialysis: CostShare;
 }
 
 export interface RxTierCopays {
