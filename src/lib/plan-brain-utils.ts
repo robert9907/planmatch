@@ -109,7 +109,11 @@ export function annualMedicalCostFromUtilization(
   const pcpCopay = copayForCategory(benefits, 'primary_care');
   const specCopay = copayForCategory(benefits, 'specialist');
   const labCopay = copayForCategory(benefits, 'lab');
-  const imgCopay = copayForCategory(benefits, 'imaging');
+  // pm_plan_benefits canonical key is 'advanced_imaging'. The legacy
+  // PBP synth key 'imaging' only appears on medicare_gov-derived rows
+  // (PBP_TYPE_TO_CATEGORY.imaging → 'imaging'). Landscape-only plans
+  // would silently return $0 here pre-fix.
+  const imgCopay = copayForCategory(benefits, 'advanced_imaging');
   const erCopay = copayForCategory(benefits, 'emergency');
   const ipCopay = copayForCategory(benefits, 'inpatient');
   const raw =
@@ -129,7 +133,7 @@ export function annualMedicalCostFromUtilization(
   const hasAnyCostShare =
     hasOutpatientCostShare ||
     benefitByCategory(benefits, 'lab') != null ||
-    benefitByCategory(benefits, 'imaging') != null;
+    benefitByCategory(benefits, 'advanced_imaging') != null;
   if (!hasAnyCostShare && moopInNetwork != null && moopInNetwork > 0) {
     return Math.min(1500, Math.round(moopInNetwork / 2));
   }
@@ -738,7 +742,7 @@ export function suppliesValueAnnual(coverage: SupplyCoverage[]): number {
  */
 export function extractCategoryAnnualValue(
   benefits: ReadonlyArray<{ benefit_category: string; coverage_amount: number | null; max_coverage: number | null; benefit_description?: string | null }>,
-  category: 'dental' | 'vision' | 'otc' | 'partb_giveback' | 'hearing' | 'fitness' | 'transportation' | 'telehealth',
+  category: 'dental' | 'vision' | 'otc' | 'partb_giveback' | 'hearing' | 'fitness' | 'transportation' | 'telehealth' | 'meals',
 ): number {
   if (category === 'otc') {
     const { quarterly } = extractOtcQuarterly(benefits);

@@ -44,6 +44,11 @@ export interface AnnualUtilization {
   podiatryVisits: number;
   diabeticSuppliesMonths: number;
   telehealth: number;
+  // Step 3 — categories added so the Gate 4 cost sort sees them. Each
+  // routes a copay or coinsurance through the medical bucket pre-MOOP.
+  snfDaysExpected: number;        // expected SNF days per year
+  ambulanceTripsExpected: number; // expected emergency transport trips
+  dmeAnnualSpend: number;         // notional retail $ that DME coins applies to
 }
 
 export interface AnnualCostEstimate {
@@ -53,9 +58,15 @@ export interface AnnualCostEstimate {
   suppliesCost: number;         // diabetic supplies × 12 (when diabetic)
   erExpected: number;           // ER copay × probability
   hospitalExpected: number;     // hospital per-day × days × probability
+  // Step 3 — Gate 4 cost components.
+  snfExpected: number;          // SNF day-1 copay × expected days
+  ambulanceExpected: number;    // per-trip copay × expected trips
+  dmeExpected: number;          // DME coinsurance × annual DME spend
+  deductibleCost: number;       // pm_plans.annual_deductible passthrough
   partBGivebackSavings: number; // annualized giveback (subtracted)
   // Medical bucket capped at in-network MOOP (medical + supplies + ER +
-  // hospital). MOOP doesn't cover premium or drugs, so those stay raw.
+  // hospital + SNF + ambulance + DME + deductible). MOOP doesn't cover
+  // premium or drugs, so those stay raw.
   cappedMedicalBucket: number;
   // Final number to surface on cards — premium + drugs + capped medical
   // bucket − giveback. Floor at 0.
@@ -80,6 +91,9 @@ const UTILIZATION_PROFILES: Record<UtilizationCondition, AnnualUtilization> = {
     podiatryVisits: 2,             // neuropathy foot care
     diabeticSuppliesMonths: 12,
     telehealth: 4,
+    snfDaysExpected: 1,            // rare diabetic complication SNF stay
+    ambulanceTripsExpected: 0.15,  // tracks ER probability
+    dmeAnnualSpend: 600,           // CGM sensors, lancets, monitors
   },
   chf: {
     pcpVisits: 4,
@@ -93,6 +107,9 @@ const UTILIZATION_PROFILES: Record<UtilizationCondition, AnnualUtilization> = {
     podiatryVisits: 0,
     diabeticSuppliesMonths: 0,
     telehealth: 6,                 // weight monitoring
+    snfDaysExpected: 5,            // post-hospitalization rehab common
+    ambulanceTripsExpected: 0.25,
+    dmeAnnualSpend: 400,
   },
   copd: {
     pcpVisits: 4,
@@ -106,6 +123,9 @@ const UTILIZATION_PROFILES: Record<UtilizationCondition, AnnualUtilization> = {
     podiatryVisits: 0,
     diabeticSuppliesMonths: 0,
     telehealth: 4,
+    snfDaysExpected: 2,
+    ambulanceTripsExpected: 0.20,
+    dmeAnnualSpend: 800,           // oxygen, nebulizer, CPAP
   },
   ckd: {
     pcpVisits: 4,
@@ -119,6 +139,9 @@ const UTILIZATION_PROFILES: Record<UtilizationCondition, AnnualUtilization> = {
     podiatryVisits: 0,
     diabeticSuppliesMonths: 0,
     telehealth: 6,
+    snfDaysExpected: 3,
+    ambulanceTripsExpected: 0.15,
+    dmeAnnualSpend: 200,
   },
   hypertension: {
     pcpVisits: 3,
@@ -132,6 +155,9 @@ const UTILIZATION_PROFILES: Record<UtilizationCondition, AnnualUtilization> = {
     podiatryVisits: 0,
     diabeticSuppliesMonths: 0,
     telehealth: 0,
+    snfDaysExpected: 0,
+    ambulanceTripsExpected: 0.05,
+    dmeAnnualSpend: 0,
   },
   healthy: {
     pcpVisits: 2,                  // annual wellness + 1 follow-up
@@ -145,6 +171,9 @@ const UTILIZATION_PROFILES: Record<UtilizationCondition, AnnualUtilization> = {
     podiatryVisits: 0,
     diabeticSuppliesMonths: 0,
     telehealth: 0,
+    snfDaysExpected: 0,
+    ambulanceTripsExpected: 0.05,
+    dmeAnnualSpend: 0,
   },
 };
 
@@ -174,6 +203,9 @@ export function combineUtilization(
     podiatryVisits: 0,
     diabeticSuppliesMonths: 0,
     telehealth: 0,
+    snfDaysExpected: 0,
+    ambulanceTripsExpected: 0,
+    dmeAnnualSpend: 0,
   };
 
   for (const p of profiles) {
@@ -186,6 +218,12 @@ export function combineUtilization(
     out.podiatryVisits = Math.max(out.podiatryVisits, p.podiatryVisits);
     out.diabeticSuppliesMonths = Math.max(out.diabeticSuppliesMonths, p.diabeticSuppliesMonths);
     out.telehealth = Math.max(out.telehealth, p.telehealth);
+    out.snfDaysExpected = Math.max(out.snfDaysExpected, p.snfDaysExpected);
+    out.ambulanceTripsExpected = Math.max(
+      out.ambulanceTripsExpected,
+      p.ambulanceTripsExpected,
+    );
+    out.dmeAnnualSpend = Math.max(out.dmeAnnualSpend, p.dmeAnnualSpend);
     // Probabilities — independent-event combination. Both conditions
     // can trigger an ER visit; combined prob = 1 - (1-p1)(1-p2)…
     out.erProbability = 1 - (1 - out.erProbability) * (1 - p.erProbability);
@@ -221,6 +259,24 @@ export interface RealAnnualCostInputs {
     er?: number | null;
     inpatientPerDay?: number | null;
     diabeticSupplies?: number | null;
+    // Plan's actual podiatry copay. Routes podiatry visits separately
+    // from the specialist bucket when filed — many plans set podiatry
+    // lower ($0–$15) than specialist ($45+). Falls back to specialist
+    // when null. (Latent bug pre-fix: podiatryVisits were always
+    // multiplied by the specialist copay.)
+    podiatry?: number | null;
+    // SNF day-1 copay (parsed from inpatient-format ladder by caller).
+    // Multiplied by expected SNF days from utilization.
+    snfPerDay?: number | null;
+    // Per-trip ambulance copay.
+    ambulancePerTrip?: number | null;
+    // DME / prosthetics coinsurance (0–100). Multiplied by an annual
+    // notional DME spend so users with chronic DME needs see the cost
+    // gap between $0-coins and 20%-coins plans.
+    dmeCoinsurancePct?: number | null;
+    // pm_plans.annual_deductible (medical, in-network). Added to the
+    // medical bucket before the MOOP cap so deductibles affect rank.
+    annualDeductible?: number | null;
   };
 }
 
@@ -234,8 +290,13 @@ export function calculateRealAnnualCost(
   const c = args.copays;
 
   const pcpCost = u.pcpVisits * (c.pcp ?? 0);
-  const specCost =
-    (u.specialistVisits + u.podiatryVisits) * (c.specialist ?? 0);
+  const specCost = u.specialistVisits * (c.specialist ?? 0);
+  // Podiatry uses the plan's filed podiatry copay when present, falling
+  // back to specialist. Carriers commonly file podiatry at $0–$15 even
+  // when specialist is $45+, so routing through specialist over-counted
+  // the cost for diabetic users with neuropathy.
+  const podiatryCopay = c.podiatry ?? c.specialist ?? 0;
+  const podiatryCost = u.podiatryVisits * podiatryCopay;
   const labCost = u.labDraws * (c.lab ?? 0);
   const imagingCost = u.imagingScans * (c.imaging ?? 0);
   const telehealthCost = u.telehealth * (c.telehealth ?? 0);
@@ -243,7 +304,7 @@ export function calculateRealAnnualCost(
   // contribution (intentional; the wellness benefit absorbs it).
 
   const medicalCost =
-    pcpCost + specCost + labCost + imagingCost + telehealthCost;
+    pcpCost + specCost + podiatryCost + labCost + imagingCost + telehealthCost;
 
   // Diabetic supplies: only counted when the user is diabetic AND the
   // plan files an insulin/supplies category. When the plan doesn't file
@@ -269,12 +330,41 @@ export function calculateRealAnnualCost(
       : INPATIENT_PER_DAY_FALLBACK;
   const hospitalExpected = u.hospitalProbability * ipPerDay * u.hospitalDays;
 
+  // Step 3 — SNF day-1 copay × expected days. Day-1 is the broker-
+  // visible cost; the full ladder lives in benefit_description but for
+  // ranking we use the highest-impact tier.
+  const snfExpected = (c.snfPerDay ?? 0) * u.snfDaysExpected;
+
+  // Step 3 — ambulance per-trip × expected trips (probabilistic).
+  const ambulanceExpected = (c.ambulancePerTrip ?? 0) * u.ambulanceTripsExpected;
+
+  // Step 3 — DME coinsurance × notional annual DME spend. dmeCoinsurance
+  // arrives as 0–100 (percent); convert to fraction.
+  const dmePctFraction = (c.dmeCoinsurancePct ?? 0) / 100;
+  const dmeExpected = dmePctFraction * u.dmeAnnualSpend;
+
+  // Step 3 — medical deductible passthrough. Member pays up to the
+  // deductible before plan cost-share kicks in; the medical bucket
+  // copay terms already model post-deductible cost-share, so adding
+  // the deductible is the pre-cost-share floor exposure. The MOOP cap
+  // still applies; in practice it's only relevant on plans where
+  // utilization × copays sums to less than the deductible (very low-
+  // utilization users on a deductible-bearing plan).
+  const deductibleCost = c.annualDeductible ?? 0;
+
   // MOOP cap on the medical-side bucket. MOOP does NOT cover premium
   // or Part D drugs — those stay raw. The cap protects against
   // implausibly high estimates from heavy-utilization profiles being
   // applied to plans with high copays — actual exposure is bounded.
   const medicalBucketRaw =
-    medicalCost + suppliesCost + erExpected + hospitalExpected;
+    medicalCost +
+    suppliesCost +
+    erExpected +
+    hospitalExpected +
+    snfExpected +
+    ambulanceExpected +
+    dmeExpected +
+    deductibleCost;
   const cappedMedicalBucket =
     args.moopInNetwork != null && args.moopInNetwork > 0
       ? Math.min(medicalBucketRaw, args.moopInNetwork)
@@ -295,6 +385,10 @@ export function calculateRealAnnualCost(
     suppliesCost: Math.round(suppliesCost),
     erExpected: Math.round(erExpected),
     hospitalExpected: Math.round(hospitalExpected),
+    snfExpected: Math.round(snfExpected),
+    ambulanceExpected: Math.round(ambulanceExpected),
+    dmeExpected: Math.round(dmeExpected),
+    deductibleCost: Math.round(deductibleCost),
     partBGivebackSavings: Math.round(args.partBGivebackAnnual),
     cappedMedicalBucket: Math.round(cappedMedicalBucket),
     netAnnual: Math.round(netAnnual),
