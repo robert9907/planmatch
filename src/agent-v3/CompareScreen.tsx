@@ -22,6 +22,10 @@ import {
 } from 'react';
 import type { CostShare, Plan } from '@/types/plans';
 import { useSession } from '@/hooks/useSession';
+import {
+  firstTierCopay,
+  formatInpatientLadder,
+} from '@/lib/inpatient-format';
 import { Container, Header, Nav, fmt } from './atoms';
 import {
   annualEstimate,
@@ -124,6 +128,30 @@ function csMetric(key: string, label: string, get: (p: Plan) => CostShare): Metr
     label,
     format: (p) => safeCostShare(formatCostShareWithRange(get(p))),
     numeric: (p) => costShareNumeric(get(p)),
+    higherIsBetter: false,
+  };
+}
+
+// Inpatient day-tier ladder metric — renders the full ladder
+// ("$0/day · days 1-20\n$218/day · days 21-50\n$0/day · days 51-100")
+// from benefit_description and uses the day-1 copay for winner math
+// (see [[feedback_inpatient_full_ladder]] + lib/inpatient-format.ts).
+// Cells using this metric must allow multi-line text (whiteSpace:
+// pre-line); other csMetric rows return single-line strings and are
+// unaffected.
+function ladderMetric(key: string, label: string, get: (p: Plan) => CostShare): Metric {
+  return {
+    key,
+    label,
+    format: (p) => {
+      const cs = get(p);
+      const formatted = formatInpatientLadder(cs.description, cs.copay, cs.coinsurance);
+      return formatted ?? 'Not available';
+    },
+    numeric: (p) => {
+      const cs = get(p);
+      return firstTierCopay(cs.description, cs.copay);
+    },
     higherIsBetter: false,
   };
 }
@@ -251,7 +279,13 @@ function buildMetrics(args: {
     },
     csMetric('urgent_care', 'Urgent care', (p) => p.benefits.medical.urgent_care),
     csMetric('emergency', 'Emergency', (p) => p.benefits.medical.emergency),
-    csMetric('inpatient', 'Inpatient (per stay)', (p) => p.benefits.medical.inpatient),
+    ladderMetric('inpatient', 'Inpatient hospital', (p) => p.benefits.medical.inpatient),
+    ladderMetric(
+      'mh_inpatient',
+      'Inpatient mental',
+      (p) => p.benefits.medical.mental_health_inpatient,
+    ),
+    ladderMetric('snf', 'Skilled nursing', (p) => p.benefits.medical.snf),
     csMetric(
       'out_surg_hosp',
       'Outpatient surg. (hosp)',
@@ -1625,13 +1659,15 @@ function MetricRow({
       >
         {metric.label}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
         <span
           style={{
             fontFamily: FONT_NUM,
             fontSize: 12,
             fontWeight: 700,
             color: isBest ? '#15803d' : TEXT,
+            whiteSpace: 'pre-line',
+            textAlign: 'right',
           }}
         >
           {metric.format(plan)}
@@ -2000,6 +2036,7 @@ function H2HView({
                   fontSize: 14,
                   fontWeight: 600,
                   color: TEXT,
+                  whiteSpace: 'pre-line',
                 }}
               >
                 {m.format(baseline)}
@@ -2031,11 +2068,11 @@ function H2HView({
                   color: TEXT,
                   background: winBg,
                   display: 'flex',
-                  alignItems: 'center',
+                  alignItems: 'flex-start',
                   gap: 8,
                 }}
               >
-                <span>{m.format(challenger)}</span>
+                <span style={{ whiteSpace: 'pre-line' }}>{m.format(challenger)}</span>
                 {arrow && deltaLabel && (
                   <span
                     style={{

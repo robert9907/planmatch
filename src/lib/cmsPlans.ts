@@ -71,6 +71,8 @@ const EMPTY_MEDICAL = {
   urgent_care: EMPTY_COST_SHARE,
   emergency: EMPTY_COST_SHARE,
   inpatient: EMPTY_COST_SHARE,
+  mental_health_inpatient: EMPTY_COST_SHARE,
+  snf: EMPTY_COST_SHARE,
   outpatient_surgery_hospital: EMPTY_COST_SHARE,
   outpatient_surgery_asc: EMPTY_COST_SHARE,
   outpatient_observation: EMPTY_COST_SHARE,

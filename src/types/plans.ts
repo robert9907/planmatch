@@ -72,6 +72,13 @@ export interface MedicalCopays {
   urgent_care: CostShare;
   emergency: CostShare;
   inpatient: CostShare;
+  // Day-tier ladder categories. pm_plan_benefits stores the day-1 copay
+  // in the structured `copay` column with the rest of the ladder in
+  // `benefit_description` ("Days 1-20: $0/day · Days 21-50: $218/day").
+  // Surfaces must parse the description (lib/inpatient-format.ts) and
+  // render every tier — see [[feedback_inpatient_full_ladder]].
+  mental_health_inpatient: CostShare;
+  snf: CostShare;
   // New categories imported from PBP b7/b8/b9 for v4 Quote & Delivery.
   // Every field is still optional-by-nullness — a plan that didn't file a
   // given row shows `{copay:null, coinsurance:null}` and the UI renders $0

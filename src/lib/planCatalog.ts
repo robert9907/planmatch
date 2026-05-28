@@ -170,6 +170,8 @@ function fillBenefits(partial: Partial<PlanBenefits>): PlanBenefits {
       urgent_care: cs(partial.medical?.urgent_care),
       emergency: cs(partial.medical?.emergency),
       inpatient: cs(partial.medical?.inpatient),
+      mental_health_inpatient: cs(partial.medical?.mental_health_inpatient),
+      snf: cs(partial.medical?.snf),
       outpatient_surgery_hospital: cs(partial.medical?.outpatient_surgery_hospital),
       outpatient_surgery_asc: cs(partial.medical?.outpatient_surgery_asc),
       outpatient_observation: cs(partial.medical?.outpatient_observation),

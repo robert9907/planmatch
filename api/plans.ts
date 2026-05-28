@@ -71,6 +71,8 @@ interface PlanBenefits {
     urgent_care: CostShare;
     emergency: CostShare;
     inpatient: CostShare;
+    mental_health_inpatient: CostShare;
+    snf: CostShare;
     outpatient_surgery_hospital: CostShare;
     outpatient_surgery_asc: CostShare;
     outpatient_observation: CostShare;
@@ -1247,6 +1249,11 @@ function buildBenefits(
       urgent_care: costShareFor(rows, 'urgent_care'),
       emergency: costShareFor(rows, 'emergency'),
       inpatient: costShareFor(rows, 'inpatient'),
+      // Day-tier ladder rows — pm_plan_benefits puts day-1 in `copay`
+      // and the rest of the ladder in `benefit_description`. See
+      // src/lib/inpatient-format.ts.
+      mental_health_inpatient: costShareFor(rows, 'mental_health_inpatient'),
+      snf: costShareFor(rows, 'snf'),
       outpatient_surgery_hospital: costShareFor(rows, 'outpatient_surgery_hospital'),
       outpatient_surgery_asc: costShareFor(rows, 'outpatient_surgery_asc'),
       outpatient_observation: costShareFor(rows, 'outpatient_observation'),
