@@ -59,8 +59,6 @@ import {
 } from '@/hooks/usePlanBrain';
 import { useDrugCosts, lookupPlanCost } from '@/hooks/useDrugCosts';
 import { monthlyCostFromFormulary } from '@/lib/drugCosts';
-import { CalendarYearCost } from '@/components/CalendarYearCost';
-import { brainSlotToFormularyMap } from '@/lib/partDPhaseCalc';
 import {
   useManufacturerAssistance,
   type AssistanceRow,
@@ -234,7 +232,7 @@ type ColumnVariant = 'current' | 'best_rx' | 'lowest_oop' | 'giveback' | 'normal
 // table render below (meds → providers → medical → plan costs →
 // extras). The Total Annual Value summary row is intentionally not a
 // section — it always renders.
-type SectionKey = 'meds' | 'calendarYearCost' | 'providers' | 'medical' | 'planCosts' | 'extras';
+type SectionKey = 'meds' | 'providers' | 'medical' | 'planCosts' | 'extras';
 
 interface ColumnDef {
   id: string;
@@ -375,11 +373,6 @@ export function QuoteDeliveryV4({
   // regardless — they're the always-on summary + CTA, not a section.
   const [collapsedSections, setCollapsedSections] = useState<Record<SectionKey, boolean>>({
     meds: false,
-    // Calendar Year Cost starts collapsed — it's a deep-dive accordion
-    // (4 KPIs + bar chart + month-by-month drug breakdown) that would
-    // dominate the table if expanded by default. Clicking the section
-    // header reveals one CalendarYearCost row per plan.
-    calendarYearCost: true,
     providers: false,
     medical: false,
     planCosts: false,
@@ -2333,42 +2326,6 @@ export function QuoteDeliveryV4({
               })}
             </tr>
 
-            </>)}
-
-            <SectionHeader
-              colSpan={colSpanFull}
-              label="Calendar Year Cost"
-              collapsed={collapsedSections.calendarYearCost}
-              onToggle={() => toggleSection('calendarYearCost')}
-            />
-            {!collapsedSections.calendarYearCost && (<>
-              {columns.map((col) => {
-                const s = styleFor(col.variant);
-                const cp = `${col.plan.contract_id}-${col.plan.plan_number}`;
-                const formulary = brainSlotToFormularyMap(
-                  brainData?.formularyByContractPlan[cp],
-                );
-                return (
-                  <tr key={`cyc-${col.id}`}>
-                    <th style={labelCellStyle}>
-                      <div style={{ fontWeight: 600 }}>{col.plan.carrier}</div>
-                      <div style={{ fontSize: 10, color: COL.inkSub, fontWeight: 400 }}>
-                        {col.plan.plan_name}
-                      </div>
-                    </th>
-                    <td
-                      colSpan={columns.length}
-                      style={{ ...cellStyle(s.bodyBg), padding: 8 }}
-                    >
-                      <CalendarYearCost
-                        medications={medications}
-                        plan={col.plan}
-                        formulary={formulary}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
             </>)}
 
             <SectionHeader

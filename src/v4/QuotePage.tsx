@@ -9,15 +9,11 @@
 
 import { useMemo, useState } from 'react';
 import { Step6QuoteDelivery } from '@/components/steps/Step6QuoteDelivery';
-import { Top4Screen } from './Top4Screen';
-import { PlanDetailView } from './PlanDetailView';
 import { useSession } from '@/hooks/useSession';
 import { useScreenShareStore } from '@/hooks/useScreenShare';
 import { usePrintableQuote } from '@/hooks/usePrintableQuote';
 import { generateQuotePdf } from '@/lib/quotePdf';
 import { BROKER } from '@/lib/constants';
-
-type View = 'top4' | 'detail' | 'compare';
 
 interface Props {
   onBack: () => void;
@@ -28,15 +24,6 @@ export function QuotePage({ onBack }: Props) {
   const medications = useSession((s) => s.medications);
   const providers = useSession((s) => s.providers);
   const selectedFinalists = useSession((s) => s.selectedFinalists);
-
-  // View routing — Top4 is the new default entry; the side-by-side
-  // QuoteDeliveryV4 table is reachable from the Top4 "Compare" CTA or
-  // the detail view's compare button. PlanDetailView opens when a Top4
-  // card is tapped. State lives here at the page level so the back
-  // button can route per-view (detail → top4, compare → top4, top4 →
-  // wizard) instead of bouncing the user all the way out.
-  const [view, setView] = useState<View>('top4');
-  const [detailPlanId, setDetailPlanId] = useState<string | null>(null);
 
   // No mode override here. The legacy version forced new_quote on
   // every mount, which stomped the LandingPage's auto-flip into
@@ -98,36 +85,14 @@ export function QuotePage({ onBack }: Props) {
       setPrinting(false);
     }
   }
-  const titleByView: Record<View, { title: string; sub: string }> = {
-    top4: {
-      title: 'Your Best Matches',
-      sub: 'Top plans for your medications, providers, and county. Tap to explore — or compare side-by-side.',
-    },
-    detail: {
-      title: 'Plan Details',
-      sub: 'Full benefits, copays, and calendar-year drug cost projection.',
-    },
-    compare: {
-      title: 'Quote & Delivery',
-      sub: 'Side-by-side comparison sorted by total Rx cost. Current plan benchmarked left.',
-    },
-  };
-  const heading = titleByView[view];
-
-  function handleBack() {
-    if (view === 'detail' || view === 'compare') {
-      setView('top4');
-      return;
-    }
-    onBack();
-  }
-
   return (
     <>
       <div className="scroll">
         <div className="phdr">
-          <div className="ptitle">{heading.title}</div>
-          <div className="psub">{heading.sub}</div>
+          <div className="ptitle">Quote &amp; Delivery</div>
+          <div className="psub">
+            Side-by-side comparison sorted by total Rx cost. Current plan benchmarked left.
+          </div>
           {client.name && (
             <div className="pclient">
               <strong>{client.name}</strong>
@@ -139,23 +104,7 @@ export function QuotePage({ onBack }: Props) {
           )}
         </div>
         <div className="cnt cnt-wide">
-          {view === 'top4' && (
-            <Top4Screen
-              onSelectPlan={(id) => {
-                setDetailPlanId(id);
-                setView('detail');
-              }}
-              onCompare={() => setView('compare')}
-            />
-          )}
-          {view === 'detail' && detailPlanId && (
-            <PlanDetailView
-              planId={detailPlanId}
-              onBack={() => setView('top4')}
-              onCompare={() => setView('compare')}
-            />
-          )}
-          {view === 'compare' && <Step6QuoteDelivery />}
+          <Step6QuoteDelivery />
         </div>
       </div>
       <div className="bbar">
@@ -188,7 +137,7 @@ export function QuotePage({ onBack }: Props) {
           >
             {shareActive ? '● Sharing — Stop' : shareStarting ? 'Starting…' : 'Share Screen'}
           </button>
-          <button type="button" className="btn out" onClick={handleBack}>← Back</button>
+          <button type="button" className="btn out" onClick={onBack}>← Back</button>
           <button
             type="button"
             className="btn pri"
