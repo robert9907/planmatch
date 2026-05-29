@@ -489,8 +489,30 @@ function AddProviderPanel({
         }}
       />
       {search.loading && (
-        <div style={{ marginTop: 8, fontSize: 11, color: '#64748b' }}>
+        <div
+          style={{
+            marginTop: 8,
+            fontSize: 11,
+            color: '#64748b',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 11,
+              height: 11,
+              borderRadius: '50%',
+              border: '2px solid rgba(13,47,94,0.15)',
+              borderTopColor: '#0d2f5e',
+              animation: 'npiSearchSpin 0.7s linear infinite',
+              display: 'inline-block',
+            }}
+          />
           Searching NPPES…
+          <style>{`@keyframes npiSearchSpin { to { transform: rotate(360deg); } }`}</style>
         </div>
       )}
       {search.error && (
@@ -515,53 +537,99 @@ function AddProviderPanel({
             background: 'white',
           }}
         >
-          {search.results.map((r) => (
-            <li
-              key={r.npi}
-              style={{ borderBottom: '1px solid rgba(13,47,94,0.04)' }}
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  onAdd(r);
-                  setQuery('');
-                }}
-                style={{
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '10px 12px',
-                  background: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: 12,
-                  fontSize: 13,
-                }}
+          {search.results.map((r) => {
+            const isOrg = r.enumeration_type === 'NPI-2';
+            const location = r.practice_city
+              ? `${r.practice_city}${r.practice_state ? ', ' + r.practice_state : ''}`
+              : null;
+            return (
+              <li
+                key={r.npi}
+                style={{ borderBottom: '1px solid rgba(13,47,94,0.04)' }}
               >
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ fontWeight: 700, color: '#0d2f5e' }}>
-                    {r.display_name}
-                  </span>
-                  {r.specialty && (
-                    <span style={{ marginLeft: 8, fontSize: 11, color: '#64748b' }}>
-                      {r.specialty}
+                <button
+                  type="button"
+                  onClick={() => {
+                    onAdd(r);
+                    setQuery('');
+                  }}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '10px 12px',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 12,
+                    fontSize: 13,
+                  }}
+                >
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: 'block' }}>
+                      <span style={{ fontWeight: 700, color: '#0d2f5e' }}>
+                        {r.display_name}
+                      </span>
+                      {isOrg && (
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: 9.5,
+                            fontWeight: 700,
+                            letterSpacing: 0.4,
+                            textTransform: 'uppercase',
+                            color: '#0071e3',
+                            background: 'rgba(0,113,227,0.08)',
+                            padding: '1px 6px',
+                            borderRadius: 999,
+                            verticalAlign: 'middle',
+                          }}
+                        >
+                          Practice
+                        </span>
+                      )}
                     </span>
-                  )}
-                  <span style={{ marginLeft: 8, fontSize: 11, color: '#94a3b8' }}>
-                    NPI {r.npi}
-                    {r.practice_city
-                      ? ` · ${r.practice_city}${r.practice_state ? ', ' + r.practice_state : ''}`
-                      : ''}
+                    <span
+                      style={{
+                        display: 'block',
+                        marginTop: 1,
+                        fontSize: 11,
+                        color: '#64748b',
+                      }}
+                    >
+                      {[
+                        r.specialty,
+                        !isOrg && r.practice_name ? r.practice_name : null,
+                        location,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </span>
+                    <span
+                      style={{
+                        display: 'block',
+                        marginTop: 1,
+                        fontFamily:
+                          'ui-monospace, SFMono-Regular, Menlo, monospace',
+                        fontSize: 9.5,
+                        letterSpacing: 0.3,
+                        color: '#94a3b8',
+                      }}
+                    >
+                      NPI {r.npi}
+                    </span>
                   </span>
-                </span>
-                <span style={{ fontSize: 11, color: '#0071e3', fontWeight: 700 }}>
-                  Add
-                </span>
-              </button>
-            </li>
-          ))}
+                  <span
+                    style={{ fontSize: 11, color: '#0071e3', fontWeight: 700 }}
+                  >
+                    Add
+                  </span>
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </Card>

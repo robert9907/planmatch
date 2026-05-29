@@ -5,14 +5,23 @@ import { useEffect, useRef, useState } from 'react';
 // raw NPPES JSON on the client because the agent endpoint passes
 // NPPES through unchanged. Used by the inline add-provider panel on
 // agent-v3 ProvidersScreen.
+//
+// The proxy now fires NPI-1 (individuals) + NPI-2 (organizations) in
+// parallel so a query like "Duke Primary Care" surfaces practices
+// alongside named clinicians. enumeration_type rides through so the
+// UI can render org rows differently (no "Dr." prefix, practice chip).
 
 export interface ProviderSearchResult {
   npi: string;
+  /** "NPI-1" individual | "NPI-2" organization. */
+  enumeration_type: 'NPI-1' | 'NPI-2';
   display_name: string;
   first_name: string | null;
   last_name: string;
   credential: string | null;
   specialty: string | null;
+  /** Organization name for NPI-2 rows; null for individuals. */
+  practice_name: string | null;
   practice_city: string | null;
   practice_state: string | null;
   practice_zip: string | null;
@@ -25,8 +34,22 @@ export interface UseProviderSearch {
   fallback: 'last_name_only' | null;
 }
 
-const MIN_CHARS = 2;
+const MIN_CHARS = 3;
 const DEBOUNCE_MS = 300;
+
+// Module-scope cache: keyed by `${q}|${state}`, so re-typing a query
+// the user has already issued in this session serves instantly from
+// memory instead of refetching NPPES. Lives for the lifetime of the
+// page — no TTL because NPPES results are stable within a session.
+interface CachedResponse {
+  rows: ProviderSearchResult[];
+  fallback: 'last_name_only' | null;
+}
+const responseCache = new Map<string, CachedResponse>();
+
+function cacheKey(q: string, state: string): string {
+  return `${q.toLowerCase()}|${state}`;
+}
 
 interface NppesAddress {
   address_purpose?: string;
@@ -61,11 +84,12 @@ function normalize(raw: NppesResult): ProviderSearchResult | null {
   const basic = raw.basic ?? {};
   const isOrg = raw.enumeration_type === 'NPI-2';
   const first = basic.first_name?.trim() || null;
+  const orgName = basic.organization_name?.trim() || null;
   const last = isOrg
-    ? (basic.organization_name?.trim() ?? '')
+    ? (orgName ?? '')
     : (basic.last_name?.trim() ?? '');
   const display = isOrg
-    ? (basic.organization_name?.trim() ?? `NPI ${npi}`)
+    ? (orgName ?? `NPI ${npi}`)
     : [first, last].filter(Boolean).join(' ') || `NPI ${npi}`;
   const primaryTax =
     (raw.taxonomies ?? []).find((t) => t.primary) ?? (raw.taxonomies ?? [])[0];
@@ -74,11 +98,13 @@ function normalize(raw: NppesResult): ProviderSearchResult | null {
     (raw.addresses ?? [])[0];
   return {
     npi,
+    enumeration_type: isOrg ? 'NPI-2' : 'NPI-1',
     display_name: display,
     first_name: first,
     last_name: last,
     credential: basic.credential?.trim() || null,
     specialty: primaryTax?.desc?.trim() || null,
+    practice_name: isOrg ? orgName : null,
     practice_city: location?.city?.trim() || null,
     practice_state: location?.state?.trim() || null,
     practice_zip: location?.postal_code?.trim() || null,
@@ -110,6 +136,19 @@ export function useProviderSearch(
       setFallback(null);
       return;
     }
+
+    // Cache hit: serve instantly, skip the debounce + fetch entirely.
+    const key = cacheKey(q, st);
+    const cached = responseCache.get(key);
+    if (cached) {
+      const exclude = new Set(excludeRef.current);
+      setResults(cached.rows.filter((r) => !exclude.has(r.npi)));
+      setFallback(cached.fallback);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -127,15 +166,16 @@ export function useProviderSearch(
           setFallback(null);
           return;
         }
-        const exclude = new Set(excludeRef.current);
         const rows = Array.isArray(body?.results)
           ? (body.results as NppesResult[])
               .map(normalize)
               .filter((r): r is ProviderSearchResult => !!r)
-              .filter((r) => !exclude.has(r.npi))
           : [];
-        setResults(rows);
-        setFallback(body?.fallback === 'last_name_only' ? 'last_name_only' : null);
+        const fb = body?.fallback === 'last_name_only' ? 'last_name_only' : null;
+        responseCache.set(key, { rows, fallback: fb });
+        const exclude = new Set(excludeRef.current);
+        setResults(rows.filter((r) => !exclude.has(r.npi)));
+        setFallback(fb);
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : 'Search failed');
