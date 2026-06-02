@@ -23,6 +23,7 @@ import type { Plan } from '@/types/plans';
 import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
 import { useSession } from '@/hooks/useSession';
 import type { StateCode } from '@/types/session';
+import { DISCLAIMERS } from '@/lib/compliance';
 import {
   Card,
   Container,
@@ -76,6 +77,10 @@ export function IntakeScreen({
   const currentPlanId = useSession((s) => s.currentPlanId);
   const setCurrentPlanId = useSession((s) => s.setCurrentPlanId);
   const setNoCurrentPlan = useSession((s) => s.setNoCurrentPlan);
+  const disclaimersConfirmed = useSession((s) => s.disclaimersConfirmed);
+  const confirmDisclaimer = useSession((s) => s.confirmDisclaimer);
+  const callRecordingDisclosed = disclaimersConfirmed.includes('call_recording');
+  const callRecordingDef = DISCLAIMERS.find((d) => d.id === 'call_recording');
 
   const [zipLoading, setZipLoading] = useState(false);
   const [zipError, setZipError] = useState<string | null>(null);
@@ -141,14 +146,25 @@ export function IntakeScreen({
   }, [client.zip]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Continue requires the four fields the rest of the workflow can't
-  // function without. Email is nice-to-have but not blocking; the
-  // broker often captures it mid-call after the SOA. Current plan is
-  // optional too — many shoppers are new to Medicare.
+  // function without PLUS the call-recording disclosure (CMS requires
+  // it at call start, before any plan discussion). Email is
+  // nice-to-have but not blocking; the broker often captures it
+  // mid-call after the SOA. Current plan is optional too — many
+  // shoppers are new to Medicare.
+  //
+  // Why gate here and not just on the Disclaimers screen? CMS
+  // requires the call-recording notice BEFORE any quoting begins.
+  // Intake is the first screen the broker hits with a live caller,
+  // so locking Continue until call_recording is confirmed prevents
+  // the broker from skipping straight into plan discussion. TPMO +
+  // SOA still happen on the Disclaimers screen (screen 2) where
+  // they belong contextually with the live ORG_COUNT/PLAN_COUNT.
   const canContinue = Boolean(
     client.name &&
       client.dob &&
       /^\d{5}$/.test(client.zip) &&
-      client.phone,
+      client.phone &&
+      callRecordingDisclosed,
   );
 
   // Inline create-client. Fires only when the broker landed on
@@ -309,6 +325,78 @@ export function IntakeScreen({
         title="Let's find your perfect plan"
         sub="We'll walk through this together — about 5 minutes."
       />
+      {callRecordingDef && (
+        <div
+          style={{
+            background: callRecordingDisclosed ? 'rgba(5,150,105,0.04)' : '#fffbeb',
+            border: callRecordingDisclosed
+              ? '1px solid rgba(5,150,105,0.2)'
+              : '2px solid #f59e0b',
+            borderRadius: 11,
+            padding: '14px 18px',
+            marginBottom: 14,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 9,
+              fontWeight: 800,
+              color: callRecordingDisclosed ? '#059669' : '#d97706',
+              letterSpacing: 1,
+              textTransform: 'uppercase',
+              marginBottom: 4,
+            }}
+          >
+            Call Recording Disclosure · CMS-required at call start
+          </div>
+          <div
+            style={{
+              fontFamily: "'Fraunces', Georgia, serif",
+              fontSize: 15,
+              fontWeight: 700,
+              color: '#0d2f5e',
+              marginBottom: 6,
+            }}
+          >
+            Read aloud verbatim, then confirm:
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              color: '#334155',
+              lineHeight: 1.5,
+              fontStyle: 'italic',
+              marginBottom: 12,
+            }}
+          >
+            “{callRecordingDef.body}”
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (!callRecordingDisclosed) confirmDisclaimer('call_recording');
+            }}
+            disabled={callRecordingDisclosed}
+            style={{
+              background: callRecordingDisclosed
+                ? 'linear-gradient(135deg, #059669, #047857)'
+                : '#f59e0b',
+              color: 'white',
+              border: 'none',
+              borderRadius: 7,
+              padding: '8px 16px',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: callRecordingDisclosed ? 'default' : 'pointer',
+              letterSpacing: 0.3,
+            }}
+          >
+            {callRecordingDisclosed
+              ? '✓ Confirmed — call recording disclosed to beneficiary'
+              : 'I have disclosed call recording to the beneficiary'}
+          </button>
+        </div>
+      )}
       <Card>
         <div
           style={{
