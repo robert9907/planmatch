@@ -1009,18 +1009,60 @@ export function usePlanBrain(args: Args): State {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    const qs = new URLSearchParams({ ids: planIds });
-    if (rxcuis) qs.set('rxcuis', rxcuis);
-    if (npis) qs.set('npis', npis);
-    fetch(`/api/plan-brain-data?${qs.toString()}`, { signal: controller.signal })
-      .then(async (res) => {
+
+    void (async () => {
+      // ── FHIR live fallback (best-effort, non-fatal) ─────────────────
+      // /api/provider-network-status hits pm_provider_network_cache, then
+      // falls back to the carrier FHIR endpoints (UHC / Humana / BCBS NC /
+      // Devoted) for any (plan, npi) pair with no cache row, then upserts
+      // resolved rows back into the cache. The downstream
+      // /api/plan-brain-data read picks up the freshly-populated rows so
+      // Gate 1 ranks confirmed in-network plans above plans still showing
+      // "?" — which now means "no FHIR carrier could resolve it" not
+      // "we never tried."
+      //
+      // Failures here are intentionally swallowed. The brain still runs
+      // against whatever's in cache; Gate 1 passes Unknown (see
+      // plan-brain.ts:applyProviderGate) so the user always sees plans,
+      // just with the unverified badge.
+      if (npis) {
+        // /api/provider-network-status keys on the COMBINED plan_id
+        // ("H5253-189"), not the triple ("H5253-189-0"). Collapse.
+        const planIdsCombined = Array.from(
+          new Set(
+            planIds.split(',').map((id) => {
+              const parts = id.split('-');
+              return parts.length >= 2 ? `${parts[0]}-${parts[1]}` : id;
+            }),
+          ),
+        ).join(',');
+        try {
+          const fhirQs = new URLSearchParams({
+            plan_ids: planIdsCombined,
+            npis,
+          });
+          await fetch(`/api/provider-network-status?${fhirQs.toString()}`, {
+            signal: controller.signal,
+          });
+        } catch (err) {
+          if ((err as { name?: string })?.name === 'AbortError') return;
+          console.warn('[plan-brain] FHIR fallback non-fatal failure:', err);
+        }
+      }
+      if (controller.signal.aborted) return;
+
+      // ── Cache read ─────────────────────────────────────────────────
+      try {
+        const qs = new URLSearchParams({ ids: planIds });
+        if (rxcuis) qs.set('rxcuis', rxcuis);
+        if (npis) qs.set('npis', npis);
+        const res = await fetch(`/api/plan-brain-data?${qs.toString()}`, {
+          signal: controller.signal,
+        });
         if (!res.ok) throw new Error(`plan-brain-data ${res.status}`);
-        return (await res.json()) as PlanBrainData;
-      })
-      .then((d) => {
+        const d = (await res.json()) as PlanBrainData;
         if (!controller.signal.aborted) setData(d);
-      })
-      .catch((err) => {
+      } catch (err) {
         if ((err as { name?: string })?.name === 'AbortError') return;
         // No silent degradation — empty `networkByPlan` would let every
         // OON plan compete on cost alone (Mode B in the brain-funnel
@@ -1028,10 +1070,11 @@ export function usePlanBrain(args: Args): State {
         // render a banner instead of a misleading ranking.
         setError((err as Error).message);
         setData(null);
-      })
-      .finally(() => {
+      } finally {
         if (!controller.signal.aborted) setLoading(false);
-      });
+      }
+    })();
+
     return () => controller.abort();
   }, [planIds, rxcuis, npis]);
 
