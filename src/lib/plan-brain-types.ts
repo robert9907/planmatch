@@ -144,30 +144,6 @@ export interface BrainScore {
   // C-SNP that landed in the Top 4 naturally on cost, and on every
   // standard MAPD.
   csnpReservedSlot: boolean;
-  // Near-miss detail. Set when this plan was added to the Top 4 as a
-  // gate-3 near-miss — passed Gates 1+2 but missed EXACTLY ONE user
-  // preference (e.g., dental allowance below the user's threshold).
-  // Plans that miss 2+ preferences are eliminated and never reach the
-  // Top 4. The UI uses these fields to render copy like "Covers your
-  // doctor and meds · $1,500 dental (you asked for $2,000)".
-  // Null on full_match plans, csnp_reserved swaps, and any plan not
-  // in the Top 4.
-  nearMiss: {
-    /** User-priority key the plan missed (e.g. 'dental', 'vision',
-     *  'otc', 'hearing', 'fitness', 'transportation', 'partb_giveback',
-     *  'low_moop', 'low_drug_costs'). */
-    preference: string;
-    /** User's dollar threshold (e.g. 2000 when they picked
-     *  "dental ≥ $2,000"). Null when the preference is binary
-     *  (vision/fitness/hearing/etc. picked without a $ floor). */
-    userThreshold: number | null;
-    /** Plan's actual value for that preference. 0 when the plan
-     *  doesn't file anything for the category. */
-    planValue: number;
-    /** userThreshold − planValue for dollar prefs; null for binary
-     *  prefs (where the miss is just "absent"). */
-    shortfall: number | null;
-  } | null;
   // Ribbon assignment (filled in by ribbon pass — null until then)
   ribbon: RibbonType | null;
   // Plain-English summary of the year on this plan, condition-aware

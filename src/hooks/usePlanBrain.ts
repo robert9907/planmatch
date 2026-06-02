@@ -229,17 +229,6 @@ export interface ScoredPlan {
    *  now hard-eliminates any plan missing a user drug; no medication
    *  backfill ever fires. Field kept for caller compat. */
   medicationBackfill: boolean;
-  /** Set when this plan was added to the Top 4 as a near_miss — passed
-   *  Gates 1+2 but missed exactly ONE user preference. The UI uses
-   *  these fields to render copy like "Covers your doctor and meds ·
-   *  $1,500 dental (you asked for $2,000)". Null on full_match,
-   *  csnp_reserved swaps, and plans not in the Top 4. */
-  nearMiss: {
-    preference: string;
-    userThreshold: number | null;
-    planValue: number;
-    shortfall: number | null;
-  } | null;
   realAnnualCost: CompatRealAnnualCost | null;
   redFlags: CompatRedFlag[];
   disqualified: boolean;
@@ -683,7 +672,6 @@ function adaptScored(
     isCsnp,
     csnpReservedSlot: score.csnpReservedSlot,
     medicationBackfill: score.medicationBackfill,
-    nearMiss: score.nearMiss,
     realAnnualCost: realAnnual,
     redFlags,
     disqualified: score.disqualifiedByRedFlag || score.allProvidersOutOfNetwork,
@@ -827,9 +815,29 @@ function adaptBrainOutput(
   brain: BrainOutput,
   agentPlanByTriple: Map<string, Plan>,
 ): PlanBrainResult {
+  // brain.ranked is the FULL rawScored pool sorted by cost — it still
+  // contains plans Gate 1 (provider OON / unverified) and Gate 2 (any
+  // user drug not on formulary) eliminated. Mapping all of it into
+  // `scored` is what surfaced plans with "0/1 doctors in-network" and
+  // "Not available" drug costs as Top Pick. Match the consumer brain's
+  // Results.tsx contract: iterate liveTop3.picks (the diversified
+  // Gate-survivors in slot order — full_match → near_miss → C-SNP
+  // reserved swap) and adapt only those. No backfill, no value
+  // alternatives — if liveTop3 is null or has 2 picks, scored has 0
+  // or 2 entries and CompareScreen renders that many.
+  const scoredByKey = new Map<string, BrainScoredPlan>();
+  for (const sp of brain.ranked) {
+    scoredByKey.set(
+      `${sp.row.contract_id}-${sp.row.plan_id}-${sp.row.segment_id}`,
+      sp,
+    );
+  }
   const scored: ScoredPlan[] = [];
   let rank = 1;
-  for (const sp of brain.ranked) {
+  for (const pick of brain.liveTop3?.picks ?? []) {
+    const key = `${pick.plan.row.contract_id}-${pick.plan.row.plan_id}-${pick.plan.row.segment_id}`;
+    const sp = scoredByKey.get(key);
+    if (!sp) continue;
     const adapted = adaptScored(sp, rank, agentPlanByTriple);
     if (adapted) {
       scored.push(adapted);
