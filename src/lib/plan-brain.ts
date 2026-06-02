@@ -197,6 +197,14 @@ function totalAnnualCost(s: BrainScoredPlan): number {
 //   5. Carrier name alphabetical — pure stability, last resort, so
 //      runs are reproducible across DB row-order shuffles.
 function compareByCostThenTiebreakers(a: BrainScoredPlan, b: BrainScoredPlan): number {
+  // PROVIDER CONFIDENCE TIER — fully-confirmed-in-net plans rank
+  // above any plan with an unverified provider, regardless of cost.
+  // Surfaced in the Compare screen so brokers don't pick a cheaper
+  // plan whose network status is "?" — those carry the 'unknown'
+  // badge and sit behind any confirmed match.
+  const aConfirmed = a.score.allProvidersInNetwork ? 1 : 0;
+  const bConfirmed = b.score.allProvidersInNetwork ? 1 : 0;
+  if (aConfirmed !== bConfirmed) return bConfirmed - aConfirmed;
   const costDiff = totalAnnualCost(a) - totalAnnualCost(b);
   if (costDiff !== 0) return costDiff;
   // 1. More providers in-network first.
@@ -271,27 +279,28 @@ function unionUtilizationConditions(
 
 // ─── Gate 1 — providers ──────────────────────────────────────────────
 //
-// STRICT BINARY. The pm_provider_network_cache lookup yields three
-// states per (plan, npi):
+// Three states per (plan, npi) from pm_provider_network_cache:
 //
-//   • covered=true      — verified in-network → PASS
+//   • covered=true      — verified in-network → PASS, no flag
 //   • covered=false     — verified OUT of network → ELIMINATED
-//   • cache row absent  — UNVERIFIED (carrier not yet scraped) → ELIMINATED
+//   • cache row absent  — UNVERIFIED → PASS with anyProviderUnverified
+//                         flag (surfaces as 'unknown' on the Compare
+//                         screen so the broker knows to call the
+//                         carrier).
 //
-// Product rule: if we can't confirm the provider is in-network, the
-// plan is out. Zero pass-throughs. Every Top-4 plan has every user
-// provider on a confirmed-in-network row.
-//
-// Trade-off: carriers whose provider networks haven't been scraped
-// drop out of Top 4 until the cache backfills. We accept that —
-// surfacing "your doctor might be in network, we're not sure" is
-// worse than narrowing the pool to plans we can stand behind.
+// Strict-elim-on-absent over-killed: cache coverage is sparse outside
+// the 3 active FHIR carriers (uhc / humana / bcbsnc), so a client like
+// Carol Hawk with a PA in Alamance County had every plan show "0/1
+// providers" and Gate 1 emptied the pool. Unverified now passes; the
+// real fix is the FHIR live fallback (upstream, populates the cache
+// before the brain runs). Confirmed-in-net plans still outrank
+// unverified ones via compareByCostThenTiebreakers.
 function applyProviderGate(
   pool: ReadonlyArray<BrainScoredPlan>,
   userHasProviders: boolean,
 ): BrainScoredPlan[] {
   if (!userHasProviders) return [...pool];
-  return pool.filter((s) => s.score.allProvidersInNetwork);
+  return pool.filter((s) => !s.score.anyProviderDefinitivelyOut);
 }
 
 // ─── Gate 2 — medications ────────────────────────────────────────────

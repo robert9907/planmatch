@@ -607,14 +607,21 @@ function adaptScored(
     ? mapRealAnnualCost(score.realAnnualCost)
     : null;
 
+  // After Gate 1's relaxation, plans with any unverified provider pass
+  // through with score.allProvidersOutOfNetwork=true (when inNetCount
+  // is 0). Map unverified BEFORE all_out so the UI badges 'unknown' and
+  // the broker knows to call the carrier — not 'all_out' which reads
+  // as "we confirmed your doctor is out of network."
   const providerNetworkStatus: ScoredPlan['providerNetworkStatus'] =
     score.allProvidersInNetwork
       ? 'all_in'
-      : score.allProvidersOutOfNetwork
-        ? 'all_out'
-        : score.anyProviderOutOfNetwork
-          ? 'partial'
-          : 'unknown';
+      : score.anyProviderUnverified
+        ? 'unknown'
+        : score.allProvidersOutOfNetwork
+          ? 'all_out'
+          : score.anyProviderOutOfNetwork
+            ? 'partial'
+            : 'unknown';
 
   const appliedRules: CompatRuleApplication[] = score.appliedBrokerRules.map((r) => ({
     ruleId: r.ruleId,
@@ -674,7 +681,10 @@ function adaptScored(
     medicationBackfill: score.medicationBackfill,
     realAnnualCost: realAnnual,
     redFlags,
-    disqualified: score.disqualifiedByRedFlag || score.allProvidersOutOfNetwork,
+    // No longer treats unverified-network plans as disqualified — Gate 1
+    // passes Unknown with a flag, and QuoteDeliveryV4 filters on this
+    // term to hide plans from the audit columns.
+    disqualified: score.disqualifiedByRedFlag,
     whySwitchCopy: score.costBreakdown,
     annualUtilization: score.annualUtilization,
   };
