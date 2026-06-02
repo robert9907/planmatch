@@ -34,6 +34,19 @@ import {
 } from './atoms';
 import { SnapTrigger } from './SnapTrigger';
 
+function splitNameForCreate(full: string): { first: string; last: string } {
+  const parts = (full ?? '').trim().split(/\s+/);
+  if (parts.length === 0 || !parts[0]) return { first: '', last: '' };
+  if (parts.length === 1) return { first: parts[0], last: '' };
+  return { first: parts[0], last: parts.slice(1).join(' ') };
+}
+
+function hasClientIdParam(): boolean {
+  if (typeof window === 'undefined') return false;
+  const v = new URLSearchParams(window.location.search).get('clientId');
+  return Boolean(v && v.trim());
+}
+
 interface Props {
   /** Plan catalog fetched by AgentV3App for the client's county+state.
    *  Empty array when ZIP hasn't resolved yet — the picker stays hidden
@@ -137,6 +150,79 @@ export function IntakeScreen({
       /^\d{5}$/.test(client.zip) &&
       client.phone,
   );
+
+  // Inline create-client. Fires only when the broker landed on
+  // /agent-v3 without a ?clientId= (new caller, no CRM row yet) and
+  // hit Continue. POSTs to /api/agentbase-create-client; on success
+  // pins the returned id into the URL via history.replaceState so all
+  // downstream syncs (med upsert, provider link, recommend) resolve
+  // straight to this row instead of re-doing phone/dob matching.
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  async function handleContinue() {
+    if (!canContinue || creating) return;
+    setCreateError(null);
+
+    // Already hydrated from ?clientId= — nothing to create.
+    if (hasClientIdParam()) {
+      onNext();
+      return;
+    }
+
+    const { first, last } = splitNameForCreate(client.name);
+    if (!first || !last) {
+      setCreateError(
+        'Enter both first and last name so the AgentBase row can be created.',
+      );
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const res = await fetch('/api/agentbase-create-client', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          firstName: first,
+          lastName: last,
+          phone: client.phone || undefined,
+          email: client.email || undefined,
+          dob: client.dob || undefined,
+          zip: client.zip,
+          county: client.county || undefined,
+          state: client.state || undefined,
+          medicareId: client.mbi || undefined,
+          currentPlanId: currentPlanId || undefined,
+        }),
+      });
+      const body = (await res.json().catch(() => ({}))) as
+        | { clientId: number; created: boolean }
+        | { error: string };
+      if (!res.ok || !('clientId' in body)) {
+        const msg =
+          'error' in body && typeof body.error === 'string'
+            ? body.error
+            : `create-client ${res.status}`;
+        setCreateError(msg);
+        return;
+      }
+      // Pin clientId into the URL so a refresh re-hydrates this row
+      // and the recommend endpoint resolves by id.
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('clientId', String(body.clientId));
+        window.history.replaceState(null, '', url.toString());
+      } catch {
+        // history API unavailable (very old browser); ignore.
+      }
+      onNext();
+    } catch (err) {
+      setCreateError((err as Error).message);
+    } finally {
+      setCreating(false);
+    }
+  }
 
   // ── Current plan picker state ────────────────────────────────────
   const selectedPlan = useMemo<Plan | null>(
@@ -449,7 +535,28 @@ export function IntakeScreen({
       <div style={{ marginTop: 14 }}>
         <SnapTrigger capture={capture} />
       </div>
-      <Nav onNext={onNext} nextDisabled={!canContinue} />
+      {createError && (
+        <div
+          role="alert"
+          style={{
+            marginTop: 12,
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            color: '#7f1d1d',
+            borderRadius: 8,
+            padding: '8px 12px',
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
+          ⚠ Couldn't create AgentBase client: {createError}
+        </div>
+      )}
+      <Nav
+        onNext={handleContinue}
+        nextDisabled={!canContinue || creating}
+        nextLabel={creating ? 'Saving…' : undefined}
+      />
     </Container>
   );
 }
