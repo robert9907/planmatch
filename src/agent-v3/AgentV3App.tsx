@@ -172,6 +172,23 @@ export function AgentV3App() {
   const [clientView, setClientView] = useState(false);
   const [priorities, setPriorities] = useState<PriorityKey[]>(DEFAULT_PRIORITIES);
 
+  // Bundle-version probe — visible in the browser console on first
+  // mount so we can tell at a glance whether the loaded JS has the
+  // empty-default fix or a cached older bundle. Expect:
+  //   [agent-v3 init] DEFAULT_PRIORITIES=[] initialPriorities=[]
+  // If the right side shows ['low_rx','keep_doctor','dental','vision']
+  // the browser is on a stale bundle — hard-refresh.
+  useEffect(() => {
+    console.log(
+      '[agent-v3 init] DEFAULT_PRIORITIES=',
+      DEFAULT_PRIORITIES,
+      'initialPriorities=',
+      priorities,
+    );
+    // Mount-only — we don't want to log on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const client = useSession((s) => s.client);
   const medications = useSession((s) => s.medications);
   const providers = useSession((s) => s.providers);
