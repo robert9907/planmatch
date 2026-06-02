@@ -210,6 +210,11 @@ export interface ScoredPlan {
   providerBoost: number;
   providerNetworkStatus: 'all_in' | 'partial' | 'all_out' | 'unknown';
   uncoveredDrugRxcuis: string[];
+  /** Mirror of BrainScore.drugCoverageUnknown — true when at least one
+   *  user drug has no pm_drug_cost_cache row AND isn't on the plan's
+   *  formulary. UI surfaces the "drug coverage estimated — confirm
+   *  with your pharmacist" disclaimer on affected plan columns. */
+  drugCoverageUnknown: boolean;
   ribbon: RibbonKey | null;
   breakdown: string;
   drugCostByRxcui: Record<string, number>;
@@ -669,6 +674,7 @@ function adaptScored(
         : 0,
     providerNetworkStatus,
     uncoveredDrugRxcuis,
+    drugCoverageUnknown: score.drugCoverageUnknown,
     ribbon: score.ribbon,
     breakdown: score.costBreakdown,
     drugCostByRxcui: {},

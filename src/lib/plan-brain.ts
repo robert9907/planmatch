@@ -522,6 +522,7 @@ function brainToLiveTop3Pick(
       drugsCoveredLowTier: s.score.lowTierCount,
       drugsTotal: s.score.totalCount,
       drugsAllCovered: s.score.coveredCount === s.score.totalCount && s.score.totalCount > 0,
+      drugCoverageUnknown: s.score.drugCoverageUnknown,
       estimatedAnnualDrugCost: s.score.totalAnnualDrugCost,
       totalAnnualCost: s.score.realAnnualCost.netAnnual,
       extrasValue: s.score.extrasValueAnnual,
@@ -634,6 +635,12 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     const coveredCount = drugEstimates.filter((x) => x.covered).length;
     const lowTierCount = drugEstimates.filter((x) => x.tier != null && x.tier <= 2).length;
     const totalCount = drugEstimates.length;
+    // At least one user drug has no cache row AND isn't on the formulary —
+    // we have no evidence either way. UI surfaces a "drug coverage
+    // estimated — confirm with your pharmacist" disclaimer.
+    const drugCoverageUnknown = drugEstimates.some(
+      (x) => !x.covered && !x.confirmedUncovered,
+    );
 
     const moopBenefit = benefitByCategory(benefits, 'moop_in');
     const moopAmount =
@@ -755,6 +762,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       coveredCount,
       totalCount,
       lowTierCount,
+      drugCoverageUnknown,
       allProvidersInNetwork: allInNet,
       providersInNetworkCount: inNetCount,
       anyProviderOutOfNetwork: anyOut,

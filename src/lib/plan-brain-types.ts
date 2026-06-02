@@ -78,6 +78,12 @@ export interface BrainScore {
   coveredCount: number;
   totalCount: number;
   lowTierCount: number;        // tier 1 or 2
+  /** True when at least one user drug has covered=false AND
+   *  confirmedUncovered=false (i.e., we have no evidence either way —
+   *  no pm_drug_cost_cache row AND no formulary entry). Surfaced on
+   *  LiveTop3PickPlan.drugCoverageUnknown so the UI can display
+   *  "drug coverage estimated — confirm with your pharmacist". */
+  drugCoverageUnknown: boolean;
   // Provider integration — soft adjuster, not an axis
   allProvidersInNetwork: boolean;
   /** Count of user-listed providers confirmed in-network on this plan
@@ -241,6 +247,11 @@ export interface LiveTop3PickPlan {
   drugsCoveredLowTier: number;
   drugsTotal: number;
   drugsAllCovered: boolean;
+  /** Mirror of BrainScore.drugCoverageUnknown — true when at least one
+   *  user drug has no cache row AND isn't on the plan's formulary. UI
+   *  reads this to render the "drug coverage estimated — confirm with
+   *  your pharmacist" disclaimer on affected plans. */
+  drugCoverageUnknown: boolean;
   estimatedAnnualDrugCost: number;
   totalAnnualCost: number;
   extrasValue: number;

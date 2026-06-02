@@ -74,6 +74,12 @@ interface Props {
    *  type-check. */
   ribbonByPlanId?: Record<string, string | null>;
   annualDrugByPlanId: Record<string, number | null>;
+  /** True when the brain couldn't confirm coverage for ≥1 user drug on
+   *  this plan (no pm_drug_cost_cache row AND not on the formulary).
+   *  The drug-cost row in the slot card renders an amber disclaimer
+   *  ("confirm with your pharmacist") for any plan flagged here.
+   *  Optional so older callers still type-check. */
+  drugCoverageUnknownByPlanId?: Record<string, boolean>;
   /**
    * Fire-and-forget AgentBase write-back. CompareScreen calls this with
    * the picked plan when the broker clicks Enroll on a card or the
@@ -441,6 +447,7 @@ export function CompareScreen({
   scoredPlans,
   ribbonByPlanId,
   annualDrugByPlanId,
+  drugCoverageUnknownByPlanId,
   onRecommend,
   onBack,
   onNext,
@@ -699,6 +706,11 @@ export function CompareScreen({
             baseline={baseline}
             metrics={metrics}
             bestByMetric={bestByMetric}
+            drugCoverageUnknown={
+              plan != null && drugCoverageUnknownByPlanId
+                ? drugCoverageUnknownByPlanId[plan.id] === true
+                : false
+            }
             onDrop={handleDrop}
             onClear={() => clearSlot(i)}
             onFill={() => fillEmptySlot(i)}
@@ -1393,6 +1405,7 @@ function SlotCell({
   baseline,
   metrics,
   bestByMetric,
+  drugCoverageUnknown,
   onDrop,
   onClear,
   onFill,
@@ -1410,6 +1423,10 @@ function SlotCell({
   baseline: Plan | null;
   metrics: Metric[];
   bestByMetric: Record<string, number | null>;
+  /** Brain flag (mirrored from BrainScore.drugCoverageUnknown) — when
+   *  true, the drug-cost row in this slot card renders an amber
+   *  "confirm with your pharmacist" disclaimer. */
+  drugCoverageUnknown: boolean;
   onDrop: (slotIdx: number, draggedPlanId: string) => void;
   onClear: () => void;
   onFill: () => void;
@@ -1581,6 +1598,7 @@ function SlotCell({
             baseline={baseline}
             isBaseline={isBaseline}
             best={bestByMetric[m.key] ?? null}
+            drugCoverageUnknown={m.key === 'drugs' && drugCoverageUnknown}
           />
         ))}
       </div>
@@ -1645,6 +1663,7 @@ function MetricRow({
   baseline,
   isBaseline,
   best,
+  drugCoverageUnknown,
 }: {
   metric: Metric;
   plan: Plan;
@@ -1653,6 +1672,10 @@ function MetricRow({
    *  delta-vs-self arrow (always 0). */
   isBaseline: boolean;
   best: number | null;
+  /** True only on the 'drugs' row, only when the brain flagged this
+   *  plan with drugCoverageUnknown. Renders an amber inline disclaimer
+   *  below the value. */
+  drugCoverageUnknown?: boolean;
 }) {
   const num = metric.numeric(plan);
   const isBest = best != null && num != null && num === best;
@@ -1665,10 +1688,6 @@ function MetricRow({
   return (
     <div
       style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr auto',
-        gap: 8,
-        alignItems: 'center',
         padding: '5px 6px',
         background: isBest ? 'rgba(34,197,94,0.08)' : 'transparent',
         borderRadius: 6,
@@ -1677,51 +1696,79 @@ function MetricRow({
     >
       <div
         style={{
-          fontFamily: FONT_LABEL,
-          fontSize: 10,
-          fontWeight: 600,
-          color: MUTED,
-          textTransform: 'uppercase',
-          letterSpacing: 0.4,
+          display: 'grid',
+          gridTemplateColumns: '1fr auto',
+          gap: 8,
+          alignItems: 'center',
         }}
       >
-        {metric.label}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-        <span
+        <div
           style={{
-            fontFamily: FONT_NUM,
-            fontSize: 12,
-            fontWeight: 700,
-            color: isBest ? '#15803d' : TEXT,
-            whiteSpace: 'pre-line',
-            textAlign: 'right',
+            fontFamily: FONT_LABEL,
+            fontSize: 10,
+            fontWeight: 600,
+            color: MUTED,
+            textTransform: 'uppercase',
+            letterSpacing: 0.4,
           }}
         >
-          {metric.format(plan)}
-        </span>
-        {arrow && deltaLabel && (
+          {metric.label}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
           <span
             style={{
               fontFamily: FONT_NUM,
-              fontSize: 9,
+              fontSize: 12,
               fontWeight: 700,
-              color: arrowColor,
-              background:
-                dir === 'better'
-                  ? 'rgba(34,197,94,0.1)'
-                  : dir === 'worse'
-                    ? 'rgba(239,68,68,0.1)'
-                    : 'transparent',
-              padding: '1px 5px',
-              borderRadius: 4,
-              whiteSpace: 'nowrap',
+              color: isBest ? '#15803d' : TEXT,
+              whiteSpace: 'pre-line',
+              textAlign: 'right',
             }}
           >
-            {arrow} {deltaLabel}
+            {metric.format(plan)}
           </span>
-        )}
+          {arrow && deltaLabel && (
+            <span
+              style={{
+                fontFamily: FONT_NUM,
+                fontSize: 9,
+                fontWeight: 700,
+                color: arrowColor,
+                background:
+                  dir === 'better'
+                    ? 'rgba(34,197,94,0.1)'
+                    : dir === 'worse'
+                      ? 'rgba(239,68,68,0.1)'
+                      : 'transparent',
+                padding: '1px 5px',
+                borderRadius: 4,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {arrow} {deltaLabel}
+            </span>
+          )}
+        </div>
       </div>
+      {drugCoverageUnknown && (
+        <div
+          role="note"
+          style={{
+            marginTop: 4,
+            padding: '5px 8px',
+            background: 'rgba(245,158,11,0.12)',
+            border: '1px solid rgba(245,158,11,0.45)',
+            borderRadius: 5,
+            fontFamily: FONT_LABEL,
+            fontSize: 9.5,
+            fontWeight: 600,
+            color: '#92400e',
+            lineHeight: 1.3,
+          }}
+        >
+          Drug coverage estimated — confirm with your pharmacist before enrolling
+        </div>
+      )}
     </div>
   );
 }

@@ -191,6 +191,12 @@ export interface DrugYearlyEstimate {
   tier: number | null;
   yearlyCost: number;
   covered: boolean;
+  // True when the pm_drug_cost_cache row exists and explicitly marks
+  // this drug uncovered. False when the cache is silent (no row) and
+  // the formulary doesn't list it either — that case is "unknown
+  // coverage" and surfaces via BrainScore.drugCoverageUnknown so the
+  // UI can warn instead of treating it as confirmed-uncovered.
+  confirmedUncovered: boolean;
 }
 
 // Single-drug yearly cost estimate. Cache hit → use it. Cache miss →
@@ -214,6 +220,7 @@ export function estimateDrugYearlyCost(d: EstimateDrugInput): DrugYearlyEstimate
         tier: hit.tier ?? tier,
         yearlyCost: Math.max(0, Math.round(capped)),
         covered: hit.covered,
+        confirmedUncovered: hit.covered === false,
       };
     }
   }
@@ -224,12 +231,15 @@ export function estimateDrugYearlyCost(d: EstimateDrugInput): DrugYearlyEstimate
     const capped = INSULIN_NAME_RE.test(d.name)
       ? Math.min(yearly, INSULIN_MONTHLY_CAP_2026 * 12)
       : yearly;
-    return { rxcui: d.rxcui, name: d.name, tier, yearlyCost: Math.max(0, Math.round(capped)), covered: true };
+    return { rxcui: d.rxcui, name: d.name, tier, yearlyCost: Math.max(0, Math.round(capped)), covered: true, confirmedUncovered: false };
   }
 
-  // Not in formulary — heavy penalty per spec: assume full retail.
+  // Not in formulary AND no cache row — coverage is unknown. Apply the
+  // retail penalty so cost-rank still disfavors these plans, but mark
+  // confirmedUncovered=false so BrainScore.drugCoverageUnknown can flag
+  // the gap for the UI warning.
   const fullCost = NOTIONAL_TIER_FULL_COST[3] * 12; // ~$2,400 if uncovered brand-tier guess
-  return { rxcui: d.rxcui, name: d.name, tier: null, yearlyCost: fullCost, covered: false };
+  return { rxcui: d.rxcui, name: d.name, tier: null, yearlyCost: fullCost, covered: false, confirmedUncovered: false };
 }
 
 // ─── Bundle drug cost — Part D deductible-aware ──────────────────────
@@ -271,6 +281,8 @@ interface DrugInfo {
   retailMonthly: number;
   postDeductibleMonthly: number;
   covered: boolean;
+  // See DrugYearlyEstimate.confirmedUncovered for semantics.
+  confirmedUncovered: boolean;
   isInsulin: boolean;
   cacheOverride: number | null;
 }
@@ -308,6 +320,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
         retailMonthly: 0,
         postDeductibleMonthly: 0,
         covered: cachedCovered ?? true,
+        confirmedUncovered: cachedCovered === false,
         isInsulin,
         cacheOverride,
       };
@@ -315,6 +328,9 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
 
     const effectiveTier = cachedTier ?? tier;
     if (effectiveTier == null && !cov && cachedCovered !== true) {
+      // No tier from cache OR formulary AND no cache override saying
+      // covered=true. cachedCovered === false ⇒ confirmed uncovered;
+      // cachedCovered == null ⇒ unknown (no evidence either way).
       const retailMonthly = NOTIONAL_TIER_FULL_COST[3];
       return {
         input: d,
@@ -322,6 +338,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
         retailMonthly,
         postDeductibleMonthly: retailMonthly,
         covered: false,
+        confirmedUncovered: cachedCovered === false,
         isInsulin,
         cacheOverride: null,
       };
@@ -346,6 +363,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       retailMonthly,
       postDeductibleMonthly,
       covered: true,
+      confirmedUncovered: cachedCovered === false,
       isInsulin,
       cacheOverride: null,
     };
@@ -377,6 +395,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
         tier: info.tier,
         yearlyCost: info.cacheOverride,
         covered: info.covered,
+        confirmedUncovered: info.confirmedUncovered,
       };
     }
     if (!info.covered) {
@@ -389,6 +408,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
         tier: null,
         yearlyCost: Math.max(0, Math.round(yearly)),
         covered: false,
+        confirmedUncovered: info.confirmedUncovered,
       };
     }
     if (info.isInsulin) {
@@ -399,6 +419,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
         tier: info.tier,
         yearlyCost: Math.max(0, Math.round(yearly)),
         covered: true,
+        confirmedUncovered: false,
       };
     }
     if (info.tier != null && info.tier <= 2) {
@@ -408,6 +429,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
         tier: info.tier,
         yearlyCost: Math.max(0, Math.round(info.postDeductibleMonthly * 12)),
         covered: true,
+        confirmedUncovered: false,
       };
     }
     let yearly: number;
@@ -424,6 +446,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       tier: info.tier,
       yearlyCost: Math.max(0, Math.round(yearly)),
       covered: true,
+      confirmedUncovered: false,
     };
   });
 }

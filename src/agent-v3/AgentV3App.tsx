@@ -325,16 +325,28 @@ export function AgentV3App() {
       if (c.plan_id) store.setCurrentPlanId(c.plan_id);
 
       for (const m of detail.medications) {
+        if (!m.name.trim()) continue;
         store.addMedication({
           name: m.name,
           rxcui: m.rxcui || undefined,
           dosageInstructions:
             [m.dose, m.frequency].filter(Boolean).join(' · ') || undefined,
+          tier: m.tier || undefined,
+          quantity: m.quantity || undefined,
+          refillDays: m.refill_days || undefined,
           source: 'manual',
           confidence: 'high',
         });
       }
       for (const p of detail.providers) {
+        if (!p.name.trim()) continue;
+        // Pre-seed networkStatus for the plan the CRM last verified
+        // against, so the Providers screen renders that row as the
+        // resolved status instead of flashing Checking → Verified again.
+        const seededStatus: Record<string, 'in' | 'out' | 'unknown'> = {};
+        if (p.last_known_plan_id && p.last_known_network_status) {
+          seededStatus[p.last_known_plan_id] = p.last_known_network_status;
+        }
         store.addProvider({
           name: p.name,
           specialty: p.specialty || undefined,
@@ -342,8 +354,12 @@ export function AgentV3App() {
           address: p.address || undefined,
           phone: p.phone || undefined,
           source: 'manual',
+          networkStatus: seededStatus,
         });
       }
+      console.info(
+        `[agent-v3] hydrated from AgentBase: ${detail.medications.length} meds, ${detail.providers.length} providers`,
+      );
 
       setHydration({ kind: 'ready', clientId, clientName: c.name });
     })();
@@ -601,6 +617,20 @@ export function AgentV3App() {
     return out;
   }, [brain.result]);
 
+  // drugCoverageUnknown per plan id. True when ≥1 user drug has no
+  // pm_drug_cost_cache row AND isn't on the plan's formulary — i.e.,
+  // we have no evidence of coverage either way. CompareScreen renders
+  // an amber "confirm with your pharmacist" disclaimer under the
+  // Drug cost / yr row on affected plan columns.
+  const drugCoverageUnknownByPlanId = useMemo<Record<string, boolean>>(() => {
+    if (!brain.result) return {};
+    const out: Record<string, boolean> = {};
+    for (const s of brain.result.scored) {
+      out[s.plan.id] = s.drugCoverageUnknown;
+    }
+    return out;
+  }, [brain.result]);
+
   // ── Current plan lookup ──────────────────────────────────────────
   const currentPlan = useMemo<Plan | null>(() => {
     if (!currentPlanId) return null;
@@ -765,6 +795,7 @@ export function AgentV3App() {
             scoredPlans={scoredPlans}
             ribbonByPlanId={ribbonByPlanId}
             annualDrugByPlanId={annualDrugByPlanId}
+            drugCoverageUnknownByPlanId={drugCoverageUnknownByPlanId}
             onRecommend={onRecommend}
             onBack={() => setScreen('priorities')}
             onNext={() => setScreen('compliance')}
