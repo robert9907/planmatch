@@ -305,22 +305,23 @@ function applyProviderGate(
 
 // ─── Gate 2 — medications ────────────────────────────────────────────
 //
-// Drop any plan where any user drug is uncovered. Carve-out: when no
-// plan in the pool returned any formulary rows at all, the lookup is
-// broken — keep every plan.
+// Hard gate. A plan passes ONLY when every user drug is on the plan's
+// formulary AND drug coverage is fully confirmed (no rxcui has zero
+// evidence). No pool-wide escape hatch — if the data is missing for
+// every plan in the area, the broker sees an empty pool and knows to
+// reach for the manual fallback, not get quietly handed back a list of
+// plans we can't actually quote.
 function applyMedicationGate(
   pool: ReadonlyArray<BrainScoredPlan>,
   userHasDrugs: boolean,
-  poolHasAnyFormulary: boolean,
-): { survivors: BrainScoredPlan[]; relaxedDataGap: boolean } {
-  if (!userHasDrugs) return { survivors: [...pool], relaxedDataGap: false };
-  if (!poolHasAnyFormulary) {
-    return { survivors: [...pool], relaxedDataGap: true };
-  }
-  const survivors = pool.filter(
-    (s) => s.score.totalCount === 0 || s.score.coveredCount === s.score.totalCount,
+): BrainScoredPlan[] {
+  if (!userHasDrugs) return [...pool];
+  return pool.filter(
+    (s) =>
+      s.score.totalCount > 0 &&
+      s.score.coveredCount === s.score.totalCount &&
+      !s.score.drugCoverageUnknown,
   );
-  return { survivors, relaxedDataGap: false };
 }
 
 // ─── Gate 3 — extras "must offer" elimination ────────────────────────
@@ -745,13 +746,11 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   console.log('Gate 1:', gate1.length, 'survived of', rawScored.length);
 
   // ── Gate 2 — medications ──────────────────────────────────────────
-  const poolHasAnyFormulary = gate1.some((s) => s.formulary.size > 0);
-  const gate2Result = applyMedicationGate(gate1, userHasDrugs, poolHasAnyFormulary);
-  const gate2Sorted = [...gate2Result.survivors].sort(
+  const gate2Survivors = applyMedicationGate(gate1, userHasDrugs);
+  const gate2Sorted = [...gate2Survivors].sort(
     (a, b) => a.score.totalAnnualDrugCost - b.score.totalAnnualDrugCost,
   );
-  debugLog(`Gate 2: ${gate2Sorted.length}/${gate1.length} survived meds` +
-    (gate2Result.relaxedDataGap ? ' (data-gap relax)' : ''));
+  debugLog(`Gate 2: ${gate2Sorted.length}/${gate1.length} survived meds`);
   console.log('Gate 2:', gate2Sorted.length, 'survived');
 
   // ── Gate 3 — extras "must offer" elimination ──────────────────────

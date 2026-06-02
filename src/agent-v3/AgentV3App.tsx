@@ -27,10 +27,9 @@ import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
 import { useScreenShareStore } from '@/hooks/useScreenShare';
 import { fetchClientSession } from '@/lib/agentbase';
-import { bulkLookupFormulary, getCachedFormulary } from '@/lib/formularyLookup';
+import { bulkLookupFormulary } from '@/lib/formularyLookup';
 import { fetchPlansForClient } from '@/lib/planCatalog';
 import { totalComplianceItems } from '@/lib/compliance';
-import { monthlyCostFromFormulary } from '@/lib/drugCosts';
 import type { Plan } from '@/types/plans';
 import type { StateCode } from '@/types/session';
 import { useAgentBaseRecommend } from '@/hooks/useAgentBaseRecommend';
@@ -130,17 +129,6 @@ function hasAnyClientFieldParam(p: ClientFieldParams): boolean {
       p.currentPlanName,
   );
 }
-
-// Annual-cost ceiling per Part D tier — used by the sanity layer over
-// pm_drug_cost_cache. Module-scope so it isn't re-created every render
-// (would invalidate the annualDrugByPlanId memo).
-const TIER_ANNUAL_CEILING: Record<number, number> = {
-  1: 360,    // Tier 1 generics — $30/mo upper bound (most are $0-$10)
-  2: 720,    // Tier 2 preferred generics — $60/mo
-  3: 1800,   // Tier 3 preferred brands — $150/mo
-  4: 4800,   // Tier 4 non-preferred — $400/mo
-  5: 18000,  // Tier 5 specialty — coinsurance on high-priced biologics
-};
 
 type HydrationState =
   | { kind: 'idle' }       // no clientId in URL — seed mode or empty
@@ -508,107 +496,26 @@ export function AgentV3App() {
     void bulkLookupFormulary(contractIds, rxcuis);
   }, [eligiblePlans, medications]);
 
-  // ── Drug-cost map sourced from pm_drug_cost_cache ────────────────
-  // Earlier versions threaded useDrugCosts → /api/drug-costs, which
-  // does a Playwright scrape of medicare.gov. Akamai now blocks the
-  // scrape (POST .../drugs/cost times out at 30s on Vercel) and the
-  // stale error gets cached for 5 min, so the swipe deck never sees
-  // costs.
+  // ── Drug-cost map sourced from the brain (P5 fix) ────────────────
+  // The brain's score.totalAnnualDrugCost is the authoritative number:
+  // it uses RxNav-expanded rxcuis to match sibling formulary entries,
+  // applies tier ceilings, handles insulin caps, and falls back to
+  // formulary copay × 12 when pm_drug_cost_cache misses. The old
+  // per-plan loop here used ORIGINAL rxcuis via getCachedFormulary and
+  // diverged from the brain — the brain said "covered, $X" while this
+  // map said "null" → UI rendered "Not available" on plans the brain
+  // had already cleared Gate 2 with. Now they agree.
   //
-  // /api/plan-brain-data already returns the structured pm_drug_cost_cache
-  // slice (per-plan, per-NDC yearly totals) from Supabase — same source
-  // the scrape would write to on a hit. We aggregate per plan: sum
-  // estimated_yearly_total across NDCs, divide by 12 for monthly.
-  //
-  // Sanity layer: pm_drug_cost_cache occasionally carries bad rows
-  // (full retail markup landed instead of plan-discounted cost — the
-  // Wellcare Simple HMO-POS gabapentin row had estimated_yearly_total
-  // = $15,378 against a Tier 1-2 generic that should be $0-$120/yr).
-  // For each plan we compute a per-rxcui tier ceiling from the primed
-  // formulary cache and use it as a soft cap. The cached value wins
-  // when it sits inside the ceiling band; when it exceeds the band by
-  // a wide margin we fall back to copay × 12 from the formulary tier.
-  // Drugs marked 'not_covered' in formulary skip the ceiling — full
-  // retail there is legitimate.
+  // Plans not in brain.result.scored (eliminated, or never reached
+  // Gate 4) don't get an entry — UI fallback (?? null) renders em-dash.
   const annualDrugByPlanId = useMemo<Record<string, number | null>>(() => {
+    if (!brain.result) return {};
     const out: Record<string, number | null> = {};
-    if (!brain.data) return out;
-    const rxcuis = medications
-      .map((m) => m.rxcui)
-      .filter((s): s is string => !!s);
-
-    for (const plan of eligiblePlans) {
-      const contractPlan = `${plan.contract_id}-${plan.plan_number}`;
-      const ndcMap = brain.data.drugCostCache[plan.id] ?? {};
-      let cacheTotal = 0;
-      let anyCache = false;
-      for (const row of Object.values(ndcMap)) {
-        if (typeof row.estimated_yearly_total === 'number') {
-          cacheTotal += row.estimated_yearly_total;
-          anyCache = true;
-        }
-      }
-
-      // Build the formulary-derived sane total + sane ceiling.
-      let formularyTotal = 0;
-      let ceilingTotal = 0;
-      let allCovered = true;
-      for (const rxcui of rxcuis) {
-        const hit = getCachedFormulary(contractPlan, rxcui);
-        if (!hit) {
-          // No formulary data — can't bound, fall back to cache.
-          allCovered = false;
-          continue;
-        }
-        if (hit.tier === 'not_covered' || hit.tier === 'excluded') {
-          // Drug isn't on formulary — patient pays retail, cache is
-          // authoritative. Skip ceiling for this drug.
-          allCovered = false;
-          continue;
-        }
-        const tierNum = typeof hit.tier === 'number' ? hit.tier : null;
-        if (tierNum != null) {
-          ceilingTotal += TIER_ANNUAL_CEILING[tierNum] ?? 1800;
-        }
-        // Per-fill cost: flat copay when filed, else coinsurance × tier
-        // notional retail. Pre-fix, the coinsurance branch was missing
-        // and Ozempic (Tier 3, ~25% coinsurance on most NC plans) added
-        // $0 to formularyTotal, surfacing as "Annual Drugs $0/yr" on
-        // Compare when pm_drug_cost_cache had no row for the plan.
-        const monthly = monthlyCostFromFormulary({
-          tier: tierNum,
-          copay: hit.copay,
-          coinsurance: hit.coinsurance,
-        });
-        formularyTotal += monthly * 12;
-      }
-
-      if (!anyCache) {
-        out[plan.id] = allCovered && rxcuis.length > 0 ? formularyTotal : null;
-        continue;
-      }
-
-      // Override threshold: cache > 1.5× ceiling and ceiling > 0
-      // means the cache is implausibly high vs. what the plan's
-      // formulary filing says it should be. Use the formulary total
-      // (or ceiling if formulary copay is null) instead.
-      if (allCovered && ceilingTotal > 0 && cacheTotal > ceilingTotal * 1.5) {
-        const replacement = formularyTotal > 0 ? formularyTotal : ceilingTotal;
-        if (typeof console !== 'undefined' && console.warn) {
-          console.warn(
-            `[drug-cost-sanity] ${plan.contract_id}-${plan.plan_number}: ` +
-              `cache=$${cacheTotal} → $${replacement} ` +
-              `(tier ceiling $${ceilingTotal}, formulary copay × 12 = $${formularyTotal})`,
-          );
-        }
-        out[plan.id] = replacement;
-        continue;
-      }
-
-      out[plan.id] = cacheTotal;
+    for (const s of brain.result.scored) {
+      out[s.plan.id] = Math.round(s.totalAnnualDrugCost);
     }
     return out;
-  }, [brain.data, eligiblePlans, medications]);
+  }, [brain.result]);
   // ── Brain rank derivatives ───────────────────────────────────────
   // scoredPlans = the brain's ranked plan list (descending by composite
   // score). CompareScreen consumes this directly to seed slot 0 with
@@ -634,17 +541,37 @@ export function AgentV3App() {
     return out;
   }, [brain.result]);
 
-  // drugCoverageUnknown per plan id. True when ≥1 user drug has no
-  // pm_drug_cost_cache row AND isn't on the plan's formulary — i.e.,
-  // we have no evidence of coverage either way. CompareScreen renders
-  // an amber "confirm with your pharmacist" disclaimer under the
-  // Drug cost / yr row on affected plan columns.
+  // drugCoverageUnknown per plan id. After Gate 2's strict elimination
+  // every plan in scored has drugCoverageUnknown=false — the disclaimer
+  // never fires for Top 4 picks. Kept for compat with CompareScreen
+  // signature.
   const drugCoverageUnknownByPlanId = useMemo<Record<string, boolean>>(() => {
     if (!brain.result) return {};
     const out: Record<string, boolean> = {};
     for (const s of brain.result.scored) {
       out[s.plan.id] = s.drugCoverageUnknown;
     }
+    return out;
+  }, [brain.result]);
+
+  // ── Drug-coverage display from brain (P1 fix) ────────────────────
+  // CompareScreen used to call coveredCount(plan, rxcuis), reading
+  // plan.formulary[rxcui]. But /api/plans.ts returns formulary={}
+  // (populated lazily via /api/formulary, and nothing in agent-v3
+  // hydrates back onto the Plan object) so the old code always rendered
+  // "0/N covered" for every plan, including the ones the brain knew
+  // were fully covered. Source-of-truth is now BrainScore.coveredCount
+  // / totalCount, surfaced through the adapter on ScoredPlan.
+  const drugsCoveredByPlanId = useMemo<Record<string, number>>(() => {
+    if (!brain.result) return {};
+    const out: Record<string, number> = {};
+    for (const s of brain.result.scored) out[s.plan.id] = s.drugsCovered;
+    return out;
+  }, [brain.result]);
+  const drugsTotalByPlanId = useMemo<Record<string, number>>(() => {
+    if (!brain.result) return {};
+    const out: Record<string, number> = {};
+    for (const s of brain.result.scored) out[s.plan.id] = s.drugsTotal;
     return out;
   }, [brain.result]);
 
@@ -832,6 +759,8 @@ export function AgentV3App() {
             ribbonByPlanId={ribbonByPlanId}
             annualDrugByPlanId={annualDrugByPlanId}
             drugCoverageUnknownByPlanId={drugCoverageUnknownByPlanId}
+            drugsCoveredByPlanId={drugsCoveredByPlanId}
+            drugsTotalByPlanId={drugsTotalByPlanId}
             onRecommend={onRecommend}
             onBack={() => setScreen('priorities')}
             onNext={() => setScreen('compliance')}

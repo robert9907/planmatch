@@ -37,11 +37,13 @@ import {
   planDisplay,
 } from './planDisplay';
 
-// Carriers that didn't file a value get "Not available" instead of the
-// formatCostShare/formatPcp default "—". Per project rule, every
-// benefit row stays visible — change the text, not the row.
+// Per the current product rule: rows stay visible, but unfiled values
+// render as em-dash, not "Not available" (which read as "we can't
+// quote this plan" to brokers). The data IS in Supabase for 178K+
+// pm_plan_benefits rows; em-dash is reserved for the genuine gaps
+// (mostly C-SNP plans whose PBP B-codes aren't in pm_plan_benefits yet).
 function safeCostShare(s: string): string {
-  return s === '—' ? 'Not available' : s;
+  return s;
 }
 
 // ── Design tokens ──────────────────────────────────────────────
@@ -80,6 +82,16 @@ interface Props {
    *  ("confirm with your pharmacist") for any plan flagged here.
    *  Optional so older callers still type-check. */
   drugCoverageUnknownByPlanId?: Record<string, boolean>;
+  /** Per-plan count of user drugs the brain confirmed are on formulary,
+   *  sourced from BrainScore.coveredCount via the adapter. Replaces the
+   *  old `plan.formulary[rxcui]` lookup that always returned `{}` in
+   *  agent-v3 (plan.formulary is populated lazily via /api/formulary,
+   *  and agent-v3 never hydrates back onto the Plan object). Plans not
+   *  in the brain's scored list (e.g., the user's current plan when it
+   *  failed Gates 1+2) get undefined → UI renders em-dash. */
+  drugsCoveredByPlanId?: Record<string, number>;
+  /** Companion to drugsCoveredByPlanId — BrainScore.totalCount. */
+  drugsTotalByPlanId?: Record<string, number>;
   /**
    * Fire-and-forget AgentBase write-back. CompareScreen calls this with
    * the picked plan when the broker clicks Enroll on a card or the
@@ -103,14 +115,10 @@ interface ProviderRow {
   networkStatus?: Record<string, string> | undefined;
 }
 
-function coveredCount(plan: Plan, rxcuis: string[]): number {
-  let n = 0;
-  for (const r of rxcuis) {
-    const t = plan.formulary[r];
-    if (t != null && t !== 'excluded') n += 1;
-  }
-  return n;
-}
+// Old per-plan coveredCount(plan, rxcuis) read plan.formulary[rxcui],
+// which is always `{}` in agent-v3 (plan.formulary is populated lazily
+// via /api/formulary and nothing re-hydrates back onto the Plan object).
+// The brain has the right numbers — passed in via drugsCoveredByPlanId.
 
 function providersInNetwork(plan: Plan, providers: ProviderRow[]): number {
   let n = 0;
@@ -152,7 +160,7 @@ function ladderMetric(key: string, label: string, get: (p: Plan) => CostShare): 
     format: (p) => {
       const cs = get(p);
       const formatted = formatInpatientLadder(cs.description, cs.copay, cs.coinsurance);
-      return formatted ?? 'Not available';
+      return formatted ?? '—';
     },
     numeric: (p) => {
       const cs = get(p);
@@ -166,9 +174,13 @@ function buildMetrics(args: {
   rxcuis: string[];
   providers: ProviderRow[];
   annualDrugByPlanId: Record<string, number | null>;
+  drugsCoveredByPlanId: Record<string, number>;
+  drugsTotalByPlanId: Record<string, number>;
 }): Metric[] {
-  const { rxcuis, providers, annualDrugByPlanId } = args;
+  const { rxcuis, providers, annualDrugByPlanId, drugsCoveredByPlanId, drugsTotalByPlanId } = args;
   const drug = (p: Plan) => annualDrugByPlanId[p.id] ?? null;
+  const drugsCovered = (p: Plan) => drugsCoveredByPlanId[p.id];
+  const drugsTotal = (p: Plan) => drugsTotalByPlanId[p.id];
 
   return [
     {
@@ -190,7 +202,7 @@ function buildMetrics(args: {
       label: 'Drug cost / yr',
       format: (p) => {
         const v = drug(p);
-        return v == null ? 'Not available' : `${fmt(v)}/yr`;
+        return v == null ? '—' : `${fmt(v)}/yr`;
       },
       numeric: drug,
       higherIsBetter: false,
@@ -198,9 +210,14 @@ function buildMetrics(args: {
     {
       key: 'meds',
       label: 'Meds covered',
-      format: (p) =>
-        rxcuis.length === 0 ? '—' : `${coveredCount(p, rxcuis)}/${rxcuis.length}`,
-      numeric: (p) => (rxcuis.length === 0 ? null : coveredCount(p, rxcuis)),
+      format: (p) => {
+        if (rxcuis.length === 0) return '—';
+        const c = drugsCovered(p);
+        const t = drugsTotal(p);
+        if (c == null || t == null) return '—';
+        return `${c}/${t}`;
+      },
+      numeric: (p) => (rxcuis.length === 0 ? null : (drugsCovered(p) ?? null)),
       higherIsBetter: true,
     },
     {
@@ -233,7 +250,7 @@ function buildMetrics(args: {
       label: 'OTC / qtr',
       format: (p) => {
         const v = p.benefits.otc.allowance_per_quarter;
-        return v > 0 ? `$${v}/qtr` : 'Not available';
+        return v > 0 ? `$${v}/qtr` : '—';
       },
       numeric: (p) => p.benefits.otc.allowance_per_quarter,
       higherIsBetter: true,
@@ -249,14 +266,17 @@ function buildMetrics(args: {
       key: 'giveback',
       label: 'Part B giveback',
       format: (p) =>
-        p.part_b_giveback > 0 ? `$${p.part_b_giveback}/mo` : 'Not available',
+        p.part_b_giveback > 0 ? `$${p.part_b_giveback}/mo` : '—',
       numeric: (p) => p.part_b_giveback,
       higherIsBetter: true,
     },
     {
       key: 'stars',
       label: 'Star rating',
-      format: (p) => `${p.star_rating} ★`,
+      // CMS gives "Plan too new to be measured" to MA plans in their
+      // first 3 years; pm_plans stores those as null → 0. Show the
+      // CMS-style copy instead of misleading "0 ★".
+      format: (p) => (p.star_rating > 0 ? `${p.star_rating} ★` : 'Not yet rated'),
       numeric: (p) => p.star_rating,
       higherIsBetter: true,
     },
@@ -279,7 +299,7 @@ function buildMetrics(args: {
       key: 'partd_ded',
       label: 'Part D Ded.',
       format: (p) =>
-        p.drug_deductible == null ? 'Not available' : `$${p.drug_deductible}`,
+        p.drug_deductible == null ? '—' : `$${p.drug_deductible}`,
       numeric: (p) => p.drug_deductible,
       higherIsBetter: false,
     },
@@ -448,6 +468,8 @@ export function CompareScreen({
   ribbonByPlanId,
   annualDrugByPlanId,
   drugCoverageUnknownByPlanId,
+  drugsCoveredByPlanId,
+  drugsTotalByPlanId,
   onRecommend,
   onBack,
   onNext,
@@ -461,8 +483,15 @@ export function CompareScreen({
   );
 
   const metrics = useMemo(
-    () => buildMetrics({ rxcuis, providers, annualDrugByPlanId }),
-    [rxcuis, providers, annualDrugByPlanId],
+    () =>
+      buildMetrics({
+        rxcuis,
+        providers,
+        annualDrugByPlanId,
+        drugsCoveredByPlanId: drugsCoveredByPlanId ?? {},
+        drugsTotalByPlanId: drugsTotalByPlanId ?? {},
+      }),
+    [rxcuis, providers, annualDrugByPlanId, drugsCoveredByPlanId, drugsTotalByPlanId],
   );
 
   // Data-quality counts driving the warning banner. When the broker
@@ -1093,7 +1122,7 @@ function BenchCard({
   const sixthValue = showGiveback
     ? plan.part_b_giveback > 0
       ? `$${plan.part_b_giveback}/mo`
-      : 'Not available'
+      : '—'
     : `${inNetCount}/${providers.length}`;
   const sixthWins = showGiveback
     ? baseline != null && plan.part_b_giveback > baseline.part_b_giveback
@@ -1195,10 +1224,14 @@ function BenchCard({
           <MetricMini label="MOOP" value={fmt(plan.moop_in_network)} winning={moopWins} />
           <MetricMini
             label="Drug / yr"
-            value={drug == null ? 'Not available' : fmt(drug)}
+            value={drug == null ? '—' : fmt(drug)}
             winning={drugWins}
           />
-          <MetricMini label="Stars" value={`${plan.star_rating} ★`} winning={starsWins} />
+          <MetricMini
+            label="Stars"
+            value={plan.star_rating > 0 ? `${plan.star_rating} ★` : 'Not yet rated'}
+            winning={starsWins}
+          />
           <MetricMini
             label="Dental"
             value={planDisplay(plan).dentalMax}
@@ -1256,18 +1289,18 @@ function BenchCard({
               value={
                 plan.benefits.otc.allowance_per_quarter > 0
                   ? `$${plan.benefits.otc.allowance_per_quarter}`
-                  : 'Not avail.'
+                  : '—'
               }
             />
             <PreviewRow label="Vision" value={planDisplay(plan).visionAllowance} />
             <PreviewRow label="Fitness" value={planDisplay(plan).fitness} />
             <PreviewRow
               label="Part B back"
-              value={plan.part_b_giveback > 0 ? `$${plan.part_b_giveback}/mo` : 'Not avail.'}
+              value={plan.part_b_giveback > 0 ? `$${plan.part_b_giveback}/mo` : '—'}
             />
             <PreviewRow
               label="Part D ded."
-              value={plan.drug_deductible == null ? 'Not avail.' : `$${plan.drug_deductible}`}
+              value={plan.drug_deductible == null ? '—' : `$${plan.drug_deductible}`}
             />
           </div>
         )}

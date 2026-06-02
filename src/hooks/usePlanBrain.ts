@@ -215,6 +215,13 @@ export interface ScoredPlan {
    *  formulary. UI surfaces the "drug coverage estimated — confirm
    *  with your pharmacist" disclaimer on affected plan columns. */
   drugCoverageUnknown: boolean;
+  /** Count of user drugs the plan's formulary actually files. Wired
+   *  directly from BrainScore.coveredCount so UI doesn't have to
+   *  re-query plan.formulary (which is `{}` in agent-v3 because no one
+   *  hydrates it). */
+  drugsCovered: number;
+  /** Total user drugs evaluated. Matches userProfile.drugs.length. */
+  drugsTotal: number;
   ribbon: RibbonKey | null;
   breakdown: string;
   drugCostByRxcui: Record<string, number>;
@@ -671,6 +678,8 @@ function adaptScored(
     providerNetworkStatus,
     uncoveredDrugRxcuis,
     drugCoverageUnknown: score.drugCoverageUnknown,
+    drugsCovered: score.coveredCount,
+    drugsTotal: score.totalCount,
     ribbon: score.ribbon,
     breakdown: score.costBreakdown,
     drugCostByRxcui: {},
