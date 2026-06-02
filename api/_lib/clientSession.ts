@@ -55,6 +55,8 @@ export interface ShapedMedication {
   frequency: string;
   rxcui: string;
   refill_days: string;
+  tier: string;
+  quantity: string;
 }
 
 export interface ShapedProvider {
@@ -65,6 +67,12 @@ export interface ShapedProvider {
   phone: string;
   address: string;
   npi: string;
+  // Carried from the client_providers join row (not from providers).
+  // Lets agent-v3 pre-seed networkStatus[last_known_plan_id] so the
+  // Providers screen doesn't re-flicker "Checking" for a plan we
+  // already verified last call.
+  last_known_network_status: 'in' | 'out' | 'unknown' | null;
+  last_known_plan_id: string;
 }
 
 interface ClientRow {
@@ -102,11 +110,15 @@ interface MedicationRow {
   frequency: string | null;
   rxcui: string | null;
   refill_days: string | null;
+  tier: string | null;
+  quantity: string | null;
   created_at: string | null;
 }
 
 interface ClientProviderLink {
   provider_id: number;
+  last_known_network_status: string | null;
+  last_known_plan_id: string | null;
   providers:
     | {
         id: number;
@@ -133,13 +145,13 @@ export async function loadClientSession(
     sb.from('clients').select('*').eq('id', id).maybeSingle(),
     sb
       .from('client_medications')
-      .select('id, name, dose, frequency, rxcui, refill_days, created_at')
+      .select('id, name, dose, frequency, rxcui, refill_days, tier, quantity, created_at')
       .eq('client_id', id)
       .order('created_at', { ascending: true }),
     sb
       .from('client_providers')
       .select(
-        'provider_id, providers:provider_id ( id, name, specialty, affiliation, phone, address, npi )',
+        'provider_id, last_known_network_status, last_known_plan_id, providers:provider_id ( id, name, specialty, affiliation, phone, address, npi )',
       )
       .eq('client_id', id),
   ]);
@@ -158,8 +170,11 @@ export async function loadClientSession(
     client: shapeClient(client),
     medications: meds.map(shapeMed),
     providers: providerLinks
-      .map((l) => l.providers)
-      .filter((p): p is NonNullable<ClientProviderLink['providers']> => !!p)
+      .filter(
+        (l): l is ClientProviderLink & {
+          providers: NonNullable<ClientProviderLink['providers']>;
+        } => !!l.providers,
+      )
       .map(shapeProvider),
   };
 }
@@ -205,12 +220,16 @@ function shapeMed(r: MedicationRow): ShapedMedication {
     frequency: r.frequency ?? '',
     rxcui: r.rxcui ?? '',
     refill_days: r.refill_days ?? '',
+    tier: r.tier ?? '',
+    quantity: r.quantity ?? '',
   };
 }
 
 function shapeProvider(
-  r: NonNullable<ClientProviderLink['providers']>,
+  l: ClientProviderLink & { providers: NonNullable<ClientProviderLink['providers']> },
 ): ShapedProvider {
+  const r = l.providers;
+  const ns = l.last_known_network_status;
   return {
     id: String(r.id),
     name: r.name ?? '',
@@ -219,6 +238,9 @@ function shapeProvider(
     phone: r.phone ?? '',
     address: r.address ?? '',
     npi: r.npi ?? '',
+    last_known_network_status:
+      ns === 'in' || ns === 'out' || ns === 'unknown' ? ns : null,
+    last_known_plan_id: l.last_known_plan_id ?? '',
   };
 }
 

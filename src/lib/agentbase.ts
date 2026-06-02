@@ -61,6 +61,8 @@ export interface AgentBaseClientDetail {
     frequency: string;
     rxcui: string;
     refill_days: string;
+    tier: string;
+    quantity: string;
   }>;
   providers: Array<{
     id: string;
@@ -70,6 +72,8 @@ export interface AgentBaseClientDetail {
     phone: string;
     address: string;
     npi: string;
+    last_known_network_status: 'in' | 'out' | 'unknown' | null;
+    last_known_plan_id: string;
   }>;
 }
 

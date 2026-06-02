@@ -33,6 +33,14 @@ export interface Medication {
   form?: string;
   dosageInstructions?: string;
   prescribingPhysician?: string;
+  // Optional fields hydrated from AgentBase client_medications.
+  // Quantity is per-fill free text ("30", "1 box"); tier is the
+  // CRM-side formulary tier text ("Tier 1", "Tier 3 - Preferred Brand").
+  // Both pass through unchanged so the broker sees what the CRM filed
+  // without re-deriving on this side.
+  tier?: string;
+  quantity?: string;
+  refillDays?: string;
   source: 'manual' | 'capture';
   confidence?: 'high' | 'medium' | 'low';
   addedAt: number;
