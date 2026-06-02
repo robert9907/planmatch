@@ -59,6 +59,8 @@ function initialState(): SessionState & { benefitFilters: BenefitFilterState } {
     recommendation: null,
     complianceChecked: [],
     disclaimersConfirmed: [],
+    complianceTimestamps: {},
+    disclaimerTimestamps: {},
     currentPlanId: null,
     noCurrentPlan: false,
     selectedFinalists: [],
@@ -195,18 +197,37 @@ export const useSession = create<SessionStore>()(
       setGivebackPlanEnrolled: (enrolled) => set({ givebackPlanEnrolled: enrolled }),
 
       toggleComplianceItem: (id) =>
-        set((state) => ({
-          complianceChecked: state.complianceChecked.includes(id)
-            ? state.complianceChecked.filter((x) => x !== id)
-            : [...state.complianceChecked, id],
-        })),
+        set((state) => {
+          const isChecked = state.complianceChecked.includes(id);
+          if (isChecked) {
+            // Uncheck: drop the timestamp too so the audit trail
+            // reflects that the broker re-opened this item.
+            const { [id]: _removed, ...rest } = state.complianceTimestamps;
+            return {
+              complianceChecked: state.complianceChecked.filter((x) => x !== id),
+              complianceTimestamps: rest,
+            };
+          }
+          return {
+            complianceChecked: [...state.complianceChecked, id],
+            complianceTimestamps: {
+              ...state.complianceTimestamps,
+              [id]: new Date().toISOString(),
+            },
+          };
+        }),
 
       confirmDisclaimer: (id) =>
-        set((state) => ({
-          disclaimersConfirmed: state.disclaimersConfirmed.includes(id)
-            ? state.disclaimersConfirmed
-            : [...state.disclaimersConfirmed, id],
-        })),
+        set((state) => {
+          if (state.disclaimersConfirmed.includes(id)) return state;
+          return {
+            disclaimersConfirmed: [...state.disclaimersConfirmed, id],
+            disclaimerTimestamps: {
+              ...state.disclaimerTimestamps,
+              [id]: new Date().toISOString(),
+            },
+          };
+        }),
 
       resetSession: () => set(initialState()),
     }),

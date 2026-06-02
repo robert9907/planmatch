@@ -113,6 +113,16 @@ export interface SessionState {
   recommendation: string | null;
   complianceChecked: string[];
   disclaimersConfirmed: string[];
+  /** ISO timestamp captured the moment a checklist item is checked.
+   *  Keyed by item id (see src/lib/compliance.ts SECTIONS). Removed
+   *  when the item is unchecked. CMS audits require proof of WHEN a
+   *  topic was discussed, not just that the checkbox was clicked. */
+  complianceTimestamps: Record<string, string>;
+  /** ISO timestamp captured when a verbatim disclaimer is confirmed.
+   *  Keyed by disclaimer id (tpmo / call_recording / soa). One-way:
+   *  confirmDisclaimer is irreversible in the session store, so this
+   *  map only grows. */
+  disclaimerTimestamps: Record<string, string>;
   /**
    * Annual-review mode only: beneficiary's current-year plan, looked up by
    * H-number. Null in new-quote mode.

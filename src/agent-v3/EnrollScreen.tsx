@@ -44,6 +44,8 @@ export function EnrollScreen({
   const medications = useSession((s) => s.medications);
   const complianceChecked = useSession((s) => s.complianceChecked);
   const disclaimersConfirmed = useSession((s) => s.disclaimersConfirmed);
+  const complianceTimestamps = useSession((s) => s.complianceTimestamps);
+  const disclaimerTimestamps = useSession((s) => s.disclaimerTimestamps);
 
   // Toast state for the save-then-open SunFire flow. status: idle while
   // the button sits, saving while POST is in flight, saved on success
@@ -194,6 +196,8 @@ export function EnrollScreen({
             const compliance = buildComplianceSnapshot({
               complianceChecked,
               disclaimersConfirmed,
+              complianceTimestamps,
+              disclaimerTimestamps,
             });
             const sessionSummary: AgentV3SessionSummary = {
               zip: client.zip,
@@ -307,26 +311,42 @@ export function EnrollScreen({
 function buildComplianceSnapshot({
   complianceChecked,
   disclaimersConfirmed,
+  complianceTimestamps,
+  disclaimerTimestamps,
 }: {
   complianceChecked: string[];
   disclaimersConfirmed: string[];
+  complianceTimestamps: Record<string, string>;
+  disclaimerTimestamps: Record<string, string>;
 }): ComplianceSnapshot {
   const hasDisc = (id: string) => disclaimersConfirmed.includes(id);
   const hasItem = (id: string) => complianceChecked.includes(id);
   const allChecklistItemIds = SECTIONS.flatMap((s) => s.items.map((i) => i.id));
   const allItemsDone =
     allChecklistItemIds.every(hasItem) && DISCLAIMERS.every((d) => hasDisc(d.id));
+  // consentRecordedAt is the latest of all stamps once everything is
+  // confirmed — i.e. the time the broker finished the checklist. CMS
+  // reviewers want the moment full consent landed, not the start of
+  // the call.
+  const allTimestamps = [
+    ...Object.values(complianceTimestamps),
+    ...Object.values(disclaimerTimestamps),
+  ];
+  const consentRecordedAt =
+    allItemsDone && allTimestamps.length > 0
+      ? allTimestamps.reduce((a, b) => (a > b ? a : b))
+      : null;
   return {
     soaConfirmed: hasDisc('soa'),
-    soaConfirmedAt: null,
+    soaConfirmedAt: disclaimerTimestamps['soa'] ?? null,
     scopeConfirmed: hasDisc('tpmo'),
     moopExplained: hasItem('plan_costs'),
     formularyExplained: hasItem('formulary_tiers'),
     networkExplained: hasItem('plan_network'),
     consentRecorded: allItemsDone,
-    consentRecordedAt: null,
+    consentRecordedAt,
     callRecordingDisclosed: hasDisc('call_recording'),
-    callRecordingDisclosedAt: null,
+    callRecordingDisclosedAt: disclaimerTimestamps['call_recording'] ?? null,
   };
 }
 
