@@ -742,6 +742,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     );
   }
   debugLog(`Gate 1: ${gate1.length}/${rawScored.length} survived providers`);
+  console.log('Gate 1:', gate1.length, 'survived of', rawScored.length);
 
   // ── Gate 2 — medications ──────────────────────────────────────────
   const poolHasAnyFormulary = gate1.some((s) => s.formulary.size > 0);
@@ -751,6 +752,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   );
   debugLog(`Gate 2: ${gate2Sorted.length}/${gate1.length} survived meds` +
     (gate2Result.relaxedDataGap ? ' (data-gap relax)' : ''));
+  console.log('Gate 2:', gate2Sorted.length, 'survived');
 
   // ── Gate 3 — extras "must offer" elimination ──────────────────────
   const extrasGate = applyExtrasGate(gate2Sorted, userPriorities);
@@ -758,6 +760,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     `Gate 3: ${extrasGate.fullMatch.length}/${gate2Sorted.length} survived ` +
     `(eliminated: ${extrasGate.eliminated.length}, selected=[${extrasGate.selectedExtras.join(',')}])`,
   );
+  console.log('Gate 3:', extrasGate.fullMatch.length, 'survived');
 
   // ── Gate 4 — Top 4 selection (cheapest survivors) ─────────────────
   //

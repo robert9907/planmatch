@@ -160,16 +160,12 @@ const PRIORITY_TO_EXTRAS: Partial<Record<PriorityKey, string>> = {
   transportation: 'transportation',
 };
 
-// Default selection mirrors the spec ("Low Rx, Keep doctor, Dental,
-// Vision" pre-toggled). Three of these don't drive userPriorities but
-// keeping them on by default is the right starting point for the
-// weight overrides.
-const DEFAULT_PRIORITIES: PriorityKey[] = [
-  'low_rx',
-  'keep_doctor',
-  'dental',
-  'vision',
-];
+// Default = nothing pre-toggled. With Gate 3's strict "must offer"
+// elimination, a default-on dental + vision was eliminating every plan
+// that didn't file BOTH benefits before the broker even saw the
+// PrioritiesScreen. The broker now opts in explicitly to each extra
+// the client cares about; empty = no Gate 3 filter at all.
+const DEFAULT_PRIORITIES: PriorityKey[] = [];
 
 export function AgentV3App() {
   const [screen, setScreen] = useState<ScreenId>('intake');
