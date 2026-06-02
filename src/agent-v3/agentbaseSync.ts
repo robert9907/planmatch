@@ -18,6 +18,13 @@ import type { PlanBrainResult } from '@/hooks/usePlanBrain';
 import type { SyncInput } from '@/hooks/useAgentBaseRecommend';
 import { dedupeMedContext, dedupeProviderContext } from '@/lib/agentbaseSyncDedup';
 
+/** Compliance snapshot shape — re-exported off SyncInput so screens
+ *  that don't import from the hook can share the contract. */
+export type ComplianceSnapshot = NonNullable<SyncInput['compliance']>;
+
+/** Session-summary shape — same re-export pattern. */
+export type AgentV3SessionSummary = NonNullable<SyncInput['sessionSummary']>;
+
 // Rob's broker identity. Matches the values surfaced on
 // ComplianceScreen + EnrollScreen disclaimers. Hardcoded because
 // agent v3 is single-broker (Rob's CRM); when a second broker joins
@@ -42,10 +49,29 @@ interface BuildArgs {
   brainResult: PlanBrainResult | null;
   sessionId: string;
   startedAt: number;
+  /** AgentBase clients.id hydrated from the ?clientId= deep-link. When
+   *  present, the recommend endpoint skips its phone/dob match. */
+  agentbaseClientId?: number | null;
+  /** Optional CMS compliance snapshot — only the EnrollScreen call
+   *  populates this. Forwarded straight through to the endpoint. */
+  compliance?: SyncInput['compliance'];
+  /** Optional session summary for the activity log. */
+  sessionSummary?: SyncInput['sessionSummary'];
 }
 
 export function buildAgentV3SyncInput(args: BuildArgs): SyncInput | null {
-  const { plan, client, medications, providers, brainResult, sessionId, startedAt } = args;
+  const {
+    plan,
+    client,
+    medications,
+    providers,
+    brainResult,
+    sessionId,
+    startedAt,
+    agentbaseClientId,
+    compliance,
+    sessionSummary,
+  } = args;
   if (!brainResult) return null;
   const recommendedScored = brainResult.scored.find((s) => s.plan.id === plan.id);
   if (!recommendedScored) return null;
@@ -83,5 +109,8 @@ export function buildAgentV3SyncInput(args: BuildArgs): SyncInput | null {
     brainResult,
     medContext: dedupeMedContext(medContext),
     providerContext: dedupeProviderContext(providerContext),
+    agentbaseClientId: agentbaseClientId ?? null,
+    compliance: compliance ?? null,
+    sessionSummary: sessionSummary ?? null,
   };
 }

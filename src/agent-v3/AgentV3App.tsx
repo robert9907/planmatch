@@ -41,7 +41,11 @@ import { DisclaimersScreen } from './DisclaimersScreen';
 import { EnrollScreen } from './EnrollScreen';
 import { IntakeScreen } from './IntakeScreen';
 import { MedsScreen } from './MedsScreen';
-import { buildAgentV3SyncInput } from './agentbaseSync';
+import {
+  buildAgentV3SyncInput,
+  type ComplianceSnapshot,
+  type AgentV3SessionSummary,
+} from './agentbaseSync';
 import { PrioritiesScreen, type PriorityKey } from './PrioritiesScreen';
 import { ProvidersScreen } from './ProvidersScreen';
 import {
@@ -668,11 +672,26 @@ export function AgentV3App() {
     );
   }
 
-  // Fire-and-forget AgentBase write-back. Called from CompareScreen's
-  // Enroll buttons (card + summary bar) and from EnrollScreen's
-  // SunFire CTA. The hook is idempotent for same-plan re-clicks and
-  // auto-retries on first failure — UI never waits on it.
-  function onRecommend(plan: Plan) {
+  // AgentBase write-back. CompareScreen fires this fire-and-forget;
+  // EnrollScreen awaits the returned promise so it can show a toast
+  // and only open SunFire on a 2xx. The endpoint is idempotent for
+  // same-plan re-clicks (handled inside useAgentBaseRecommend.sync).
+  //
+  // When the optional snapshot is passed (EnrollScreen path), the
+  // compliance + sessionSummary fields flow through to the recommend
+  // endpoint, which stamps clients.soa_confirmed_at /
+  // call_recording_disclosed_at and inserts a planmatch_activity_log
+  // row for the CMS audit trail.
+  async function onRecommend(
+    plan: Plan,
+    snapshot?: {
+      compliance?: ComplianceSnapshot;
+      sessionSummary?: AgentV3SessionSummary;
+    },
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    const idParam = getClientIdParam();
+    const agentbaseClientId =
+      idParam && /^\d+$/.test(idParam) ? Number(idParam) : null;
     const input = buildAgentV3SyncInput({
       plan,
       client,
@@ -681,14 +700,18 @@ export function AgentV3App() {
       brainResult: brain.result,
       sessionId,
       startedAt,
+      agentbaseClientId,
+      compliance: snapshot?.compliance,
+      sessionSummary: snapshot?.sessionSummary,
     });
     if (!input) {
       console.warn(
         '[agent-v3] recommend skipped — brain.result not ready or plan not in scored set',
       );
-      return;
+      return { ok: false, error: 'Brain ranking not ready — try again in a moment.' };
     }
-    void agentbaseSync.sync(input);
+    const r = await agentbaseSync.sync(input);
+    return r.ok ? { ok: true } : { ok: false, error: r.error };
   }
 
   return (

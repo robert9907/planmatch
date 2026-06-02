@@ -7,21 +7,28 @@
 // scripts/sunfire-deeplink.md (or wherever ops drops it) — wire that
 // up by replacing buildSunFireLink().
 
+import { useState } from 'react';
 import type { Plan } from '@/types/plans';
 import { useSession } from '@/hooks/useSession';
 import { Card, Container, Header, Nav, fmt } from './atoms';
 import { annualEstimate } from './planDisplay';
+import type { ComplianceSnapshot, AgentV3SessionSummary } from './agentbaseSync';
+import { SECTIONS, DISCLAIMERS } from '@/lib/compliance';
 
 interface Props {
   current: Plan | null;
   /** Full brain-ranked plan list, descending by composite score. */
   scoredPlans: Plan[];
   annualDrugByPlanId: Record<string, number | null>;
-  /** Fire-and-forget AgentBase write-back. Called when broker clicks
-   *  Open SunFire so the CRM has the final enrollment plan synced
-   *  before the broker leaves the tab. The hook is idempotent for
-   *  same-plan re-clicks; the SunFire link still opens immediately. */
-  onRecommend?: (plan: Plan) => void;
+  /** Awaited AgentBase write-back. The button below blocks on the
+   *  Promise so the broker can't open SunFire until the recommendation
+   *  is saved (CMS audit + recovery-from-broker-tab-close). On error
+   *  the toast surfaces the message and SunFire stays closed so the
+   *  broker can retry without losing context. */
+  onRecommend?: (
+    plan: Plan,
+    snapshot: { compliance: ComplianceSnapshot; sessionSummary: AgentV3SessionSummary },
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
   onBack: () => void;
 }
 
@@ -35,6 +42,15 @@ export function EnrollScreen({
   const client = useSession((s) => s.client);
   const providers = useSession((s) => s.providers);
   const medications = useSession((s) => s.medications);
+  const complianceChecked = useSession((s) => s.complianceChecked);
+  const disclaimersConfirmed = useSession((s) => s.disclaimersConfirmed);
+
+  // Toast state for the save-then-open SunFire flow. status: idle while
+  // the button sits, saving while POST is in flight, saved on success
+  // (then sunfire opens), error if the endpoint failed (sunfire stays
+  // closed; broker retries).
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Top brain-ranked plan that isn't the client's current — falls
   // back to scoredPlans[0] when there's no current on file (e.g.
@@ -168,44 +184,150 @@ export function EnrollScreen({
       </Card>
 
       <div style={{ textAlign: 'center', marginTop: 20 }}>
-        <a
-          href={buildSunFireLink({
-            client,
-            plan: recommendedPlan,
-          })}
-          target="_blank"
-          rel="noreferrer"
-          onClick={() => {
-            // Fire-and-forget AgentBase write-back before SunFire opens.
-            // The new tab loads in parallel; sync runs on the original
-            // tab and posts its 1-2s round-trip in the background.
-            onRecommend?.(recommendedPlan);
+        <button
+          type="button"
+          disabled={saveStatus === 'saving'}
+          onClick={async () => {
+            if (saveStatus === 'saving') return;
+            setSaveStatus('saving');
+            setSaveError(null);
+            const compliance = buildComplianceSnapshot({
+              complianceChecked,
+              disclaimersConfirmed,
+            });
+            const sessionSummary: AgentV3SessionSummary = {
+              zip: client.zip,
+              county: client.county,
+              planYear: 2026,
+              estimatedAnnualCost: candAnnual ?? undefined,
+            };
+            const r = await (onRecommend?.(recommendedPlan, { compliance, sessionSummary }) ??
+              Promise.resolve<{ ok: true } | { ok: false; error: string }>({ ok: true }));
+            if (r.ok) {
+              setSaveStatus('saved');
+              // Open SunFire in a new tab — only after the AgentBase
+              // save lands. Use window.open instead of an <a> so the
+              // open is gated on the await above.
+              window.open(
+                buildSunFireLink({ client, plan: recommendedPlan }),
+                '_blank',
+                'noopener',
+              );
+            } else {
+              setSaveStatus('error');
+              setSaveError(r.error);
+            }
           }}
           style={{
             display: 'inline-block',
-            background: 'linear-gradient(135deg, #059669, #047857)',
+            background:
+              saveStatus === 'saving'
+                ? 'linear-gradient(135deg, #94a3b8, #64748b)'
+                : 'linear-gradient(135deg, #059669, #047857)',
             color: 'white',
             border: 'none',
             borderRadius: 13,
             padding: '16px 50px',
             fontSize: 16,
             fontWeight: 800,
-            cursor: 'pointer',
+            cursor: saveStatus === 'saving' ? 'wait' : 'pointer',
             boxShadow: '0 8px 30px rgba(5,150,105,0.3)',
             letterSpacing: 0.5,
             textDecoration: 'none',
           }}
         >
-          Open SunFire Matrix — Submit Enrollment →
-        </a>
+          {saveStatus === 'saving'
+            ? 'Saving to AgentBase…'
+            : 'Save & Open SunFire Matrix →'}
+        </button>
         <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 6 }}>
           Pre-populated · NPN 10447418
         </div>
+
+        {saveStatus === 'saved' && (
+          <div
+            role="status"
+            style={{
+              marginTop: 12,
+              display: 'inline-block',
+              background: 'rgba(5,150,105,0.08)',
+              border: '1px solid rgba(5,150,105,0.3)',
+              borderRadius: 8,
+              color: '#047857',
+              padding: '8px 14px',
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            ✓ Saved to AgentBase — SunFire opening in a new tab.
+          </div>
+        )}
+        {saveStatus === 'error' && (
+          <div
+            role="alert"
+            style={{
+              marginTop: 12,
+              display: 'inline-block',
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: 8,
+              color: '#7f1d1d',
+              padding: '8px 14px',
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            ⚠ AgentBase save failed: {saveError ?? 'unknown error'}. SunFire
+            stayed closed so you can retry.
+          </div>
+        )}
       </div>
 
       <Nav onBack={onBack} />
     </Container>
   );
+}
+
+/** Derives the ComplianceSnapshot the recommend endpoint expects from
+ *  the session's array-of-IDs compliance model. The 13-item discussion
+ *  checklist + 3 verbatim disclaimers map down to 5 named booleans CMS
+ *  reviewers actually look at:
+ *    soaConfirmed              ← disclaimersConfirmed includes 'soa'
+ *    callRecordingDisclosed    ← disclaimersConfirmed includes 'call_recording'
+ *    scopeConfirmed            ← disclaimersConfirmed includes 'tpmo'
+ *                                 (TPMO is what scopes the conversation)
+ *    moopExplained             ← complianceChecked includes 'plan_costs'
+ *    formularyExplained        ← complianceChecked includes 'formulary_tiers'
+ *    networkExplained          ← complianceChecked includes 'plan_network'
+ *    consentRecorded           ← all 16 items confirmed (the gate fires
+ *                                 only after the broker has worked
+ *                                 through every checklist row)
+ *  Timestamps are passed as null here; Fix 3 wires the session store to
+ *  capture per-disclaimer ISO timestamps that flow through this helper. */
+function buildComplianceSnapshot({
+  complianceChecked,
+  disclaimersConfirmed,
+}: {
+  complianceChecked: string[];
+  disclaimersConfirmed: string[];
+}): ComplianceSnapshot {
+  const hasDisc = (id: string) => disclaimersConfirmed.includes(id);
+  const hasItem = (id: string) => complianceChecked.includes(id);
+  const allChecklistItemIds = SECTIONS.flatMap((s) => s.items.map((i) => i.id));
+  const allItemsDone =
+    allChecklistItemIds.every(hasItem) && DISCLAIMERS.every((d) => hasDisc(d.id));
+  return {
+    soaConfirmed: hasDisc('soa'),
+    soaConfirmedAt: null,
+    scopeConfirmed: hasDisc('tpmo'),
+    moopExplained: hasItem('plan_costs'),
+    formularyExplained: hasItem('formulary_tiers'),
+    networkExplained: hasItem('plan_network'),
+    consentRecorded: allItemsDone,
+    consentRecordedAt: null,
+    callRecordingDisclosed: hasDisc('call_recording'),
+    callRecordingDisclosedAt: null,
+  };
 }
 
 function Stat({

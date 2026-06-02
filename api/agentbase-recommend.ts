@@ -39,6 +39,13 @@ const AGENTBASE_CRM_BASE = process.env.AGENTBASE_CRM_URL || 'https://agentbase-c
 // ─── Request shape ────────────────────────────────────────────────
 
 interface RecommendBody {
+  /** Optional AgentBase clients.id. When present, skip the phone /
+   *  last_name+dob match and resolve straight to this row — the agent-v3
+   *  hydration path always knows the id (?clientId= deep-link), so
+   *  passing it eliminates a misroute risk when two clients share a
+   *  phone number. Backward compatible: when absent, the legacy
+   *  phone/dob match path below runs. */
+  client_id?: number | string;
   client: {
     name: string;
     phone: string;
@@ -123,6 +130,35 @@ interface RecommendBody {
   /** Drives AgentBase's AEP "needs attention" surfacing. True when
    *  recommended plan has Part B giveback > 0. */
   giveback_plan_enrolled: boolean;
+  /** CMS compliance snapshot at the moment the broker hit Enroll.
+   *  Optional — fire-and-forget callers from CompareScreen don't have
+   *  it yet (compliance happens on screen 7). When present, the
+   *  endpoint stamps soa_confirmed_at + call_recording_disclosed_at on
+   *  the clients row and inserts a row into planmatch_activity_log
+   *  with the full object for the audit trail CMS requires. */
+  compliance?: {
+    soaConfirmed: boolean;
+    soaConfirmedAt: string | null;
+    scopeConfirmed: boolean;
+    moopExplained: boolean;
+    formularyExplained: boolean;
+    networkExplained: boolean;
+    consentRecorded: boolean;
+    consentRecordedAt: string | null;
+    callRecordingDisclosed: boolean;
+    callRecordingDisclosedAt: string | null;
+  };
+  /** Optional session metadata logged alongside the activity row.
+   *  Lets AgentBase replay context (which county, what brain archetype
+   *  drove the rec, how much we estimated the client would pay) when
+   *  reviewing a recommendation months later. */
+  session_summary?: {
+    zip: string;
+    county: string;
+    planYear: number;
+    brainArchetype?: string;
+    estimatedAnnualCost?: number;
+  };
 }
 
 interface DbClient {
@@ -166,7 +202,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // ─── Match step ─────────────────────────────────────────────
     let matched: DbClient | null = null;
-    if (phoneDigits.length >= 10) {
+    // Direct id resolution wins over phone/dob match: agent-v3 always
+    // knows clients.id from the ?clientId= deep-link, and passing it
+    // through eliminates the two-clients-share-a-phone misroute risk.
+    const directId =
+      typeof fullBody.client_id === 'number'
+        ? fullBody.client_id
+        : typeof fullBody.client_id === 'string' && /^\d+$/.test(fullBody.client_id.trim())
+        ? Number(fullBody.client_id.trim())
+        : null;
+    if (directId != null) {
+      const { data, error } = await sb
+        .from('clients')
+        .select('id, first_name, last_name, phone, dob')
+        .eq('id', directId)
+        .maybeSingle();
+      if (error) throw error;
+      matched = (data as DbClient | null) ?? null;
+      if (!matched) {
+        return badRequest(res, `client_id ${directId} not found in AgentBase`);
+      }
+    }
+    if (!matched && phoneDigits.length >= 10) {
       // PostgREST ilike on phone — accept any formatting variation as
       // long as the digit run matches.
       const { data, error } = await sb
@@ -200,7 +257,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // AgentBase's CRM list filter.
     const planTriple = `${fullBody.recommended_plan.contract_id}-${fullBody.recommended_plan.plan_id}-${fullBody.recommended_plan.segment_id}`;
     const today = new Date().toISOString().slice(0, 10);
-    const updates = {
+    const recommendNowIso = new Date().toISOString();
+    // Recommended_* columns are written alongside the legacy
+    // plan_name / plan_id / carrier set so old AgentBase CRM views keep
+    // rendering and the new audit columns (recommended_at, SOA stamp,
+    // call-recording stamp) get filled. Both column sets stay in sync
+    // for every PlanMatch enrollment write.
+    //
+    // ⚠ Requires the following AgentBase columns — see
+    //   docs/agentbase-schema-additions.sql for the exact ALTER TABLE
+    //   statements. If the columns don't exist, the update payload is
+    //   rebuilt without them (see retry block below) so a fresh
+    //   AgentBase database doesn't 42703 the whole enrollment path.
+    const baseUpdates = {
       first_name,
       last_name,
       phone: fullBody.client.phone || null,
@@ -217,17 +286,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       next_step: `Recommended ${fullBody.recommended_plan.plan_name} via PlanMatch on ${today}` +
         (fullBody.giveback_plan_enrolled ? ' · GIVEBACK — re-evaluate at AEP' : ''),
       giveback_plan_enrolled: fullBody.giveback_plan_enrolled,
-      updated_at: new Date().toISOString(),
+      updated_at: recommendNowIso,
     };
+    const auditUpdates = {
+      recommended_plan_id: planTriple,
+      recommended_plan_name: fullBody.recommended_plan.plan_name,
+      recommended_carrier: fullBody.recommended_plan.carrier,
+      recommended_contract_id: fullBody.recommended_plan.contract_id,
+      recommended_at: recommendNowIso,
+      soa_confirmed_at: fullBody.compliance?.soaConfirmedAt ?? null,
+      call_recording_disclosed_at:
+        fullBody.compliance?.callRecordingDisclosedAt ?? null,
+    };
+    const updates = { ...baseUpdates, ...auditUpdates };
 
     let clientId: number;
     let didCreate = false;
+    // 42703 = undefined_column. When AgentBase hasn't run the recommended_*
+    // ALTER TABLEs yet (see docs/agentbase-schema-additions.sql), retry
+    // without the audit columns so the enrollment write still lands.
+    // The webhook forward below still carries the full audit shape for
+    // AgentBase's webhook handler to persist however it likes.
+    let auditColumnsMissing = false;
     if (matched) {
       const { error } = await sb
         .from('clients')
         .update(updates)
         .eq('id', matched.id);
-      if (error) throw error;
+      if (error?.code === '42703') {
+        auditColumnsMissing = true;
+        console.warn(
+          '[recommend] recommended_*/soa/call-recording columns missing — see docs/agentbase-schema-additions.sql. Retrying with legacy columns only.',
+          { message: error.message },
+        );
+        const { error: retryErr } = await sb
+          .from('clients')
+          .update(baseUpdates)
+          .eq('id', matched.id);
+        if (retryErr) throw retryErr;
+      } else if (error) {
+        throw error;
+      }
       clientId = matched.id;
     } else {
       const insertRow = {
@@ -240,8 +339,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .insert(insertRow)
         .select('id')
         .single();
-      if (error) throw error;
-      clientId = (data as { id: number }).id;
+      if (error?.code === '42703') {
+        auditColumnsMissing = true;
+        console.warn(
+          '[recommend] recommended_*/soa/call-recording columns missing on insert — retrying with legacy columns only.',
+          { message: error.message },
+        );
+        const fallbackRow = {
+          ...baseUpdates,
+          lead_source: 'planmatch',
+          created_at: new Date().toISOString(),
+        };
+        const { data: data2, error: retryErr } = await sb
+          .from('clients')
+          .insert(fallbackRow)
+          .select('id')
+          .single();
+        if (retryErr) throw retryErr;
+        clientId = (data2 as { id: number }).id;
+      } else if (error) {
+        throw error;
+      } else {
+        clientId = (data as { id: number }).id;
+      }
       didCreate = true;
     }
 
@@ -616,6 +736,54 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
+    // ─── Activity log row (CMS audit trail) ──────────────────────
+    // Captures the full compliance object, selected plan, timestamp,
+    // and session summary as JSON so an AgentBase reviewer can replay
+    // the recommendation context months later. Best-effort: a missing
+    // table (fresh AgentBase install without the migration) logs and
+    // returns auditLogged=false but does not block the response.
+    let auditLogged = false;
+    let auditLogError: string | null = null;
+    if (fullBody.compliance || fullBody.session_summary) {
+      try {
+        const { error: logErr } = await sb.from('planmatch_activity_log').insert({
+          client_id: clientId,
+          event_type: 'plan_recommended',
+          selected_plan_id: planTriple,
+          selected_plan_name: fullBody.recommended_plan.plan_name,
+          carrier: fullBody.recommended_plan.carrier,
+          contract_id: fullBody.recommended_plan.contract_id,
+          compliance: fullBody.compliance ?? null,
+          session_summary: fullBody.session_summary ?? null,
+          source: 'planmatch',
+          created_at: recommendNowIso,
+        });
+        if (logErr) {
+          auditLogError = logErr.message;
+          if (logErr.code === '42P01' || logErr.code === '42703') {
+            console.warn(
+              '[recommend] planmatch_activity_log table/column missing — see docs/agentbase-schema-additions.sql.',
+              { code: logErr.code, message: logErr.message },
+            );
+          } else {
+            console.error('[recommend] activity log insert failed', {
+              client_id: clientId,
+              code: logErr.code,
+              message: logErr.message,
+            });
+          }
+        } else {
+          auditLogged = true;
+        }
+      } catch (logErr) {
+        auditLogError = (logErr as Error).message;
+        console.error('[recommend] activity log threw', {
+          client_id: clientId,
+          message: auditLogError,
+        });
+      }
+    }
+
     // ─── Forward rich payload to the webhook (best-effort) ───────
     // The direct write above is the must-not-fail path. The webhook
     // forward is the rich-data path; if it fails (AgentBase webhook
@@ -667,6 +835,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       giveback_flagged: fullBody.giveback_plan_enrolled,
       meds_summary: medSummary,
       providers_summary: provSummary,
+      audit_logged: auditLogged,
+      audit_log_error: auditLogError,
+      audit_columns_missing: auditColumnsMissing,
+      recommended_at: recommendNowIso,
     });
   } catch (err) {
     return serverError(res, err);

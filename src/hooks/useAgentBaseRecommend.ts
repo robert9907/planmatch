@@ -78,6 +78,36 @@ export interface SyncInput {
     specialty: string | null;
     network_status: 'in' | 'out' | 'unknown';
   }>;
+  /** Optional AgentBase clients.id — when set, the recommend endpoint
+   *  bypasses the phone/last_name+dob match and resolves straight to
+   *  this row. Agent-v3 hydrates this from the ?clientId= deep-link. */
+  agentbaseClientId?: number | null;
+  /** Optional CMS compliance snapshot. Captured on the Compliance
+   *  screen + the Intake call-recording disclosure. Flows through to
+   *  clients.soa_confirmed_at / call_recording_disclosed_at and a row
+   *  in planmatch_activity_log. Null on the fire-and-forget call from
+   *  CompareScreen — compliance hasn't been collected yet at that
+   *  point in the flow. */
+  compliance?: {
+    soaConfirmed: boolean;
+    soaConfirmedAt: string | null;
+    scopeConfirmed: boolean;
+    moopExplained: boolean;
+    formularyExplained: boolean;
+    networkExplained: boolean;
+    consentRecorded: boolean;
+    consentRecordedAt: string | null;
+    callRecordingDisclosed: boolean;
+    callRecordingDisclosedAt: string | null;
+  } | null;
+  /** Optional session metadata logged alongside the activity row. */
+  sessionSummary?: {
+    zip: string;
+    county: string;
+    planYear: number;
+    brainArchetype?: string;
+    estimatedAnnualCost?: number;
+  } | null;
 }
 
 const RETRY_DELAY_MS = 2_000;
@@ -177,6 +207,13 @@ export function useAgentBaseRecommend() {
       // the broker should re-evaluate at next AEP because giveback
       // amounts shift year-over-year.
       giveback_plan_enrolled: (input.recommendedPlan.part_b_giveback ?? 0) > 0,
+      // Optional pass-throughs — endpoint treats both as optional and
+      // (when present) writes recommended_*/soa_confirmed_at/
+      // call_recording_disclosed_at columns + a planmatch_activity_log
+      // row. Absent on the fire-and-forget Compare-screen call.
+      client_id: input.agentbaseClientId ?? undefined,
+      compliance: input.compliance ?? undefined,
+      session_summary: input.sessionSummary ?? undefined,
     };
   }, []);
 
@@ -214,10 +251,16 @@ export function useAgentBaseRecommend() {
     return json as RecommendSyncResult & { ok: true };
   }, []);
 
-  const sync = useCallback(async (input: SyncInput) => {
+  const sync = useCallback(async (
+    input: SyncInput,
+  ): Promise<{ ok: true; result: RecommendSyncResult } | { ok: false; error: string }> => {
     const planId = input.recommendedPlan.id;
-    // Idempotent same-plan re-click — skip the network round trip.
-    if (syncedPlanIdRef.current === planId && state === 'synced') return;
+    // Idempotent same-plan re-click — skip the network round trip but
+    // still return the previously-cached success so callers awaiting
+    // (e.g. EnrollScreen's save-then-open flow) don't stall.
+    if (syncedPlanIdRef.current === planId && state === 'synced' && result) {
+      return { ok: true, result };
+    }
 
     setState('syncing');
     setError(null);
@@ -227,6 +270,7 @@ export function useAgentBaseRecommend() {
       setResult(r);
       setState('synced');
       syncedPlanIdRef.current = planId;
+      return { ok: true, result: r };
     } catch (err1) {
       console.warn('[agentbase-recommend] first attempt failed:', (err1 as Error).message);
       setState('retrying');
@@ -236,13 +280,16 @@ export function useAgentBaseRecommend() {
         setResult(r);
         setState('synced');
         syncedPlanIdRef.current = planId;
+        return { ok: true, result: r };
       } catch (err2) {
-        console.error('[agentbase-recommend] retry failed:', (err2 as Error).message);
-        setError((err2 as Error).message);
+        const msg = (err2 as Error).message;
+        console.error('[agentbase-recommend] retry failed:', msg);
+        setError(msg);
         setState('error');
+        return { ok: false, error: msg };
       }
     }
-  }, [buildBody, postOnce, state]);
+  }, [buildBody, postOnce, state, result]);
 
   const reset = useCallback(() => {
     setState('idle');
