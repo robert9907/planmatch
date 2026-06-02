@@ -45,17 +45,12 @@ export function useResolveRxcuis(): void {
 
       (async () => {
         try {
-          // First pass: name + strength. Strength tokens help the
-          // ranker pick the right strength SBD when multiple exist.
+          // First pass: name + strength. Strength tokens don't appear
+          // in pm_drugs.search_text (which is lower(name||generic||
+          // brand)), so this query usually returns empty when strength
+          // is present; the fallback below catches it.
           let results = await searchDrug(queryWithStrength);
           if (cancelled) return;
-          // Name-only fallback: when "Ozempic 1mg/0.75mL" returns
-          // nothing (RxNorm tokenizer sometimes chokes on slash-form
-          // strengths) retry with bare "Ozempic" so the broker isn't
-          // stuck staring at a "couldn't resolve" badge on a drug
-          // RxNorm clearly knows about. Only fires when the first
-          // search was strength-augmented AND came back empty — a
-          // no-strength search would have already hit this branch.
           if (results.length === 0 && strength) {
             results = await searchDrug(name);
             if (cancelled) return;
@@ -63,11 +58,18 @@ export function useResolveRxcuis(): void {
           const best = pickBest(results, strength);
           if (best?.rxcui) {
             updateMedication(med.id, { rxcui: best.rxcui });
+          } else {
+            // Both passes returned empty — leave id retryable so the
+            // next mount tries again. Without this the broker's first
+            // session-load result ("No RxNorm match") sticks forever
+            // even if pm_drugs gets updated mid-session or the broker
+            // re-types the name.
+            resolvedRef.current.delete(med.id);
           }
         } catch {
           // Leave the id out of the resolved set so the next mount
-          // can retry — transient RxNav outages shouldn't permanently
-          // block badge rendering for this med.
+          // can retry — transient Supabase errors shouldn't
+          // permanently block badge rendering for this med.
           resolvedRef.current.delete(med.id);
         }
       })();
