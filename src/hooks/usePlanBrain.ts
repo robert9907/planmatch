@@ -30,6 +30,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
 import { runPlanBrain } from '@/lib/plan-brain';
+import { checkProviderNetwork } from '@/lib/library-client';
 import type {
   BrainInputs,
   BrainOutput,
@@ -1073,42 +1074,41 @@ export function usePlanBrain(args: Args): State {
     setError(null);
 
     void (async () => {
-      // ── FHIR live fallback (best-effort, non-fatal) ─────────────────
-      // /api/provider-network-status hits pm_provider_network_cache, then
-      // falls back to the carrier FHIR endpoints (UHC / Humana / BCBS NC /
-      // Devoted) for any (plan, npi) pair with no cache row, then upserts
-      // resolved rows back into the cache. The downstream
-      // /api/plan-brain-data read picks up the freshly-populated rows so
-      // Gate 1 ranks confirmed in-network plans above plans still showing
-      // "?" — which now means "no FHIR carrier could resolve it" not
-      // "we never tried."
+      // ── FHIR pre-warm via library (best-effort, non-fatal) ─────────
+      // Single source of truth: same /api/library/provider-network
+      // endpoint that ProvidersScreen calls via checkNetworkBatch. Hits
+      // pm_provider_network_cache, falls back to FHIR live for UHC /
+      // Humana / BCBS NC / Devoted on cache misses, upserts resolved
+      // rows. The downstream /api/plan-brain-data read picks up the
+      // freshly-populated rows.
       //
-      // Failures here are intentionally swallowed. The brain still runs
-      // against whatever's in cache; Gate 1 passes Unknown (see
-      // plan-brain.ts:applyProviderGate) so the user always sees plans,
-      // just with the unverified badge.
-      if (npis) {
-        // /api/provider-network-status keys on the COMBINED plan_id
-        // ("H5253-189"), not the triple ("H5253-189-0"). Collapse.
-        const planIdsCombined = Array.from(
-          new Set(
-            planIds.split(',').map((id) => {
-              const parts = id.split('-');
-              return parts.length >= 2 ? `${parts[0]}-${parts[1]}` : id;
-            }),
-          ),
-        ).join(',');
+      // Previously this hit the local agent endpoint
+      // /api/provider-network-status (copied from consumer in 590f336)
+      // — same logic, different host. The library call replaces it so
+      // there's exactly one pipeline writing to the cache from the
+      // agent. The local endpoint stays on disk for now in case we
+      // need to roll back, but no caller in src/ should reach it.
+      //
+      // Failures here are intentionally swallowed. The brain still
+      // runs against whatever's in cache; Gate 1 passes Unknown (see
+      // plan-brain.ts:applyProviderGate) so the user always sees
+      // plans, just with the unverified badge.
+      const npiList = npis ? npis.split(',').filter(Boolean) : [];
+      if (npiList.length > 0 && client.state && client.county) {
         try {
-          const fhirQs = new URLSearchParams({
-            plan_ids: planIdsCombined,
-            npis,
-          });
-          await fetch(`/api/provider-network-status?${fhirQs.toString()}`, {
+          await checkProviderNetwork({
+            npis: npiList,
+            state: client.state,
+            county: client.county,
+            plan_ids: planIds.split(',').filter(Boolean),
             signal: controller.signal,
           });
         } catch (err) {
           if ((err as { name?: string })?.name === 'AbortError') return;
-          console.warn('[plan-brain] FHIR fallback non-fatal failure:', err);
+          console.warn(
+            '[plan-brain] library provider-network pre-warm failed (non-fatal):',
+            err,
+          );
         }
       }
       if (controller.signal.aborted) return;
@@ -1138,7 +1138,13 @@ export function usePlanBrain(args: Args): State {
     })();
 
     return () => controller.abort();
-  }, [planIds, rxcuis, npis]);
+    // client.state + .county are in the deps so the brain re-runs once
+    // AgentBase hydration finishes (it often lands them a tick after
+    // mount). Without the deps, the initial fire skips the library
+    // pre-warm and the brain reads a non-FHIR cache for the rest of
+    // the session — same hydration race the ProvidersScreen fix in
+    // 00b984f closed for its own effect.
+  }, [planIds, rxcuis, npis, client.state, client.county]);
 
   const ready = !loading && data !== null && plans.length > 0;
 
