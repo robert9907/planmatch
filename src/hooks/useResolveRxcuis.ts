@@ -33,43 +33,64 @@ export function useResolveRxcuis(): void {
 
   useEffect(() => {
     let cancelled = false;
-    for (const med of medications) {
-      if (med.rxcui) continue;
-      const rawName = med.name.trim();
-      if (rawName.length < 2) continue;
-      if (resolvedRef.current.has(med.id)) continue;
-      resolvedRef.current.add(med.id);
 
-      const strength = med.strength?.trim() ?? '';
-      const variants = buildNameVariants(rawName);
+    // Sequential resolution. Parallel IIFEs hit a React effect-rerun
+    // cascade: the first updateMedication call mutates the medications
+    // array, the effect re-fires, cleanup flips `cancelled = true` on
+    // the old closure, and every other in-flight IIFE bails at its next
+    // await without writing — but they're already reserved in
+    // resolvedRef, so they never retry. Net result was 1 of N meds
+    // resolving per page load. One-at-a-time means at most one IIFE
+    // exists per effect run; cleanup only cancels that single in-flight
+    // search, the new effect run picks up where we left off (med2 not
+    // in resolvedRef because we only reserve on success), and each
+    // medication eventually resolves.
+    void (async () => {
+      for (const med of medications) {
+        if (cancelled) return;
+        if (med.rxcui) continue;
+        if (resolvedRef.current.has(med.id)) continue;
+        const rawName = med.name.trim();
+        if (rawName.length < 2) continue;
 
-      (async () => {
+        const strength = med.strength?.trim() ?? '';
+        const variants = buildNameVariants(rawName);
+
+        let best: RxNormDrug | null = null;
         try {
-          let results: RxNormDrug[] = [];
           for (const v of variants) {
-            results = await searchDrug(v);
             if (cancelled) return;
-            if (results.length > 0) break;
-          }
-          const best = pickBest(results, strength);
-          if (best?.rxcui) {
-            updateMedication(med.id, { rxcui: best.rxcui });
-          } else {
-            // Every variant returned empty — leave id retryable so a
-            // future mount tries again. Without this the broker's first
-            // session-load result ("No RxNorm match") sticks forever
-            // even if pm_drugs gets refreshed mid-session or the broker
-            // re-types the name.
-            resolvedRef.current.delete(med.id);
+            const results = await searchDrug(v);
+            if (cancelled) return;
+            if (results.length > 0) {
+              best = pickBest(results, strength);
+              if (best?.rxcui) break;
+              best = null; // strength didn't match — keep trying variants
+            }
           }
         } catch {
-          // Leave the id out of the resolved set so the next mount
-          // can retry — transient Supabase errors shouldn't
-          // permanently block badge rendering for this med.
-          resolvedRef.current.delete(med.id);
+          // Transient error — leave this med out of resolvedRef so a
+          // future effect run retries. Move on to the next med so one
+          // bad fetch doesn't block the rest of the batch.
+          continue;
         }
-      })();
-    }
+
+        if (cancelled) return;
+
+        if (best?.rxcui) {
+          updateMedication(med.id, { rxcui: best.rxcui });
+          // Reserve AFTER confirmed resolution so a mid-loop cleanup
+          // leaves unprocessed meds retryable on the next effect run.
+          resolvedRef.current.add(med.id);
+        }
+        // If no variant matched, do NOT add to resolvedRef — this lets
+        // a future mount (e.g., after pm_drugs is refreshed, or after
+        // the broker re-types the name) try again. Within this loop we
+        // just move on to the next med; the unresolved one stays red
+        // until something triggers a retry.
+      }
+    })();
+
     return () => {
       cancelled = true;
     };
