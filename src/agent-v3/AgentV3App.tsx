@@ -531,7 +531,23 @@ export function AgentV3App() {
   // Adapter pre-sorts by cost ascending.
   const benchPlans = useMemo<Plan[]>(() => {
     if (!brain.result) return [];
-    return brain.result.bench.map((s) => s.plan);
+    const result = brain.result.bench.map((s) => s.plan);
+    // Diagnostic: confirm where bench is breaking if it shows empty in
+    // the UI despite a multi-plan county. Expected: scored.length≤4 and
+    // bench.length = eligible - scored.length (typically 40-80 for NC).
+    // If bench is 0 here, the adapter never built it; if non-zero here
+    // but the BenchSection doesn't render, the prop wiring or the
+    // section's empty-guard is the culprit.
+    console.log(
+      '[agent-v3] bench:',
+      result.length,
+      'of',
+      brain.result.scored.length + result.length,
+      'eligible (Top 4:',
+      brain.result.scored.length,
+      ')',
+    );
+    return result;
   }, [brain.result]);
   const benchGateResultsByPlanId = useMemo<
     Record<string, { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }>
