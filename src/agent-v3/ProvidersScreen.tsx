@@ -22,7 +22,7 @@
 //     resolved status — if a plan is out-of-network or unknown the
 //     final state is the colored badge, not "Verified".
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
 import { useProviderSearch } from '@/hooks/useProviderSearch';
 import { useSession } from '@/hooks/useSession';
@@ -55,7 +55,6 @@ export function ProvidersScreen({
   onNext,
   onBack,
   clientView,
-  rankedPlanIds,
   capture,
 }: Props) {
   const client = useSession((s) => s.client);
@@ -79,30 +78,19 @@ export function ProvidersScreen({
     };
   }, [client.state, client.county, client.planType]);
 
-  // Top 3 plans against which we render the in-network rail. Ordered
-  // by brain rank when available, otherwise the catalog's natural
-  // order.
-  const topPlans = useMemo(() => {
-    if (eligiblePlans.length === 0) return [];
-    if (rankedPlanIds && rankedPlanIds.length > 0) {
-      const byId = new Map(eligiblePlans.map((p) => [p.id, p]));
-      const ordered = rankedPlanIds
-        .map((id) => byId.get(id))
-        .filter((p): p is Plan => !!p);
-      // Backfill with any plan not already represented, preserving order.
-      for (const p of eligiblePlans) {
-        if (!ordered.find((q) => q.id === p.id)) ordered.push(p);
-      }
-      return ordered.slice(0, 3);
-    }
-    return eligiblePlans.slice(0, 3);
-  }, [eligiblePlans, rankedPlanIds]);
+  // All eligible plans in the county. The provider rail shows EVERY
+  // plan grouped by carrier (was top-3 only pre-fix) so the broker
+  // can scan the whole county's network status in one place. Brain
+  // rank ordering is ignored here — plans get sorted into carrier
+  // groups by ProviderCard, where alphabetical-within-carrier matches
+  // the way carriers organize their own directories.
+  const allEligiblePlans = eligiblePlans;
 
   return (
     <Container>
       <Header
         title="Your doctors"
-        sub="Verifying network status across all recommended plans…"
+        sub="Network status across every plan in this county — grouped by carrier."
       />
 
       <SnapInbox capture={capture} accept="provider" />
@@ -145,12 +133,24 @@ export function ProvidersScreen({
           <ProviderCard
             key={provider.id}
             provider={provider}
-            topPlans={topPlans}
+            allPlans={allEligiblePlans}
             onWriteBack={(map) => {
               const prev = provider.networkStatus ?? {};
               const next = { ...prev };
               for (const [planId, status] of map) next[planId] = status;
               updateProvider(provider.id, { networkStatus: next });
+            }}
+            onMarkInNetwork={(planId) => {
+              // Broker-verified manual override. Same channel as the
+              // automatic checkNetworkBatch writeback so downstream
+              // (CompareScreen, brain pipeline, AgentBase sync) reads
+              // a single networkStatus map. Persists for the broker's
+              // session; cross-session DB write to
+              // pm_provider_network_cache is a follow-up endpoint.
+              const prev = provider.networkStatus ?? {};
+              updateProvider(provider.id, {
+                networkStatus: { ...prev, [planId]: 'in' },
+              });
             }}
             onRemove={() => removeProvider(provider.id)}
             staggerIndex={i}
@@ -160,10 +160,12 @@ export function ProvidersScreen({
 
       {!clientView && providers.length > 0 && (
         <AgentInsight>
-          ✅ Provider rail above reflects pm_provider_network_cache. Any
-          plan stuck on <b>Unknown</b> means the consumer-side scraper
-          hasn't covered it yet — use the per-carrier override on the v4
-          Providers page if you've called the office.
+          ✅ Every county plan is listed above. Library API resolves
+          UHC / Humana / BCBS NC / Devoted via FHIR; remaining carriers
+          come from pm_provider_network_cache. Tap <b>Mark In-Network</b>
+          on any <b>⚠ Unverified</b> row after you confirm with the
+          carrier office — the override applies across Compare, brain,
+          and the AgentBase write-back.
         </AgentInsight>
       )}
 
@@ -174,58 +176,78 @@ export function ProvidersScreen({
 
 function ProviderCard({
   provider,
-  topPlans,
+  allPlans,
   onWriteBack,
+  onMarkInNetwork,
   onRemove,
   staggerIndex,
 }: {
   provider: Provider;
-  topPlans: Plan[];
+  allPlans: Plan[];
   onWriteBack: (map: Map<string, NetworkStatus>) => void;
+  onMarkInNetwork: (planId: string) => void;
   onRemove: () => void;
   staggerIndex: number;
 }) {
   const [rows, setRows] = useState<PlanRowState[]>([]);
   const cardClient = useSession((s) => s.client);
 
+  // Cap stagger at first 6 plans so an 80-plan county doesn't drag
+  // the "Checking…" animation to 30+ seconds. Beyond the cap rows
+  // flip straight to their resolved state once the library call lands.
+  const STAGGER_CAP = 6;
+  const STAGGER_STEP_MS = 250;
+
   useEffect(() => {
-    setRows(topPlans.map((p) => ({ plan: p, state: 'queued' as RowState })));
-    if (topPlans.length === 0 || !provider.npi) return;
+    // Seed rows in carrier-alpha-then-plan-alpha order so the grouped
+    // render below has stable section ordering on first paint.
+    const seeded = [...allPlans].sort(
+      (a, b) =>
+        (a.carrier ?? '').localeCompare(b.carrier ?? '') ||
+        (a.plan_name ?? '').localeCompare(b.plan_name ?? ''),
+    );
+    setRows(seeded.map((p) => ({ plan: p, state: 'queued' as RowState })));
+    if (allPlans.length === 0 || !provider.npi) return;
 
     let cancelled = false;
     const npi = provider.npi;
-    const plans = topPlans;
 
-    // Stagger the visual transitions so the ribbon feels like a queue
-    // even when the cache hits return instantly.
-    plans.forEach((p, i) => {
+    // Stagger only the first STAGGER_CAP plans visually — past that the
+    // queue animation contributes noise without information.
+    seeded.forEach((p, i) => {
+      const delay = Math.min(i, STAGGER_CAP) * STAGGER_STEP_MS;
       window.setTimeout(() => {
         if (cancelled) return;
         setRows((prev) =>
           prev.map((r) => (r.plan.id === p.id ? { ...r, state: 'checking' } : r)),
         );
-      }, 200 + i * 400);
+      }, delay + 80);
     });
 
-    checkNetworkBatch(npi, plans, {
+    checkNetworkBatch(npi, seeded, {
       state: cardClient.state ?? null,
       county: cardClient.county ?? null,
     })
       .then((map) => {
         if (cancelled) return;
         const writeBack = new Map<string, NetworkStatus>();
-        plans.forEach((p, i) => {
-          window.setTimeout(() => {
-            if (cancelled) return;
-            const result = map.get(p.id);
+        // Flush every resolved status into rows + the writeBack map in
+        // one render pass (no per-row setTimeout cascade). Manual
+        // override clicks during a re-fetch are preserved by
+        // checkNetworkStatusOverridePriority in the row-set merger.
+        setRows((prev) =>
+          prev.map((r) => {
+            const result = map.get(r.plan.id);
             const status: NetworkStatus = result?.status ?? 'unknown';
-            setRows((prev) =>
-              prev.map((r) => (r.plan.id === p.id ? { ...r, state: status } : r)),
-            );
-            writeBack.set(p.id, status);
-            if (i === plans.length - 1) onWriteBack(writeBack);
-          }, 600 + i * 400);
-        });
+            writeBack.set(r.plan.id, status);
+            // Don't downgrade a broker-marked 'in' back to whatever
+            // checkNetworkBatch returned mid-session.
+            const fromSession = provider.networkStatus?.[r.plan.id];
+            if (fromSession === 'in' && status !== 'in') return r;
+            return { ...r, state: status };
+          }),
+        );
+        onWriteBack(writeBack);
       })
       .catch((err) => {
         console.warn('[providers] checkNetworkBatch failed:', (err as Error).message);
@@ -239,14 +261,8 @@ function ProviderCard({
     // cardClient.state + .county are in the deps because checkNetworkBatch
     // routes to /api/library/provider-network (with FHIR live fallback)
     // when both are set, and falls back to a direct cache read otherwise.
-    // AgentBase hydration often populates client.state/county a tick
-    // AFTER ProvidersScreen mounts, so without these deps the initial
-    // mount fires against `state: null` → directBatch → no FHIR
-    // resolution, and the broker sees stale "Unknown" on FHIR-covered
-    // carriers (UHC / Humana / BCBS NC / Devoted) for the rest of the
-    // session.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider.npi, topPlans.map((p) => p.id).join(','), cardClient.state, cardClient.county]);
+  }, [provider.npi, allPlans.map((p) => p.id).join(','), cardClient.state, cardClient.county]);
 
   return (
     <Card
@@ -320,30 +336,157 @@ function ProviderCard({
         </div>
       )}
 
-      {rows.map((row) => (
-        <div
-          key={row.plan.id}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '8px 12px',
-            borderRadius: 8,
-            background: '#f8fafc',
-            border: '1px solid rgba(13,47,94,0.04)',
-            marginBottom: 5,
-          }}
-        >
-          <div style={{ fontSize: 11, color: '#475569', fontWeight: 600 }}>
-            {row.plan.carrier}{' '}
-            <span style={{ color: '#94a3b8', fontWeight: 400 }}>
-              · {row.plan.plan_name}
+      {rows.length > 0 && (
+        <ProviderRail
+          rows={rows}
+          onMarkInNetwork={onMarkInNetwork}
+        />
+      )}
+    </Card>
+  );
+}
+
+// ── Per-provider rail: summary + grouped rows + manual override ────
+// Renders one section per carrier with plans alphabetized within. The
+// top summary line counts the In-Network / OON / Unverified buckets so
+// the broker can see at a glance "12 in / 3 out / 27 to verify" before
+// scrolling. The override button is the workflow-critical bit: the
+// broker calls Aetna, confirms Daniel Waddell is in-network on plan X,
+// taps "Mark In-Network", and the row flips green AND the override
+// propagates to CompareScreen + brain + AgentBase sync via the parent
+// updateProvider call.
+function ProviderRail({
+  rows,
+  onMarkInNetwork,
+}: {
+  rows: PlanRowState[];
+  onMarkInNetwork: (planId: string) => void;
+}) {
+  // Counts — terminal states only (queued/checking don't contribute).
+  let inCount = 0;
+  let outCount = 0;
+  let unknownCount = 0;
+  for (const r of rows) {
+    if (r.state === 'in') inCount += 1;
+    else if (r.state === 'out') outCount += 1;
+    else if (r.state === 'unknown') unknownCount += 1;
+  }
+  // Group by carrier — Map preserves insertion order, and rows are
+  // already carrier-alpha-sorted in seeded.
+  const byCarrier = new Map<string, PlanRowState[]>();
+  for (const r of rows) {
+    const c = r.plan.carrier || 'Other';
+    const slot = byCarrier.get(c) ?? [];
+    slot.push(r);
+    byCarrier.set(c, slot);
+  }
+
+  return (
+    <div>
+      <div
+        style={{
+          display: 'flex',
+          gap: 12,
+          flexWrap: 'wrap',
+          padding: '8px 12px',
+          background: '#f8fafc',
+          borderRadius: 8,
+          marginBottom: 10,
+          fontSize: 11,
+          fontWeight: 700,
+        }}
+      >
+        <span style={{ color: '#065f46' }}>✓ {inCount} In-Network</span>
+        <span style={{ color: '#991b1b' }}>✕ {outCount} Out-of-Network</span>
+        <span style={{ color: '#92400e' }}>⚠ {unknownCount} Unverified</span>
+        <span style={{ color: '#94a3b8', fontWeight: 500 }}>
+          · {rows.length} plans total
+        </span>
+      </div>
+
+      {Array.from(byCarrier.entries()).map(([carrier, group]) => (
+        <div key={carrier} style={{ marginBottom: 12 }}>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 0.4,
+              textTransform: 'uppercase',
+              color: '#475569',
+              padding: '4px 4px 6px',
+              borderBottom: '1px solid rgba(13,47,94,0.06)',
+              marginBottom: 4,
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 8,
+            }}
+          >
+            <span>{carrier}</span>
+            <span style={{ color: '#94a3b8', fontWeight: 500 }}>
+              {group.length} plan{group.length === 1 ? '' : 's'}
             </span>
           </div>
-          <RowBadge state={row.state} />
+          {group.map((row) => {
+            const isUnverified = row.state === 'unknown';
+            return (
+              <div
+                key={row.plan.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '7px 10px',
+                  borderRadius: 6,
+                  background: '#fbfcfd',
+                  border: '1px solid rgba(13,47,94,0.04)',
+                  marginBottom: 4,
+                  gap: 8,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: '#0d2f5e',
+                    fontWeight: 600,
+                    flex: 1,
+                    minWidth: 0,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                  title={row.plan.plan_name}
+                >
+                  {row.plan.plan_name}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                  <RowBadge state={row.state} />
+                  {isUnverified && (
+                    <button
+                      type="button"
+                      onClick={() => onMarkInNetwork(row.plan.id)}
+                      style={{
+                        background: 'white',
+                        color: '#065f46',
+                        border: '1px solid #10b981',
+                        borderRadius: 14,
+                        padding: '2px 8px',
+                        fontSize: 10,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title="Mark in-network — apply after confirming with the carrier office"
+                    >
+                      Mark In-Network
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       ))}
-    </Card>
+    </div>
   );
 }
 
