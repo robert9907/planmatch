@@ -92,6 +92,13 @@ interface Props {
   drugsCoveredByPlanId?: Record<string, number>;
   /** Companion to drugsCoveredByPlanId — BrainScore.totalCount. */
   drugsTotalByPlanId?: Record<string, number>;
+  /** Per-(plan × med) breakdown — drives the per-med row list on
+   *  every plan card and the compact bench summary. Comes from
+   *  BrainScore.drugBreakdown via the adapter. */
+  drugBreakdownByPlanId?: Record<
+    string,
+    ReadonlyArray<DrugRow>
+  >;
   /** Every county plan that didn't make Top 4, sorted by cost ASC.
    *  Rendered below the 4-up grid with an elimination-reason badge
    *  per card so the broker can scroll the full pool without leaving
@@ -131,6 +138,15 @@ interface ProviderRow {
    *  cache pipeline writes 'in' / 'out' / 'unknown' here; missing
    *  keys default to 'unknown' at render time. */
   networkStatus?: Record<string, string> | undefined;
+}
+
+interface DrugRow {
+  rxcui: string;
+  name: string;
+  covered: boolean;
+  tier: number | null;
+  monthlyCopay: number | null;
+  annualCost: number;
 }
 
 // Old per-plan coveredCount(plan, rxcuis) read plan.formulary[rxcui],
@@ -488,6 +504,7 @@ export function CompareScreen({
   drugCoverageUnknownByPlanId,
   drugsCoveredByPlanId,
   drugsTotalByPlanId,
+  drugBreakdownByPlanId,
   benchPlans,
   benchGateResultsByPlanId,
   onRecommend,
@@ -751,6 +768,7 @@ export function CompareScreen({
         annualDrugByPlanId={annualDrugByPlanId}
         ribbonByPlanId={ribbonByPlanId ?? {}}
         gateResultsByPlanId={benchGateResultsByPlanId ?? {}}
+        drugBreakdownByPlanId={drugBreakdownByPlanId ?? {}}
         providers={providers}
         onAddToBoard={addToBoard}
         onOpenH2H={openH2H}
@@ -775,6 +793,11 @@ export function CompareScreen({
             metrics={metrics}
             bestByMetric={bestByMetric}
             providers={providers}
+            drugBreakdown={
+              plan != null && drugBreakdownByPlanId
+                ? drugBreakdownByPlanId[plan.id] ?? null
+                : null
+            }
             drugCoverageUnknown={
               plan != null && drugCoverageUnknownByPlanId
                 ? drugCoverageUnknownByPlanId[plan.id] === true
@@ -972,6 +995,7 @@ function Bench({
   annualDrugByPlanId,
   ribbonByPlanId,
   gateResultsByPlanId,
+  drugBreakdownByPlanId,
   providers,
   onAddToBoard,
   onOpenH2H,
@@ -984,6 +1008,7 @@ function Bench({
     string,
     { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }
   >;
+  drugBreakdownByPlanId: Record<string, ReadonlyArray<DrugRow>>;
   providers: ProviderRow[];
   onAddToBoard: (plan: Plan) => void;
   onOpenH2H: (plan: Plan) => void;
@@ -1124,6 +1149,7 @@ function Bench({
               annualDrugByPlanId={annualDrugByPlanId}
               ribbon={ribbonByPlanId[p.id] ?? null}
               gateResults={gateResultsByPlanId[p.id] ?? null}
+              drugBreakdown={drugBreakdownByPlanId[p.id] ?? null}
               providers={providers}
               onAddToBoard={onAddToBoard}
               onOpenH2H={onOpenH2H}
@@ -1141,6 +1167,7 @@ function BenchCard({
   annualDrugByPlanId,
   ribbon,
   gateResults,
+  drugBreakdown,
   providers,
   onAddToBoard,
   onOpenH2H,
@@ -1150,6 +1177,7 @@ function BenchCard({
   annualDrugByPlanId: Record<string, number | null>;
   ribbon: string | null;
   gateResults: { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean } | null;
+  drugBreakdown: ReadonlyArray<DrugRow> | null;
   providers: ProviderRow[];
   onAddToBoard: (plan: Plan) => void;
   onOpenH2H: (plan: Plan) => void;
@@ -1405,6 +1433,11 @@ function BenchCard({
           still show every entered provider with a status pill. */}
       <ProviderList plan={plan} providers={providers} variant="compact" />
 
+      {/* Per-medication summary — single-line "$X/yr (Y/Z covered)"
+          so the bench card stays compact but still answers "what
+          would this plan cost the client at the pharmacy?". */}
+      <DrugBreakdown breakdown={drugBreakdown ?? []} variant="compact" />
+
       <div
         style={{
           display: 'grid',
@@ -1650,6 +1683,154 @@ function ProviderList({
   );
 }
 
+// ── Per-medication cost breakdown ───────────────────────────────
+// Renders the broker-facing answer to "what will the client actually
+// pay at the pharmacy for each of their drugs on this plan?". One
+// row per user drug with tier + monthly copay + annual cost, ending
+// in a TOTAL line. The aggregate "Drug cost / yr" metric row stays
+// for fast scanning; this block adds the per-med detail the broker
+// quotes from. Renders nothing when the user has no drugs.
+function DrugBreakdown({
+  breakdown,
+  variant = 'full',
+}: {
+  breakdown: ReadonlyArray<DrugRow>;
+  /** 'full' for slot cards (per-med rows + total); 'compact' for
+   *  the 220px bench cards (single-line summary). */
+  variant?: 'full' | 'compact';
+}) {
+  if (breakdown.length === 0) return null;
+  const covered = breakdown.filter((d) => d.covered).length;
+  const total = breakdown.reduce((sum, d) => sum + d.annualCost, 0);
+  const isCompact = variant === 'compact';
+
+  if (isCompact) {
+    return (
+      <div
+        style={{
+          padding: '6px 10px 8px',
+          borderTop: `1px solid ${BORDER}`,
+          background: 'white',
+          fontFamily: FONT_LABEL,
+          fontSize: 10,
+          color: MUTED,
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 6,
+        }}
+      >
+        <span style={{ fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+          Drugs
+        </span>
+        <span
+          style={{
+            fontFamily: FONT_NUM,
+            fontWeight: 700,
+            color: covered === breakdown.length ? '#15803d' : TEXT,
+          }}
+        >
+          {fmt(total)}/yr ({covered}/{breakdown.length} covered)
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        padding: '8px 10px',
+        borderTop: `1px solid ${BORDER}`,
+        background: 'white',
+        fontFamily: FONT_LABEL,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: 0.5,
+          textTransform: 'uppercase',
+          color: MUTED,
+          marginBottom: 6,
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 6,
+        }}
+      >
+        <span>Drug costs</span>
+        <span style={{ color: covered === breakdown.length ? '#15803d' : MUTED }}>
+          {covered}/{breakdown.length} covered
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {breakdown.map((d) => {
+          const tierLabel = d.tier != null ? `Tier ${d.tier}` : 'Not covered';
+          const copayLabel =
+            d.monthlyCopay != null ? `$${d.monthlyCopay}/mo` : '—';
+          const annualLabel = `${fmt(d.annualCost)}/yr`;
+          return (
+            <div
+              key={d.rxcui || d.name}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(0, 1fr) 60px 70px 70px',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 11,
+                color: d.covered ? TEXT : '#991b1b',
+              }}
+            >
+              <span
+                style={{
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  minWidth: 0,
+                }}
+                title={d.name}
+              >
+                {d.name}
+              </span>
+              <span style={{ color: d.covered ? MUTED : '#991b1b', fontSize: 10 }}>
+                {tierLabel}
+              </span>
+              <span style={{ fontFamily: FONT_NUM, fontSize: 10, textAlign: 'right' }}>
+                {copayLabel}
+              </span>
+              <span
+                style={{
+                  fontFamily: FONT_NUM,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  textAlign: 'right',
+                }}
+              >
+                {annualLabel}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          marginTop: 6,
+          paddingTop: 6,
+          borderTop: `1px dashed ${BORDER}`,
+          fontSize: 11,
+          fontWeight: 700,
+          color: TEXT,
+        }}
+      >
+        <span>Total drug cost</span>
+        <span style={{ fontFamily: FONT_NUM }}>{fmt(total)}/yr</span>
+      </div>
+    </div>
+  );
+}
+
 // ── Slot cell ──────────────────────────────────────────────────
 function SlotCell({
   slotIdx,
@@ -1660,6 +1841,7 @@ function SlotCell({
   metrics,
   bestByMetric,
   providers,
+  drugBreakdown,
   drugCoverageUnknown,
   onDrop,
   onClear,
@@ -1681,6 +1863,9 @@ function SlotCell({
   /** Broker-entered providers + per-plan networkStatus map. Drives the
    *  per-provider list rendered below the metric grid. */
   providers: ProviderRow[];
+  /** Per-medication breakdown for this plan. Null when missing — the
+   *  DrugBreakdown component renders nothing in that case. */
+  drugBreakdown: ReadonlyArray<DrugRow> | null;
   /** Brain flag (mirrored from BrainScore.drugCoverageUnknown) — when
    *  true, the drug-cost row in this slot card renders an amber
    *  "confirm with your pharmacist" disclaimer. */
@@ -1868,6 +2053,14 @@ function SlotCell({
           the top, individual provider rows below with name + status
           pill (green ✓ / red ✗ / amber ⚠). */}
       <ProviderList plan={plan} providers={providers} variant="full" />
+
+      {/* Per-medication cost breakdown — one row per user drug with
+          tier + monthly copay + annual cost, ending in the plan's
+          total. What the broker quotes at the pharmacy counter. */}
+      <DrugBreakdown
+        breakdown={drugBreakdown ?? []}
+        variant="full"
+      />
 
       <div
         style={{

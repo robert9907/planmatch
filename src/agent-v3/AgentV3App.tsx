@@ -606,6 +606,38 @@ export function AgentV3App() {
     for (const s of brain.result.scored) out[s.plan.id] = s.drugsTotal;
     return out;
   }, [brain.result]);
+  // Per-(plan, med) breakdown — drives the per-med row list on every
+  // plan card. Includes bench plans so the "Why is this $1k more on
+  // this plan?" answer is visible without enrolling first.
+  const drugBreakdownByPlanId = useMemo<
+    Record<
+      string,
+      ReadonlyArray<{
+        rxcui: string;
+        name: string;
+        covered: boolean;
+        tier: number | null;
+        monthlyCopay: number | null;
+        annualCost: number;
+      }>
+    >
+  >(() => {
+    if (!brain.result) return {};
+    const out: Record<
+      string,
+      ReadonlyArray<{
+        rxcui: string;
+        name: string;
+        covered: boolean;
+        tier: number | null;
+        monthlyCopay: number | null;
+        annualCost: number;
+      }>
+    > = {};
+    for (const s of brain.result.scored) out[s.plan.id] = s.drugBreakdown;
+    for (const s of brain.result.bench) out[s.plan.id] = s.drugBreakdown;
+    return out;
+  }, [brain.result]);
 
   // ── Current plan lookup ──────────────────────────────────────────
   const currentPlan = useMemo<Plan | null>(() => {
@@ -795,6 +827,7 @@ export function AgentV3App() {
             drugCoverageUnknownByPlanId={drugCoverageUnknownByPlanId}
             drugsCoveredByPlanId={drugsCoveredByPlanId}
             drugsTotalByPlanId={drugsTotalByPlanId}
+            drugBreakdownByPlanId={drugBreakdownByPlanId}
             onRecommend={onRecommend}
             onBack={() => setScreen('priorities')}
             onNext={() => setScreen('compliance')}

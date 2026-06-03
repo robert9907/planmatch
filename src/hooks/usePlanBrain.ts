@@ -222,6 +222,19 @@ export interface ScoredPlan {
   drugsCovered: number;
   /** Total user drugs evaluated. Matches userProfile.drugs.length. */
   drugsTotal: number;
+  /** Per-medication breakdown — pass-through from
+   *  BrainScore.drugBreakdown. One entry per user drug, in input
+   *  order. CompareScreen renders per-med rows in each SlotCell
+   *  ("Synthroid · Tier 1 · $3/mo · $36/yr") and a "$X/yr (Y/Z
+   *  covered)" one-liner on the bench. Empty when no user drugs. */
+  drugBreakdown: ReadonlyArray<{
+    rxcui: string;
+    name: string;
+    covered: boolean;
+    tier: number | null;
+    monthlyCopay: number | null;
+    annualCost: number;
+  }>;
   ribbon: RibbonKey | null;
   breakdown: string;
   drugCostByRxcui: Record<string, number>;
@@ -695,6 +708,7 @@ function adaptScored(
     drugCoverageUnknown: score.drugCoverageUnknown,
     drugsCovered: score.coveredCount,
     drugsTotal: score.totalCount,
+    drugBreakdown: score.drugBreakdown,
     ribbon: score.ribbon,
     breakdown: score.costBreakdown,
     drugCostByRxcui: {},

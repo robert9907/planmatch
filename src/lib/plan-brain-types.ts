@@ -218,6 +218,21 @@ export interface BrainScore {
   gate1Passed: boolean;
   gate2Passed: boolean;
   gate3Passed: boolean;
+  // ── Per-medication breakdown (Library + CompareScreen) ─────────
+  // One entry per user-listed drug, in the same order the user
+  // supplied them. Populated alongside the aggregate coveredCount /
+  // totalAnnualDrugCost so the agent UI can render a per-med row on
+  // each plan card: "Synthroid · Tier 1 · $3/mo · $36/yr". Mirrors
+  // the consumer brain extension shipped in 65eec8c. Empty when the
+  // user has no drugs.
+  drugBreakdown: ReadonlyArray<{
+    rxcui: string;
+    name: string;
+    covered: boolean;
+    tier: number | null;
+    monthlyCopay: number | null;
+    annualCost: number;
+  }>;
 }
 
 /** Flattened plan shape consumed by the Results card UI. Created by

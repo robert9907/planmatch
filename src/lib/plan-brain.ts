@@ -668,6 +668,23 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     const totalCost = annualPremium + totalAnnualDrugCost - partBGivebackAnnual;
     const costBreakdown = `Estimated total: ${fmtUSD(totalCost)}/yr (premium ${fmtUSD(annualPremium)} + drugs ${fmtUSD(totalAnnualDrugCost)}${partBGivebackAnnual > 0 ? ` − giveback ${fmtUSD(partBGivebackAnnual)}` : ''}).`;
 
+    // Per-medication breakdown — one entry per user drug, same order
+    // as input. monthlyCopay comes from the formulary row's copay; tier
+    // comes from drugEstimates (prefers cache tier over formulary tier
+    // when both exist).
+    const drugBreakdown = drugEstimates.map((est) => {
+      const rxcuiStr = est.rxcui ?? '';
+      const cov = rxcuiStr ? formulary.get(rxcuiStr) : undefined;
+      return {
+        rxcui: rxcuiStr,
+        name: est.name,
+        covered: est.covered,
+        tier: est.tier,
+        monthlyCopay: cov?.copay ?? null,
+        annualCost: Math.round(est.yearlyCost),
+      };
+    });
+
     const score: BrainScore = {
       // Axis scores filled in below once we know the pool size.
       drugCostScore: 0,
@@ -682,6 +699,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       totalCount,
       lowTierCount,
       drugCoverageUnknown,
+      drugBreakdown,
       allProvidersInNetwork: allInNet,
       providersInNetworkCount: inNetCount,
       anyProviderOutOfNetwork: anyOut,
