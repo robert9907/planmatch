@@ -533,14 +533,32 @@ export function CompareScreen({
   const baseline: Plan | null = current ?? scoredPlans[0] ?? null;
   const baselineIsCurrent = current != null;
 
-  // Pool = baseline first (always slot 0), then every other scored
-  // plan in brain-rank order. Slot 1–3 take the top three challengers;
-  // the rest go to the bench.
+  // Pool = baseline first (always slot 0), then scoredPlans (Top 4),
+  // then benchPlans (every other eligible plan in the county). The
+  // existing bench memo (`pool - slotIds`) automatically picks up the
+  // non-slot plans as bench items — the drag-to-board / H2H mechanic
+  // already operates on whatever's in pool, so widening pool widens
+  // the bench's reach to the full pool without touching downstream
+  // logic. Pre-c7b5954 the pool was scoredPlans only (Top 4); the
+  // bench was the leftover ≤3 items not in slots, which felt
+  // truncated against an 80-plan county.
   const pool: Plan[] = useMemo(() => {
-    if (!baseline) return scoredPlans;
-    const others = scoredPlans.filter((p) => p.id !== baseline.id);
+    const all: Plan[] = [];
+    const seen = new Set<string>();
+    for (const p of scoredPlans) {
+      if (seen.has(p.id)) continue;
+      seen.add(p.id);
+      all.push(p);
+    }
+    for (const p of benchPlans ?? []) {
+      if (seen.has(p.id)) continue;
+      seen.add(p.id);
+      all.push(p);
+    }
+    if (!baseline) return all;
+    const others = all.filter((p) => p.id !== baseline.id);
     return [baseline, ...others];
-  }, [baseline, scoredPlans]);
+  }, [baseline, scoredPlans, benchPlans]);
 
   const [slots, setSlots] = useState<(Plan | null)[]>(() => initSlots(pool));
   const [mode, setMode] = useState<'grid' | 'h2h'>('grid');
@@ -725,6 +743,7 @@ export function CompareScreen({
         baseline={baseline}
         annualDrugByPlanId={annualDrugByPlanId}
         ribbonByPlanId={ribbonByPlanId ?? {}}
+        gateResultsByPlanId={benchGateResultsByPlanId ?? {}}
         providers={providers}
         onAddToBoard={addToBoard}
         onOpenH2H={openH2H}
@@ -768,26 +787,16 @@ export function CompareScreen({
         onEnroll={recommendAndAdvance(topChallenger)}
       />
 
-      <BenchSection
-        plans={benchPlans ?? []}
-        gateResultsByPlanId={benchGateResultsByPlanId ?? {}}
-        annualDrugByPlanId={annualDrugByPlanId}
-      />
-
       <Nav onBack={onBack} onNext={onNext} nextLabel="CMS Compliance →" />
     </Container>
   );
 }
 
-// ── Bench section ───────────────────────────────────────────────────
-// Renders every county plan that didn't make Top 4, sorted by cost ASC,
-// with an elimination-reason chip per card. Brokers use this to scroll
-// the full pool without leaving the screen — and to spot the
-// "Provider OON" plan they wanted to override-and-recommend.
-//
-// Elimination reason is derived from the gate flags the brain set on
-// each plan. Sequential gate semantics: a plan fails at the FIRST gate
-// that excluded it.
+// ── Bench elimination helper ────────────────────────────────────────
+// Consumed by BenchCard to label why each bench plan didn't make Top 4.
+// Sequential gate semantics: a plan is labeled by the FIRST gate that
+// excluded it. Plans that survived every gate but ranked past slot 4 by
+// total cost get the softer "Outside Top 4" label.
 function eliminationReason(g: {
   gate1_passed: boolean;
   gate2_passed: boolean;
@@ -797,89 +806,6 @@ function eliminationReason(g: {
   if (!g.gate2_passed) return 'Meds not covered';
   if (!g.gate3_passed) return 'Missing selected extra';
   return 'Outside Top 4';
-}
-
-function BenchSection({
-  plans,
-  gateResultsByPlanId,
-  annualDrugByPlanId,
-}: {
-  plans: Plan[];
-  gateResultsByPlanId: Record<
-    string,
-    { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }
-  >;
-  annualDrugByPlanId: Record<string, number | null>;
-}) {
-  if (plans.length === 0) return null;
-  return (
-    <div style={{ marginTop: 28 }}>
-      <div
-        style={{
-          fontSize: 12,
-          fontWeight: 700,
-          letterSpacing: '0.06em',
-          textTransform: 'uppercase',
-          color: '#475569',
-          marginBottom: 10,
-        }}
-      >
-        Other plans in this county ({plans.length})
-      </div>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-          gap: 10,
-        }}
-      >
-        {plans.map((p) => {
-          const gates = gateResultsByPlanId[p.id];
-          const reason = gates ? eliminationReason(gates) : 'Outside Top 4';
-          const drug = annualDrugByPlanId[p.id];
-          return (
-            <div
-              key={p.id}
-              style={{
-                background: 'white',
-                border: '1px solid rgba(13,47,94,0.08)',
-                borderRadius: 10,
-                padding: 12,
-                fontSize: 12,
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                <div style={{ fontWeight: 700, color: '#0d2f5e', lineHeight: 1.2 }}>
-                  {p.plan_name}
-                </div>
-                <div
-                  style={{
-                    fontSize: 10,
-                    fontWeight: 700,
-                    padding: '2px 6px',
-                    borderRadius: 4,
-                    background: reason === 'Outside Top 4' ? '#e0e7ff' : '#fee2e2',
-                    color: reason === 'Outside Top 4' ? '#3730a3' : '#991b1b',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {reason}
-                </div>
-              </div>
-              <div style={{ color: '#64748b', marginBottom: 4 }}>{p.carrier}</div>
-              <div style={{ display: 'flex', gap: 12, color: '#475569' }}>
-                <span>${p.premium}/mo</span>
-                <span>MOOP {fmt(p.moop_in_network)}</span>
-                <span>
-                  Drug {drug == null ? '—' : `${fmt(drug)}/yr`}
-                </span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
 }
 
 // ── Data quality warning banner ────────────────────────────────
@@ -1037,6 +963,7 @@ function Bench({
   baseline,
   annualDrugByPlanId,
   ribbonByPlanId,
+  gateResultsByPlanId,
   providers,
   onAddToBoard,
   onOpenH2H,
@@ -1045,6 +972,10 @@ function Bench({
   baseline: Plan | null;
   annualDrugByPlanId: Record<string, number | null>;
   ribbonByPlanId: Record<string, string | null>;
+  gateResultsByPlanId: Record<
+    string,
+    { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }
+  >;
   providers: ProviderRow[];
   onAddToBoard: (plan: Plan) => void;
   onOpenH2H: (plan: Plan) => void;
@@ -1184,6 +1115,7 @@ function Bench({
               baseline={baseline}
               annualDrugByPlanId={annualDrugByPlanId}
               ribbon={ribbonByPlanId[p.id] ?? null}
+              gateResults={gateResultsByPlanId[p.id] ?? null}
               providers={providers}
               onAddToBoard={onAddToBoard}
               onOpenH2H={onOpenH2H}
@@ -1200,6 +1132,7 @@ function BenchCard({
   baseline,
   annualDrugByPlanId,
   ribbon,
+  gateResults,
   providers,
   onAddToBoard,
   onOpenH2H,
@@ -1208,6 +1141,7 @@ function BenchCard({
   baseline: Plan | null;
   annualDrugByPlanId: Record<string, number | null>;
   ribbon: string | null;
+  gateResults: { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean } | null;
   providers: ProviderRow[];
   onAddToBoard: (plan: Plan) => void;
   onOpenH2H: (plan: Plan) => void;
@@ -1252,6 +1186,13 @@ function BenchCard({
 
   const isBaseline = baseline != null && plan.id === baseline.id;
   const ribbonChip = ribbon ? RIBBON_STYLE[ribbon] : null;
+  // Elimination chip — labels why this plan didn't make Top 4. Sequential
+  // gate semantics: a plan is labeled by the FIRST gate that excluded
+  // it. Plans on the bench that passed every gate (the Gate-4 cost
+  // ranking pushed them past slot 4) get the softer blue chip.
+  const elim = gateResults ? eliminationReason(gateResults) : null;
+  const elimSurvived = elim === 'Outside Top 4';
+  const showElimChip = elim != null && !isBaseline;
 
   return (
     <div
@@ -1287,25 +1228,49 @@ function BenchCard({
           gap: 4,
         }}
       >
-        {ribbonChip && (
-          <span
-            style={{
-              display: 'inline-block',
-              alignSelf: 'flex-start',
-              background: ribbonChip.bg,
-              color: ribbonChip.color,
-              fontFamily: FONT_LABEL,
-              fontSize: 8,
-              fontWeight: 800,
-              letterSpacing: 0.8,
-              padding: '2px 6px',
-              borderRadius: 3,
-              textTransform: 'uppercase',
-            }}
-          >
-            {ribbonChip.label}
-          </span>
-        )}
+        <div style={{ display: 'flex', gap: 4, alignSelf: 'flex-start', flexWrap: 'wrap' }}>
+          {ribbonChip && (
+            <span
+              style={{
+                display: 'inline-block',
+                background: ribbonChip.bg,
+                color: ribbonChip.color,
+                fontFamily: FONT_LABEL,
+                fontSize: 8,
+                fontWeight: 800,
+                letterSpacing: 0.8,
+                padding: '2px 6px',
+                borderRadius: 3,
+                textTransform: 'uppercase',
+              }}
+            >
+              {ribbonChip.label}
+            </span>
+          )}
+          {showElimChip && (
+            <span
+              style={{
+                display: 'inline-block',
+                background: elimSurvived ? '#e0e7ff' : '#fee2e2',
+                color: elimSurvived ? '#3730a3' : '#991b1b',
+                fontFamily: FONT_LABEL,
+                fontSize: 8,
+                fontWeight: 800,
+                letterSpacing: 0.8,
+                padding: '2px 6px',
+                borderRadius: 3,
+                textTransform: 'uppercase',
+              }}
+              title={
+                elimSurvived
+                  ? 'Survived every gate — ranked below Top 4 by total cost.'
+                  : `Eliminated at ${elim?.toLowerCase()}.`
+              }
+            >
+              {elim}
+            </span>
+          )}
+        </div>
         <div
           style={{
             fontFamily: FONT_LABEL,
