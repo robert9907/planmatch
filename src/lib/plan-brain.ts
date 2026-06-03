@@ -708,6 +708,11 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       priorityChecks: [],
       tradeoffWarnings: [],
       dentalTier,
+      // Gate flags default false; flipped on after each gate phase below
+      // so the adapter can attach gate_results to every bench plan.
+      gate1Passed: false,
+      gate2Passed: false,
+      gate3Passed: false,
     };
     return { row, benefits, formulary, score };
   });
@@ -727,6 +732,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
 
   // ── Gate 1 — providers ────────────────────────────────────────────
   const gate1 = applyProviderGate(rawScored, userHasProviders);
+  for (const s of gate1) s.score.gate1Passed = true;
   // Unconditional diagnostic — surfaces silent provider-gate bypass.
   // userHasProviders=false means Gate 1 returns the whole pool
   // unchanged; cacheSize=0 with userHasProviders=true means every
@@ -747,6 +753,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
 
   // ── Gate 2 — medications ──────────────────────────────────────────
   const gate2Survivors = applyMedicationGate(gate1, userHasDrugs);
+  for (const s of gate2Survivors) s.score.gate2Passed = true;
   const gate2Sorted = [...gate2Survivors].sort(
     (a, b) => a.score.totalAnnualDrugCost - b.score.totalAnnualDrugCost,
   );
@@ -755,6 +762,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
 
   // ── Gate 3 — extras "must offer" elimination ──────────────────────
   const extrasGate = applyExtrasGate(gate2Sorted, userPriorities);
+  for (const s of extrasGate.fullMatch) s.score.gate3Passed = true;
   debugLog(
     `Gate 3: ${extrasGate.fullMatch.length}/${gate2Sorted.length} survived ` +
     `(eliminated: ${extrasGate.eliminated.length}, selected=[${extrasGate.selectedExtras.join(',')}])`,

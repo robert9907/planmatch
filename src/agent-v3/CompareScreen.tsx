@@ -92,6 +92,17 @@ interface Props {
   drugsCoveredByPlanId?: Record<string, number>;
   /** Companion to drugsCoveredByPlanId — BrainScore.totalCount. */
   drugsTotalByPlanId?: Record<string, number>;
+  /** Every county plan that didn't make Top 4, sorted by cost ASC.
+   *  Rendered below the 4-up grid with an elimination-reason badge
+   *  per card so the broker can scroll the full pool without leaving
+   *  the screen. */
+  benchPlans?: Plan[];
+  /** Per-plan gate survivorship for the bench. Used to label why
+   *  each bench plan was eliminated. */
+  benchGateResultsByPlanId?: Record<
+    string,
+    { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }
+  >;
   /**
    * Fire-and-forget AgentBase write-back. CompareScreen calls this with
    * the picked plan when the broker clicks Enroll on a card or the
@@ -470,6 +481,8 @@ export function CompareScreen({
   drugCoverageUnknownByPlanId,
   drugsCoveredByPlanId,
   drugsTotalByPlanId,
+  benchPlans,
+  benchGateResultsByPlanId,
   onRecommend,
   onBack,
   onNext,
@@ -755,8 +768,117 @@ export function CompareScreen({
         onEnroll={recommendAndAdvance(topChallenger)}
       />
 
+      <BenchSection
+        plans={benchPlans ?? []}
+        gateResultsByPlanId={benchGateResultsByPlanId ?? {}}
+        annualDrugByPlanId={annualDrugByPlanId}
+      />
+
       <Nav onBack={onBack} onNext={onNext} nextLabel="CMS Compliance →" />
     </Container>
+  );
+}
+
+// ── Bench section ───────────────────────────────────────────────────
+// Renders every county plan that didn't make Top 4, sorted by cost ASC,
+// with an elimination-reason chip per card. Brokers use this to scroll
+// the full pool without leaving the screen — and to spot the
+// "Provider OON" plan they wanted to override-and-recommend.
+//
+// Elimination reason is derived from the gate flags the brain set on
+// each plan. Sequential gate semantics: a plan fails at the FIRST gate
+// that excluded it.
+function eliminationReason(g: {
+  gate1_passed: boolean;
+  gate2_passed: boolean;
+  gate3_passed: boolean;
+}): string {
+  if (!g.gate1_passed) return 'Provider OON';
+  if (!g.gate2_passed) return 'Meds not covered';
+  if (!g.gate3_passed) return 'Missing selected extra';
+  return 'Outside Top 4';
+}
+
+function BenchSection({
+  plans,
+  gateResultsByPlanId,
+  annualDrugByPlanId,
+}: {
+  plans: Plan[];
+  gateResultsByPlanId: Record<
+    string,
+    { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }
+  >;
+  annualDrugByPlanId: Record<string, number | null>;
+}) {
+  if (plans.length === 0) return null;
+  return (
+    <div style={{ marginTop: 28 }}>
+      <div
+        style={{
+          fontSize: 12,
+          fontWeight: 700,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: '#475569',
+          marginBottom: 10,
+        }}
+      >
+        Other plans in this county ({plans.length})
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+          gap: 10,
+        }}
+      >
+        {plans.map((p) => {
+          const gates = gateResultsByPlanId[p.id];
+          const reason = gates ? eliminationReason(gates) : 'Outside Top 4';
+          const drug = annualDrugByPlanId[p.id];
+          return (
+            <div
+              key={p.id}
+              style={{
+                background: 'white',
+                border: '1px solid rgba(13,47,94,0.08)',
+                borderRadius: 10,
+                padding: 12,
+                fontSize: 12,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                <div style={{ fontWeight: 700, color: '#0d2f5e', lineHeight: 1.2 }}>
+                  {p.plan_name}
+                </div>
+                <div
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                    background: reason === 'Outside Top 4' ? '#e0e7ff' : '#fee2e2',
+                    color: reason === 'Outside Top 4' ? '#3730a3' : '#991b1b',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {reason}
+                </div>
+              </div>
+              <div style={{ color: '#64748b', marginBottom: 4 }}>{p.carrier}</div>
+              <div style={{ display: 'flex', gap: 12, color: '#475569' }}>
+                <span>${p.premium}/mo</span>
+                <span>MOOP {fmt(p.moop_in_network)}</span>
+                <span>
+                  Drug {drug == null ? '—' : `${fmt(drug)}/yr`}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

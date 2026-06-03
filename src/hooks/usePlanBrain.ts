@@ -242,6 +242,15 @@ export interface ScoredPlan {
   whySwitchCopy: string;
   /** Underlying combined utilization for this plan (same per run). */
   annualUtilization: AnnualUtilization;
+  /** Per-gate survivorship. Mirrors BrainScore.gate*Passed populated
+   *  by runPlanBrain after each gate phase. CompareScreen's bench
+   *  reads these to label why an eliminated plan didn't make Top 4
+   *  ("Provider OON" / "Meds not covered" / "Missing benefit"). */
+  gate_results: {
+    gate1_passed: boolean;
+    gate2_passed: boolean;
+    gate3_passed: boolean;
+  };
 }
 
 export interface PlanBrainResult {
@@ -250,6 +259,12 @@ export interface PlanBrainResult {
   utilization: 'low' | 'moderate' | 'high';
   utilizationProfile: CompatUtilizationProfile;
   scored: ScoredPlan[];
+  /** Every plan in the eligible pool that did NOT make Top 4, sorted
+   *  by total annual cost ascending. Each entry carries gate_results
+   *  so CompareScreen can label the elimination reason. Useful for
+   *  the broker who wants to scroll past the 4-up and see the full
+   *  county pool with their elimination footprint. */
+  bench: ScoredPlan[];
   filteredOut: { plan: Plan; reason: string }[];
   detectedConditions: CompatDetectedCondition[];
   medicationPatterns: CompatMedicationPattern[];
@@ -696,6 +711,11 @@ function adaptScored(
     disqualified: score.disqualifiedByRedFlag,
     whySwitchCopy: score.costBreakdown,
     annualUtilization: score.annualUtilization,
+    gate_results: {
+      gate1_passed: score.gate1Passed,
+      gate2_passed: score.gate2Passed,
+      gate3_passed: score.gate3Passed,
+    },
   };
 }
 
@@ -852,6 +872,7 @@ function adaptBrainOutput(
     );
   }
   const scored: ScoredPlan[] = [];
+  const scoredKeys = new Set<string>();
   let rank = 1;
   for (const pick of brain.liveTop3?.picks ?? []) {
     const key = `${pick.plan.row.contract_id}-${pick.plan.row.plan_id}-${pick.plan.row.segment_id}`;
@@ -860,7 +881,24 @@ function adaptBrainOutput(
     const adapted = adaptScored(sp, rank, agentPlanByTriple);
     if (adapted) {
       scored.push(adapted);
+      scoredKeys.add(key);
       rank += 1;
+    }
+  }
+
+  // Bench = brain.ranked (full eligible pool, sorted by cost) minus
+  // the plans that made Top 4. Each entry carries score.gate*Passed
+  // via adaptScored.gate_results so the UI can label the elimination
+  // reason ("Provider OON" / "Meds not covered" / "Missing dental").
+  const bench: ScoredPlan[] = [];
+  let benchRank = scored.length + 1;
+  for (const sp of brain.ranked) {
+    const key = `${sp.row.contract_id}-${sp.row.plan_id}-${sp.row.segment_id}`;
+    if (scoredKeys.has(key)) continue;
+    const adapted = adaptScored(sp, benchRank, agentPlanByTriple);
+    if (adapted) {
+      bench.push(adapted);
+      benchRank += 1;
     }
   }
 
@@ -893,6 +931,7 @@ function adaptBrainOutput(
     utilization,
     utilizationProfile,
     scored,
+    bench,
     filteredOut: [],
     detectedConditions: adaptDetectedConditions(brain.detectedConditions),
     medicationPatterns: adaptMedicationPatterns(brain.medicationPatterns),

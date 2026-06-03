@@ -127,13 +127,22 @@ function buildNameVariants(rawName: string): string[] {
   const name = rawName.trim();
   add(name);
 
-  // Parenthetical: "Synthroid (Levothyroxine)" → ["Synthroid",
-  // "Levothyroxine"]. Either side may be the brand vs the generic —
-  // we add both and let pm_drugs decide which one hits.
+  // Parenthetical: "Synthroid (Levothyroxine)" → variants in this
+  // order: ["Levothyroxine", "Synthroid"]. AgentBase's convention is
+  // "Brand (Generic)" — try the generic side FIRST so pickBest lands
+  // on the SCD rxcui (pm_formulary Tier 1, $0-10/month copays) before
+  // the SBD branded rxcui (Tier 2-3, often coinsurance). If we resolve
+  // to the brand rxcui by accident, the pricing on every Compare card
+  // gets inflated for what's actually a generic.
+  //
+  // Risk: if a record arrives as "Generic (Brand)" instead, we'd try
+  // the brand first and surface the wrong rxcui — but per CRM
+  // convention this hasn't been the case, and pickBest's strength
+  // matcher still picks the right strength regardless of form.
   const parens = name.match(/^([^(]+?)\s*\(([^)]+)\)/);
   if (parens) {
-    add(parens[1]);
     add(parens[2]);
+    add(parens[1]);
   }
 
   // Apply each strip in turn to every variant accumulated so far. Order

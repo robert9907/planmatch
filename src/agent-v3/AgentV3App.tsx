@@ -525,6 +525,22 @@ export function AgentV3App() {
     if (!brain.result) return [];
     return brain.result.scored.map((s) => s.plan);
   }, [brain.result]);
+  // Bench = every county plan that didn't make Top 4. Carries gate
+  // flags per plan so CompareScreen can render an elimination-reason
+  // badge ("Provider OON" / "Meds not covered" / "Missing dental").
+  // Adapter pre-sorts by cost ascending.
+  const benchPlans = useMemo<Plan[]>(() => {
+    if (!brain.result) return [];
+    return brain.result.bench.map((s) => s.plan);
+  }, [brain.result]);
+  const benchGateResultsByPlanId = useMemo<
+    Record<string, { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }>
+  >(() => {
+    if (!brain.result) return {};
+    const out: Record<string, { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }> = {};
+    for (const s of brain.result.bench) out[s.plan.id] = s.gate_results;
+    return out;
+  }, [brain.result]);
   const rankedPlanIds = useMemo<string[]>(
     () => scoredPlans.map((p) => p.id),
     [scoredPlans],
@@ -756,6 +772,8 @@ export function AgentV3App() {
           <CompareScreen
             current={currentPlan}
             scoredPlans={scoredPlans}
+            benchPlans={benchPlans}
+            benchGateResultsByPlanId={benchGateResultsByPlanId}
             ribbonByPlanId={ribbonByPlanId}
             annualDrugByPlanId={annualDrugByPlanId}
             drugCoverageUnknownByPlanId={drugCoverageUnknownByPlanId}

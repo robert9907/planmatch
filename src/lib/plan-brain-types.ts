@@ -209,6 +209,15 @@ export interface BrainScore {
   // the Tier-1 -10 composite penalty when the user picked dental as a
   // priority and the curated-set ≥2-Tier-3 enforcement.
   dentalTier: 'preventive' | 'basic' | 'comprehensive';
+  // ── Per-gate survivorship (Bench display) ──────────────────────
+  // True when this plan was still in the pool after the named gate
+  // ran. Populated by runPlanBrain after each gate phase. The
+  // CompareScreen bench reads these so each eliminated plan card
+  // carries its elimination reason ("Provider OON" / "Meds not
+  // covered" / "Missing dental benefit") instead of just disappearing.
+  gate1Passed: boolean;
+  gate2Passed: boolean;
+  gate3Passed: boolean;
 }
 
 /** Flattened plan shape consumed by the Results card UI. Created by
