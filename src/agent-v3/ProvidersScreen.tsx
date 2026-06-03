@@ -214,12 +214,27 @@ function ProviderCard({
 
     // Stagger only the first STAGGER_CAP plans visually — past that the
     // queue animation contributes noise without information.
+    //
+    // The `r.state === 'queued'` guard is load-bearing. For an 80-plan
+    // card the library round-trip (~500ms cached) finishes WHILE the
+    // stagger timers are still firing (cap × 250ms ≈ 1.5s). Without the
+    // guard, the stagger callbacks that fire AFTER the library flush
+    // zombie-overwrite resolved rows back to 'checking' — the broker
+    // sees plans the library marked in_network as stuck "Checking…",
+    // then downgrading to Unverified once the timer queue drains.
+    // With the guard, once a row leaves 'queued' (either via this
+    // stagger or via the library flush below) it's locked in; pending
+    // stagger callbacks see state ≠ 'queued' and no-op.
     seeded.forEach((p, i) => {
       const delay = Math.min(i, STAGGER_CAP) * STAGGER_STEP_MS;
       window.setTimeout(() => {
         if (cancelled) return;
         setRows((prev) =>
-          prev.map((r) => (r.plan.id === p.id ? { ...r, state: 'checking' } : r)),
+          prev.map((r) =>
+            r.plan.id === p.id && r.state === 'queued'
+              ? { ...r, state: 'checking' }
+              : r,
+          ),
         );
       }, delay + 80);
     });
