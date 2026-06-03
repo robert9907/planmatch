@@ -105,10 +105,29 @@ async function libraryBatch(
     plan_ids: plans.map((p) => p.id),
   });
   const npiBlock = resp.by_npi[npi];
-  if (!npiBlock) return out;
+  if (!npiBlock) {
+    console.warn(
+      `[network-check] library returned no block for npi ${npi}. by_npi keys:`,
+      Object.keys(resp.by_npi ?? {}),
+    );
+    return out;
+  }
+  let inMatch = 0;
+  let inMiss = 0;
   for (const lib of npiBlock.plans) {
     const plan = plansByTriple.get(lib.plan_id);
-    if (!plan) continue;
+    if (!plan) {
+      // Plan-id key mismatch — log a sample so the user can see which
+      // direction the divergence is (agent triple vs library triple).
+      if (inMiss < 3) {
+        console.warn(
+          `[network-check] library plan_id "${lib.plan_id}" not in agent plansByTriple (status: ${lib.status})`,
+        );
+      }
+      inMiss += 1;
+      continue;
+    }
+    inMatch += 1;
     const status: NetworkStatus =
       lib.status === 'in_network'
         ? 'in'
@@ -129,6 +148,20 @@ async function libraryBatch(
   for (const p of plans) {
     if (!out.has(p.id)) out.set(p.id, makeResult(p, 'unknown', 'fallback_unknown'));
   }
+  // Counts so the broker can see at a glance from devtools whether the
+  // mapping is healthy.
+  let inN = 0;
+  let outN = 0;
+  let unkN = 0;
+  for (const r of out.values()) {
+    if (r.status === 'in') inN += 1;
+    else if (r.status === 'out') outN += 1;
+    else unkN += 1;
+  }
+  console.log(
+    `[network-check] library mapped npi=${npi}: matched=${inMatch} missed=${inMiss} ` +
+      `→ in=${inN} out=${outN} unknown=${unkN} (input plans=${plans.length})`,
+  );
   return out;
 }
 

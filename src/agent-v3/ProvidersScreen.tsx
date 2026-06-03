@@ -245,16 +245,40 @@ function ProviderCard({
     })
       .then((map) => {
         if (cancelled) return;
+
+        // Build writeBack DIRECTLY from the resolved map first, before
+        // any setRows call. The previous version populated writeBack
+        // inside the setRows updater callback — in React 18 / concurrent
+        // rendering that callback can run AFTER the surrounding .then
+        // continues, so `onWriteBack(writeBack)` could fire with a still-
+        // empty Map. updateProvider then merged 80 empty keys onto
+        // provider.networkStatus, the CompareScreen provider list saw
+        // undefined for every plan, and rendered '⚠ Unverified' across
+        // the board even though the rows on this card briefly flashed
+        // green before re-rendering.
         const writeBack = new Map<string, NetworkStatus>();
-        // Flush every resolved status into rows + the writeBack map in
-        // one render pass (no per-row setTimeout cascade). Manual
-        // override clicks during a re-fetch are preserved by
-        // checkNetworkStatusOverridePriority in the row-set merger.
+        for (const p of seeded) {
+          const result = map.get(p.id);
+          writeBack.set(p.id, result?.status ?? 'unknown');
+        }
+
+        // Diagnostic: surfaces a one-line summary in devtools so we can
+        // confirm without a debugger that the data path is healthy.
+        let inN = 0;
+        let outN = 0;
+        let unkN = 0;
+        for (const v of writeBack.values()) {
+          if (v === 'in') inN += 1;
+          else if (v === 'out') outN += 1;
+          else unkN += 1;
+        }
+        console.log(
+          `[providers] writeBack npi=${npi}: in=${inN} out=${outN} unknown=${unkN} (rows=${seeded.length})`,
+        );
+
         setRows((prev) =>
           prev.map((r) => {
-            const result = map.get(r.plan.id);
-            const status: NetworkStatus = result?.status ?? 'unknown';
-            writeBack.set(r.plan.id, status);
+            const status = writeBack.get(r.plan.id) ?? 'unknown';
             // Don't downgrade a broker-marked 'in' back to whatever
             // checkNetworkBatch returned mid-session.
             const fromSession = provider.networkStatus?.[r.plan.id];
