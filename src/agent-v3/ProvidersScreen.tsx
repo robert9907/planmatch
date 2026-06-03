@@ -236,8 +236,17 @@ function ProviderCard({
     return () => {
       cancelled = true;
     };
+    // cardClient.state + .county are in the deps because checkNetworkBatch
+    // routes to /api/library/provider-network (with FHIR live fallback)
+    // when both are set, and falls back to a direct cache read otherwise.
+    // AgentBase hydration often populates client.state/county a tick
+    // AFTER ProvidersScreen mounts, so without these deps the initial
+    // mount fires against `state: null` → directBatch → no FHIR
+    // resolution, and the broker sees stale "Unknown" on FHIR-covered
+    // carriers (UHC / Humana / BCBS NC / Devoted) for the rest of the
+    // session.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider.npi, topPlans.map((p) => p.id).join(',')]);
+  }, [provider.npi, topPlans.map((p) => p.id).join(','), cardClient.state, cardClient.county]);
 
   return (
     <Card
