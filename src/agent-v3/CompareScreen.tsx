@@ -123,6 +123,13 @@ interface Metric {
 }
 
 interface ProviderRow {
+  /** Stable id from useSession; used as React key. Falls back to npi. */
+  id?: string;
+  /** Display name — "Dr. Kombiz Klein, PA" etc. */
+  name?: string;
+  /** Per-plan network status keyed by plan.id (triple). Library /
+   *  cache pipeline writes 'in' / 'out' / 'unknown' here; missing
+   *  keys default to 'unknown' at render time. */
   networkStatus?: Record<string, string> | undefined;
 }
 
@@ -767,6 +774,7 @@ export function CompareScreen({
             baseline={baseline}
             metrics={metrics}
             bestByMetric={bestByMetric}
+            providers={providers}
             drugCoverageUnknown={
               plan != null && drugCoverageUnknownByPlanId
                 ? drugCoverageUnknownByPlanId[plan.id] === true
@@ -1393,6 +1401,10 @@ function BenchCard({
         )}
       </div>
 
+      {/* Per-provider list — compact variant so 220px-wide bench cards
+          still show every entered provider with a status pill. */}
+      <ProviderList plan={plan} providers={providers} variant="compact" />
+
       <div
         style={{
           display: 'grid',
@@ -1516,6 +1528,128 @@ function PreviewRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+// ── Per-provider network list ───────────────────────────────────
+// Replaces the old aggregate "Docs in-net: 1/3" cell with a one-line
+// summary plus a row per provider. Status badge per row:
+//   'in'      → ✓ green   (FHIR/cache confirmed in-network)
+//   'out'     → ✗ red     (FHIR/cache confirmed out-of-network)
+//   'unknown' → ⚠ amber   (no resolution — broker should call carrier)
+// Renders nothing when the broker entered no providers (the rest of
+// the card layout already handles that case via the Part-B-giveback
+// fallback in the metric grid).
+function ProviderList({
+  plan,
+  providers,
+  variant = 'full',
+}: {
+  plan: Plan;
+  providers: ProviderRow[];
+  /** 'full' for slot cards (signature + per-row pill); 'compact' for
+   *  the 220px bench cards (abbreviated names, smaller pills). */
+  variant?: 'full' | 'compact';
+}) {
+  if (providers.length === 0) return null;
+  let inCount = 0;
+  let outCount = 0;
+  let unknownCount = 0;
+  for (const p of providers) {
+    const s = p.networkStatus?.[plan.id] ?? 'unknown';
+    if (s === 'in') inCount += 1;
+    else if (s === 'out') outCount += 1;
+    else unknownCount += 1;
+  }
+  const isCompact = variant === 'compact';
+  return (
+    <div
+      style={{
+        padding: isCompact ? '6px 10px 8px' : '8px 10px',
+        borderTop: `1px solid ${BORDER}`,
+        background: 'white',
+        fontFamily: FONT_LABEL,
+      }}
+    >
+      <div
+        style={{
+          fontSize: isCompact ? 9 : 10,
+          fontWeight: 700,
+          letterSpacing: 0.5,
+          textTransform: 'uppercase',
+          color: MUTED,
+          marginBottom: isCompact ? 4 : 6,
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 6,
+        }}
+      >
+        <span>Doctors</span>
+        <span style={{ color: inCount === providers.length ? '#15803d' : MUTED }}>
+          {inCount}/{providers.length} In-Network
+          {outCount > 0 ? ` · ${outCount} out` : ''}
+          {unknownCount > 0 ? ` · ${unknownCount} ?` : ''}
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: isCompact ? 3 : 4 }}>
+        {providers.map((p, i) => {
+          const status = (p.networkStatus?.[plan.id] ?? 'unknown') as
+            | 'in'
+            | 'out'
+            | 'unknown';
+          const meta =
+            status === 'in'
+              ? { bg: '#dcfce7', fg: '#15803d', icon: '✓', label: 'In-Network' }
+              : status === 'out'
+                ? { bg: '#fee2e2', fg: '#991b1b', icon: '✗', label: 'Out-of-Network' }
+                : { bg: '#fef3c7', fg: '#92400e', icon: '⚠', label: 'Unverified' };
+          return (
+            <div
+              key={p.id ?? p.name ?? i}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 6,
+                fontSize: isCompact ? 10 : 11,
+              }}
+            >
+              <span
+                style={{
+                  color: TEXT,
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  flex: 1,
+                  minWidth: 0,
+                }}
+              >
+                {p.name ?? 'Provider'}
+              </span>
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  background: meta.bg,
+                  color: meta.fg,
+                  fontWeight: 700,
+                  fontSize: isCompact ? 9 : 10,
+                  padding: isCompact ? '1px 5px' : '2px 6px',
+                  borderRadius: 3,
+                  whiteSpace: 'nowrap',
+                }}
+                title={meta.label}
+              >
+                <span aria-hidden="true">{meta.icon}</span>
+                {isCompact ? null : <span>{meta.label}</span>}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Slot cell ──────────────────────────────────────────────────
 function SlotCell({
   slotIdx,
@@ -1525,6 +1659,7 @@ function SlotCell({
   baseline,
   metrics,
   bestByMetric,
+  providers,
   drugCoverageUnknown,
   onDrop,
   onClear,
@@ -1543,6 +1678,9 @@ function SlotCell({
   baseline: Plan | null;
   metrics: Metric[];
   bestByMetric: Record<string, number | null>;
+  /** Broker-entered providers + per-plan networkStatus map. Drives the
+   *  per-provider list rendered below the metric grid. */
+  providers: ProviderRow[];
   /** Brain flag (mirrored from BrainScore.drugCoverageUnknown) — when
    *  true, the drug-cost row in this slot card renders an amber
    *  "confirm with your pharmacist" disclaimer. */
@@ -1709,19 +1847,27 @@ function SlotCell({
         </button>
       </div>
 
-      <div style={{ padding: '8px 10px', flex: 1 }}>
-        {metrics.map((m) => (
-          <MetricRow
-            key={m.key}
-            metric={m}
-            plan={plan}
-            baseline={baseline}
-            isBaseline={isBaseline}
-            best={bestByMetric[m.key] ?? null}
-            drugCoverageUnknown={m.key === 'drugs' && drugCoverageUnknown}
-          />
-        ))}
+      <div style={{ padding: '8px 10px' }}>
+        {metrics
+          .filter((m) => m.key !== 'providers')
+          .map((m) => (
+            <MetricRow
+              key={m.key}
+              metric={m}
+              plan={plan}
+              baseline={baseline}
+              isBaseline={isBaseline}
+              best={bestByMetric[m.key] ?? null}
+              drugCoverageUnknown={m.key === 'drugs' && drugCoverageUnknown}
+            />
+          ))}
       </div>
+
+      {/* Per-provider in-network list replaces the old aggregate
+          "Doctors in-network: X/Y" metric row. Summary count stays at
+          the top, individual provider rows below with name + status
+          pill (green ✓ / red ✗ / amber ⚠). */}
+      <ProviderList plan={plan} providers={providers} variant="full" />
 
       <div
         style={{
