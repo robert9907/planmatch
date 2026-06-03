@@ -105,13 +105,13 @@ export function ProvidersPage({ capture, onBack, onContinue }: Props) {
       networkStatus: {},
     });
     setQuery(''); setResults([]);
-    await runChecks(id, p.npi, eligiblePlans, updateProvider, { zip: client.zip, county: client.county });
+    await runChecks(id, p.npi, eligiblePlans, updateProvider, { zip: client.zip, county: client.county, state: client.state });
   }
 
   async function recheck(prov: Provider) {
     if (!prov.npi) return;
     updateProvider(prov.id, { networkStatus: {} });
-    await runChecks(prov.id, prov.npi, eligiblePlans, updateProvider, { zip: client.zip, county: client.county });
+    await runChecks(prov.id, prov.npi, eligiblePlans, updateProvider, { zip: client.zip, county: client.county, state: client.state });
   }
 
   function toggleManualOverride(prov: Provider) {
@@ -139,7 +139,7 @@ export function ProvidersPage({ capture, onBack, onContinue }: Props) {
     // status again instead of staying stuck on 'in'.
     if (prov.npi) {
       const carrierPlans = eligiblePlans.filter((p) => p.carrier === carrier);
-      runChecks(prov.id, prov.npi, carrierPlans, updateProvider, { zip: client.zip, county: client.county });
+      runChecks(prov.id, prov.npi, carrierPlans, updateProvider, { zip: client.zip, county: client.county, state: client.state });
     }
   }
 
@@ -511,11 +511,12 @@ async function runChecks(
   npi: string,
   plans: Plan[],
   updateProvider: (id: string, patch: Partial<Provider>) => void,
-  ctx: { zip?: string | null; county?: string | null } = {},
+  ctx: { zip?: string | null; county?: string | null; state?: string | null } = {},
 ) {
-  // One round trip handles every plan: /api/network-check reads
-  // pm_provider_network_cache for hits and falls back to a live
-  // Medicare.gov call for misses.
+  // checkNetworkBatch now routes to /api/library/provider-network
+  // when ctx.state + ctx.county are set, with cache + FHIR live
+  // fallback. Falls back to direct pm_provider_network_cache read
+  // when either is missing.
   try {
     const map = await checkNetworkBatch(npi, plans, ctx);
     const curr = useSession.getState().providers.find((p) => p.id === providerId);

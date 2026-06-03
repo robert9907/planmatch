@@ -186,6 +186,7 @@ function ProviderCard({
   staggerIndex: number;
 }) {
   const [rows, setRows] = useState<PlanRowState[]>([]);
+  const cardClient = useSession((s) => s.client);
 
   useEffect(() => {
     setRows(topPlans.map((p) => ({ plan: p, state: 'queued' as RowState })));
@@ -207,7 +208,8 @@ function ProviderCard({
     });
 
     checkNetworkBatch(npi, plans, {
-      county: null,
+      state: cardClient.state ?? null,
+      county: cardClient.county ?? null,
     })
       .then((map) => {
         if (cancelled) return;
