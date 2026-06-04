@@ -105,6 +105,24 @@ async function libraryBatch(
     plan_ids: plans.map((p) => p.id),
   });
   const npiBlock = resp.by_npi[npi];
+  // [AUDIT 2] Raw response → per-NPI block. Count plans before any
+  // mapping so we can compare against AUDIT 1 (raw) and AUDIT 3
+  // (mapped + reshaped). A drop here means the library returned the
+  // npi but with a different/empty plans array than AUDIT 1 implied.
+  const rawIn = (npiBlock?.plans ?? []).filter(
+    (p) => p.status === 'in_network',
+  ).length;
+  const rawOut = (npiBlock?.plans ?? []).filter(
+    (p) => p.status === 'out_of_network',
+  ).length;
+  const rawUnk = (npiBlock?.plans ?? []).filter(
+    (p) => p.status === 'unknown',
+  ).length;
+  console.log(
+    `[AUDIT 2] npi=${npi} npiBlock.plans=${npiBlock?.plans?.length ?? 0} ` +
+      `→ in_network=${rawIn} out_of_network=${rawOut} unknown=${rawUnk} ` +
+      `(input plan_ids=${plans.length})`,
+  );
   if (!npiBlock) {
     console.warn(
       `[network-check] library returned no block for npi ${npi}. by_npi keys:`,
@@ -161,6 +179,16 @@ async function libraryBatch(
   console.log(
     `[network-check] library mapped npi=${npi}: matched=${inMatch} missed=${inMiss} ` +
       `→ in=${inN} out=${outN} unknown=${unkN} (input plans=${plans.length})`,
+  );
+  // [AUDIT 3] The Map this function returns to checkNetworkBatch's
+  // caller. If AUDIT 2 said in_network=28 but AUDIT 3 says in=0, the
+  // drop is in the plansByTriple lookup — library returned plan_id
+  // triples that don't match the agent's Plan.id format.
+  console.log(
+    `[AUDIT 3] libraryBatch returning map size=${out.size} ` +
+      `in=${inN} out=${outN} unknown=${unkN} ` +
+      `(plansByTriple sample=${[...plansByTriple.keys()].slice(0, 2).join(',')} ` +
+      `library plan_id sample=${(npiBlock.plans[0]?.plan_id) ?? '—'})`,
   );
   return out;
 }

@@ -91,7 +91,24 @@ export async function checkProviderNetwork(args: {
       `library/provider-network ${res.status} ${body.slice(0, 200)}`,
     );
   }
-  return (await res.json()) as LibraryProviderNetworkResponse;
+  const parsed = (await res.json()) as LibraryProviderNetworkResponse;
+  // [AUDIT 1] Raw library response, BEFORE any client-side processing.
+  // First 300 chars of the JSON keeps the line scannable while still
+  // showing the by_npi keys + first NPI block's plans array.
+  try {
+    const npiKeys = Object.keys(parsed.by_npi ?? {});
+    const firstNpi = npiKeys[0];
+    const firstPlans = firstNpi ? parsed.by_npi[firstNpi]?.plans ?? [] : [];
+    const inCount = firstPlans.filter((p) => p.status === 'in_network').length;
+    console.log(
+      `[AUDIT 1] library raw response: npis=${npiKeys.length} firstNpi=${firstNpi ?? '—'} ` +
+        `plans=${firstPlans.length} in_network=${inCount} | ` +
+        JSON.stringify(parsed).slice(0, 300),
+    );
+  } catch {
+    // Defensive — shouldn't happen, but never let a log break the fetch.
+  }
+  return parsed;
 }
 
 // ─── rank-plans ──────────────────────────────────────────────────

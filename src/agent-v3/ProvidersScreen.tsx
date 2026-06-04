@@ -138,11 +138,12 @@ export function ProvidersScreen({
               const prev = provider.networkStatus ?? {};
               const next = { ...prev };
               for (const [planId, status] of map) next[planId] = status;
-              // Diagnostic: terminal-state breakdown of the merged map
-              // about to land on provider.networkStatus. If this shows
-              // in=28 but ProviderRail still renders 0 In-Network, the
-              // break is in ProviderCard's local `rows` state, not in
-              // session — likely a stagger / state ordering issue.
+              // [AUDIT 5] Merged map about to be persisted via
+              // updateProvider. Counts of values in `next` (what's
+              // landing in session). If AUDIT 4 said in=28 and
+              // AUDIT 5 says in=0, the merge loop dropped them —
+              // likely a Map iteration error or `prev` had stale
+              // 'out' values overwriting.
               let inN = 0;
               let outN = 0;
               let unkN = 0;
@@ -152,7 +153,7 @@ export function ProvidersScreen({
                 else if (v === 'unknown') unkN += 1;
               }
               console.log(
-                `[providers] onWriteBack merged npi=${provider.npi}: ` +
+                `[AUDIT 5] provider.networkStatus after write npi=${provider.npi}: ` +
                   `in=${inN} out=${outN} unknown=${unkN} (keys=${Object.keys(next).length})`,
               );
               updateProvider(provider.id, { networkStatus: next });
@@ -208,6 +209,30 @@ function ProviderCard({
 }) {
   const [rows, setRows] = useState<PlanRowState[]>([]);
   const cardClient = useSession((s) => s.client);
+
+  // [AUDIT 6] Commit-time row state. Fires only when `rows` reference
+  // changes (i.e., after setRows has actually flushed). If AUDIT 4
+  // said writeBack in=28 but this shows in=0, setRows resolved AND
+  // immediately got reset by another effect run — likely the
+  // useEffect re-firing because `allPlans` reference changed mid-cycle.
+  useEffect(() => {
+    let inN = 0;
+    let outN = 0;
+    let unkN = 0;
+    let queued = 0;
+    let checking = 0;
+    for (const r of rows) {
+      if (r.state === 'in') inN += 1;
+      else if (r.state === 'out') outN += 1;
+      else if (r.state === 'unknown') unkN += 1;
+      else if (r.state === 'queued') queued += 1;
+      else if (r.state === 'checking') checking += 1;
+    }
+    console.log(
+      `[AUDIT 6] rows state npi=${provider.npi} total=${rows.length}: ` +
+        `in=${inN} out=${outN} unknown=${unkN} queued=${queued} checking=${checking}`,
+    );
+  }, [rows, provider.npi]);
 
   // Cap stagger at first 6 plans so an 80-plan county doesn't drag
   // the "Checking…" animation to 30+ seconds. Beyond the cap rows
@@ -291,6 +316,18 @@ function ProviderCard({
         }
         console.log(
           `[providers] writeBack npi=${npi}: in=${inN} out=${outN} unknown=${unkN} (rows=${seeded.length})`,
+        );
+
+        // [AUDIT 4] writeBack Map about to be applied to local rows
+        // AND handed to the parent via onWriteBack. If AUDIT 3 said
+        // in=28 but AUDIT 4 shows in=0, the .then handler is rebuilding
+        // writeBack from the wrong source (was happening pre-fdcb0f0).
+        const audit4In = [...writeBack.values()].filter((v) => v === 'in').length;
+        const audit4Out = [...writeBack.values()].filter((v) => v === 'out').length;
+        const audit4Unk = [...writeBack.values()].filter((v) => v === 'unknown').length;
+        console.log(
+          `[AUDIT 4] writeBack npi=${npi} size=${writeBack.size} ` +
+            `in=${audit4In} out=${audit4Out} unknown=${audit4Unk}`,
         );
 
         let bypassedAsIn = 0;

@@ -512,6 +512,27 @@ export function AgentV3App() {
           `→ in=${inN} out=${outN} unknown=${unkN} ` +
           `(changed=${changed})`,
       );
+      // [AUDIT 7] Rank-plans-derived networkStatus about to land on
+      // provider.networkStatus. Independent from AUDIT 1-6 (those
+      // trace the dedicated /api/library/provider-network path used
+      // by ProvidersScreen). If AUDIT 7 says in=28 but AUDIT 6 still
+      // shows in=0, ProvidersScreen's setRows is overriding session
+      // state with stale 'queued' rows from its own re-mount cycle.
+      // If AUDIT 7 says in=0 too, rank-plans itself returned 0 in_network
+      // for this NPI — check /api/library/rank-plans response shape.
+      let nextIn = 0;
+      let nextOut = 0;
+      let nextUnk = 0;
+      for (const v of Object.values(next)) {
+        if (v === 'in') nextIn += 1;
+        else if (v === 'out') nextOut += 1;
+        else if (v === 'unknown') nextUnk += 1;
+      }
+      console.log(
+        `[AUDIT 7] rank-plans provider hydration npi=${provider.npi}: ` +
+          `in=${nextIn} out=${nextOut} unknown=${nextUnk} ` +
+          `(keys=${Object.keys(next).length})`,
+      );
       if (changed) updateProvider(provider.id, { networkStatus: next });
     }
     // Intentionally not depending on `providers` — we only react to
