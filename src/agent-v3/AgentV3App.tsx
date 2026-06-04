@@ -23,6 +23,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { usePlanBrain } from '@/hooks/usePlanBrain';
+import { useRankedPlans } from '@/hooks/useRankedPlans';
 import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
 import { useScreenShareStore } from '@/hooks/useScreenShare';
@@ -443,42 +444,67 @@ export function AgentV3App() {
     weightOverride,
   });
 
+  // Library-side ranking — the new source of truth for the compare
+  // screen's plan list, gate results, ribbons, per-plan medication
+  // coverage, and per-plan provider network status. Runs alongside
+  // the legacy usePlanBrain() call: QuoteDeliveryV4 + AgentBase
+  // recommend still consume `brain` (PlanBrainResult/PlanBrainData
+  // shape) because the library doesn't yet expose archetype, weights,
+  // applied broker rules, red flags, real-cost breakdown, or
+  // structured formulary rows. Those callers move over once the
+  // library response is expanded. Until then we pay one extra
+  // ranking call per quote — temporary cost while the migration is
+  // staged.
+  const ranked = useRankedPlans({
+    client,
+    medications,
+    providers,
+    userPriorities: userPriorityKeys,
+    currentPlanId,
+  });
+
   // ── Provider network hydration ────────────────────────────────────
-  // brain.data.networkByPlan already carries pm_provider_network_cache
-  // rows for every (plan, npi) pair — it's part of the same Supabase
-  // payload the brain itself uses. Mirror those rows into
-  // useSession.providers[*].networkStatus so PinnedPlan + SwipeCard
-  // (which read provider.networkStatus[plan.id]) light up immediately,
-  // without requiring a visit to the Providers screen first. The
-  // Providers screen still runs its own checkNetworkBatch on mount
-  // for the staggered Queued → Checking → Verified animation; that's
-  // additive — same data source, just animated.
+  // Mirror the per-plan provider network status from the library
+  // response into useSession.providers[*].networkStatus so PinnedPlan
+  // + SwipeCard (which read provider.networkStatus[plan.id]) light up
+  // immediately without requiring a visit to the Providers screen.
+  // Walks both top_plans and bench_plans so every county plan card
+  // has a status. The Providers screen still runs its own
+  // checkNetworkBatch on mount for the Queued → Checking → Verified
+  // animation; that's additive.
   useEffect(() => {
-    if (!brain.data) return;
-    const networkByPlan = brain.data.networkByPlan;
+    if (!ranked.result) return;
+    const allPlans = [
+      ...ranked.result.top_plans,
+      ...ranked.result.bench_plans,
+    ];
     for (const provider of providers) {
       if (!provider.npi) continue;
       const next: Record<string, 'in' | 'out' | 'unknown'> = {
         ...(provider.networkStatus ?? {}),
       };
       let changed = false;
-      for (const [planTriple, byNpi] of Object.entries(networkByPlan)) {
-        const row = byNpi[provider.npi];
+      for (const lp of allPlans) {
+        const row = lp.providers.find((pr) => pr.npi === provider.npi);
         if (!row) continue;
         const status: 'in' | 'out' | 'unknown' =
-          row.covered === true ? 'in' : row.covered === false ? 'out' : 'unknown';
-        if (next[planTriple] !== status) {
-          next[planTriple] = status;
+          row.in_network === true
+            ? 'in'
+            : row.in_network === false
+              ? 'out'
+              : 'unknown';
+        if (next[lp.plan_id] !== status) {
+          next[lp.plan_id] = status;
           changed = true;
         }
       }
       if (changed) updateProvider(provider.id, { networkStatus: next });
     }
     // Intentionally not depending on `providers` — we only react to
-    // brain.data refreshes. Re-running on every providers update would
-    // create a write→read loop with updateProvider.
+    // library result refreshes. Re-running on every providers update
+    // would create a write→read loop with updateProvider.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brain.data]);
+  }, [ranked.result]);
 
   // ── Formulary cache prime (shell-level) ──────────────────────────
   // MedsScreen primes pm_formulary entries for eligiblePlans × user
@@ -496,148 +522,145 @@ export function AgentV3App() {
     void bulkLookupFormulary(contractIds, rxcuis);
   }, [eligiblePlans, medications]);
 
-  // ── Drug-cost map sourced from the brain (P5 fix) ────────────────
-  // The brain's score.totalAnnualDrugCost is the authoritative number:
-  // it uses RxNav-expanded rxcuis to match sibling formulary entries,
-  // applies tier ceilings, handles insulin caps, and falls back to
-  // formulary copay × 12 when pm_drug_cost_cache misses. The old
-  // per-plan loop here used ORIGINAL rxcuis via getCachedFormulary and
-  // diverged from the brain — the brain said "covered, $X" while this
-  // map said "null" → UI rendered "Not available" on plans the brain
-  // had already cleared Gate 2 with. Now they agree.
-  //
-  // Plans not in brain.result.scored (eliminated, or never reached
-  // Gate 4) don't get an entry — UI fallback (?? null) renders em-dash.
-  const annualDrugByPlanId = useMemo<Record<string, number | null>>(() => {
-    if (!brain.result) return {};
-    const out: Record<string, number | null> = {};
-    for (const s of brain.result.scored) {
-      out[s.plan.id] = Math.round(s.totalAnnualDrugCost);
-    }
-    return out;
-  }, [brain.result]);
-  // ── Brain rank derivatives ───────────────────────────────────────
-  // scoredPlans = the brain's ranked plan list (descending by composite
-  // score). CompareScreen consumes this directly to seed slot 0 with
-  // `current` (or the top plan as fallback) and slots 1–3 with the top
-  // challengers. ProvidersScreen still wants the id-only list.
+  // ── Brain derivatives, sourced from the library result ─────────
+  // The library's rank-plans response carries per-plan medications,
+  // gate_results, ribbons, and totals. We adapt back into the side
+  // maps + Plan[] shape CompareScreen already consumes so the screen
+  // stays untouched while the underlying pipeline collapses to one
+  // HTTP call. Plan objects come from `eligiblePlans` (the county
+  // catalog) keyed by the library's `plan_id` triple.
+  type DrugRow = {
+    rxcui: string;
+    name: string;
+    covered: boolean;
+    tier: number | null;
+    monthlyCopay: number | null;
+    annualCost: number;
+  };
+
+  const planById = useMemo(() => {
+    const m = new Map<string, Plan>();
+    for (const p of eligiblePlans) m.set(p.id, p);
+    return m;
+  }, [eligiblePlans]);
+
   const scoredPlans = useMemo<Plan[]>(() => {
-    if (!brain.result) return [];
-    return brain.result.scored.map((s) => s.plan);
-  }, [brain.result]);
-  // Bench = every county plan that didn't make Top 4. Carries gate
-  // flags per plan so CompareScreen can render an elimination-reason
-  // badge ("Provider OON" / "Meds not covered" / "Missing dental").
-  // Adapter pre-sorts by cost ascending.
+    if (!ranked.result) return [];
+    return ranked.result.top_plans
+      .map((lp) => planById.get(lp.plan_id))
+      .filter((p): p is Plan => p != null);
+  }, [ranked.result, planById]);
+
   const benchPlans = useMemo<Plan[]>(() => {
-    if (!brain.result) return [];
-    const result = brain.result.bench.map((s) => s.plan);
-    // Diagnostic: confirm where bench is breaking if it shows empty in
-    // the UI despite a multi-plan county. Expected: scored.length≤4 and
-    // bench.length = eligible - scored.length (typically 40-80 for NC).
-    // If bench is 0 here, the adapter never built it; if non-zero here
-    // but the BenchSection doesn't render, the prop wiring or the
-    // section's empty-guard is the culprit.
+    if (!ranked.result) return [];
+    const out = ranked.result.bench_plans
+      .map((lp) => planById.get(lp.plan_id))
+      .filter((p): p is Plan => p != null);
+    // Diagnostic — confirms the library returned a bench list and the
+    // local catalog fully covers it. Mismatch (out.length <
+    // bench_plans.length) means the library ranked a plan the agent's
+    // /api/plans catalog doesn't carry — usually a county routing bug.
     console.log(
       '[agent-v3] bench:',
-      result.length,
+      out.length,
       'of',
-      brain.result.scored.length + result.length,
+      ranked.result.top_plans.length + ranked.result.bench_plans.length,
       'eligible (Top 4:',
-      brain.result.scored.length,
+      ranked.result.top_plans.length,
       ')',
     );
-    return result;
-  }, [brain.result]);
+    return out;
+  }, [ranked.result, planById]);
+
+  const annualDrugByPlanId = useMemo<Record<string, number | null>>(() => {
+    if (!ranked.result) return {};
+    const out: Record<string, number | null> = {};
+    for (const lp of ranked.result.top_plans) {
+      out[lp.plan_id] = lp.total_annual_drug_cost;
+    }
+    for (const lp of ranked.result.bench_plans) {
+      out[lp.plan_id] = lp.total_annual_drug_cost;
+    }
+    return out;
+  }, [ranked.result]);
+
   const benchGateResultsByPlanId = useMemo<
     Record<string, { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }>
   >(() => {
-    if (!brain.result) return {};
+    if (!ranked.result) return {};
     const out: Record<string, { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }> = {};
-    for (const s of brain.result.bench) out[s.plan.id] = s.gate_results;
+    for (const lp of ranked.result.bench_plans) {
+      out[lp.plan_id] = lp.gate_results;
+    }
     return out;
-  }, [brain.result]);
+  }, [ranked.result]);
+
   const rankedPlanIds = useMemo<string[]>(
     () => scoredPlans.map((p) => p.id),
     [scoredPlans],
   );
-  // Ribbon assignment per plan id (LOWEST_DRUG_COST, BEST_EXTRAS, etc.).
-  // Brain's ribbon pass decorates only category leaders; most plans get
-  // null. CompareScreen surfaces these as colored chips on bench cards.
+
   const ribbonByPlanId = useMemo<Record<string, string | null>>(() => {
-    if (!brain.result) return {};
+    if (!ranked.result) return {};
     const out: Record<string, string | null> = {};
-    for (const s of brain.result.scored) {
-      out[s.plan.id] = (s.ribbon as string | null) ?? null;
+    for (const lp of ranked.result.top_plans) {
+      out[lp.plan_id] = lp.ribbon;
     }
     return out;
-  }, [brain.result]);
+  }, [ranked.result]);
 
-  // drugCoverageUnknown per plan id. After Gate 2's strict elimination
-  // every plan in scored has drugCoverageUnknown=false — the disclaimer
-  // never fires for Top 4 picks. Kept for compat with CompareScreen
-  // signature.
-  const drugCoverageUnknownByPlanId = useMemo<Record<string, boolean>>(() => {
-    if (!brain.result) return {};
-    const out: Record<string, boolean> = {};
-    for (const s of brain.result.scored) {
-      out[s.plan.id] = s.drugCoverageUnknown;
-    }
-    return out;
-  }, [brain.result]);
+  // The library's strict Gate 2 elimination means no plan in top_plans
+  // or bench_plans carries an "unknown drug coverage" disclaimer; the
+  // brain either confirmed covered or eliminated. Kept as a stub map
+  // for CompareScreen prop compatibility.
+  const drugCoverageUnknownByPlanId = useMemo<Record<string, boolean>>(
+    () => ({}),
+    [],
+  );
 
-  // ── Drug-coverage display from brain (P1 fix) ────────────────────
-  // CompareScreen used to call coveredCount(plan, rxcuis), reading
-  // plan.formulary[rxcui]. But /api/plans.ts returns formulary={}
-  // (populated lazily via /api/formulary, and nothing in agent-v3
-  // hydrates back onto the Plan object) so the old code always rendered
-  // "0/N covered" for every plan, including the ones the brain knew
-  // were fully covered. Source-of-truth is now BrainScore.coveredCount
-  // / totalCount, surfaced through the adapter on ScoredPlan.
   const drugsCoveredByPlanId = useMemo<Record<string, number>>(() => {
-    if (!brain.result) return {};
+    if (!ranked.result) return {};
     const out: Record<string, number> = {};
-    for (const s of brain.result.scored) out[s.plan.id] = s.drugsCovered;
+    for (const lp of ranked.result.top_plans) out[lp.plan_id] = lp.meds_covered;
+    for (const lp of ranked.result.bench_plans) out[lp.plan_id] = lp.meds_covered;
     return out;
-  }, [brain.result]);
+  }, [ranked.result]);
+
   const drugsTotalByPlanId = useMemo<Record<string, number>>(() => {
-    if (!brain.result) return {};
+    if (!ranked.result) return {};
     const out: Record<string, number> = {};
-    for (const s of brain.result.scored) out[s.plan.id] = s.drugsTotal;
+    for (const lp of ranked.result.top_plans) out[lp.plan_id] = lp.meds_total;
+    for (const lp of ranked.result.bench_plans) out[lp.plan_id] = lp.meds_total;
     return out;
-  }, [brain.result]);
-  // Per-(plan, med) breakdown — drives the per-med row list on every
-  // plan card. Includes bench plans so the "Why is this $1k more on
-  // this plan?" answer is visible without enrolling first.
+  }, [ranked.result]);
+
   const drugBreakdownByPlanId = useMemo<
-    Record<
-      string,
-      ReadonlyArray<{
-        rxcui: string;
-        name: string;
-        covered: boolean;
-        tier: number | null;
-        monthlyCopay: number | null;
-        annualCost: number;
-      }>
-    >
+    Record<string, ReadonlyArray<DrugRow>>
   >(() => {
-    if (!brain.result) return {};
-    const out: Record<
-      string,
-      ReadonlyArray<{
+    if (!ranked.result) return {};
+    const out: Record<string, ReadonlyArray<DrugRow>> = {};
+    const adapt = (
+      meds: ReadonlyArray<{
         rxcui: string;
         name: string;
         covered: boolean;
         tier: number | null;
-        monthlyCopay: number | null;
-        annualCost: number;
-      }>
-    > = {};
-    for (const s of brain.result.scored) out[s.plan.id] = s.drugBreakdown;
-    for (const s of brain.result.bench) out[s.plan.id] = s.drugBreakdown;
+        copay: number | null;
+        annual_cost: number;
+      }>,
+    ): DrugRow[] =>
+      meds.map((m) => ({
+        rxcui: m.rxcui,
+        name: m.name,
+        covered: m.covered,
+        tier: m.tier,
+        monthlyCopay: m.copay,
+        annualCost: m.annual_cost,
+      }));
+    for (const lp of ranked.result.top_plans) out[lp.plan_id] = adapt(lp.medications);
+    for (const lp of ranked.result.bench_plans) out[lp.plan_id] = adapt(lp.medications);
     return out;
-  }, [brain.result]);
+  }, [ranked.result]);
 
   // ── Current plan lookup ──────────────────────────────────────────
   const currentPlan = useMemo<Plan | null>(() => {
