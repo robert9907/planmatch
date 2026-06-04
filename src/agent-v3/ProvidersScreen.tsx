@@ -138,6 +138,23 @@ export function ProvidersScreen({
               const prev = provider.networkStatus ?? {};
               const next = { ...prev };
               for (const [planId, status] of map) next[planId] = status;
+              // Diagnostic: terminal-state breakdown of the merged map
+              // about to land on provider.networkStatus. If this shows
+              // in=28 but ProviderRail still renders 0 In-Network, the
+              // break is in ProviderCard's local `rows` state, not in
+              // session — likely a stagger / state ordering issue.
+              let inN = 0;
+              let outN = 0;
+              let unkN = 0;
+              for (const v of Object.values(next)) {
+                if (v === 'in') inN += 1;
+                else if (v === 'out') outN += 1;
+                else if (v === 'unknown') unkN += 1;
+              }
+              console.log(
+                `[providers] onWriteBack merged npi=${provider.npi}: ` +
+                  `in=${inN} out=${outN} unknown=${unkN} (keys=${Object.keys(next).length})`,
+              );
               updateProvider(provider.id, { networkStatus: next });
             }}
             onMarkInNetwork={(planId) => {
@@ -276,16 +293,35 @@ function ProviderCard({
           `[providers] writeBack npi=${npi}: in=${inN} out=${outN} unknown=${unkN} (rows=${seeded.length})`,
         );
 
+        let bypassedAsIn = 0;
         setRows((prev) =>
           prev.map((r) => {
             const status = writeBack.get(r.plan.id) ?? 'unknown';
-            // Don't downgrade a broker-marked 'in' back to whatever
-            // checkNetworkBatch returned mid-session.
+            // Don't downgrade a session-confirmed 'in' (broker manual
+            // override OR auto-hydrated from rank-plans by AgentV3App)
+            // back to whatever this checkNetworkBatch returned. The
+            // /api/library/rank-plans + /api/library/provider-network
+            // resolution paths can disagree per-plan (different cache
+            // hits + FHIR fallbacks), so when session already says 'in'
+            // we trust it. CRUCIAL: still flip the row's visual state
+            // to 'in' so ProviderRail's inCount counts it — the prior
+            // version returned `r` unchanged, which left rows stranded
+            // in 'queued'/'checking' even though session knew the
+            // status. That's exactly the "library returned 28 but UI
+            // shows 0" symptom.
             const fromSession = provider.networkStatus?.[r.plan.id];
-            if (fromSession === 'in' && status !== 'in') return r;
+            if (fromSession === 'in' && status !== 'in') {
+              bypassedAsIn += 1;
+              return { ...r, state: 'in' };
+            }
             return { ...r, state: status };
           }),
         );
+        if (bypassedAsIn > 0) {
+          console.log(
+            `[providers] writeBack npi=${npi}: ${bypassedAsIn} rows held at 'in' from session (rank-plans hydration / broker override) — provider-network said otherwise`,
+          );
+        }
         onWriteBack(writeBack);
       })
       .catch((err) => {
@@ -405,11 +441,24 @@ function ProviderRail({
   let inCount = 0;
   let outCount = 0;
   let unknownCount = 0;
+  let queuedCount = 0;
+  let checkingCount = 0;
   for (const r of rows) {
     if (r.state === 'in') inCount += 1;
     else if (r.state === 'out') outCount += 1;
     else if (r.state === 'unknown') unknownCount += 1;
+    else if (r.state === 'queued') queuedCount += 1;
+    else if (r.state === 'checking') checkingCount += 1;
   }
+  // Diagnostic: render-time totals. If onWriteBack merged in=28 but
+  // this still shows in=0 with queued/checking >0, the bypass left
+  // rows stranded. If queued+checking=0 here and in=0, the rows are
+  // being reset by another effect run mid-cycle.
+  console.log(
+    `[providers] rail render rows=${rows.length}: ` +
+      `in=${inCount} out=${outCount} unknown=${unknownCount} ` +
+      `queued=${queuedCount} checking=${checkingCount}`,
+  );
   // Group by carrier — Map preserves insertion order, and rows are
   // already carrier-alpha-sorted in seeded.
   const byCarrier = new Map<string, PlanRowState[]>();

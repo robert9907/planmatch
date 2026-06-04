@@ -484,20 +484,34 @@ export function AgentV3App() {
         ...(provider.networkStatus ?? {}),
       };
       let changed = false;
+      let foundInLibrary = 0;
+      let inN = 0;
+      let outN = 0;
+      let unkN = 0;
       for (const lp of allPlans) {
         const row = lp.providers.find((pr) => pr.npi === provider.npi);
         if (!row) continue;
+        foundInLibrary += 1;
         const status: 'in' | 'out' | 'unknown' =
           row.in_network === true
             ? 'in'
             : row.in_network === false
               ? 'out'
               : 'unknown';
+        if (status === 'in') inN += 1;
+        else if (status === 'out') outN += 1;
+        else unkN += 1;
         if (next[lp.plan_id] !== status) {
           next[lp.plan_id] = status;
           changed = true;
         }
       }
+      console.log(
+        `[agent-v3] rank-plans hydration npi=${provider.npi}: ` +
+          `library-plans=${allPlans.length} found=${foundInLibrary} ` +
+          `→ in=${inN} out=${outN} unknown=${unkN} ` +
+          `(changed=${changed})`,
+      );
       if (changed) updateProvider(provider.id, { networkStatus: next });
     }
     // Intentionally not depending on `providers` — we only react to
