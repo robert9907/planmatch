@@ -468,13 +468,11 @@ export function AgentV3App() {
 
   // ── Provider network hydration ────────────────────────────────────
   // Mirror the per-plan provider network status from the library
-  // response into useSession.providers[*].networkStatus so PinnedPlan
-  // + SwipeCard (which read provider.networkStatus[plan.id]) light up
-  // immediately without requiring a visit to the Providers screen.
-  // Walks both top_plans and bench_plans so every county plan card
-  // has a status. The Providers screen still runs its own
-  // checkNetworkBatch on mount for the Queued → Checking → Verified
-  // animation; that's additive.
+  // response into useSession.providers[*].networkStatus so PinnedPlan,
+  // SwipeCard, AND ProvidersScreen all read from a single source of
+  // truth. Walks both top_plans and bench_plans so every county plan
+  // card has a status. ProvidersScreen is now a pure projection of
+  // this map — no separate checkNetworkBatch race.
   useEffect(() => {
     if (!ranked.result) return;
     const allPlans = [
@@ -514,27 +512,6 @@ export function AgentV3App() {
           `library-plans=${allPlans.length} found=${foundInLibrary} ` +
           `→ in=${inN} out=${outN} unknown=${unkN} ` +
           `(changed=${changed})`,
-      );
-      // [AUDIT 7] Rank-plans-derived networkStatus about to land on
-      // provider.networkStatus. Independent from AUDIT 1-6 (those
-      // trace the dedicated /api/library/provider-network path used
-      // by ProvidersScreen). If AUDIT 7 says in=28 but AUDIT 6 still
-      // shows in=0, ProvidersScreen's setRows is overriding session
-      // state with stale 'queued' rows from its own re-mount cycle.
-      // If AUDIT 7 says in=0 too, rank-plans itself returned 0 in_network
-      // for this NPI — check /api/library/rank-plans response shape.
-      let nextIn = 0;
-      let nextOut = 0;
-      let nextUnk = 0;
-      for (const v of Object.values(next)) {
-        if (v === 'in') nextIn += 1;
-        else if (v === 'out') nextOut += 1;
-        else if (v === 'unknown') nextUnk += 1;
-      }
-      console.log(
-        `[AUDIT 7] rank-plans provider hydration npi=${provider.npi}: ` +
-          `in=${nextIn} out=${nextOut} unknown=${nextUnk} ` +
-          `(keys=${Object.keys(next).length})`,
       );
       if (changed) updateProvider(provider.id, { networkStatus: next });
     }

@@ -1,38 +1,32 @@
 // ProvidersScreen — agent-v3 screen 3.
 //
-// Mockup intent: a single provider card with the provider's name and
-// group, then a row per recommended plan with a Verified / Checking /
-// Queued badge that resolves in sequence. Real wiring uses
-// pm_provider_network_cache (the working table behind
-// "pm_provider_cache_coverage" in the spec) via checkNetworkBatch —
-// same source the v4 ProvidersPage already uses, so the two flows agree
-// on coverage truth.
+// Reads per-(provider, plan) network status from the session — populated
+// upstream by AgentV3App's rank-plans hydration effect — and renders one
+// section per carrier with the In-Network / OON / Unverified split.
 //
-// Live wires:
-//   • Eligible plans → fetchPlansForClient (state/county/planType)
-//   • Sorted by Brain composite (passed in) so the rows lead with the
-//     plans most likely to be finalists. We surface the top 3.
-//   • Per provider: checkNetworkBatch(npi, eligiblePlans) returns the
-//     'in' | 'out' | 'unknown' result keyed by plan.id, which we
-//     write back to useSession.providers[].networkStatus so the rest
-//     of the workflow (Swipe, Compare, Enroll) can read it.
-//   • A staggered display delay (200/600/1000 ms) gives the spec's
-//     Queued → Checking → Verified animation feel even when the cache
-//     read is instantaneous. The badge always reflects the actual
-//     resolved status — if a plan is out-of-network or unknown the
-//     final state is the colored badge, not "Verified".
+// Why no separate library call here: rank-plans already resolves the
+// provider×plan grid for every county plan and hydrates
+// useSession.providers[*].networkStatus. The earlier additive call to
+// checkNetworkBatch raced the rank-plans hydration — a late
+// 'fallback_unknown' return could overwrite a freshly-confirmed 'in'
+// from the library. Removing it makes the Providers screen a pure
+// projection of session state.
+//
+// Tradeoff: the Queued → Checking → Verified animation is gone. The
+// resolved state appears immediately when rank-plans has landed.
 
-import { useEffect, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
 import { useProviderSearch } from '@/hooks/useProviderSearch';
 import { useSession } from '@/hooks/useSession';
-import { checkNetworkBatch, type NetworkStatus } from '@/lib/networkCheck';
 import { fetchPlansForClient } from '@/lib/planCatalog';
 import type { Plan } from '@/types/plans';
 import type { Provider } from '@/types/session';
 import { AgentInsight, Card, Container, Header, Nav } from './atoms';
 import { SnapInbox } from './SnapInbox';
 import { FADE_SLIDE_IN } from './styles';
+
+type RowState = 'in' | 'out' | 'unknown';
 
 interface Props {
   onNext: () => void;
@@ -43,8 +37,6 @@ interface Props {
   rankedPlanIds?: string[];
   capture: UseCaptureSessionResult;
 }
-
-type RowState = 'queued' | 'checking' | NetworkStatus;
 
 interface PlanRowState {
   plan: Plan;
@@ -134,37 +126,11 @@ export function ProvidersScreen({
             key={provider.id}
             provider={provider}
             allPlans={allEligiblePlans}
-            onWriteBack={(map) => {
-              const prev = provider.networkStatus ?? {};
-              const next = { ...prev };
-              for (const [planId, status] of map) next[planId] = status;
-              // [AUDIT 5] Merged map about to be persisted via
-              // updateProvider. Counts of values in `next` (what's
-              // landing in session). If AUDIT 4 said in=28 and
-              // AUDIT 5 says in=0, the merge loop dropped them —
-              // likely a Map iteration error or `prev` had stale
-              // 'out' values overwriting.
-              let inN = 0;
-              let outN = 0;
-              let unkN = 0;
-              for (const v of Object.values(next)) {
-                if (v === 'in') inN += 1;
-                else if (v === 'out') outN += 1;
-                else if (v === 'unknown') unkN += 1;
-              }
-              console.log(
-                `[AUDIT 5] provider.networkStatus after write npi=${provider.npi}: ` +
-                  `in=${inN} out=${outN} unknown=${unkN} (keys=${Object.keys(next).length})`,
-              );
-              updateProvider(provider.id, { networkStatus: next });
-            }}
             onMarkInNetwork={(planId) => {
-              // Broker-verified manual override. Same channel as the
-              // automatic checkNetworkBatch writeback so downstream
-              // (CompareScreen, brain pipeline, AgentBase sync) reads
-              // a single networkStatus map. Persists for the broker's
-              // session; cross-session DB write to
-              // pm_provider_network_cache is a follow-up endpoint.
+              // Broker-verified manual override. Updates session immediately
+              // so the row flips green; the broker-verify-provider endpoint
+              // call (Fix 2) is wired separately so the override survives
+              // across sessions via pm_provider_network_cache.
               const prev = provider.networkStatus ?? {};
               updateProvider(provider.id, {
                 networkStatus: { ...prev, [planId]: 'in' },
@@ -178,12 +144,12 @@ export function ProvidersScreen({
 
       {!clientView && providers.length > 0 && (
         <AgentInsight>
-          ✅ Every county plan is listed above. Library API resolves
-          UHC / Humana / BCBS NC / Devoted via FHIR; remaining carriers
-          come from pm_provider_network_cache. Tap <b>Mark In-Network</b>
-          on any <b>⚠ Unverified</b> row after you confirm with the
-          carrier office — the override applies across Compare, brain,
-          and the AgentBase write-back.
+          ✅ Every county plan is listed above. Status comes from
+          rank-plans (FHIR for UHC / Humana / BCBS NC / Devoted,
+          pm_provider_network_cache for the rest). Tap <b>Mark
+          In-Network</b> on any <b>⚠ Unverified</b> row after you
+          confirm with the carrier office — the override applies
+          immediately and persists via broker-verify-provider.
         </AgentInsight>
       )}
 
@@ -195,186 +161,31 @@ export function ProvidersScreen({
 function ProviderCard({
   provider,
   allPlans,
-  onWriteBack,
   onMarkInNetwork,
   onRemove,
   staggerIndex,
 }: {
   provider: Provider;
   allPlans: Plan[];
-  onWriteBack: (map: Map<string, NetworkStatus>) => void;
   onMarkInNetwork: (planId: string) => void;
   onRemove: () => void;
   staggerIndex: number;
 }) {
-  const [rows, setRows] = useState<PlanRowState[]>([]);
-  const cardClient = useSession((s) => s.client);
-
-  // [AUDIT 6] Commit-time row state. Fires only when `rows` reference
-  // changes (i.e., after setRows has actually flushed). If AUDIT 4
-  // said writeBack in=28 but this shows in=0, setRows resolved AND
-  // immediately got reset by another effect run — likely the
-  // useEffect re-firing because `allPlans` reference changed mid-cycle.
-  useEffect(() => {
-    let inN = 0;
-    let outN = 0;
-    let unkN = 0;
-    let queued = 0;
-    let checking = 0;
-    for (const r of rows) {
-      if (r.state === 'in') inN += 1;
-      else if (r.state === 'out') outN += 1;
-      else if (r.state === 'unknown') unkN += 1;
-      else if (r.state === 'queued') queued += 1;
-      else if (r.state === 'checking') checking += 1;
-    }
-    console.log(
-      `[AUDIT 6] rows state npi=${provider.npi} total=${rows.length}: ` +
-        `in=${inN} out=${outN} unknown=${unkN} queued=${queued} checking=${checking}`,
-    );
-  }, [rows, provider.npi]);
-
-  // Cap stagger at first 6 plans so an 80-plan county doesn't drag
-  // the "Checking…" animation to 30+ seconds. Beyond the cap rows
-  // flip straight to their resolved state once the library call lands.
-  const STAGGER_CAP = 6;
-  const STAGGER_STEP_MS = 250;
-
-  useEffect(() => {
-    // Seed rows in carrier-alpha-then-plan-alpha order so the grouped
-    // render below has stable section ordering on first paint.
-    const seeded = [...allPlans].sort(
+  // Derive rows directly from session (populated by AgentV3App's
+  // rank-plans hydration effect). Carrier-alpha then plan-alpha keeps
+  // section ordering stable across re-renders.
+  const rows: PlanRowState[] = useMemo(() => {
+    const sorted = [...allPlans].sort(
       (a, b) =>
         (a.carrier ?? '').localeCompare(b.carrier ?? '') ||
         (a.plan_name ?? '').localeCompare(b.plan_name ?? ''),
     );
-    setRows(seeded.map((p) => ({ plan: p, state: 'queued' as RowState })));
-    if (allPlans.length === 0 || !provider.npi) return;
-
-    let cancelled = false;
-    const npi = provider.npi;
-
-    // Stagger only the first STAGGER_CAP plans visually — past that the
-    // queue animation contributes noise without information.
-    //
-    // The `r.state === 'queued'` guard is load-bearing. For an 80-plan
-    // card the library round-trip (~500ms cached) finishes WHILE the
-    // stagger timers are still firing (cap × 250ms ≈ 1.5s). Without the
-    // guard, the stagger callbacks that fire AFTER the library flush
-    // zombie-overwrite resolved rows back to 'checking' — the broker
-    // sees plans the library marked in_network as stuck "Checking…",
-    // then downgrading to Unverified once the timer queue drains.
-    // With the guard, once a row leaves 'queued' (either via this
-    // stagger or via the library flush below) it's locked in; pending
-    // stagger callbacks see state ≠ 'queued' and no-op.
-    seeded.forEach((p, i) => {
-      const delay = Math.min(i, STAGGER_CAP) * STAGGER_STEP_MS;
-      window.setTimeout(() => {
-        if (cancelled) return;
-        setRows((prev) =>
-          prev.map((r) =>
-            r.plan.id === p.id && r.state === 'queued'
-              ? { ...r, state: 'checking' }
-              : r,
-          ),
-        );
-      }, delay + 80);
-    });
-
-    checkNetworkBatch(npi, seeded, {
-      state: cardClient.state ?? null,
-      county: cardClient.county ?? null,
-    })
-      .then((map) => {
-        if (cancelled) return;
-
-        // Build writeBack DIRECTLY from the resolved map first, before
-        // any setRows call. The previous version populated writeBack
-        // inside the setRows updater callback — in React 18 / concurrent
-        // rendering that callback can run AFTER the surrounding .then
-        // continues, so `onWriteBack(writeBack)` could fire with a still-
-        // empty Map. updateProvider then merged 80 empty keys onto
-        // provider.networkStatus, the CompareScreen provider list saw
-        // undefined for every plan, and rendered '⚠ Unverified' across
-        // the board even though the rows on this card briefly flashed
-        // green before re-rendering.
-        const writeBack = new Map<string, NetworkStatus>();
-        for (const p of seeded) {
-          const result = map.get(p.id);
-          writeBack.set(p.id, result?.status ?? 'unknown');
-        }
-
-        // Diagnostic: surfaces a one-line summary in devtools so we can
-        // confirm without a debugger that the data path is healthy.
-        let inN = 0;
-        let outN = 0;
-        let unkN = 0;
-        for (const v of writeBack.values()) {
-          if (v === 'in') inN += 1;
-          else if (v === 'out') outN += 1;
-          else unkN += 1;
-        }
-        console.log(
-          `[providers] writeBack npi=${npi}: in=${inN} out=${outN} unknown=${unkN} (rows=${seeded.length})`,
-        );
-
-        // [AUDIT 4] writeBack Map about to be applied to local rows
-        // AND handed to the parent via onWriteBack. If AUDIT 3 said
-        // in=28 but AUDIT 4 shows in=0, the .then handler is rebuilding
-        // writeBack from the wrong source (was happening pre-fdcb0f0).
-        const audit4In = [...writeBack.values()].filter((v) => v === 'in').length;
-        const audit4Out = [...writeBack.values()].filter((v) => v === 'out').length;
-        const audit4Unk = [...writeBack.values()].filter((v) => v === 'unknown').length;
-        console.log(
-          `[AUDIT 4] writeBack npi=${npi} size=${writeBack.size} ` +
-            `in=${audit4In} out=${audit4Out} unknown=${audit4Unk}`,
-        );
-
-        let bypassedAsIn = 0;
-        setRows((prev) =>
-          prev.map((r) => {
-            const status = writeBack.get(r.plan.id) ?? 'unknown';
-            // Don't downgrade a session-confirmed 'in' (broker manual
-            // override OR auto-hydrated from rank-plans by AgentV3App)
-            // back to whatever this checkNetworkBatch returned. The
-            // /api/library/rank-plans + /api/library/provider-network
-            // resolution paths can disagree per-plan (different cache
-            // hits + FHIR fallbacks), so when session already says 'in'
-            // we trust it. CRUCIAL: still flip the row's visual state
-            // to 'in' so ProviderRail's inCount counts it — the prior
-            // version returned `r` unchanged, which left rows stranded
-            // in 'queued'/'checking' even though session knew the
-            // status. That's exactly the "library returned 28 but UI
-            // shows 0" symptom.
-            const fromSession = provider.networkStatus?.[r.plan.id];
-            if (fromSession === 'in' && status !== 'in') {
-              bypassedAsIn += 1;
-              return { ...r, state: 'in' };
-            }
-            return { ...r, state: status };
-          }),
-        );
-        if (bypassedAsIn > 0) {
-          console.log(
-            `[providers] writeBack npi=${npi}: ${bypassedAsIn} rows held at 'in' from session (rank-plans hydration / broker override) — provider-network said otherwise`,
-          );
-        }
-        onWriteBack(writeBack);
-      })
-      .catch((err) => {
-        console.warn('[providers] checkNetworkBatch failed:', (err as Error).message);
-        if (cancelled) return;
-        setRows((prev) => prev.map((r) => ({ ...r, state: 'unknown' })));
-      });
-
-    return () => {
-      cancelled = true;
-    };
-    // cardClient.state + .county are in the deps because checkNetworkBatch
-    // routes to /api/library/provider-network (with FHIR live fallback)
-    // when both are set, and falls back to a direct cache read otherwise.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider.npi, allPlans.map((p) => p.id).join(','), cardClient.state, cardClient.county]);
+    const byPlan = provider.networkStatus ?? {};
+    return sorted.map((p) => ({
+      plan: p,
+      state: (byPlan[p.id] ?? 'unknown') as RowState,
+    }));
+  }, [allPlans, provider.networkStatus]);
 
   return (
     <Card
@@ -474,30 +285,16 @@ function ProviderRail({
   rows: PlanRowState[];
   onMarkInNetwork: (planId: string) => void;
 }) {
-  // Counts — terminal states only (queued/checking don't contribute).
   let inCount = 0;
   let outCount = 0;
   let unknownCount = 0;
-  let queuedCount = 0;
-  let checkingCount = 0;
   for (const r of rows) {
     if (r.state === 'in') inCount += 1;
     else if (r.state === 'out') outCount += 1;
-    else if (r.state === 'unknown') unknownCount += 1;
-    else if (r.state === 'queued') queuedCount += 1;
-    else if (r.state === 'checking') checkingCount += 1;
+    else unknownCount += 1;
   }
-  // Diagnostic: render-time totals. If onWriteBack merged in=28 but
-  // this still shows in=0 with queued/checking >0, the bypass left
-  // rows stranded. If queued+checking=0 here and in=0, the rows are
-  // being reset by another effect run mid-cycle.
-  console.log(
-    `[providers] rail render rows=${rows.length}: ` +
-      `in=${inCount} out=${outCount} unknown=${unknownCount} ` +
-      `queued=${queuedCount} checking=${checkingCount}`,
-  );
   // Group by carrier — Map preserves insertion order, and rows are
-  // already carrier-alpha-sorted in seeded.
+  // already carrier-alpha-sorted upstream.
   const byCarrier = new Map<string, PlanRowState[]>();
   for (const r of rows) {
     const c = r.plan.carrier || 'Other';
@@ -616,44 +413,6 @@ function ProviderRail({
 }
 
 function RowBadge({ state }: { state: RowState }) {
-  if (state === 'queued') {
-    return (
-      <span
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 4,
-          padding: '3px 10px',
-          borderRadius: 14,
-          fontSize: 11,
-          fontWeight: 600,
-          background: '#f1f5f9',
-          color: '#94a3b8',
-        }}
-      >
-        ⏳ Queued
-      </span>
-    );
-  }
-  if (state === 'checking') {
-    return (
-      <span
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 4,
-          padding: '3px 10px',
-          borderRadius: 14,
-          fontSize: 11,
-          fontWeight: 600,
-          background: '#fef3c7',
-          color: '#92400e',
-        }}
-      >
-        <span className="pma3-pulsedot" /> Checking…
-      </span>
-    );
-  }
   if (state === 'in') {
     return (
       <span
@@ -703,11 +462,11 @@ function RowBadge({ state }: { state: RowState }) {
         borderRadius: 14,
         fontSize: 11,
         fontWeight: 600,
-        background: '#f1f5f9',
-        color: '#94a3b8',
+        background: '#fef3c7',
+        color: '#92400e',
       }}
     >
-      ? Unknown
+      ⚠ Unverified
     </span>
   );
 }
