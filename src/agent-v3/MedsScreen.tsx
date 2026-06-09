@@ -177,7 +177,7 @@ export function MedsScreen({ onNext, onBack, clientView, capture }: Props) {
           addMedication({
             name: r.displayName,
             rxcui: r.rxcui,
-            strength: r.strength ?? undefined,
+            dose: r.strength ?? undefined,
             form: r.dose_form ?? undefined,
             source: 'manual',
           });
@@ -348,7 +348,7 @@ function MedRow({
 }) {
   const stats = useMemo(() => perDrugBest(med, plans, tick), [med, plans, tick]);
   const tierForIcon = stats.bestTier ?? 0;
-  const dosage = [med.strength, med.dosageInstructions].filter(Boolean).join(' • ');
+  const dosage = [med.dose, med.frequency].filter(Boolean).join(' • ');
   // Annualized estimate = monthly copay × 12. We label it "est" so
   // nobody mistakes it for a Medicare.gov-sourced annual; the live
   // total in the footer AgentInsight is the real per-plan annual.

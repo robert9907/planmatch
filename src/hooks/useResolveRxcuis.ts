@@ -53,7 +53,7 @@ export function useResolveRxcuis(): void {
         const rawName = med.name.trim();
         if (rawName.length < 2) continue;
 
-        const strength = med.strength?.trim() ?? '';
+        const strength = med.dose?.trim() ?? '';
         const variants = buildNameVariants(rawName);
 
         let best: RxNormDrug | null = null;

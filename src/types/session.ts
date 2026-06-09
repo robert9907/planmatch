@@ -39,18 +39,32 @@ export interface Medication {
   id: string;
   rxcui?: string;
   name: string;
-  strength?: string;
+  // Canonical-type alignment. Currently not populated by Agent A's
+  // hydration path (CRM only stores `name`); kept for the brain
+  // input rule `name: m.genericName ?? m.name`, which is a no-op
+  // here until a future phase wires brand/generic resolution from
+  // the drug-search side.
+  genericName?: string;
+  brandName?: string;
+  brandRxcui?: string;
+  // Renamed from `strength` to align with CanonicalMedication.
+  dose?: string;
   form?: string;
-  dosageInstructions?: string;
+  // Renamed from `dosageInstructions`. Free-text dosing schedule
+  // (e.g. "Daily", "2x/day", "As needed"). Builders that compose
+  // it from dose+schedule still write here.
+  frequency?: string;
   prescribingPhysician?: string;
   // Optional fields hydrated from AgentBase client_medications.
-  // Quantity is per-fill free text ("30", "1 box"); tier is the
-  // CRM-side formulary tier text ("Tier 1", "Tier 3 - Preferred Brand").
-  // Both pass through unchanged so the broker sees what the CRM filed
-  // without re-deriving on this side.
-  tier?: string;
+  // Quantity stays free text because brokers enter values like
+  // "1 box" / "0.5 mL" in the CRM and we want those preserved on
+  // hydration. tier moves to numeric (1-6) to match the canonical
+  // type; the hydration adapter parses "Tier N" → N during the
+  // migration window. refillDays moves to numeric — DB values are
+  // all "30"/"60"/"90".
+  tier?: number;
   quantity?: string;
-  refillDays?: string;
+  refillDays?: number;
   source: 'manual' | 'capture';
   confidence?: 'high' | 'medium' | 'low';
   addedAt: number;

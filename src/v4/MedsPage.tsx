@@ -248,7 +248,7 @@ function MedRow({ med, plans, onRemove }: { med: Medication; plans: Plan[]; onRe
   return (
     <div className="mi">
       <div className="minfo">
-        <div className="mname">{med.name}{med.strength ? ` · ${med.strength}` : ''}</div>
+        <div className="mname">{med.name}{med.dose ? ` · ${med.dose}` : ''}</div>
         <div className="mdet">
           {med.rxcui && <span className="mrx">rxcui {med.rxcui}</span>}
           {med.confidence && <span className={`mconf${med.confidence === 'high' ? ' h' : ''}`}>{med.confidence}</span>}

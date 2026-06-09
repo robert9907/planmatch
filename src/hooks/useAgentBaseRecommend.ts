@@ -54,8 +54,8 @@ export interface SyncInput {
   medContext: Array<{
     name: string;
     rxcui: string | null;
-    /** Strength from session.Medication.strength when present, else
-     *  parsed from segment 2 of the RxNorm display string (e.g. "10 MG"). */
+    /** Dose from session.Medication.dose when present, else parsed
+     *  from segment 2 of the RxNorm display string (e.g. "10 MG"). */
     dose: string | null;
     /** Dose form parsed from segment 3 of the RxNorm display
      *  ("Oral Capsule", "Pen Injector"). May be multi-segment

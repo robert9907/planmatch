@@ -156,7 +156,7 @@ export function LandingPage({ onPickClient, onStartNew }: Props) {
         addMedication({
           name: m.name,
           rxcui: m.rxcui || undefined,
-          dosageInstructions: [m.dose, m.frequency].filter(Boolean).join(' · ') || undefined,
+          frequency: [m.dose, m.frequency].filter(Boolean).join(' · ') || undefined,
           source: 'manual',
           confidence: 'high',
         });

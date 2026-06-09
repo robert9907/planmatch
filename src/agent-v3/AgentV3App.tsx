@@ -335,14 +335,24 @@ export function AgentV3App() {
 
       for (const m of detail.medications) {
         if (!m.name.trim()) continue;
+        // Parse tier and refillDays from the AgentBase text columns
+        // into the numeric Medication shape. Tier carries "Tier N" today
+        // and (post-migration) just "N" — both produce a clean digit
+        // here. refill_days is always a numeric string. NaN falls back
+        // to undefined so we don't pollute the store with bad values.
+        const parseDigit = (s: string | null | undefined): number | undefined => {
+          if (!s) return undefined;
+          const n = parseInt(String(s).replace(/[^0-9]/g, ''), 10);
+          return Number.isFinite(n) ? n : undefined;
+        };
         store.addMedication({
           name: m.name,
           rxcui: m.rxcui || undefined,
-          dosageInstructions:
+          frequency:
             [m.dose, m.frequency].filter(Boolean).join(' · ') || undefined,
-          tier: m.tier || undefined,
+          tier: parseDigit(m.tier),
           quantity: m.quantity || undefined,
-          refillDays: m.refill_days || undefined,
+          refillDays: parseDigit(m.refill_days),
           source: 'manual',
           confidence: 'high',
         });

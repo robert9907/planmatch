@@ -40,7 +40,7 @@ export function buildClientInfoText({
 
   const medLines = medications.length
     ? medications
-        .map((m) => `- ${m.name}${m.strength ? ` ${m.strength}` : ''}`)
+        .map((m) => `- ${m.name}${m.dose ? ` ${m.dose}` : ''}`)
         .join('\n')
     : '- (none)';
 

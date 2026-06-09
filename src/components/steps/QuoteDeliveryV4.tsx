@@ -1265,13 +1265,13 @@ export function QuoteDeliveryV4({
         // The parsed name is the safe default for RxNorm-captured meds.
         name: parsed.name || m.name,
         rxcui: med?.rxcui ?? null,
-        // Strength from session wins if present; otherwise fall back
-        // to the parsed dose. RxNorm capture flow populates
-        // med.strength; manual entry may not.
-        dose: med?.strength ?? parsed.dose,
+        // Dose from session wins if present; otherwise fall back to
+        // the parsed dose. RxNorm capture flow populates med.dose;
+        // manual entry may not.
+        dose: med?.dose ?? parsed.dose,
         // Form from session wins if present; otherwise parsed segment 3+.
         form: med?.form ?? parsed.form,
-        frequency: med?.dosageInstructions ?? null,
+        frequency: med?.frequency ?? null,
         refill_days: refillDays,
         tier_on_recommended_plan: m.tiers[colIdx] ?? null,
         monthly_cost: m.monthly[colIdx] ?? null,
@@ -3484,7 +3484,7 @@ function AssistanceHelpSection({
             return (
               <div key={m.id} id={`qv4-help-${m.id}`} style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: COL.navyHeader, marginBottom: 6 }}>
-                  {m.name}{m.strength ? ` ${m.strength}` : ''}
+                  {m.name}{m.dose ? ` ${m.dose}` : ''}
                 </div>
                 {programs.length === 0 ? (
                   <div style={{ fontSize: 12, color: COL.inkSub }}>

@@ -79,9 +79,9 @@ export function buildAgentV3SyncInput(args: BuildArgs): SyncInput | null {
   const medContext = medications.map((m) => ({
     name: m.name,
     rxcui: m.rxcui ?? null,
-    dose: m.strength ?? null,
+    dose: m.dose ?? null,
     form: m.form ?? null,
-    frequency: m.dosageInstructions ?? null,
+    frequency: m.frequency ?? null,
     refill_days: null,
     tier_on_recommended_plan: null,
     monthly_cost: null,

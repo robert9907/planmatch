@@ -340,12 +340,12 @@ function MedicationRow({
         <div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>
             {med.name}
-            {med.strength ? ` · ${med.strength}` : ''}
+            {med.dose ? ` · ${med.dose}` : ''}
             {med.form ? ` · ${med.form}` : ''}
           </div>
-          {med.dosageInstructions && (
+          {med.frequency && (
             <div style={{ fontSize: 12, color: 'var(--i2)', marginTop: 2 }}>
-              {med.dosageInstructions}
+              {med.frequency}
             </div>
           )}
           {med.prescribingPhysician && (

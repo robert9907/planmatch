@@ -96,8 +96,12 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
         .filter((m): m is Medication & { rxcui: string } => !!m.rxcui)
         .map((m) => ({
           rxcui: m.rxcui,
-          name: m.name,
-          strength: m.strength,
+          // Generic-first per Phase 1 audit. Formulary indexes by
+          // generic compound; brand names may not match the SPUF
+          // formulary key. Falls back to the display name when no
+          // generic was resolved.
+          name: m.genericName ?? m.name,
+          strength: m.dose,
         })),
     [medications],
   );

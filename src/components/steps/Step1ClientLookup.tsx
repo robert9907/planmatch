@@ -99,7 +99,7 @@ export function Step1ClientLookup({ onAdvance }: Step1Props) {
         addMedication({
           name: med.name,
           rxcui: med.rxcui || undefined,
-          dosageInstructions: [med.dose, med.frequency].filter(Boolean).join(' · ') || undefined,
+          frequency: [med.dose, med.frequency].filter(Boolean).join(' · ') || undefined,
           source: 'manual',
         });
       }

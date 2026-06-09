@@ -55,9 +55,9 @@ export function SnapInbox({ capture, accept }: Props) {
       if (extracted.type === 'medication' && accept === 'medication') {
         addMedication({
           name: extracted.drug_name,
-          strength: extracted.strength ?? undefined,
+          dose: extracted.strength ?? undefined,
           form: extracted.form ?? undefined,
-          dosageInstructions: extracted.dosage_instructions ?? undefined,
+          frequency: extracted.dosage_instructions ?? undefined,
           prescribingPhysician: extracted.prescribing_physician ?? undefined,
           source: 'capture',
           confidence: extracted.confidence,

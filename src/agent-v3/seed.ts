@@ -53,8 +53,8 @@ export const ROBERT_SEED = {
   medications: [
     {
       name: 'Ozempic',
-      strength: '1mg/0.75mL',
-      dosageInstructions: 'Weekly',
+      dose: '1mg/0.75mL',
+      frequency: 'Weekly',
       source: 'manual' as const,
       // 3 ML semaglutide 1.34 MG/ML Pen Injector [Ozempic] — delivers
       // 1 MG per dose at the maintenance strength. pm_formulary
@@ -63,22 +63,22 @@ export const ROBERT_SEED = {
     },
     {
       name: 'Lisinopril',
-      strength: '20mg',
-      dosageInstructions: 'Daily',
+      dose: '20mg',
+      frequency: 'Daily',
       source: 'manual' as const,
       rxcui: '314077', // lisinopril 20 MG Oral Tablet — Tier 1 / $0
     },
     {
       name: 'Atorvastatin',
-      strength: '40mg',
-      dosageInstructions: 'Daily',
+      dose: '40mg',
+      frequency: 'Daily',
       source: 'manual' as const,
       rxcui: '617311', // atorvastatin 40 MG Oral Tablet — Tier 1 / $0
     },
     {
       name: 'Gabapentin',
-      strength: '300mg',
-      dosageInstructions: '2x Daily',
+      dose: '300mg',
+      frequency: '2x Daily',
       source: 'manual' as const,
       rxcui: '197321', // gabapentin 300 MG Oral Capsule — Tier 2-3
     },
