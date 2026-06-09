@@ -110,7 +110,10 @@ interface MedicationRow {
   frequency: string | null;
   rxcui: string | null;
   refill_days: string | null;
-  tier: string | null;
+  // Post-migration 031 PostgREST returns tier as a JSON number;
+  // the column is smallint. During the migration window or for older
+  // deploys it may still be a string. shapeMed coerces to string.
+  tier: string | number | null;
   quantity: string | null;
   created_at: string | null;
 }
@@ -220,7 +223,7 @@ function shapeMed(r: MedicationRow): ShapedMedication {
     frequency: r.frequency ?? '',
     rxcui: r.rxcui ?? '',
     refill_days: r.refill_days ?? '',
-    tier: r.tier ?? '',
+    tier: r.tier != null ? String(r.tier) : '',
     quantity: r.quantity ?? '',
   };
 }
