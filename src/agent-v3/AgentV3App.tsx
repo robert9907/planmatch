@@ -147,6 +147,9 @@ const PRIORITY_TO_EXTRAS: Partial<Record<PriorityKey, string>> = {
   otc: 'otc',
   fitness: 'fitness',
   transportation: 'transportation',
+  telehealth: 'telehealth',
+  healthy_foods: 'healthy_foods',
+  partb_giveback: 'partb_giveback',
 };
 
 // Default = nothing pre-toggled. With Gate 3's strict "must offer"
@@ -734,6 +737,20 @@ export function AgentV3App() {
     );
   }
 
+  // Pick order drives Gate 3 relax order on the brain side (bottom of
+  // the list relaxes first when no county plans satisfy every pick).
+  function movePriority(key: PriorityKey, direction: 'up' | 'down') {
+    setPriorities((curr) => {
+      const i = curr.indexOf(key);
+      if (i < 0) return curr;
+      const swapWith = direction === 'up' ? i - 1 : i + 1;
+      if (swapWith < 0 || swapWith >= curr.length) return curr;
+      const next = [...curr];
+      [next[i], next[swapWith]] = [next[swapWith], next[i]];
+      return next;
+    });
+  }
+
   // AgentBase write-back. CompareScreen fires this fire-and-forget;
   // EnrollScreen awaits the returned promise so it can show a toast
   // and only open SunFire on a 2xx. The endpoint is idempotent for
@@ -870,6 +887,7 @@ export function AgentV3App() {
           <PrioritiesScreen
             selected={priorities}
             onToggle={togglePriority}
+            onMove={movePriority}
             onBack={() => setScreen('providers')}
             onNext={() => setScreen('compare')}
           />
