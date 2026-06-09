@@ -93,7 +93,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       plan_id: body.currentPlanId?.trim() || null,
       year: 2026,
       source: 'plan-match-agent',
-      status: 'active',
+      // Triggers AgentBase's "🚨 New Leads" popup (filter in
+      // agentbase-crm/components/AgentBaseCRM.jsx:2291 is
+      //   clients.status === "New Lead" && !c.newLeadAlertDismissedAt
+      // ). Was 'active' — which silently suppressed the bell for every
+      // client Rob created from the agent-v3 IntakeScreen. Insert-only
+      // (this whole function only runs when no existing row matched
+      // the phone-dedup above, so we never overwrite a categorized
+      // client's status).
+      status: 'New Lead',
+      // Belt-and-suspenders against a future change to the AgentBase
+      // clients column default for new_lead_alert_dismissed_at
+      // (migration 029_clients_new_lead_alert_dismissed). NULL = bell
+      // pops; any timestamp = already-dismissed.
+      new_lead_alert_dismissed_at: null,
       lead_source: 'planmatch',
       created_at: nowIso,
       updated_at: nowIso,
