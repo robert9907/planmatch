@@ -223,3 +223,47 @@ export async function rankPlans(
   }
   return (await res.json()) as LibraryRankResult;
 }
+
+// ─── broker-verify-provider ───────────────────────────────────────
+//
+// Persists a "Mark In-Network" click to pm_provider_network_cache as
+// a source='broker_verified' row. Next rank-plans response picks it
+// up via the cache's freshest-checked_at resolution. FHIR-source rows
+// (fhir_uhc / fhir_humana / fhir_devoted / fhir_bcbsnc) are
+// authoritative — the server returns
+// overwritten='skipped_fhir_authoritative' rather than overwriting.
+
+export interface BrokerVerifyProviderResult {
+  success: true;
+  overwritten: 'inserted' | 'skipped_fhir_authoritative';
+  checked_at?: string;
+  fhir_source?: string;
+  fhir_covered?: boolean;
+}
+
+export async function brokerVerifyProvider(args: {
+  npi: string;
+  /** Triple plan id — "H5253-189-000" form (matches the plan.id the
+   *  agent threads everywhere). The endpoint splits it into combined
+   *  contract+plan and segment internally. */
+  planId: string;
+  signal?: AbortSignal;
+}): Promise<BrokerVerifyProviderResult> {
+  const { npi, planId, signal } = args;
+  const res = await fetch(
+    `${LIBRARY_URL}/api/library/broker-verify-provider`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ npi, planId }),
+      signal,
+    },
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(
+      `library/broker-verify-provider ${res.status} ${body.slice(0, 200)}`,
+    );
+  }
+  return (await res.json()) as BrokerVerifyProviderResult;
+}

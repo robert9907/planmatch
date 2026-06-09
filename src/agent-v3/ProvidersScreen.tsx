@@ -19,6 +19,7 @@ import { useMemo, useState, useEffect } from 'react';
 import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
 import { useProviderSearch } from '@/hooks/useProviderSearch';
 import { useSession } from '@/hooks/useSession';
+import { brokerVerifyProvider } from '@/lib/library-client';
 import { fetchPlansForClient } from '@/lib/planCatalog';
 import type { Plan } from '@/types/plans';
 import type { Provider } from '@/types/session';
@@ -127,14 +128,34 @@ export function ProvidersScreen({
             provider={provider}
             allPlans={allEligiblePlans}
             onMarkInNetwork={(planId) => {
-              // Broker-verified manual override. Updates session immediately
-              // so the row flips green; the broker-verify-provider endpoint
-              // call (Fix 2) is wired separately so the override survives
-              // across sessions via pm_provider_network_cache.
+              // 1. Update session immediately for visual feedback.
               const prev = provider.networkStatus ?? {};
               updateProvider(provider.id, {
                 networkStatus: { ...prev, [planId]: 'in' },
               });
+              // 2. Persist to pm_provider_network_cache so the override
+              //    survives across sessions. Fire-and-forget — the next
+              //    rank-plans call picks it up via the cache's freshest-
+              //    checked_at resolution. If a fhir_* row already exists
+              //    the server returns overwritten='skipped_fhir_…';
+              //    nothing to surface to the broker, the session override
+              //    still holds for THIS session.
+              if (!provider.npi) return;
+              void brokerVerifyProvider({ npi: provider.npi, planId })
+                .then((r) => {
+                  if (r.overwritten === 'skipped_fhir_authoritative') {
+                    console.log(
+                      `[providers] broker-verify npi=${provider.npi} plan=${planId}: ` +
+                        `skipped (fhir=${r.fhir_source ?? '?'} covered=${r.fhir_covered ?? '?'}); session override still applies`,
+                    );
+                  }
+                })
+                .catch((err) => {
+                  console.warn(
+                    '[providers] broker-verify-provider failed:',
+                    (err as Error).message,
+                  );
+                });
             }}
             onRemove={() => removeProvider(provider.id)}
             staggerIndex={i}
