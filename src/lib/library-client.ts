@@ -197,6 +197,11 @@ export interface LibraryRankResult {
   dsnp_eligible: boolean;
 }
 
+/** The 4 CMS-recognized C-SNP qualifying conditions the brain
+ *  accepts as a self-report. Anything outside this enum is dropped
+ *  server-side before reaching the brain. */
+export type CsnpConditionKey = 'diabetes' | 'cardio' | 'copd' | 'esrd';
+
 export interface LibraryRankInput {
   county: string;
   zip: string;
@@ -204,6 +209,12 @@ export interface LibraryRankInput {
   medications: { rxcui: string; name: string; strength?: string }[];
   providers: { npi: string; name: string }[];
   extras: { type: string; enabled: boolean; threshold?: number }[];
+  /** Self-reported chronic conditions the broker captured. Routes the
+   *  brain's C-SNP eligibility + reserved-slot path so users with no
+   *  qualifying meds still surface chronic-condition plans (the May 23
+   *  diabetes-without-Ozempic break). Optional — empty means
+   *  "med-detection only". */
+  csnpConditions?: CsnpConditionKey[];
   current_plan_id?: string | null;
 }
 

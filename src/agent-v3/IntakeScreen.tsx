@@ -623,6 +623,83 @@ export function IntakeScreen({
       <div style={{ marginTop: 14 }}>
         <SnapTrigger capture={capture} />
       </div>
+
+      {/* Chronic-condition self-report — routes the brain's C-SNP
+        * eligibility + reserved-slot path so clients who qualify but
+        * don't have qualifying meds (diet-controlled diabetes,
+        * recently-diagnosed CHF before scripts) still surface chronic-
+        * condition plans. */}
+      <Card style={{ marginTop: 14, padding: '14px 16px' }}>
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: 0.6,
+            textTransform: 'uppercase',
+            color: '#64748b',
+            marginBottom: 4,
+          }}
+        >
+          Chronic conditions (optional)
+        </div>
+        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 10 }}>
+          Surfaces C-SNP plans even when the med list doesn&rsquo;t name
+          the condition. Skip if none apply.
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+          }}
+        >
+          {(
+            [
+              { key: 'diabetes', label: '🩸 Diabetes' },
+              { key: 'cardio', label: '❤️ Heart conditions' },
+              { key: 'copd', label: '🫁 COPD' },
+              { key: 'esrd', label: '🫘 Kidney / ESRD' },
+            ] as const
+          ).map((opt) => {
+            const on = (client.csnpConditions ?? []).includes(opt.key);
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => {
+                  const cur = client.csnpConditions ?? [];
+                  const next = cur.includes(opt.key)
+                    ? cur.filter((c) => c !== opt.key)
+                    : [...cur, opt.key];
+                  updateClient({ csnpConditions: next });
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 12px',
+                  borderRadius: 999,
+                  border: on
+                    ? '1.5px solid #0d2f5e'
+                    : '1px solid rgba(13,47,94,0.18)',
+                  background: on
+                    ? 'rgba(131,240,249,0.18)'
+                    : 'white',
+                  color: '#0d2f5e',
+                  fontSize: 12,
+                  fontWeight: on ? 700 : 500,
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                }}
+              >
+                {opt.label}
+                {on && <span aria-hidden>✓</span>}
+              </button>
+            );
+          })}
+        </div>
+      </Card>
+
       {createError && (
         <div
           role="alert"

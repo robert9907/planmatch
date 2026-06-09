@@ -8,6 +8,10 @@ export type StateCode = 'NC' | 'TX' | 'GA';
 
 export type PlanType = 'MA' | 'MAPD' | 'DSNP' | 'CSNP' | 'ISNP' | 'PDP' | 'MEDSUPP';
 
+/** The 4 CMS C-SNP-qualifying conditions the brain accepts as a
+ *  self-report. Matches CsnpConditionKey in lib/library-client.ts. */
+export type CsnpConditionCode = 'diabetes' | 'cardio' | 'copd' | 'esrd';
+
 export interface Client {
   name: string;
   phone: string;
@@ -23,6 +27,12 @@ export interface Client {
   // hydration paths.
   email?: string;
   mbi?: string;
+  /** Self-reported chronic conditions captured by the broker on the
+   *  Intake screen. Forwarded to /api/library/rank-plans so the
+   *  brain's C-SNP routing fires even when the client's med list has
+   *  no qualifying drugs (e.g. diet-controlled diabetes). Optional;
+   *  empty / absent means "med-detection only". */
+  csnpConditions?: CsnpConditionCode[];
 }
 
 export interface Medication {

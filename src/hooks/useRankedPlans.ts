@@ -29,7 +29,11 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Client, Medication, Provider } from '@/types/session';
-import { rankPlans, type LibraryRankResult } from '@/lib/library-client';
+import {
+  rankPlans,
+  type CsnpConditionKey,
+  type LibraryRankResult,
+} from '@/lib/library-client';
 
 export interface UseRankedPlansArgs {
   client: Client;
@@ -38,6 +42,11 @@ export interface UseRankedPlansArgs {
   /** Already-mapped library extras strings (e.g. ['dental','vision']).
    *  Caller owns the PriorityKey → extras translation. */
   userPriorities?: string[];
+  /** Self-reported chronic conditions captured by the broker.
+   *  Passed through to the library so the brain's C-SNP routing
+   *  fires for users who qualify but have no qualifying meds on
+   *  their list. Empty / undefined means med-detection only. */
+  csnpConditions?: CsnpConditionKey[];
   /** Optional currentPlanId for annual-review flow — library excludes
    *  it from Top 4 selection. */
   currentPlanId?: string | null;
@@ -64,8 +73,14 @@ const EMPTY_STATE: UseRankedPlansState = {
 };
 
 export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
-  const { client, medications, providers, userPriorities, currentPlanId } =
-    args;
+  const {
+    client,
+    medications,
+    providers,
+    userPriorities,
+    csnpConditions,
+    currentPlanId,
+  } = args;
 
   const [state, setState] = useState<UseRankedPlansState>(EMPTY_STATE);
 
@@ -109,6 +124,11 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     [userPriorities],
   );
 
+  const csnpList = useMemo(
+    () => csnpConditions ?? [],
+    [csnpConditions],
+  );
+
   // Stable JSON serializations keyed in the dependency array. React's
   // structural equality misses identical-but-rerendered med/provider
   // arrays, which would re-fire the fetch on every parent render.
@@ -118,6 +138,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     [resolvedProviders],
   );
   const extrasKey = useMemo(() => JSON.stringify(extras), [extras]);
+  const csnpKey = useMemo(() => JSON.stringify(csnpList), [csnpList]);
 
   const county = client.county;
   const zip = client.zip;
@@ -151,6 +172,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
         medications: resolvedMeds,
         providers: resolvedProviders,
         extras,
+        csnpConditions: csnpList,
         current_plan_id: currentPlanId ?? null,
       },
       ctrl.signal,
@@ -184,7 +206,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     // medsKey / provsKey / extrasKey deliberately gate on serialized
     // content, not array identity — see notes above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [county, zip, state_, medsKey, provsKey, extrasKey, currentPlanId]);
+  }, [county, zip, state_, medsKey, provsKey, extrasKey, csnpKey, currentPlanId]);
 
   return state;
 }

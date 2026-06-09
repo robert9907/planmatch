@@ -463,6 +463,7 @@ export function AgentV3App() {
     medications,
     providers,
     userPriorities: userPriorityKeys,
+    csnpConditions: client.csnpConditions,
     currentPlanId,
   });
 
