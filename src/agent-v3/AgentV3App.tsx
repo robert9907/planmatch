@@ -688,6 +688,41 @@ export function AgentV3App() {
     return out;
   }, [ranked.result]);
 
+  // ── Per-plan gate explanations (CompareScreen "Why this plan" pills) ─
+  // Sourced from the LOCAL brain (usePlanBrain), not the library response.
+  // The library's LibraryRankPlan shape doesn't yet carry gate_explanations
+  // — it has gate_results booleans only. usePlanBrain produces the same
+  // BrainScore.explanations strings the consumer Results screen renders
+  // (packages/brain/src/plan-brain.ts), so reading them off `brain.result`
+  // by plan_id keeps the two surfaces phrasing-identical without waiting
+  // on a library-server change. Walks both scored + bench so every county
+  // plan in CompareScreen's grid + bench has a "Why this plan" expander.
+  const explanationsByPlanId = useMemo<
+    Record<
+      string,
+      {
+        gate1: ReadonlyArray<string>;
+        gate2: ReadonlyArray<string>;
+        gate3: ReadonlyArray<string>;
+        gate4: string;
+      }
+    >
+  >(() => {
+    if (!brain.result) return {};
+    const out: Record<
+      string,
+      {
+        gate1: ReadonlyArray<string>;
+        gate2: ReadonlyArray<string>;
+        gate3: ReadonlyArray<string>;
+        gate4: string;
+      }
+    > = {};
+    for (const sp of brain.result.scored) out[sp.plan.id] = sp.explanations;
+    for (const sp of brain.result.bench) out[sp.plan.id] = sp.explanations;
+    return out;
+  }, [brain.result]);
+
   // ── Current plan lookup ──────────────────────────────────────────
   const currentPlan = useMemo<Plan | null>(() => {
     if (!currentPlanId) return null;
@@ -892,6 +927,7 @@ export function AgentV3App() {
             drugsCoveredByPlanId={drugsCoveredByPlanId}
             drugsTotalByPlanId={drugsTotalByPlanId}
             drugBreakdownByPlanId={drugBreakdownByPlanId}
+            explanationsByPlanId={explanationsByPlanId}
             onRecommend={onRecommend}
             onBack={() => setScreen('priorities')}
             onNext={() => setScreen('compliance')}

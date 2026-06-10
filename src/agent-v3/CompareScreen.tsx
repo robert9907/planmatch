@@ -36,6 +36,10 @@ import {
   formatSpecialist,
   planDisplay,
 } from './planDisplay';
+import {
+  classifyExplanation,
+  summarizeExplanations,
+} from '@/lib/classify-explanation';
 
 // Per the current product rule: rows stay visible, but unfiled values
 // render as em-dash, not "Not available" (which read as "we can't
@@ -110,6 +114,14 @@ interface Props {
     string,
     { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }
   >;
+  /** Per-plan, per-gate customer-facing micro-explainer strings sourced
+   *  from BrainScore.explanations via the AgentV3App adapter. Drives the
+   *  collapsible "Why this plan" section on each SlotCell — one row per
+   *  provider on gate 1, per drug on gate 2, per priority on gate 3, and
+   *  a single cost-rank line on gate 4. Plans not in the brain's scored
+   *  list (e.g., the user's current plan when it failed Gates 1+2) get
+   *  undefined and the SlotCell renders nothing for that section. */
+  explanationsByPlanId?: Record<string, ExplanationsForPlan>;
   /**
    * Fire-and-forget AgentBase write-back. CompareScreen calls this with
    * the picked plan when the broker clicks Enroll on a card or the
@@ -119,6 +131,14 @@ interface Props {
   onRecommend?: (plan: Plan) => void;
   onBack: () => void;
   onNext: () => void;
+}
+
+/** Subset of the brain's GateExplanations rendered on each SlotCell. */
+export interface ExplanationsForPlan {
+  gate1: ReadonlyArray<string>;
+  gate2: ReadonlyArray<string>;
+  gate3: ReadonlyArray<string>;
+  gate4: string;
 }
 
 interface Metric {
@@ -507,6 +527,7 @@ export function CompareScreen({
   drugBreakdownByPlanId,
   benchPlans,
   benchGateResultsByPlanId,
+  explanationsByPlanId,
   onRecommend,
   onBack,
   onNext,
@@ -802,6 +823,11 @@ export function CompareScreen({
               plan != null && drugCoverageUnknownByPlanId
                 ? drugCoverageUnknownByPlanId[plan.id] === true
                 : false
+            }
+            explanations={
+              plan != null && explanationsByPlanId
+                ? explanationsByPlanId[plan.id] ?? null
+                : null
             }
             onDrop={handleDrop}
             onClear={() => clearSlot(i)}
@@ -1843,6 +1869,7 @@ function SlotCell({
   providers,
   drugBreakdown,
   drugCoverageUnknown,
+  explanations,
   onDrop,
   onClear,
   onFill,
@@ -1870,6 +1897,10 @@ function SlotCell({
    *  true, the drug-cost row in this slot card renders an amber
    *  "confirm with your pharmacist" disclaimer. */
   drugCoverageUnknown: boolean;
+  /** Per-gate micro-explainer strings for this plan. Null when the
+   *  parent didn't supply explanationsByPlanId for this plan id — the
+   *  "Why this plan" expander is skipped entirely in that case. */
+  explanations: ExplanationsForPlan | null;
   onDrop: (slotIdx: number, draggedPlanId: string) => void;
   onClear: () => void;
   onFill: () => void;
@@ -2062,6 +2093,11 @@ function SlotCell({
         variant="full"
       />
 
+      {/* Per-gate micro-explainer — collapsible "Why this plan" with
+          one row per provider / drug / priority + cost-rank line.
+          Sourced from BrainScore.explanations via explanationsByPlanId. */}
+      {explanations && <WhyThisPlan explanations={explanations} />}
+
       <div
         style={{
           display: 'grid',
@@ -2085,6 +2121,175 @@ function SlotCell({
           Enroll
         </button>
       </div>
+    </div>
+  );
+}
+
+// ── Per-gate micro-explainer ───────────────────────────────────
+//
+// Collapsible "Why this plan" section that sits inside each SlotCell
+// below the metrics + provider list + drug breakdown. Strings come
+// from BrainScore.explanations (built by plan-brain-explanations.ts);
+// each row gets a green ✓ / red ✗ / amber ⚠ chip via
+// classifyExplanation. Gate 4 (cost rank) is a single line at the
+// bottom of the expanded panel with no icon.
+//
+// Independent of the SlotCell's own state — broker can open the
+// "Why this plan" panel without expanding any other section.
+function WhyThisPlan({ explanations }: { explanations: ExplanationsForPlan }) {
+  const [open, setOpen] = useState(false);
+
+  const hasGateItems =
+    explanations.gate1.length + explanations.gate2.length + explanations.gate3.length > 0;
+  const hasGate4 = typeof explanations.gate4 === 'string' && explanations.gate4.length > 0;
+  if (!hasGateItems && !hasGate4) return null;
+
+  const summary = summarizeExplanations(explanations.gate1, explanations.gate2);
+  const headerSummary = summary || (hasGate4 ? explanations.gate4 : 'Gate-by-gate detail');
+
+  const colorsForState = (state: 'pass' | 'fail' | 'unverified') => {
+    if (state === 'pass') return { bg: 'rgba(34,197,94,0.12)', fg: GREEN, icon: '✓' };
+    if (state === 'fail') return { bg: 'rgba(239,68,68,0.12)', fg: CORAL, icon: '✗' };
+    return { bg: 'rgba(245,158,11,0.14)', fg: GOLD, icon: '⚠' };
+  };
+
+  const renderRow = (text: string, key: string) => {
+    const c = colorsForState(classifyExplanation(text));
+    return (
+      <li
+        key={key}
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 8,
+          marginBottom: 6,
+          fontSize: 12,
+          lineHeight: 1.4,
+          color: TEXT,
+        }}
+      >
+        <span
+          aria-hidden="true"
+          style={{
+            flex: '0 0 16px',
+            width: 16,
+            height: 16,
+            borderRadius: 8,
+            background: c.bg,
+            color: c.fg,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 10,
+            fontWeight: 700,
+            marginTop: 1,
+          }}
+        >
+          {c.icon}
+        </span>
+        <span style={{ flex: 1 }}>{text}</span>
+      </li>
+    );
+  };
+
+  const renderSection = (
+    label: string,
+    items: ReadonlyArray<string>,
+    keyPrefix: string,
+  ) => {
+    if (items.length === 0) return null;
+    return (
+      <div style={{ marginBottom: 10 }}>
+        <div
+          style={{
+            fontFamily: FONT_LABEL,
+            fontSize: 10,
+            fontWeight: 600,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: MUTED,
+            marginBottom: 5,
+          }}
+        >
+          {label}
+        </div>
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {items.map((t, i) => renderRow(t, `${keyPrefix}-${i}`))}
+        </ul>
+      </div>
+    );
+  };
+
+  return (
+    <div
+      style={{
+        padding: '8px 12px 10px',
+        borderTop: `1px solid ${BORDER}`,
+        background: 'white',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '4px 0',
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          textAlign: 'left',
+          color: TEXT,
+          fontFamily: FONT_LABEL,
+        }}
+      >
+        <span style={{ flex: 1, fontSize: 12, lineHeight: 1.35 }}>
+          <span style={{ fontWeight: 700, marginRight: 6 }}>Why this plan</span>
+          <span style={{ color: MUTED, fontWeight: 400 }}>· {headerSummary}</span>
+        </span>
+        <span
+          aria-hidden="true"
+          style={{
+            fontSize: 11,
+            color: MUTED,
+            transform: open ? 'rotate(180deg)' : 'none',
+            transition: 'transform 0.2s ease',
+            flexShrink: 0,
+          }}
+        >
+          ▾
+        </span>
+      </button>
+      {open && (
+        <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${BORDER}` }}>
+          {renderSection('Providers', explanations.gate1, 'g1')}
+          {renderSection('Medications', explanations.gate2, 'g2')}
+          {renderSection('Benefit priorities', explanations.gate3, 'g3')}
+          {hasGate4 && (
+            <div>
+              <div
+                style={{
+                  fontFamily: FONT_LABEL,
+                  fontSize: 10,
+                  fontWeight: 600,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: MUTED,
+                  marginBottom: 5,
+                }}
+              >
+                Cost rank
+              </div>
+              <div style={{ fontSize: 12, color: TEXT, lineHeight: 1.4 }}>
+                {explanations.gate4}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -265,6 +265,18 @@ export interface ScoredPlan {
     gate2_passed: boolean;
     gate3_passed: boolean;
   };
+  /** Per-gate customer-facing micro-explainer strings — pass-through
+   *  from BrainScore.explanations. One entry per user-supplied
+   *  provider / drug / priority on gates 1–3; a single cost-rank line
+   *  on gate 4. Empty arrays mean the gate didn't apply.
+   *  CompareScreen reads this via explanationsByPlanId to render the
+   *  collapsible "Why this plan" pill list on each SlotCell. */
+  explanations: {
+    gate1: ReadonlyArray<string>;
+    gate2: ReadonlyArray<string>;
+    gate3: ReadonlyArray<string>;
+    gate4: string;
+  };
 }
 
 export interface PlanBrainResult {
@@ -730,6 +742,12 @@ function adaptScored(
       gate1_passed: score.gate1Passed,
       gate2_passed: score.gate2Passed,
       gate3_passed: score.gate3Passed,
+    },
+    explanations: {
+      gate1: score.explanations.gate1,
+      gate2: score.explanations.gate2,
+      gate3: score.explanations.gate3,
+      gate4: score.explanations.gate4,
     },
   };
 }

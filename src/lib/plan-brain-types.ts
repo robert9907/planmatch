@@ -65,6 +65,28 @@ export interface BrainWeights {
   extras: number; // 0..1 ; sum should == 1
 }
 
+/**
+ * Per-gate, customer-facing micro-explainer strings carried on every
+ * scored plan. Mirrors the consumer brain's GateExplanations 1:1
+ * (packages/brain/src/plan-brain-types.ts) so the agent CompareScreen
+ * renders the same per-provider / per-drug / per-priority pills the
+ * consumer Results screen shows. Each gates 1–3 entry is one string per
+ * user-supplied input (one per provider, one per drug, one per
+ * priority); gate 4 is a single cost-rank summary line. Empty arrays
+ * mean the gate didn't apply (e.g., user entered no providers →
+ * gate1 = []).
+ */
+export interface GateExplanations {
+  /** Provider gate, one entry per user-supplied provider. */
+  gate1: ReadonlyArray<string>;
+  /** Medication gate, one entry per user-supplied drug. */
+  gate2: ReadonlyArray<string>;
+  /** Extras / preferences gate, one entry per user-selected priority. */
+  gate3: ReadonlyArray<string>;
+  /** Cost-ranking summary — e.g. "Estimated annual cost: $2,340 (rank #1 of 38)". */
+  gate4: string;
+}
+
 export interface BrainScore {
   drugCostScore: number;       // 0..100
   oopCostScore: number;        // 0..100
@@ -233,6 +255,13 @@ export interface BrainScore {
     monthlyCopay: number | null;
     annualCost: number;
   }>;
+  // Per-gate customer-facing micro-explainer strings. One entry per
+  // user-supplied provider / drug / priority for gates 1–3; a single
+  // line for gate 4 (cost rank). Empty array when the user didn't
+  // enter anything for that gate (no providers → gate1: []). Used by
+  // CompareScreen's "Why this plan" expander. Mirrors consumer brain
+  // (packages/brain/src/plan-brain-types.ts:265).
+  explanations: GateExplanations;
 }
 
 /** Flattened plan shape consumed by the Results card UI. Created by

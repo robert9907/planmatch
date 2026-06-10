@@ -31,11 +31,18 @@ import {
   type BrainOutput,
   type BrainScore,
   type BrainScoredPlan,
+  type GateExplanations,
   type LiveTop3,
   type LiveTop3Pick,
   type RankPopulation,
   type RibbonType,
 } from './plan-brain-types';
+import {
+  buildGate1Explanations,
+  buildGate2Explanations,
+  buildGate3Explanations,
+  buildGate4Explanation,
+} from './plan-brain-explanations';
 import {
   annualExtrasValue,
   annualMedicalCostFromUtilization,
@@ -685,6 +692,37 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       };
     });
 
+    // Per-gate micro-explainer strings. Gates 1–3 have everything they
+    // need locally; gate 4 needs the post-rank position, so we fill it
+    // below in the cost-sorting pass. Mirrors consumer brain wiring at
+    // packages/brain/src/plan-brain.ts:1411-1433. Cost score is passed
+    // as 0 here (informational only — used to label low_drug_costs,
+    // which doesn't gate; the axis score isn't known until pool size
+    // is known, same as consumer).
+    const gate1Explanations = buildGate1Explanations(
+      input.userProfile.providers ?? [],
+      providerCache,
+      input.verifiedInNetworkContracts,
+      row.contract_id,
+    );
+    const gate2Explanations = userHasDrugs
+      ? buildGate2Explanations(drugEstimates, formulary)
+      : [];
+    const gate3Explanations = buildGate3Explanations(
+      benefits,
+      moopAmount,
+      partBGivebackAnnual,
+      0,
+      userPriorities,
+      input.userProfile.priorityThresholds ?? {},
+    );
+    const explanations: GateExplanations = {
+      gate1: gate1Explanations,
+      gate2: gate2Explanations,
+      gate3: gate3Explanations,
+      gate4: '', // filled in after rankedByCost is sorted (see below)
+    };
+
     const score: BrainScore = {
       // Axis scores filled in below once we know the pool size.
       drugCostScore: 0,
@@ -731,6 +769,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       gate1Passed: false,
       gate2Passed: false,
       gate3Passed: false,
+      explanations,
     };
     return { row, benefits, formulary, score };
   });
@@ -838,6 +877,13 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   const N = rankedByCost.length;
   rankedByCost.forEach((s, i) => {
     s.score.composite = N > 1 ? Math.round(((N - 1 - i) / (N - 1)) * 10000) / 100 : 100;
+    // Gate-4 explainer line — single cost-rank summary. Uses
+    // realAnnualCost.netAnnual (same figure CompareScreen renders) so
+    // the pill matches the broker's headline number on the card.
+    s.score.explanations = {
+      ...s.score.explanations,
+      gate4: buildGate4Explanation(s.score.realAnnualCost.netAnnual, i + 1, N),
+    };
   });
 
   // ── Ribbon assignment ─────────────────────────────────────────────
