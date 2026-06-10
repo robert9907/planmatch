@@ -57,6 +57,15 @@ export interface ShapedMedication {
   refill_days: string;
   tier: string;
   quantity: string;
+  /** Drug dosage form ("Tablet", "Capsule", "Solution"). Added by
+   *  Phase 4 migration 032. Empty string when null. */
+  form: string;
+  /** Foreign key into providers (pharmacy). Number or null. */
+  pharmacy_id: number | null;
+  /** Next refill date as MM/DD/YYYY. Broker-entered free text. */
+  refill_date: string;
+  /** Free-text broker notes (prior auth status, side effects, etc.). */
+  notes: string;
 }
 
 export interface ShapedProvider {
@@ -115,6 +124,14 @@ interface MedicationRow {
   // deploys it may still be a string. shapeMed coerces to string.
   tier: string | number | null;
   quantity: string | null;
+  // Added by Phase 4 migration 032.
+  form: string | null;
+  // Migration 011 broker-entry columns. Pass through to the agent so
+  // the broker sees the CRM-side context (pharmacy, refill date,
+  // notes) without re-deriving.
+  pharmacy_id: number | null;
+  refill_date: string | null;
+  notes: string | null;
   created_at: string | null;
 }
 
@@ -148,8 +165,13 @@ export async function loadClientSession(
     sb.from('clients').select('*').eq('id', id).maybeSingle(),
     sb
       .from('client_medications')
-      .select('id, name, dose, frequency, rxcui, refill_days, tier, quantity, created_at')
+      .select(
+        'id, name, dose, frequency, rxcui, refill_days, tier, quantity, form, pharmacy_id, refill_date, notes, created_at',
+      )
       .eq('client_id', id)
+      // Phase 5 soft-delete: hide tombstones from the agent.
+      // Requires migration 033 (deleted_at column).
+      .is('deleted_at', null)
       .order('created_at', { ascending: true }),
     sb
       .from('client_providers')
@@ -225,6 +247,10 @@ function shapeMed(r: MedicationRow): ShapedMedication {
     refill_days: r.refill_days ?? '',
     tier: r.tier != null ? String(r.tier) : '',
     quantity: r.quantity ?? '',
+    form: r.form ?? '',
+    pharmacy_id: r.pharmacy_id ?? null,
+    refill_date: r.refill_date ?? '',
+    notes: r.notes ?? '',
   };
 }
 

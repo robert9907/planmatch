@@ -76,6 +76,12 @@ export function buildAgentV3SyncInput(args: BuildArgs): SyncInput | null {
   const recommendedScored = brainResult.scored.find((s) => s.plan.id === plan.id);
   if (!recommendedScored) return null;
 
+  // pa_required / st_required intentionally omitted. The agent-v3
+  // path doesn't compute per-drug per-plan PA/ST flags before the
+  // Recommend fires; sending hardcoded `false` here was Phase 5 noise
+  // that the agentbase-recommend endpoint treated as authoritative.
+  // QuoteDeliveryV4 (v4 flow) still sends real values from brain
+  // output — those fields are now optional in SyncInput.
   const medContext = medications.map((m) => ({
     name: m.name,
     rxcui: m.rxcui ?? null,
@@ -85,8 +91,6 @@ export function buildAgentV3SyncInput(args: BuildArgs): SyncInput | null {
     refill_days: null,
     tier_on_recommended_plan: null,
     monthly_cost: null,
-    pa_required: false,
-    st_required: false,
   }));
 
   const providerContext = providers.map((p) => ({

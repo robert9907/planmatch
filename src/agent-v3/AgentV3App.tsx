@@ -353,7 +353,13 @@ export function AgentV3App() {
           tier: parseDigit(m.tier),
           quantity: m.quantity || undefined,
           refillDays: parseDigit(m.refill_days),
-          source: 'manual',
+          // Phase 4: form + broker-entry context now round-trip
+          // through the store.
+          form: m.form || undefined,
+          pharmacyId: m.pharmacy_id ?? undefined,
+          refillDate: m.refill_date || undefined,
+          notes: m.notes || undefined,
+          source: 'agentbase',
           confidence: 'high',
         });
       }

@@ -65,7 +65,17 @@ export interface Medication {
   tier?: number;
   quantity?: string;
   refillDays?: number;
-  source: 'manual' | 'capture';
+  // Migration 011 broker-entry context, hydrated from AgentBase so a
+  // re-quote starts with the same pharmacy / refill date / notes the
+  // broker filed in the CRM. Round-trips back on the next sync.
+  pharmacyId?: number;
+  refillDate?: string;
+  notes?: string;
+  // Canonical superset per Phase 1 audit. Agent A historically used
+  // manual|capture; widened so a hydrated row carrying agentbase/
+  // search/import/quick-add/scan doesn't get rewritten to 'manual'
+  // at the boundary.
+  source: 'manual' | 'capture' | 'search' | 'scan' | 'quick-add' | 'agentbase' | 'import';
   confidence?: 'high' | 'medium' | 'low';
   addedAt: number;
 }

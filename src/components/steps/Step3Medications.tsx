@@ -446,7 +446,22 @@ function tierMeta(tier: FormularyCell): { bg: string; fg: string; border: string
   return { bg: 'var(--pt)', fg: 'var(--pur)', border: 'var(--pur)', label: `T${tier}` };
 }
 
-function SourceBadge({ source }: { source: 'manual' | 'capture' }) {
+// Phase 1 widened Medication.source to the canonical superset. The
+// badge only visually distinguishes camera-captured rows; everything
+// else renders the same "manual" pill regardless of provenance
+// (search, scan, quick-add, agentbase, import).
+function SourceBadge({
+  source,
+}: {
+  source:
+    | 'manual'
+    | 'capture'
+    | 'search'
+    | 'scan'
+    | 'quick-add'
+    | 'agentbase'
+    | 'import';
+}) {
   const isPhoto = source === 'capture';
   return (
     <span

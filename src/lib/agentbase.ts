@@ -63,6 +63,12 @@ export interface AgentBaseClientDetail {
     refill_days: string;
     tier: string;
     quantity: string;
+    // Phase 4 widening — must match ShapedMedication in
+    // api/_lib/clientSession.ts.
+    form: string;
+    pharmacy_id: number | null;
+    refill_date: string;
+    notes: string;
   }>;
   providers: Array<{
     id: string;

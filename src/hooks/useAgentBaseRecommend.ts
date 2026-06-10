@@ -68,8 +68,13 @@ export interface SyncInput {
     refill_days: string | null;
     tier_on_recommended_plan: number | null;
     monthly_cost: number | null;
-    pa_required: boolean;
-    st_required: boolean;
+    /** PA/ST flags — only set when the caller has real per-drug
+     *  per-plan brain output. Optional because the agent-v3 path
+     *  fires Recommend before the brain produces paStFlags; sending
+     *  hardcoded `false` there was misleading. The agentbase-recommend
+     *  endpoint treats absent === unknown. */
+    pa_required?: boolean;
+    st_required?: boolean;
   }>;
   /** Provider-network status on the recommended plan. */
   providerContext: Array<{
