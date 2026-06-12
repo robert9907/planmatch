@@ -134,14 +134,26 @@ export function formatSpecialist(plan: Plan): string {
 }
 
 // Generic CostShare formatter — copay wins when present, otherwise
-// coinsurance %, otherwise em-dash. Used by the CompareScreen expanded
-// rows for medical-benefit categories and Part D tier copays.
+// coinsurance %, otherwise the benefit_description (for SNP / "covered"
+// rows where CMS doesn't file a structured $), otherwise em-dash.
+// PDP guard: when the column is a Part D drug-only plan, medical
+// categories don't apply — render "N/A — Part D only" instead of "—".
 export function formatCostShare(
-  cs: { copay: number | null; coinsurance: number | null } | undefined | null,
+  cs:
+    | {
+        copay: number | null;
+        coinsurance: number | null;
+        description?: string | null;
+      }
+    | undefined
+    | null,
+  opts?: { isPdp?: boolean },
 ): string {
+  if (opts?.isPdp) return 'N/A — Part D only';
   if (!cs) return '—';
   if (cs.copay != null) return `$${cs.copay}`;
   if (cs.coinsurance != null) return `${cs.coinsurance}%`;
+  if (cs.description) return cs.description;
   return '—';
 }
 
@@ -165,7 +177,9 @@ export function formatCostShareWithRange(
       }
     | undefined
     | null,
+  opts?: { isPdp?: boolean },
 ): string {
+  if (opts?.isPdp) return 'N/A — Part D only';
   if (!cs) return '—';
   if (cs.copay != null) {
     if (cs.description) {
@@ -186,6 +200,7 @@ export function formatCostShareWithRange(
     return `$${cs.copay}`;
   }
   if (cs.coinsurance != null) return `${cs.coinsurance}%`;
+  if (cs.description) return cs.description;
   return '—';
 }
 

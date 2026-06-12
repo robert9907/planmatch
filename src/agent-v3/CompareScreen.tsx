@@ -201,7 +201,9 @@ function csMetric(key: string, label: string, get: (p: Plan) => CostShare): Metr
   return {
     key,
     label,
-    format: (p) => safeCostShare(formatCostShareWithRange(get(p))),
+    format: (p) => safeCostShare(
+      formatCostShareWithRange(get(p), { isPdp: p.plan_type === 'PDP' }),
+    ),
     numeric: (p) => costShareNumeric(get(p)),
     higherIsBetter: false,
   };
@@ -1512,15 +1514,15 @@ function BenchCard({
             <PreviewRow label="Specialist" value={formatSpecialist(plan)} />
             <PreviewRow
               label="Urgent care"
-              value={formatCostShareWithRange(plan.benefits.medical.urgent_care)}
+              value={formatCostShareWithRange(plan.benefits.medical.urgent_care, { isPdp: plan.plan_type === 'PDP' })}
             />
             <PreviewRow
               label="Emergency"
-              value={formatCostShareWithRange(plan.benefits.medical.emergency)}
+              value={formatCostShareWithRange(plan.benefits.medical.emergency, { isPdp: plan.plan_type === 'PDP' })}
             />
             <PreviewRow
               label="Inpatient"
-              value={formatCostShareWithRange(plan.benefits.medical.inpatient)}
+              value={formatCostShareWithRange(plan.benefits.medical.inpatient, { isPdp: plan.plan_type === 'PDP' })}
             />
             <PreviewRow
               label="OTC / qtr"
