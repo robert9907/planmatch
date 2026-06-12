@@ -40,6 +40,8 @@ import {
   classifyExplanation,
   summarizeExplanations,
 } from '@/lib/classify-explanation';
+import type { LibraryRankPlan } from '@/lib/library-client';
+import { QuoteBuilder } from './QuoteBuilder';
 
 // Per the current product rule: rows stay visible, but unfiled values
 // render as em-dash, not "Not available" (which read as "we can't
@@ -131,6 +133,11 @@ interface Props {
   onRecommend?: (plan: Plan) => void;
   onBack: () => void;
   onNext: () => void;
+  /** Full ranked list (top + bench) feeding the Send Quote panel. The
+   *  panel is the only place that needs the raw library result; passing
+   *  it as a flat array keeps CompareScreen's other props focused on
+   *  the brain-derived per-plan maps. */
+  rankedPlans?: LibraryRankPlan[];
 }
 
 /** Subset of the brain's GateExplanations rendered on each SlotCell. */
@@ -531,6 +538,7 @@ export function CompareScreen({
   onRecommend,
   onBack,
   onNext,
+  rankedPlans,
 }: Props) {
   const providers = useSession((s) => s.providers);
   const medications = useSession((s) => s.medications);
@@ -844,8 +852,89 @@ export function CompareScreen({
         onEnroll={recommendAndAdvance(topChallenger)}
       />
 
+      {rankedPlans && rankedPlans.length > 0 && <QuotePanel rankedPlans={rankedPlans} />}
+
       <Nav onBack={onBack} onNext={onNext} nextLabel="CMS Compliance →" />
     </Container>
+  );
+}
+
+// ── Send Quote panel ────────────────────────────────────────────────
+// Collapsed by default — the agent expands it from CompareScreen when
+// the prospect is ready to receive a frozen text-message quote. Lives
+// here (not in QuoteBuilder.tsx) so the open/close UI matches the rest
+// of the Compare workspace; the actual form is QuoteBuilder.
+
+function QuotePanel({ rankedPlans }: { rankedPlans: LibraryRankPlan[] }) {
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <div
+        style={{
+          marginTop: 16,
+          padding: 14,
+          background: PANEL,
+          border: `1px solid ${BORDER}`,
+          borderRadius: 12,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 16,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>Send a quote</div>
+          <div style={{ marginTop: 2, fontSize: 11, color: MUTED }}>
+            Text the prospect a frozen comparison of up to 5 plans they can keep.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          style={{
+            padding: '6px 12px',
+            borderRadius: 8,
+            border: `1px solid ${NAVY}`,
+            background: '#fff',
+            color: NAVY,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          Open quote builder
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div
+        style={{
+          marginBottom: 8,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>Send a quote</div>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: MUTED,
+            fontSize: 12,
+            textDecoration: 'underline',
+            cursor: 'pointer',
+          }}
+        >
+          Hide
+        </button>
+      </div>
+      <QuoteBuilder rankedPlans={rankedPlans} />
+    </div>
   );
 }
 

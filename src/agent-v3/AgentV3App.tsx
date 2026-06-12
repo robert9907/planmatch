@@ -934,6 +934,11 @@ export function AgentV3App() {
             drugsTotalByPlanId={drugsTotalByPlanId}
             drugBreakdownByPlanId={drugBreakdownByPlanId}
             explanationsByPlanId={explanationsByPlanId}
+            rankedPlans={
+              ranked.result
+                ? [...ranked.result.top_plans, ...ranked.result.bench_plans]
+                : undefined
+            }
             onRecommend={onRecommend}
             onBack={() => setScreen('priorities')}
             onNext={() => setScreen('compliance')}
