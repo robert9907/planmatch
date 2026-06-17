@@ -344,9 +344,10 @@ function applyMedicationGate(
 //
 // Empty priorities ⇒ all of Gates 1+2 survivors pass, cost-sorted.
 //
-// Priorities the user can pick that DON'T map to a Gate-3 benefit
-// (low_rx / low_premium / keep_doctor) are filtered out upstream in
-// AgentV3App's PRIORITY_TO_EXTRAS map, so they never reach this gate.
+// Every current PriorityKey maps to a Gate-3 benefit category. The
+// PRIORITY_TO_EXTRAS map in AgentV3App is the upstream filter — if a
+// future toggle is added that doesn't have a benefit row, mapping it
+// to `undefined` there will keep it out of this gate.
 
 const EXTRAS_GATE_KEYS = [
   'dental',

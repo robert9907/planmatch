@@ -138,8 +138,9 @@ type HydrationState =
   | { kind: 'error'; clientId: string; message: string };
 
 // Priority keys that map directly to extras-axis benefit_type strings.
-// "low_rx" and "low_premium" are weight knobs handled elsewhere —
-// they don't get forwarded as userPriorities.
+// All PriorityKey values map 1:1 today; the Partial<Record> shape is
+// kept so future non-extras toggles can be added without breaking the
+// extras-derivation below.
 const PRIORITY_TO_EXTRAS: Partial<Record<PriorityKey, string>> = {
   dental: 'dental',
   vision: 'vision',
@@ -168,7 +169,7 @@ export function AgentV3App() {
   // mount so we can tell at a glance whether the loaded JS has the
   // empty-default fix or a cached older bundle. Expect:
   //   [agent-v3 init] DEFAULT_PRIORITIES=[] initialPriorities=[]
-  // If the right side shows ['low_rx','dental','vision']
+  // If the right side shows ['dental','vision']
   // the browser is on a stale bundle — hard-refresh.
   useEffect(() => {
     console.log(
@@ -440,27 +441,12 @@ export function AgentV3App() {
         .filter((s): s is string => !!s),
     [priorities],
   );
-  const weightOverride = useMemo(() => {
-    const set = new Set(priorities);
-    // "low_rx" doubles drug weight; "low_premium" doubles oop weight
-    // (premium is the dominant lever inside the OOP axis). Both are
-    // proportional rebalances — applyOverride() inside plan-brain
-    // re-normalizes so the three axes still sum to 1.0.
-    if (set.has('low_rx') && set.has('low_premium')) {
-      return { drug: 0.55, oop: 0.35, extras: 0.1 };
-    }
-    if (set.has('low_rx')) return { drug: 0.6, oop: 0.25, extras: 0.15 };
-    if (set.has('low_premium')) return { oop: 0.45, drug: 0.4, extras: 0.15 };
-    return null;
-  }, [priorities]);
-
   const brain = usePlanBrain({
     plans: eligiblePlans,
     client,
     medications,
     providers,
     userPriorities: userPriorityKeys,
-    weightOverride,
   });
 
   // Library-side ranking — the new source of truth for the compare

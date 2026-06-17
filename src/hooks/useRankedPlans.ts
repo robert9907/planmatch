@@ -18,14 +18,13 @@
 // union.
 //
 // Trade-offs vs. the local-brain hook:
-//   • `weightOverride` is dropped — the library doesn't accept that
-//     knob today. The agent's "low premium" / "low rx" priority
-//     buttons no longer bias ranking through this path. (The legacy
-//     usePlanBrain still respects them for the screens that use it.)
 //   • The result is the library's `LibraryRankResult` (top_plans +
 //     bench_plans). Per-plan medication coverage, provider network
 //     status, benefits, and gate results are pre-computed by the
 //     library; the consumer reads them straight off each plan object.
+//   • The library brain is pure elimination + cost rank — no weight
+//     knobs. usePlanBrain (still used by QuoteDeliveryV4) retains its
+//     weightOverride prop for the quote-time preset buttons.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Client, Medication, Provider } from '@/types/session';

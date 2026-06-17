@@ -6,10 +6,6 @@
 // brain (Gate 3) uses these as hard eliminators — pick order drives
 // the relax-from-bottom fallback when no county plans satisfy every
 // pick. See ~/Code/plan-match/packages/brain/src/plan-brain.ts.
-//
-// Two of the toggles ("low_rx" and "low_premium") aren't extras keys —
-// they're weight-profile overrides handled in AgentV3App. The shell
-// strips them out of userPriorities before the library call.
 
 import { Container, Header, Nav } from './atoms';
 
@@ -20,10 +16,8 @@ export interface PriorityToggle {
 }
 
 export type PriorityKey =
-  | 'low_rx'
   | 'dental'
   | 'vision'
-  | 'low_premium'
   | 'hearing'
   | 'otc'
   | 'fitness'
@@ -33,10 +27,8 @@ export type PriorityKey =
   | 'partb_giveback';
 
 export const PRIORITY_OPTIONS: PriorityToggle[] = [
-  { key: 'low_rx',         label: 'Low Rx costs',     icon: '💊' },
   { key: 'dental',         label: 'Dental',           icon: '🦷' },
   { key: 'vision',         label: 'Vision',           icon: '👁' },
-  { key: 'low_premium',    label: 'Low premium',      icon: '💰' },
   { key: 'hearing',        label: 'Hearing aids',     icon: '👂' },
   { key: 'otc',            label: 'OTC allowance',    icon: '🛒' },
   { key: 'fitness',        label: 'Gym / Fitness',    icon: '🏋️' },
