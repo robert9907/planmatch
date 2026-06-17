@@ -22,18 +22,27 @@ export interface InpatientDayTier {
   dayEnd: number;
 }
 
-const TIER_RE = /Days?\s+(\d+)\s*[–-]\s*(\d+)\s*:\s*\$\s*(\d+(?:\.\d+)?)\s*\/\s*day/gi;
-
 export function parseInpatientTiers(
   description: string | null | undefined,
 ): InpatientDayTier[] {
   if (!description) return [];
   const tiers: InpatientDayTier[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = TIER_RE.exec(description)) !== null) {
-    const dayStart = Number(m[1]);
-    const dayEnd = Number(m[2]);
-    const copay = Number(m[3]);
+  // Two shapes coexist in pm_plan_benefits.benefit_description, both
+  // emitted by different importer paths (and the amount-first form
+  // round-trips into the DB through the consumer-side formatter):
+  //
+  //   Range-first :  "Days 1–5: $75/day"   /  "Day 1: $0/day"
+  //   Amount-first:  "$495/day (days 1-7)" /  "$0/day (days 8-90)"
+  //
+  // Both produce the same { dayStart, dayEnd, copay } shape; we run
+  // both regexes and sort by dayStart so a mixed-shape description
+  // still renders the ladder in day order.
+  const RANGE_FIRST =
+    /Days?\s+(\d+)\s*[–-]\s*(\d+)\s*:\s*\$\s*(\d+(?:\.\d+)?)\s*\/\s*day/gi;
+  const AMOUNT_FIRST =
+    /\$\s*(\d+(?:\.\d+)?)\s*\/\s*day\s*\(\s*days?\s+(\d+)\s*[–-]\s*(\d+)\s*\)/gi;
+
+  const pushTier = (dayStart: number, dayEnd: number, copay: number) => {
     if (
       Number.isFinite(dayStart) &&
       Number.isFinite(dayEnd) &&
@@ -42,7 +51,16 @@ export function parseInpatientTiers(
     ) {
       tiers.push({ copay, dayStart, dayEnd });
     }
+  };
+
+  let m: RegExpExecArray | null;
+  while ((m = RANGE_FIRST.exec(description)) !== null) {
+    pushTier(Number(m[1]), Number(m[2]), Number(m[3]));
   }
+  while ((m = AMOUNT_FIRST.exec(description)) !== null) {
+    pushTier(Number(m[2]), Number(m[3]), Number(m[1]));
+  }
+  tiers.sort((a, b) => a.dayStart - b.dayStart);
   return tiers;
 }
 
