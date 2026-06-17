@@ -21,7 +21,6 @@ export interface PriorityToggle {
 
 export type PriorityKey =
   | 'low_rx'
-  | 'keep_doctor'
   | 'dental'
   | 'vision'
   | 'low_premium'
@@ -35,7 +34,6 @@ export type PriorityKey =
 
 export const PRIORITY_OPTIONS: PriorityToggle[] = [
   { key: 'low_rx',         label: 'Low Rx costs',     icon: '💊' },
-  { key: 'keep_doctor',    label: 'Keep my doctor',   icon: '🩺' },
   { key: 'dental',         label: 'Dental',           icon: '🦷' },
   { key: 'vision',         label: 'Vision',           icon: '👁' },
   { key: 'low_premium',    label: 'Low premium',      icon: '💰' },

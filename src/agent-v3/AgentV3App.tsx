@@ -138,8 +138,8 @@ type HydrationState =
   | { kind: 'error'; clientId: string; message: string };
 
 // Priority keys that map directly to extras-axis benefit_type strings.
-// "low_rx", "low_premium", "keep_doctor" are weight knobs handled
-// elsewhere — they don't get forwarded as userPriorities.
+// "low_rx" and "low_premium" are weight knobs handled elsewhere —
+// they don't get forwarded as userPriorities.
 const PRIORITY_TO_EXTRAS: Partial<Record<PriorityKey, string>> = {
   dental: 'dental',
   vision: 'vision',
@@ -168,7 +168,7 @@ export function AgentV3App() {
   // mount so we can tell at a glance whether the loaded JS has the
   // empty-default fix or a cached older bundle. Expect:
   //   [agent-v3 init] DEFAULT_PRIORITIES=[] initialPriorities=[]
-  // If the right side shows ['low_rx','keep_doctor','dental','vision']
+  // If the right side shows ['low_rx','dental','vision']
   // the browser is on a stale bundle — hard-refresh.
   useEffect(() => {
     console.log(
