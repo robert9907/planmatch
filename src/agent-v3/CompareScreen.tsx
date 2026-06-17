@@ -1520,10 +1520,12 @@ function BenchCard({
               label="Emergency"
               value={formatCostShareWithRange(plan.benefits.medical.emergency, { isPdp: plan.plan_type === 'PDP' })}
             />
-            <PreviewRow
-              label="Inpatient"
-              value={formatCostShareWithRange(plan.benefits.medical.inpatient, { isPdp: plan.plan_type === 'PDP' })}
+            <InpatientPreviewRow label="Inpatient" cs={plan.benefits.medical.inpatient} />
+            <InpatientPreviewRow
+              label="MH inpatient"
+              cs={plan.benefits.medical.mental_health_inpatient}
             />
+            <InpatientPreviewRow label="Skilled nursing" cs={plan.benefits.medical.snf} />
             <PreviewRow
               label="OTC / qtr"
               value={
@@ -1667,15 +1669,36 @@ function PreviewRow({ label, value }: { label: string; value: string }) {
       style={{
         display: 'flex',
         justifyContent: 'space-between',
+        alignItems: 'flex-start',
         padding: '3px 0',
         fontFamily: FONT_LABEL,
         fontSize: 10,
       }}
     >
       <span style={{ color: MUTED }}>{label}</span>
-      <span style={{ fontFamily: FONT_NUM, fontWeight: 600, color: TEXT }}>{value}</span>
+      <span
+        style={{
+          fontFamily: FONT_NUM,
+          fontWeight: 600,
+          color: TEXT,
+          textAlign: 'right',
+          whiteSpace: 'pre-line',
+        }}
+      >
+        {value}
+      </span>
     </div>
   );
+}
+
+// Inpatient ladder variant — renders the full day-tier breakdown
+// (CMS disclosure per [[feedback_inpatient_full_ladder]]). Returns
+// null when no description / copay / coinsurance is filed so the row
+// disappears instead of showing "—".
+function InpatientPreviewRow({ label, cs }: { label: string; cs: CostShare }) {
+  const v = formatInpatientLadder(cs.description, cs.copay, cs.coinsurance);
+  if (!v) return null;
+  return <PreviewRow label={label} value={v} />;
 }
 
 // ── Per-provider network list ───────────────────────────────────
