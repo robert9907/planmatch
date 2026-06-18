@@ -349,6 +349,22 @@ function transformPbpRow(
   const category = PBP_TYPE_TO_CATEGORY[row.benefit_type];
   if (!category) return null;
 
+  // Skip "tombstone" rows that carry no signal — every numeric field
+  // null AND description blank. medicare_gov occasionally files such
+  // shell rows (canary: inpatient_hospital for H3146-006 with NULL
+  // copay/copay_max/coinsurance/description). Letting them through
+  // generates synth rows that win the (triple, category) merge against
+  // the good pm_plan_benefits row, dropping copay + description on the
+  // floor — surfaces as "—" on the agent Compare inpatient cell.
+  if (
+    row.copay == null &&
+    row.copay_max == null &&
+    row.coinsurance == null &&
+    (row.description == null || row.description.trim() === '')
+  ) {
+    return null;
+  }
+
   const isAllowance = PBP_ALLOWANCE_TYPES.has(row.benefit_type);
   let coverage_amount = isAllowance ? row.copay : null;
   const copay = isAllowance ? null : row.copay;
