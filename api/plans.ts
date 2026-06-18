@@ -683,13 +683,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const contractIds = [...new Set([...byTriple.values()].map((v) => v.row.contract_id))];
     const planIds = [...new Set([...byTriple.values()].map((v) => v.row.plan_id))];
     const benefitRows = await fetchAllRows<BenefitRow>(async (from, to) => {
+      // ORDER BY id is load-bearing for pagination: without a stable
+      // sort, PostgREST + .range() can return overlapping or missing
+      // rows across pages on multi-page fetches (Durham @ 72 plans hits
+      // 5-6 pages). The geo path was silently dropping per-plan
+      // inpatient rows once the pool crossed ~50 plans because pages
+      // 0-N were returning rows in heap order, not a stable index
+      // order. The IDs path stayed safe because it fit in one page.
       const { data, error } = await sb
         .from('pm_plan_benefits')
         .select(
-          'contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage',
+          'id, contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage',
         )
         .in('contract_id', contractIds)
         .in('plan_id', planIds)
+        .order('id', { ascending: true })
         .range(from, to);
       if (error) throw error;
       return (data ?? []) as BenefitRow[];
@@ -728,11 +736,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const pbpTypes = [...PBP_FALLBACK_TYPES, PBP_DENTAL_MAX_TYPE, PBP_OTC_TYPE, PBP_FOOD_CARD_TYPE];
     const pbpRows = await fetchAllRows<PbpBenefitRow>(async (from, to) => {
+      // ORDER BY for stable pagination — see landscape fetch above.
+      // pbp_benefits has no PK id, so we sort by the (plan_id,
+      // benefit_type, tier_id) triple it's usually indexed on.
       const { data, error } = await sb
         .from('pbp_benefits')
         .select('plan_id, benefit_type, copay, coinsurance, tier_id, description')
         .in('plan_id', [...pbpKeyVariants])
         .in('benefit_type', pbpTypes)
+        .order('plan_id', { ascending: true })
+        .order('benefit_type', { ascending: true })
+        .order('tier_id', { ascending: true, nullsFirst: true })
         .range(from, to);
       if (error) throw error;
       return (data ?? []) as PbpBenefitRow[];
@@ -754,6 +768,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // with PBP winning on (triple, category). buildBenefits below
     // operates on the merged set.
     const broadPbpRows = await fetchAllRows<PbpRichRow>(async (from, to) => {
+      // ORDER BY for stable pagination — see landscape fetch above.
+      // 7500+ rows for Durham across 8 pages; without ordering, the
+      // bestByKey winner picked per (plan_id, benefit_type, tier_id)
+      // could miss the high-rank row entirely if it landed on a page
+      // boundary that got skipped.
       const { data, error } = await sb
         .from('pbp_benefits')
         .select(
@@ -761,6 +780,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         )
         .in('plan_id', [...pbpKeyVariants])
         .in('source', ['medicare_gov', 'sb_ocr', 'cms_pbp', 'manual'])
+        .order('plan_id', { ascending: true })
+        .order('benefit_type', { ascending: true })
+        .order('tier_id', { ascending: true, nullsFirst: true })
         .range(from, to);
       if (error) throw error;
       return (data ?? []) as PbpRichRow[];
