@@ -27,20 +27,31 @@ export function parseInpatientTiers(
 ): InpatientDayTier[] {
   if (!description) return [];
   const tiers: InpatientDayTier[] = [];
-  // Two shapes coexist in pm_plan_benefits.benefit_description, both
-  // emitted by different importer paths (and the amount-first form
+  // Three shapes coexist in pm_plan_benefits.benefit_description, all
+  // emitted by different importer paths (the amount-first form
   // round-trips into the DB through the consumer-side formatter):
   //
-  //   Range-first :  "Days 1–5: $75/day"   /  "Day 1: $0/day"
-  //   Amount-first:  "$495/day (days 1-7)" /  "$0/day (days 8-90)"
+  //   Range-first   : "Days 1–5: $75/day"   /  "Day 1: $0/day"
+  //   Amount-first  : "$495/day (days 1-7)" /  "$0/day (days 8-90)"
+  //   Per-day flat  : "$0 per-day copay"    /  "$2230 per-day copay"
   //
-  // Both produce the same { dayStart, dayEnd, copay } shape; we run
-  // both regexes and sort by dayStart so a mixed-shape description
+  // The per-day-flat shape (every Aetna D-SNP plan in NC, plus a
+  // handful of other carriers) collapses the entire inpatient stay
+  // into one synthetic tier covering CMS-standard days 1-90 when the
+  // carrier files a single uniform per-day copay. Without this branch
+  // the row fell back to "$X/day" alone with no day range, and D-SNP
+  // plans displayed the structured-copay column ($1920) instead of
+  // the description's true member-out-of-pocket ($0).
+  //
+  // All three produce the same { dayStart, dayEnd, copay } shape; we
+  // run every regex and sort by dayStart so a mixed-shape description
   // still renders the ladder in day order.
   const RANGE_FIRST =
     /Days?\s+(\d+)\s*[–-]\s*(\d+)\s*:\s*\$\s*(\d+(?:\.\d+)?)\s*\/\s*day/gi;
   const AMOUNT_FIRST =
     /\$\s*(\d+(?:\.\d+)?)\s*\/\s*day\s*\(\s*days?\s+(\d+)\s*[–-]\s*(\d+)\s*\)/gi;
+  const PER_DAY_FLAT =
+    /\$\s*(\d+(?:\.\d+)?)\s*per[-\s]?day\s+copay/gi;
 
   const pushTier = (dayStart: number, dayEnd: number, copay: number) => {
     if (
@@ -59,6 +70,14 @@ export function parseInpatientTiers(
   }
   while ((m = AMOUNT_FIRST.exec(description)) !== null) {
     pushTier(Number(m[2]), Number(m[3]), Number(m[1]));
+  }
+  // Only synthesize a 1-90 tier from the per-day-flat shape when the
+  // ranged regexes found nothing — otherwise we'd double-count the
+  // first tier with a competing full-stay synthetic.
+  if (tiers.length === 0) {
+    while ((m = PER_DAY_FLAT.exec(description)) !== null) {
+      pushTier(1, 90, Number(m[1]));
+    }
   }
   tiers.sort((a, b) => a.dayStart - b.dayStart);
   return tiers;

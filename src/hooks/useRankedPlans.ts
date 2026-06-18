@@ -71,6 +71,20 @@ const EMPTY_STATE: UseRankedPlansState = {
   unresolvedProviderNames: [],
 };
 
+// Tiered extras (dental/vision/otc/giveback) must ship with a
+// threshold so the library brain's Gate 3 requires a real filed
+// dollar value > 0. Without it, the library's "no-threshold" path
+// would degrade to "category row exists" — which lets NULL-valued
+// carrier rows pass and surfaces plans with zero actual coverage
+// (UHC NC-14 incident). 1 = "any value > 0"; the agent's tier
+// picker can overwrite this later if/when it lands.
+const TIERED_EXTRAS = new Set([
+  'dental',
+  'vision',
+  'otc',
+  'partb_giveback',
+]);
+
 export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
   const {
     client,
@@ -123,6 +137,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
       (userPriorities ?? []).map((type) => ({
         type,
         enabled: true,
+        threshold: TIERED_EXTRAS.has(type) ? 1 : undefined,
       })),
     [userPriorities],
   );
