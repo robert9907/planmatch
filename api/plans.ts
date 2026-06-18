@@ -828,12 +828,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (t) synthBenefits.push(t);
     }
 
-    // Backfill coverage_amount + max_coverage on the synthetic rows
-    // from the matching landscape row when the supplemental source
-    // didn't carry a numeric dollar (sb_ocr commonly files only the
-    // marketing description for non-allowance categories like
-    // dental_comprehensive — see plans-with-extras for the full
-    // rationale).
+    // Backfill coverage_amount + max_coverage + copay + benefit_description
+    // on the synthetic rows from the matching landscape row when the
+    // supplemental source didn't carry the field. sb_ocr commonly files
+    // only the marketing description for non-allowance categories like
+    // dental_comprehensive (see plans-with-extras for that rationale);
+    // medicare_gov occasionally files partial rows that pass the
+    // null-bomb guard in transformPbpRow but still drop copay or
+    // description on the floor — this is the belt-and-suspenders second
+    // guard so a partial synth row inherits whatever landscape had.
     const landscapeRows = benefitRows;
     const landscapeByKey = new Map<string, BenefitRow>();
     for (const b of landscapeRows) {
@@ -841,7 +844,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       landscapeByKey.set(`${triple}|${b.benefit_category}`, b);
     }
     for (const b of synthBenefits) {
-      if (b.coverage_amount != null && b.max_coverage != null) continue;
       const triple = `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}`;
       const land = landscapeByKey.get(`${triple}|${b.benefit_category}`);
       if (!land) continue;
@@ -850,6 +852,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       if (b.max_coverage == null && land.max_coverage != null) {
         b.max_coverage = land.max_coverage;
+      }
+      if (b.copay == null && land.copay != null) {
+        b.copay = land.copay;
+      }
+      const synthDescBlank =
+        b.benefit_description == null || b.benefit_description.trim() === '';
+      const landDescPresent =
+        land.benefit_description != null && land.benefit_description.trim() !== '';
+      if (synthDescBlank && landDescPresent) {
+        b.benefit_description = land.benefit_description;
       }
     }
 
