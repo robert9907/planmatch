@@ -924,11 +924,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (parsed != null) b.coverage_amount = parsed;
     }
 
-    // Merge: PBP wins on (triple, category). Drop the matching
-    // landscape row so the buildBenefits flatten path sees one
-    // authoritative entry per category.
+    // Merge: PBP supplements landscape, never overrides segment-tagged
+    // cost-share. pbp_benefits.plan_id is segment-agnostic ("H3449-027"
+    // with no segment qualifier) and the medicare.gov scrape captures
+    // a single Plan Finder value that doesn't know which segment a
+    // user is asking about. When landscape's pm_plan_benefits row for
+    // the same (triple, category) has copay or coinsurance filed, the
+    // landscape row wins — its value is the one filed for the user's
+    // specific segment.
+    //
+    // Surfaced by H3449-027 (Blue Medicare Essential HMO) Durham
+    // (segment 2). Landscape filed copay=$10 for seg-2, copay=$5 for
+    // seg-1; medicare.gov scraped a single $5 across the entire
+    // contract+plan. Pre-fix the wire returned copay=5 desc="$10
+    // copay" — contradictory and compliance-risky.
+    //
+    // Allowance categories (dental, vision, otc, food_card,
+    // partb_giveback) file dollar values in coverage_amount with
+    // copay+coinsurance both null on the landscape side, so this
+    // predicate still lets synth win for them.
+    const synthFiltered = synthBenefits.filter((b) => {
+      const triple = `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}`;
+      const land = landscapeByKey.get(`${triple}|${b.benefit_category}`);
+      if (!land) return true;
+      // Landscape has a real segment-tagged cost-share — keep it.
+      if (land.copay != null || land.coinsurance != null) return false;
+      return true;
+    });
     const pbpKeyset = new Set(
-      synthBenefits.map(
+      synthFiltered.map(
         (b) => `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}|${b.benefit_category}`,
       ),
     );
@@ -938,7 +962,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}|${b.benefit_category}`,
         ),
       ),
-      ...synthBenefits,
+      ...synthFiltered,
     ];
 
     // Re-index merged rows by triple so buildBenefits below picks them
