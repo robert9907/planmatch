@@ -1,11 +1,11 @@
 // EnrollScreen — agent-v3 screen 8.
 //
-// Final summary of the recommended plan plus the SunFire deep link
-// CTA. Pre-populates SunFire's "Open Quote" URL with as much of the
-// session payload as possible (carrier, plan id, ZIP, etc.). The
-// link itself is a placeholder; the live deep-link contract sits in
-// scripts/sunfire-deeplink.md (or wherever ops drops it) — wire that
-// up by replacing buildSunFireLink().
+// Final summary of the recommended plan plus the HealthSherpa Medicare
+// intake CTA. Opens the Rob-Simm-branded HealthSherpa intake URL with
+// cms_plan_id, county, and zip_code preloaded so the consumer doesn't
+// re-key their basics. The link is built by buildMedicareEnrollLink;
+// when Partner API access lands, swap the base URL inside the helper
+// — every Enroll surface in agent-v3 routes through it.
 
 import { useState } from 'react';
 import type { Plan } from '@/types/plans';
@@ -14,6 +14,7 @@ import { Card, Container, Header, Nav, fmt } from './atoms';
 import { annualEstimate } from './planDisplay';
 import type { ComplianceSnapshot, AgentV3SessionSummary } from './agentbaseSync';
 import { SECTIONS, DISCLAIMERS } from '@/lib/compliance';
+import { buildMedicareEnrollLink } from './lib/healthsherpa-medicare-link';
 
 interface Props {
   current: Plan | null;
@@ -82,7 +83,7 @@ export function EnrollScreen({
     <Container>
       <Header
         title="Enrollment confirmed"
-        sub="All compliance items verified. Ready for SunFire submission."
+        sub="All compliance items verified. Ready for HealthSherpa submission."
       />
       <Card style={{ border: '2px solid #059669' }}>
         <div
@@ -209,13 +210,17 @@ export function EnrollScreen({
               Promise.resolve<{ ok: true } | { ok: false; error: string }>({ ok: true }));
             if (r.ok) {
               setSaveStatus('saved');
-              // Open SunFire in a new tab — only after the AgentBase
-              // save lands. Use window.open instead of an <a> so the
-              // open is gated on the await above.
+              // Open HealthSherpa in a new tab — only after the
+              // AgentBase save lands. Use window.open instead of an
+              // <a> so the open is gated on the await above.
               window.open(
-                buildSunFireLink({ client, plan: recommendedPlan }),
+                buildMedicareEnrollLink({
+                  cms_plan_id: recommendedPlan.id,
+                  county: client.county || undefined,
+                  zip_code: client.zip || undefined,
+                }),
                 '_blank',
-                'noopener',
+                'noopener,noreferrer',
               );
             } else {
               setSaveStatus('error');
@@ -242,7 +247,7 @@ export function EnrollScreen({
         >
           {saveStatus === 'saving'
             ? 'Saving to AgentBase…'
-            : 'Save & Open SunFire Matrix →'}
+            : 'Save & Open HealthSherpa →'}
         </button>
         <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 6 }}>
           Pre-populated · NPN 10447418
@@ -263,7 +268,7 @@ export function EnrollScreen({
               fontWeight: 700,
             }}
           >
-            ✓ Saved to AgentBase — SunFire opening in a new tab.
+            ✓ Saved to AgentBase — HealthSherpa opening in a new tab.
           </div>
         )}
         {saveStatus === 'error' && (
@@ -281,7 +286,7 @@ export function EnrollScreen({
               fontWeight: 700,
             }}
           >
-            ⚠ AgentBase save failed: {saveError ?? 'unknown error'}. SunFire
+            ⚠ AgentBase save failed: {saveError ?? 'unknown error'}. HealthSherpa
             stayed closed so you can retry.
           </div>
         )}
@@ -386,28 +391,3 @@ function Stat({
   );
 }
 
-// Pre-populates the SunFire Matrix quote URL with the client + plan
-// payload. The exact querystring contract isn't documented in this
-// repo yet; this function intentionally encodes everything we know so
-// when ops finalizes the deep-link spec, the only place to update is
-// the hostname / param-name remapping below.
-function buildSunFireLink({
-  client,
-  plan,
-}: {
-  client: ReturnType<typeof useSession.getState>['client'];
-  plan: Plan;
-}): string {
-  const qs = new URLSearchParams();
-  qs.set('npn', '10447418');
-  qs.set('plan_id', plan.id);
-  qs.set('contract', plan.contract_id);
-  qs.set('plan_no', plan.plan_number);
-  qs.set('carrier', plan.carrier);
-  if (client.zip) qs.set('zip', client.zip);
-  if (client.dob) qs.set('dob', client.dob);
-  if (client.name) qs.set('name', client.name);
-  if (client.phone) qs.set('phone', client.phone);
-  if (client.email) qs.set('email', client.email);
-  return `https://sunfirematrix.com/quote/start?${qs.toString()}`;
-}

@@ -43,6 +43,7 @@ import {
 } from '@/lib/classify-explanation';
 import type { LibraryRankPlan } from '@/lib/library-client';
 import { QuoteBuilder } from './QuoteBuilder';
+import { buildMedicareEnrollLink } from './lib/healthsherpa-medicare-link';
 
 // Per the current product rule: rows stay visible, but unfiled values
 // render as em-dash, not "Not available" (which read as "we can't
@@ -556,6 +557,7 @@ export function CompareScreen({
 }: Props) {
   const providers = useSession((s) => s.providers);
   const medications = useSession((s) => s.medications);
+  const client = useSession((s) => s.client);
 
   const rxcuis = useMemo(
     () => medications.map((m) => m.rxcui).filter((s): s is string => !!s),
@@ -675,9 +677,22 @@ export function CompareScreen({
   }
 
   // Wrap onNext with the AgentBase write-back. Fire-and-forget — the
-  // hook handles state + retry, the screen advances immediately.
+  // hook handles state + retry, the screen advances immediately. Also
+  // opens the HealthSherpa Medicare intake in a new tab so the broker
+  // can co-pilot the application while running the compliance gate.
   const recommendAndAdvance = (plan: Plan | null) => () => {
-    if (plan) onRecommend?.(plan);
+    if (plan) {
+      onRecommend?.(plan);
+      window.open(
+        buildMedicareEnrollLink({
+          cms_plan_id: plan.id,
+          county: client.county || undefined,
+          zip_code: client.zip || undefined,
+        }),
+        '_blank',
+        'noopener,noreferrer',
+      );
+    }
     onNext();
   };
 

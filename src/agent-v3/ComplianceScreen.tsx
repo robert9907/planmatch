@@ -10,9 +10,11 @@
 //     "NEW 2026" per CMS marketing rules (LIS/MSP eligibility,
 //     Medigap GI rights).
 //
-// SunFire Matrix Enrollment Gate is locked until ALL 16 items are
-// confirmed. The gate's "Open SunFire Matrix" CTA is the same final
-// CTA as EnrollScreen (they share intent); here it advances the screen.
+// HealthSherpa Enrollment Gate is locked until ALL 16 items are
+// confirmed. The gate's "Open HealthSherpa" CTA shares intent with
+// EnrollScreen's final CTA — it advances the screen and opens the
+// HealthSherpa Medicare intake in a new tab so the broker can co-pilot
+// the application while the audit trail finishes saving.
 
 import type { CSSProperties } from 'react';
 import { useSession } from '@/hooks/useSession';
@@ -22,6 +24,7 @@ import {
   totalComplianceItems,
 } from '@/lib/compliance';
 import { Container, Nav } from './atoms';
+import { buildMedicareEnrollLink } from './lib/healthsherpa-medicare-link';
 
 interface Props {
   onBack: () => void;
@@ -32,6 +35,7 @@ export function ComplianceScreen({ onBack, onNext }: Props) {
   const checked = useSession((s) => s.complianceChecked);
   const confirmed = useSession((s) => s.disclaimersConfirmed);
   const toggleItem = useSession((s) => s.toggleComplianceItem);
+  const client = useSession((s) => s.client);
 
   const total = totalComplianceItems();
   const done = new Set(checked).size + new Set(confirmed).size;
@@ -256,7 +260,7 @@ export function ComplianceScreen({ onBack, onNext }: Props) {
               textTransform: 'uppercase',
             }}
           >
-            SunFire Matrix Enrollment Gate
+            HealthSherpa Enrollment Gate
           </div>
           <div
             style={{
@@ -276,7 +280,21 @@ export function ComplianceScreen({ onBack, onNext }: Props) {
         </div>
         <button
           type="button"
-          onClick={allDone ? onNext : undefined}
+          onClick={
+            allDone
+              ? () => {
+                  window.open(
+                    buildMedicareEnrollLink({
+                      county: client.county || undefined,
+                      zip_code: client.zip || undefined,
+                    }),
+                    '_blank',
+                    'noopener,noreferrer',
+                  );
+                  onNext();
+                }
+              : undefined
+          }
           disabled={!allDone}
           style={{
             background: allDone
@@ -292,7 +310,7 @@ export function ComplianceScreen({ onBack, onNext }: Props) {
             transition: 'all 0.3s',
           }}
         >
-          Open SunFire Matrix →
+          Open HealthSherpa →
         </button>
       </div>
 
