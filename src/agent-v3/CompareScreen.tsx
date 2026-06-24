@@ -53,6 +53,17 @@ function safeCostShare(s: string): string {
   return s;
 }
 
+// Plan.id ships as "<contract>-<plan>-<segment>" ("H1036-318-000"). The
+// segment suffix is a Plan Finder internal detail that brokers never
+// say out loud — carriers print the contract-plan pair on member cards
+// and Marx/CMS systems quote the same form, so strip the trailing
+// segment for any display surface.
+function planIdShort(id: string): string {
+  const parts = id.split('-');
+  if (parts.length < 2) return id;
+  return `${parts[0]}-${parts[1]}`;
+}
+
 // ── Design tokens ──────────────────────────────────────────────
 const NAVY = '#0d2f5e';
 const TEAL = '#14b8a6';
@@ -1509,6 +1520,19 @@ function BenchCard({
         >
           {plan.plan_name}
         </div>
+        <div
+          style={{
+            fontFamily: FONT_NUM,
+            fontSize: 9,
+            fontWeight: 600,
+            color: 'rgba(255,255,255,0.55)',
+            letterSpacing: 0.5,
+            lineHeight: 1,
+            marginTop: 2,
+          }}
+        >
+          {planIdShort(plan.id)}
+        </div>
       </div>
 
       <div style={{ padding: 10 }}>
@@ -2210,6 +2234,19 @@ function SlotCell({
             }}
           >
             {plan.plan_name}
+          </div>
+          <div
+            style={{
+              fontFamily: FONT_NUM,
+              fontSize: 9,
+              fontWeight: 600,
+              color: 'rgba(255,255,255,0.55)',
+              letterSpacing: 0.5,
+              lineHeight: 1,
+              marginTop: 3,
+            }}
+          >
+            {planIdShort(plan.id)}
           </div>
         </div>
         <button
