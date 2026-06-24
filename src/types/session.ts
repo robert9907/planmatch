@@ -33,6 +33,14 @@ export interface Client {
    *  no qualifying drugs (e.g. diet-controlled diabetes). Optional;
    *  empty / absent means "med-detection only". */
   csnpConditions?: CsnpConditionCode[];
+  /** Dual-eligible (Medicaid + Medicare) flag captured by the broker
+   *  on the Intake screen. Strict `=== true` everywhere downstream
+   *  (plan-brain.ts:isStrictlyDualEligible) — `undefined` / `false`
+   *  both mean "treat as standard population." When true, the brain's
+   *  filterPlanPool keeps D-SNP plans in the Compare bench pool;
+   *  otherwise they're stripped before scoring. Optional so older
+   *  session payloads / AgentBase hydrations don't need a backfill. */
+  dsnpEligible?: boolean;
 }
 
 export interface Medication {

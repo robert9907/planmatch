@@ -302,6 +302,34 @@ export function IntakeScreen({
     setPlanOpen(false);
   }
 
+  // Auto-detect dual-eligible status from the current plan's name. SNP
+  // plans surface "D-SNP" or "Dual" in the marketing name (e.g.
+  // "UHC Dual Complete NC-S1 (HMO D-SNP)"); when the broker picks one
+  // it's a near-certain signal that the client is Medicaid + Medicare.
+  // We flip dsnpEligible=true on first encounter so the brain stops
+  // stripping D-SNPs from the Compare bench. Tracked per-id via a ref
+  // so the auto-set fires exactly once per plan selection — if the
+  // broker toggles it back off after the auto-set, we don't fight them
+  // (the guard returns early since the id hasn't changed).
+  const dsnpAutoSetIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const id = currentPlanId ?? (presetCurrentPlanLabel ? `__preset__` : null);
+    if (!id) return;
+    if (dsnpAutoSetIdRef.current === id) return;
+    dsnpAutoSetIdRef.current = id;
+    const name = selectedPlan?.plan_name ?? presetCurrentPlanLabel ?? '';
+    if (!name) return;
+    if (/d-?snp|\bdual\b/i.test(name) && client.dsnpEligible !== true) {
+      updateClient({ dsnpEligible: true });
+    }
+  }, [
+    currentPlanId,
+    selectedPlan,
+    presetCurrentPlanLabel,
+    client.dsnpEligible,
+    updateClient,
+  ]);
+
   // Render the picker when eligiblePlans has loaded (the usual path) OR
   // when the deep-link pre-supplied a current plan and the catalog is
   // still in flight (so the broker sees the locked-in plan immediately
@@ -623,6 +651,63 @@ export function IntakeScreen({
       <div style={{ marginTop: 14 }}>
         <SnapTrigger capture={capture} />
       </div>
+
+      {/* Dual-eligible self-report — routes the brain's D-SNP
+        * population gate (plan-brain.ts:filterPlanPool). Without this
+        * flag, D-SNP plans are stripped from the Compare bench pool
+        * before scoring, so the bench's D-SNP filter shows zero. Auto-
+        * detected from the current plan's name when it contains
+        * "D-SNP" or "Dual"; broker can override. */}
+      <Card style={{ marginTop: 14, padding: '14px 16px' }}>
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: 0.6,
+            textTransform: 'uppercase',
+            color: '#64748b',
+            marginBottom: 10,
+          }}
+        >
+          Eligibility
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {(() => {
+            const on = client.dsnpEligible === true;
+            return (
+              <button
+                type="button"
+                onClick={() => updateClient({ dsnpEligible: !on })}
+                aria-pressed={on}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 12px',
+                  borderRadius: 999,
+                  border: on
+                    ? '1.5px solid #0d2f5e'
+                    : '1px solid rgba(13,47,94,0.18)',
+                  background: on
+                    ? 'rgba(131,240,249,0.18)'
+                    : 'white',
+                  color: '#0d2f5e',
+                  fontSize: 12,
+                  fontWeight: on ? 700 : 500,
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                }}
+              >
+                💳 Dual eligible (Medicaid + Medicare)
+                {on && <span aria-hidden>✓</span>}
+              </button>
+            );
+          })()}
+        </div>
+        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 8 }}>
+          Enables D-SNP plan recommendations on the Compare screen.
+        </div>
+      </Card>
 
       {/* Chronic-condition self-report — routes the brain's C-SNP
         * eligibility + reserved-slot path so clients who qualify but
