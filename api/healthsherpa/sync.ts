@@ -1,26 +1,27 @@
 // POST /api/healthsherpa/sync
 //
-// Pre-fills a HealthSherpa Medicare intake by POSTing the agent-v3
-// session payload to HealthSherpa's Partner API (/v1/contacts) and
-// returning the consumer redirect_url the broker should open in a new
-// tab. The frontend hook (openHealthSherpaEnrollment) blocks on this
-// route — on success it window.open(redirect_url); on failure it falls
-// back to the generic intake URL so the broker is never stuck.
-//
-// Body: a flat subset of useSession.client; the route is intentionally
-// loose so unsynced fields (city, address_1, sex, part A/B effective
-// dates) can be added later without a frontend change.
+// Pre-fills a HealthSherpa Medicare intake from the agent-v3 session.
+// Search-first dedup:
+//   1. If the payload carries an MBI, search by medicare_number.
+//   2. Else if first+last+dob are present, search by name+dob.
+//   3. If a match exists, PATCH that contact with any new fields and
+//      return its redirect_url.
+//   4. Otherwise create a new contact.
+//   5. On any upstream error, return a county/zip-preloaded fallback
+//      URL so the broker is never stranded.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from '../_lib/http.js';
+import {
+  createContact,
+  HealthSherpaError,
+  searchContact,
+  updateContact,
+  type HSContactInput,
+} from './client.js';
 
-const HEALTHSHERPA_CONTACTS_URL = 'https://api.medicare.healthsherpa.com/v1/contacts';
-const AGENT_EMAIL = 'robert@generationhealth.me';
 const HEALTHSHERPA_INTAKE_BASE = 'https://medicare.healthsherpa.com/intake/robert-simm';
 
-// Local copy of buildMedicareEnrollLink — api/* can't runtime-import
-// from src/ (Vercel serverless TS path resolution), per the precedent
-// in api/_lib/brand-generics.ts.
 function buildIntakeFallbackUrl(params: {
   cms_plan_id?: string;
   county?: string;
@@ -37,12 +38,11 @@ interface SyncBody {
   external_id?: string | number;
   first_name?: string;
   last_name?: string;
-  /** Single "name" field, when the caller hasn't pre-split. */
   name?: string;
   birth_date?: string;
   phone?: string;
   email?: string;
-  sex?: 'male' | 'female' | string;
+  sex?: string;
   zip?: string;
   state?: string;
   city?: string;
@@ -53,10 +53,7 @@ interface SyncBody {
   medicare_part_b_effective_date?: string;
   extra_help?: boolean;
   medicaid_eligible?: boolean;
-  /** Optional CMS plan id ("H1036-318-000") — surfaces as a note so the
-   *  HealthSherpa agent sees which plan the broker recommended. */
   cms_plan_id?: string;
-  /** Optional plan label ("BCBSNC Blue Medicare PPO Standard") — same. */
   plan_label?: string;
   notes?: string[];
 }
@@ -79,27 +76,18 @@ function clean<T extends Record<string, unknown>>(obj: T): T {
   return out as T;
 }
 
-// HealthSherpa's /v1/contacts is strict about phone — it rejects any
-// formatting ("555-123-4567", "(555) 123-4567" both 400 with
-// "must be a valid phone number"). Brokers type phones in any format,
-// so we normalize to digits-only here. <10 digits → omit the field
-// entirely so a partial phone doesn't tank the whole sync.
+// Strip non-digits; drop leading "1" country code; require 10 digits.
+// HealthSherpa 400s on any formatted phone — see commit 8ea2dbd.
 function normalizePhone(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   const digits = raw.replace(/\D+/g, '');
-  // US numbers: 10 digits, or 11 with leading "1". Drop the country
-  // code so HealthSherpa sees the bare 10-digit form.
   if (digits.length === 11 && digits.startsWith('1')) return digits.slice(1);
   if (digits.length === 10) return digits;
   return undefined;
 }
 
-// MBI format per CMS: 11 chars, alphanumeric uppercase, position-based
-// pattern (positions 2/5/8/9 letters, 1/4/7/10/11 digits, etc.).
-// HealthSherpa enforces this and 422s on bad input. We strip dashes/
-// spaces first so brokers can type "1AB2-CD3-EF45" verbatim; only send
-// if the result is 11 alphanumeric chars. Skip the strict positional
-// regex — HealthSherpa does the final check.
+// MBI: 11 alphanumeric chars uppercase. HealthSherpa 422s on malformed
+// MBIs — drop bad ones rather than tank the whole sync.
 function normalizeMbi(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   const stripped = raw.replace(/[\s-]+/g, '').toUpperCase();
@@ -111,15 +99,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return badRequest(res, 'POST required');
 
   console.log('[healthsherpa-sync] route hit');
-
-  const apiKey = process.env.HEALTHSHERPA_MEDICARE_API_KEY;
-  if (!apiKey) {
-    console.error('[healthsherpa-sync] missing HEALTHSHERPA_MEDICARE_API_KEY env var');
-    return sendJson(res, 500, {
-      error: 'HEALTHSHERPA_MEDICARE_API_KEY not configured',
-      fallback_url: HEALTHSHERPA_INTAKE_BASE,
-    });
-  }
 
   const body = (req.body ?? {}) as SyncBody;
   const split = splitName(body.name);
@@ -137,29 +116,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const notes = [
     'Synced from Plan Match agent-v3',
     ...(planNote ? [planNote] : []),
-    ...(Array.isArray(body.notes) ? body.notes.filter((n) => typeof n === 'string' && n.trim()) : []),
+    ...(Array.isArray(body.notes)
+      ? body.notes.filter((n) => typeof n === 'string' && n.trim())
+      : []),
   ];
 
-  const contact = clean({
+  const normalizedPhone = normalizePhone(body.phone);
+  const normalizedMbi = normalizeMbi(body.medicare_number);
+
+  const contact: HSContactInput = clean({
     external_id: externalId,
     first_name: firstName || undefined,
     last_name: lastName || undefined,
     birth_date: body.birth_date,
-    phone: normalizePhone(body.phone),
+    phone: normalizedPhone,
     email: body.email,
     sex: body.sex,
     zip: body.zip,
     state: body.state,
     city: body.city,
     address_1: body.address_1,
-    medicare_number: normalizeMbi(body.medicare_number),
+    medicare_number: normalizedMbi,
     medicare_part_a_effective_date: body.medicare_part_a_effective_date,
     medicare_part_b_effective_date: body.medicare_part_b_effective_date,
     extra_help: typeof body.extra_help === 'boolean' ? body.extra_help : undefined,
-    medicaid_eligible: typeof body.medicaid_eligible === 'boolean' ? body.medicaid_eligible : undefined,
+    medicaid_eligible:
+      typeof body.medicaid_eligible === 'boolean' ? body.medicaid_eligible : undefined,
     type: 'client',
     notes,
-  });
+  }) as HSContactInput;
 
   console.log(
     `[healthsherpa-sync] outbound contact: external_id=${externalId} first=${firstName ? 'y' : 'n'} last=${lastName ? 'y' : 'n'} dob=${contact.birth_date ? 'y' : 'n'} phone=${contact.phone ? 'y' : 'n'} email=${contact.email ? 'y' : 'n'} zip=${contact.zip ?? '?'} state=${contact.state ?? '?'} mbi=${contact.medicare_number ? 'y' : 'n'} plan=${body.cms_plan_id ?? '?'}`,
@@ -167,65 +152,66 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   res.setHeader('Cache-Control', 'no-store');
 
-  // Fallback URL we hand back on any non-2xx so the frontend always has
-  // a usable enrollment link — county/zip preload into the generic
-  // intake form even when the Partner API rejects the contact.
   const fallback_url = buildIntakeFallbackUrl({
     cms_plan_id: body.cms_plan_id,
     county: body.county,
     zip_code: body.zip,
   });
 
+  // ── Search-first dedup ──────────────────────────────────────────
+  // Order: MBI > name+dob > skip. Email/phone alone aren't enough
+  // per HealthSherpa search rules.
+  const searchable =
+    !!normalizedMbi ||
+    (!!firstName && !!lastName && !!body.birth_date);
+
   try {
-    const upstream = await fetch(HEALTHSHERPA_CONTACTS_URL, {
-      method: 'POST',
-      headers: {
-        'X-API-Key': apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        agent_email: AGENT_EMAIL,
-        contact,
-      }),
-    });
-
-    const text = await upstream.text();
-    let json: unknown = null;
-    try {
-      json = text ? JSON.parse(text) : null;
-    } catch {
-      // upstream returned non-JSON — surface raw text in the error.
+    let existing = null;
+    if (searchable) {
+      try {
+        if (normalizedMbi) {
+          existing = await searchContact({ medicare_number: normalizedMbi });
+        } else {
+          existing = await searchContact({
+            first_name: firstName,
+            last_name: lastName,
+            date_of_birth: body.birth_date,
+          });
+        }
+      } catch (err) {
+        // Search failure shouldn't block the create path. Log and
+        // fall through to create — if the contact already exists,
+        // HealthSherpa will reject the create with a uniqueness
+        // error and we'll surface that to the broker.
+        console.warn(
+          '[healthsherpa-sync] search failed, falling through to create:',
+          err instanceof HealthSherpaError ? `${err.status} ${err.message}` : err,
+        );
+      }
+    } else {
+      console.log('[healthsherpa-sync] not enough fields to search; going straight to create');
     }
 
-    console.log(
-      `[healthsherpa-sync] upstream responded status=${upstream.status} body_len=${text.length}`,
-    );
+    let result: { contact: { id?: string }; redirect_url: string };
 
-    if (!upstream.ok) {
-      console.error(
-        `[healthsherpa-sync] upstream ${upstream.status}: ${text.slice(0, 500)}`,
+    if (existing && existing.contact.id) {
+      console.log(
+        `[healthsherpa-sync] existing contact found id=${existing.contact.id} → updating`,
       );
-      return sendJson(res, 502, {
-        error: `HealthSherpa API ${upstream.status}`,
-        upstream:
-          json && typeof json === 'object'
-            ? json
-            : text.slice(0, 500) || null,
-        fallback_url,
-      });
+      const updated = await updateContact(existing.contact.id, contact);
+      // 204 No Content path returns an empty redirect_url — fall back
+      // to the redirect_url from the search hit, which is still valid.
+      result = {
+        contact: updated.contact,
+        redirect_url: updated.redirect_url || existing.redirect_url,
+      };
+    } else {
+      console.log('[healthsherpa-sync] no existing contact → creating');
+      result = await createContact(contact);
     }
 
-    const data = (json ?? {}) as {
-      data?: { redirect_url?: string; contact?: { id?: string | number } };
-      redirect_url?: string;
-      contact?: { id?: string | number };
-    };
-    // HealthSherpa's response shape historically wraps under data.*; we
-    // also accept top-level keys in case the contract is flatter.
-    const redirect_url =
-      data.data?.redirect_url ?? data.redirect_url ?? fallback_url;
-    const contact_id =
-      data.data?.contact?.id ?? data.contact?.id ?? null;
+    const redirect_url = result.redirect_url || fallback_url;
+    const contact_id = result.contact.id ?? null;
     const usedFallback = redirect_url === fallback_url;
 
     console.log(
@@ -236,10 +222,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       redirect_url,
       contact_id,
       external_id: externalId,
+      matched_existing: !!existing,
     });
   } catch (err) {
+    if (err instanceof HealthSherpaError) {
+      console.error(
+        `[healthsherpa-sync] partner api ${err.status}: ${err.message}`,
+        err.upstream,
+      );
+      return sendJson(res, 502, {
+        error: err.message,
+        upstream: err.upstream,
+        fallback_url,
+      });
+    }
     console.error('[healthsherpa-sync] fetch failed:', err);
-    // Network blip: still return a usable URL so the broker isn't stuck.
     return serverError(res, {
       message: err instanceof Error ? err.message : 'HealthSherpa sync failed',
       fallback_url,
