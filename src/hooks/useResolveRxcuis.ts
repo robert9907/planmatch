@@ -126,6 +126,9 @@ const TRAILING_STRIP_TOKENS: ReadonlySet<string> = new Set([
   'HCL', 'HBR', 'SODIUM', 'POTASSIUM', 'SULFATE', 'SUCCINATE',
   'MALEATE', 'BESYLATE', 'MESYLATE', 'FUMARATE', 'TARTRATE',
   'CITRATE', 'ACETATE', 'PHOSPHATE',
+  'CALCIUM', 'CHLORIDE', 'BROMIDE', 'CARBONATE', 'OXIDE',
+  'GLUCONATE', 'STEARATE', 'NITRATE', 'BITARTRATE', 'MALATE',
+  'HYDROCHLORIDE', 'HYDROBROMIDE',
   // Release-form modifiers (overlap with RELEASE_RE, which strips
   // mid-name; this set covers the iterative end-of-name case).
   'ER', 'XR', 'XL', 'SR', 'CR', 'DR', 'IR', 'LA', 'SA', 'CD',

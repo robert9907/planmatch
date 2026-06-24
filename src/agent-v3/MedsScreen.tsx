@@ -351,6 +351,20 @@ function MedRow({
   const stats = useMemo(() => perDrugBest(med, plans, tick), [med, plans, tick]);
   const tierForIcon = stats.bestTier ?? 0;
   const dosage = [med.dose, med.frequency].filter(Boolean).join(' • ');
+
+  // Cap the Checking spinner at 12s. If the formulary prime returns
+  // empty for this rxcui (or the resolver stalled before ever assigning
+  // one), fall through to a soft "No formulary data" message instead of
+  // spinning forever — better signal for the broker than perpetual
+  // motion. Resets on rxcui/ready/tick so a late-arriving prime still
+  // promotes the row to the real stats render.
+  const [timedOut, setTimedOut] = useState(false);
+  useEffect(() => {
+    setTimedOut(false);
+    if (stats.ready) return;
+    const id = setTimeout(() => setTimedOut(true), 12000);
+    return () => clearTimeout(id);
+  }, [med.rxcui, stats.ready, tick]);
   // Annualized estimate = monthly copay × 12. We label it "est" so
   // nobody mistakes it for a Medicare.gov-sourced annual; the live
   // total in the footer AgentInsight is the real per-plan annual.
@@ -409,17 +423,23 @@ function MedRow({
             No RxNorm match
           </div>
         ) : !stats.ready ? (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              justifyContent: 'flex-end',
-            }}
-          >
-            <div className="pma3-spinner" style={{ width: 12, height: 12 }} />
-            <span style={{ fontSize: 10, color: '#94a3b8' }}>Checking</span>
-          </div>
+          timedOut ? (
+            <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600 }}>
+              No formulary data
+            </div>
+          ) : (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+                justifyContent: 'flex-end',
+              }}
+            >
+              <div className="pma3-spinner" style={{ width: 12, height: 12 }} />
+              <span style={{ fontSize: 10, color: '#94a3b8' }}>Checking</span>
+            </div>
+          )
         ) : stats.coveredPlans === 0 ? (
           <div style={{ fontSize: 10, color: '#a32d2d', fontWeight: 600 }}>
             Not covered

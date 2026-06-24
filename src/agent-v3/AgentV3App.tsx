@@ -367,8 +367,8 @@ export function AgentV3App() {
         store.addMedication({
           name: m.name,
           rxcui: m.rxcui || undefined,
-          frequency:
-            [m.dose, m.frequency].filter(Boolean).join(' · ') || undefined,
+          dose: m.dose || undefined,
+          frequency: m.frequency || undefined,
           tier: parseDigit(m.tier),
           quantity: m.quantity || undefined,
           refillDays: parseDigit(m.refill_days),
