@@ -226,7 +226,9 @@ export async function searchContact(
   if (params.medicare_number) wireParams.medicare_number = params.medicare_number;
   if (params.first_name) wireParams.first_name = params.first_name;
   if (params.last_name) wireParams.last_name = params.last_name;
-  if (dob) wireParams.date_of_birth = dob;
+  // Public docs say `date_of_birth`, but the live API rejects that key
+  // with "birth_date, email, or phone is required". Send birth_date.
+  if (dob) wireParams.birth_date = dob;
   if (params.email) wireParams.email = params.email;
   if (params.phone) wireParams.phone = params.phone;
 
