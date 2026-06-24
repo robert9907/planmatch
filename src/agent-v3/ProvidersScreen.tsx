@@ -62,20 +62,23 @@ export function ProvidersScreen({
   const addProvider = useSession((s) => s.addProvider);
   const removeProvider = useSession((s) => s.removeProvider);
 
+  // planType is null so the network check covers the full county pool
+  // (MAPD + SNP + MA-only) — matches AgentV3App so bench D-SNP / C-SNP
+  // plans show real provider statuses when the broker filters to them.
   const [eligiblePlans, setEligiblePlans] = useState<Plan[]>([]);
   useEffect(() => {
     let cancelled = false;
     fetchPlansForClient({
       state: client.state,
       county: client.county,
-      planType: client.planType,
+      planType: null,
     }).then((plans) => {
       if (!cancelled) setEligiblePlans(plans);
     });
     return () => {
       cancelled = true;
     };
-  }, [client.state, client.county, client.planType]);
+  }, [client.state, client.county]);
 
   // All eligible plans in the county. The provider rail shows EVERY
   // plan grouped by carrier (was top-3 only pre-fix) so the broker

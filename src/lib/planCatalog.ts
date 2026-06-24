@@ -22,11 +22,13 @@ interface ApiPlan {
   state: string;
   counties: string[];
   plan_type: PlanType;
+  snp_type: string | null;
   premium: number;
   annual_deductible: number | null;
   moop_in_network: number;
   moop_out_of_network: number | null;
   drug_deductible: number | null;
+  has_drug_coverage: boolean;
   part_b_giveback: number;
   star_rating: number;
   benefits: Partial<PlanBenefits>;
@@ -104,11 +106,15 @@ function toPlan(p: ApiPlan): Plan {
     state: p.state as StateCode,
     counties: p.counties ?? [],
     plan_type: p.plan_type,
+    snp_type: p.snp_type ?? null,
     premium: p.premium ?? 0,
     annual_deductible: p.annual_deductible ?? null,
     moop_in_network: p.moop_in_network ?? 0,
     moop_out_of_network: p.moop_out_of_network ?? null,
     drug_deductible: p.drug_deductible ?? null,
+    // Older /api/plans builds didn't return has_drug_coverage; treat
+    // them as covered to avoid false-positive VA matches.
+    has_drug_coverage: p.has_drug_coverage ?? true,
     part_b_giveback: p.part_b_giveback ?? 0,
     star_rating: p.star_rating ?? 0,
     benefits: fillBenefits(p.benefits ?? {}),

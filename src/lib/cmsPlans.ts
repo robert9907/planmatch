@@ -129,13 +129,20 @@ function p(override: PlanOverride): Plan {
     rx_tiers: EMPTY_RX_TIERS,
   };
   const { benefits: benefitsOverride, ...rest } = override;
+  // snp_type / has_drug_coverage defaults below are deliberately
+  // conservative — this static fallback fires only during a Supabase
+  // outage, so the compare-bench category filters won't surface these
+  // rows under D-SNP / C-SNP / VA. Real plan rows from /api/plans
+  // carry the correct values.
   return {
     counties,
+    snp_type: null,
     premium: 0,
     annual_deductible: null,
     moop_in_network: 4900,
     moop_out_of_network: null,
     drug_deductible: null,
+    has_drug_coverage: true,
     part_b_giveback: 0,
     star_rating: 4,
     benefits: { ...defaultBenefits, ...(benefitsOverride ?? {}) },

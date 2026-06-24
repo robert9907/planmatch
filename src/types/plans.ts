@@ -151,11 +151,18 @@ export interface Plan {
   state: StateCode;
   counties: string[];
   plan_type: PlanType;
+  // Raw snp_type string from pm_plans ("D-SNP" | "C-SNP" | "I-SNP" | null).
+  // plan_type already buckets SNP variants, but the compare bench filter
+  // partitions D-SNP vs C-SNP separately and needs the raw value.
+  snp_type: string | null;
   premium: number;
   annual_deductible: number | null;
   moop_in_network: number;
   moop_out_of_network: number | null;
   drug_deductible: number | null;
+  // Derived from drug_deductible: false ⇒ MA-only (no Part D bundled),
+  // which the broker filters as "VA" in the compare bench.
+  has_drug_coverage: boolean;
   part_b_giveback: number;
   star_rating: number;
   benefits: PlanBenefits;

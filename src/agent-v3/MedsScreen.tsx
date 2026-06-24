@@ -85,22 +85,24 @@ export function MedsScreen({ onNext, onBack, clientView, capture }: Props) {
   const removeMedication = useSession((s) => s.removeMedication);
 
   // Eligible plan set drives the formulary prime + the live total
-  // drug-cost lookup. Same call shape the v4 MedsPage uses so the
-  // pm_plans path is shared.
+  // drug-cost lookup. planType is null so the prime covers the full
+  // county pool (MAPD + SNP + MA-only) — matches AgentV3App's catalog
+  // fetch so bench D-SNP / C-SNP plans land with their formulary
+  // already cached when the broker filters to them on CompareScreen.
   const [eligiblePlans, setEligiblePlans] = useState<Plan[]>([]);
   useEffect(() => {
     let cancelled = false;
     fetchPlansForClient({
       state: client.state,
       county: client.county,
-      planType: client.planType,
+      planType: null,
     }).then((plans) => {
       if (!cancelled) setEligiblePlans(plans);
     });
     return () => {
       cancelled = true;
     };
-  }, [client.state, client.county, client.planType]);
+  }, [client.state, client.county]);
 
   // Bulk-prime pm_formulary so getCachedFormulary returns hits in the
   // per-row render. Re-fires whenever the (plans × rxcuis) tuple

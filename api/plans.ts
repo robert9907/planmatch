@@ -38,11 +38,18 @@ interface Plan {
   state: string;
   counties: string[];
   plan_type: AppPlanType;
+  snp_type: string | null;
   premium: number;
   annual_deductible: number | null;
   moop_in_network: number;
   moop_out_of_network: number | null;
   drug_deductible: number | null;
+  // Derived from drug_deductible: true when the plan files a Part D
+  // deductible (even $0), false when the column is NULL. NULL is the
+  // landscape extract's marker for MA-only plans (no Part D bundled),
+  // which the broker workflow filters as "VA" — clients who get their
+  // Rx through VA pharmacy and only want medical coverage.
+  has_drug_coverage: boolean;
   part_b_giveback: number;
   star_rating: number;
   benefits: PlanBenefits;
@@ -1000,6 +1007,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         state: row.state,
         counties: [...counties].sort(),
         plan_type: mapPlanType(row.plan_type, row.snp, row.snp_type),
+        snp_type: row.snp_type,
+        has_drug_coverage: row.drug_deductible !== null,
         premium: row.monthly_premium ?? 0,
         // pm_plans.annual_deductible is sparsely populated (3% of Durham
         // plans) while pbp_benefits.medical_deductible from medicare_gov

@@ -404,20 +404,26 @@ export function AgentV3App() {
   const stopShare = useScreenShareStore((s) => s.stop);
 
   // ── Eligible plan catalog ────────────────────────────────────────
+  // planType is intentionally null here — the broker workflow needs the
+  // full county pool (MAPD + D-SNP + C-SNP + MA-only) on the compare
+  // bench so the D-SNP / C-SNP / VA category filters can partition real
+  // rows. Filtering by client.planType at the API would drop the SNP
+  // buckets before they ever reach Bench. The brain's gates still cull
+  // by client eligibility; this just widens the pool feeding them.
   const [eligiblePlans, setEligiblePlans] = useState<Plan[]>([]);
   useEffect(() => {
     let cancelled = false;
     fetchPlansForClient({
       state: client.state,
       county: client.county,
-      planType: client.planType,
+      planType: null,
     }).then((plans) => {
       if (!cancelled) setEligiblePlans(plans);
     });
     return () => {
       cancelled = true;
     };
-  }, [client.state, client.county, client.planType]);
+  }, [client.state, client.county]);
 
   // Phase 2 of the test seed — once eligiblePlans has landed, pick a
   // plausible current plan so the swipe deck has something to benchmark
