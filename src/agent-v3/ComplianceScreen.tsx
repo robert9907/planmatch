@@ -238,6 +238,12 @@ export function ComplianceScreen({ onBack, onNext }: Props) {
         );
       })}
 
+      {/* Reference-only compliance docs — not part of the 16-item gate.
+          Collapsed by default so the checklist stays the focus; broker
+          can expand mid-call when asked "how long do you keep my call?"
+          or to confirm a grievance pointer. */}
+      <RetentionPolicy />
+
       <div
         style={{
           background: allDone ? 'rgba(5,150,105,0.04)' : '#fffbeb',
@@ -394,3 +400,137 @@ const CHECKBOX_STYLE = (done: boolean, verbatim: boolean): CSSProperties => ({
   cursor: 'pointer',
   transition: 'all 0.2s',
 });
+
+// ── Call Recording Retention Policy ─────────────────────────────────
+// CMS CY2027 Final Rule (effective 2026-10-01) split call-recording
+// retention into two tracks. Documenting the CORRECT version of the
+// rules here so the broker doesn't fall back on the older "10 years
+// for everything" shorthand mid-call. Reference-only; not part of the
+// 16-item enrollment gate.
+//
+// Sources:
+//   • 42 CFR §422.2274 (Medicare Advantage marketing)
+//   • CY2027 Final Rule (Federal Register, 2026)
+//   • CMS Final Rule Fact Sheet
+//
+// Storage: Twilio. Twilio does NOT auto-delete recordings by default —
+// they persist indefinitely until a delete API call. So the
+// 6-or-10-year obligation is a procedural rule, not a vendor setting
+// that needs to be configured. Verified 2026-06-24.
+
+function RetentionPolicy() {
+  return (
+    <details
+      style={{
+        background: '#f8fafc',
+        border: '1px solid rgba(13,47,94,0.08)',
+        borderRadius: 10,
+        padding: '10px 14px',
+        marginBottom: 12,
+        marginTop: 18,
+        fontSize: 12,
+        lineHeight: 1.55,
+        color: '#1e293b',
+      }}
+    >
+      <summary
+        style={{
+          cursor: 'pointer',
+          fontWeight: 700,
+          color: '#0d2f5e',
+          listStyle: 'revert',
+        }}
+      >
+        Call Recording Retention Policy <span style={{ color: '#64748b', fontWeight: 500 }}>(CY2027 Final Rule)</span>
+      </summary>
+
+      <div style={{ marginTop: 10 }}>
+        <div style={SECTION_HEAD}>Marketing &amp; Sales Calls</div>
+        <ul style={LIST}>
+          <li>
+            <strong>6-year total retention</strong> (reduced from prior
+            10-year shorthand).
+          </li>
+          <li>
+            Years 1–3: <strong>audio recording required</strong> —
+            transcript alone is not sufficient.
+          </li>
+          <li>
+            Years 4–6: audio <em>or</em> a complete and accurate
+            transcript acceptable. CMS defines "complete and accurate"
+            as documenting the full recording and reflecting all
+            statements as originally occurred.
+          </li>
+          <li>
+            Applies to <strong>all</strong> marketing and sales calls —
+            independent agents <em>and</em> call centers. No solo-
+            producer exemption.
+          </li>
+        </ul>
+
+        <div style={SECTION_HEAD}>Enrollment Calls (unchanged — separate track)</div>
+        <ul style={LIST}>
+          <li>
+            <strong>10-year retention</strong> from date of call. CMS
+            explicitly declined to reduce it in CY2027.
+          </li>
+          <li>
+            The enrollment portion of a call serves as the enrollment
+            form and proof of intent to enroll.
+          </li>
+          <li>
+            <strong>Mixed calls roll up:</strong> if a single call
+            contains both sales discussion and enrollment, the entire
+            call falls under the 10-year track.
+          </li>
+        </ul>
+
+        <div style={SECTION_HEAD}>Operational Policy — GenerationHealth</div>
+        <ul style={LIST}>
+          <li>
+            Retain <strong>all</strong> call audio for 10 years. Avoids
+            misclassification risk on mixed sales-plus-enrollment calls.
+          </li>
+          <li>
+            <strong>Storage:</strong> Twilio (US region). Twilio retains
+            recordings indefinitely by default — no auto-delete is
+            configured, so the 10-year obligation is a procedural rule,
+            not a vendor setting.
+          </li>
+          <li>
+            <strong>Access:</strong> authorized broker personnel only,
+            via Twilio Console or AgentBase CRM call log.
+          </li>
+          <li>
+            <strong>Deletion prohibited</strong> during the retention
+            period.
+          </li>
+          <li>
+            <strong>Lead-source consent records:</strong> 10 years
+            (matches enrollment track).
+          </li>
+        </ul>
+
+        <div style={{ fontSize: 10, color: '#64748b', marginTop: 8 }}>
+          Refs: 42 CFR §422.2274 · CY2027 Final Rule (Federal Register) ·
+          CMS Final Rule Fact Sheet. Last verified 2026-06-24.
+        </div>
+      </div>
+    </details>
+  );
+}
+
+const SECTION_HEAD: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#0d2f5e',
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+  marginTop: 10,
+  marginBottom: 4,
+};
+
+const LIST: CSSProperties = {
+  margin: '0 0 6px 0',
+  paddingLeft: 18,
+};
