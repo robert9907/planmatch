@@ -1,5 +1,21 @@
 // AgentV3App — top-level shell for the agent quoting flow.
 //
+// ════════════════════════════════════════════════════════════════════
+// CANONICAL AGENT-V3 CODEBASE.
+//
+// This is THE active source of truth for the agent-facing Plan Match
+// tool. The consumer repo (robert9907/plan-match,
+// apps/web/src/pages/agent-v3/) used to carry a 7-week-old refactor
+// stub; W3 Fix 7 redirected planmatch.generationhealth.me/agent-v3
+// → planmatch.vercel.app/agent-v3 (this app), and W4 Fix 3 deleted
+// the stale consumer directory entirely.
+//
+// When you make a compliance-bearing change here (SOA wording, TPMO
+// language, fitness-program names, recording disclosure, etc.) it does
+// NOT need to be mirrored to the consumer repo — that route now just
+// renders the W3-Fix-7 redirect.
+// ════════════════════════════════════════════════════════════════════
+//
 // 7-screen flow: intake → meds → providers → priorities → compare →
 // compliance → enroll. The Plans/Swipe deck collapsed into Compare,
 // which now seeds slots directly from the brain's ranked scoring
