@@ -218,10 +218,32 @@ export async function updateContact(
  *  Returns null when HealthSherpa reports no match (404 / 422 with
  *  resource_not_found). Throws on other errors (auth failures, server
  *  errors, validation rejections from bad search params). */
+/** Search requires DOB in strict ISO YYYY-MM-DD format — the contact's
+ *  stored value is normalized to ISO and HealthSherpa string-compares.
+ *  Create accepts MM/DD/YYYY happily, so this only matters here.
+ *  Returns the input unchanged when it's already ISO or unparseable
+ *  (let HealthSherpa surface the validation error in that case). */
+function toIsoDob(raw: string): string {
+  // Already ISO (YYYY-MM-DD or YYYY/MM/DD).
+  const iso = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (iso) {
+    const [, y, m, d] = iso;
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  // US format MM/DD/YYYY or MM-DD-YYYY.
+  const us = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (us) {
+    const [, m, d, y] = us;
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  return raw;
+}
+
 export async function searchContact(
   params: HSSearchParams,
 ): Promise<HSResult | null> {
-  const dob = params.date_of_birth ?? params.birth_date;
+  const rawDob = params.date_of_birth ?? params.birth_date;
+  const dob = rawDob ? toIsoDob(rawDob) : undefined;
   const wireParams: Record<string, string> = {};
   if (params.medicare_number) wireParams.medicare_number = params.medicare_number;
   if (params.first_name) wireParams.first_name = params.first_name;
