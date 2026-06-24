@@ -24,7 +24,7 @@ import {
   totalComplianceItems,
 } from '@/lib/compliance';
 import { Container, Nav } from './atoms';
-import { buildMedicareEnrollLink } from './lib/healthsherpa-medicare-link';
+import { useHealthSherpaEnroll } from './lib/useHealthSherpaEnroll';
 
 interface Props {
   onBack: () => void;
@@ -36,6 +36,7 @@ export function ComplianceScreen({ onBack, onNext }: Props) {
   const confirmed = useSession((s) => s.disclaimersConfirmed);
   const toggleItem = useSession((s) => s.toggleComplianceItem);
   const client = useSession((s) => s.client);
+  const enroll = useHealthSherpaEnroll();
 
   const total = totalComplianceItems();
   const done = new Set(checked).size + new Set(confirmed).size;
@@ -281,21 +282,14 @@ export function ComplianceScreen({ onBack, onNext }: Props) {
         <button
           type="button"
           onClick={
-            allDone
+            allDone && enroll.status !== 'syncing'
               ? () => {
-                  window.open(
-                    buildMedicareEnrollLink({
-                      county: client.county || undefined,
-                      zip_code: client.zip || undefined,
-                    }),
-                    '_blank',
-                    'noopener,noreferrer',
-                  );
+                  void enroll.openEnrollment({ client });
                   onNext();
                 }
               : undefined
           }
-          disabled={!allDone}
+          disabled={!allDone || enroll.status === 'syncing'}
           style={{
             background: allDone
               ? 'linear-gradient(135deg, #059669, #047857)'
@@ -306,11 +300,14 @@ export function ComplianceScreen({ onBack, onNext }: Props) {
             padding: '11px 22px',
             fontSize: 13,
             fontWeight: 700,
-            cursor: allDone ? 'pointer' : 'default',
+            cursor:
+              allDone && enroll.status !== 'syncing' ? 'pointer' : 'default',
             transition: 'all 0.3s',
           }}
         >
-          Open HealthSherpa →
+          {enroll.status === 'syncing'
+            ? 'Connecting to HealthSherpa…'
+            : 'Open HealthSherpa →'}
         </button>
       </div>
 

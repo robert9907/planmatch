@@ -14,7 +14,7 @@ import { Card, Container, Header, Nav, fmt } from './atoms';
 import { annualEstimate } from './planDisplay';
 import type { ComplianceSnapshot, AgentV3SessionSummary } from './agentbaseSync';
 import { SECTIONS, DISCLAIMERS } from '@/lib/compliance';
-import { buildMedicareEnrollLink } from './lib/healthsherpa-medicare-link';
+import { useHealthSherpaEnroll } from './lib/useHealthSherpaEnroll';
 
 interface Props {
   current: Plan | null;
@@ -48,12 +48,16 @@ export function EnrollScreen({
   const complianceTimestamps = useSession((s) => s.complianceTimestamps);
   const disclaimerTimestamps = useSession((s) => s.disclaimerTimestamps);
 
-  // Toast state for the save-then-open SunFire flow. status: idle while
-  // the button sits, saving while POST is in flight, saved on success
-  // (then sunfire opens), error if the endpoint failed (sunfire stays
-  // closed; broker retries).
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  // Toast state for the save-then-open HealthSherpa flow. status: idle
+  // while the button sits, saving while AgentBase POST is in flight,
+  // syncing while the HealthSherpa /v1/contacts round-trip is in
+  // flight, saved on success (then HealthSherpa opens), error if either
+  // leg failed (HealthSherpa stays closed; broker retries).
+  const [saveStatus, setSaveStatus] = useState<
+    'idle' | 'saving' | 'syncing' | 'saved' | 'error'
+  >('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
+  const enroll = useHealthSherpaEnroll();
 
   // Top brain-ranked plan that isn't the client's current — falls
   // back to scoredPlans[0] when there's no current on file (e.g.
@@ -191,7 +195,7 @@ export function EnrollScreen({
           type="button"
           disabled={saveStatus === 'saving'}
           onClick={async () => {
-            if (saveStatus === 'saving') return;
+            if (saveStatus === 'saving' || saveStatus === 'syncing') return;
             setSaveStatus('saving');
             setSaveError(null);
             const compliance = buildComplianceSnapshot({
@@ -208,29 +212,34 @@ export function EnrollScreen({
             };
             const r = await (onRecommend?.(recommendedPlan, { compliance, sessionSummary }) ??
               Promise.resolve<{ ok: true } | { ok: false; error: string }>({ ok: true }));
-            if (r.ok) {
-              setSaveStatus('saved');
-              // Open HealthSherpa in a new tab — only after the
-              // AgentBase save lands. Use window.open instead of an
-              // <a> so the open is gated on the await above.
-              window.open(
-                buildMedicareEnrollLink({
-                  cms_plan_id: recommendedPlan.id,
-                  county: client.county || undefined,
-                  zip_code: client.zip || undefined,
-                }),
-                '_blank',
-                'noopener,noreferrer',
-              );
-            } else {
+            if (!r.ok) {
               setSaveStatus('error');
               setSaveError(r.error);
+              return;
+            }
+            // AgentBase save landed — now sync to HealthSherpa Partner
+            // API. The hook opens the redirect_url itself on success and
+            // falls back to the generic intake URL on error, so the
+            // broker always lands in a HealthSherpa tab.
+            setSaveStatus('syncing');
+            const result = await enroll.openEnrollment({
+              client,
+              plan: recommendedPlan,
+            });
+            if (result.ok) {
+              setSaveStatus('saved');
+            } else {
+              // Tab was still opened (fallback URL), but we surface the
+              // Partner-API error so the broker knows the contact
+              // pre-fill didn't land.
+              setSaveStatus('error');
+              setSaveError(enroll.error ?? 'HealthSherpa Partner API sync failed');
             }
           }}
           style={{
             display: 'inline-block',
             background:
-              saveStatus === 'saving'
+              saveStatus === 'saving' || saveStatus === 'syncing'
                 ? 'linear-gradient(135deg, #94a3b8, #64748b)'
                 : 'linear-gradient(135deg, #059669, #047857)',
             color: 'white',
@@ -239,7 +248,8 @@ export function EnrollScreen({
             padding: '16px 50px',
             fontSize: 16,
             fontWeight: 800,
-            cursor: saveStatus === 'saving' ? 'wait' : 'pointer',
+            cursor:
+              saveStatus === 'saving' || saveStatus === 'syncing' ? 'wait' : 'pointer',
             boxShadow: '0 8px 30px rgba(5,150,105,0.3)',
             letterSpacing: 0.5,
             textDecoration: 'none',
@@ -247,7 +257,9 @@ export function EnrollScreen({
         >
           {saveStatus === 'saving'
             ? 'Saving to AgentBase…'
-            : 'Save & Open HealthSherpa →'}
+            : saveStatus === 'syncing'
+              ? 'Connecting to HealthSherpa…'
+              : 'Save & Open HealthSherpa →'}
         </button>
         <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 6 }}>
           Pre-populated · NPN 10447418
@@ -286,8 +298,8 @@ export function EnrollScreen({
               fontWeight: 700,
             }}
           >
-            ⚠ AgentBase save failed: {saveError ?? 'unknown error'}. HealthSherpa
-            stayed closed so you can retry.
+            ⚠ {saveError ?? 'unknown error'}. HealthSherpa opened with the
+            generic intake URL — re-enter client basics or retry.
           </div>
         )}
       </div>
