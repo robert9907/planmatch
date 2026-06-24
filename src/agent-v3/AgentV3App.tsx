@@ -491,6 +491,13 @@ export function AgentV3App() {
     userPriorities: userPriorityKeys,
     csnpConditions: client.csnpConditions,
     currentPlanId,
+    // When the broker flagged the client as dual-eligible on Intake,
+    // pass it through so the library's filterPlanPool keeps D-SNPs in
+    // the Top-4 candidate pool. When false/undefined, the bench still
+    // surfaces every D-SNP (sourced from eligiblePlans), but Top 4
+    // stays strict — broker can drag any D-SNP onto the board manually
+    // if the situation warrants it.
+    dsnpEligible: client.dsnpEligible,
   });
 
   // ── Provider network hydration: full-county direct call ───────────
@@ -710,26 +717,36 @@ export function AgentV3App() {
       .filter((p): p is Plan => p != null);
   }, [ranked.result, planById]);
 
+  // Bench = the broker's workspace, not the brain's runners-up. The
+  // brain's filterPlanPool strips D-SNPs from clients flagged
+  // dsnpEligible !== true and MA-only plans from clients with meds —
+  // correct for the strict Top-4 board (don't recommend D-SNPs to non-
+  // dual clients) but wrong for the bench, where the broker needs to
+  // see and drag ANY county plan onto the board to compare. So we
+  // source bench from the FULL /api/plans response (eligiblePlans,
+  // fetched with planType=null) minus whatever's already in Top 4.
+  // Plans the brain didn't score won't have annualDrug / ribbon / gate
+  // entries; CompareScreen already renders "—" for those, which reads
+  // correctly as "unscored candidate."
   const benchPlans = useMemo<Plan[]>(() => {
-    if (!ranked.result) return [];
-    const out = ranked.result.bench_plans
-      .map((lp) => planById.get(normalizePlanId(lp.plan_id)))
-      .filter((p): p is Plan => p != null);
-    // Diagnostic — confirms the library returned a bench list and the
-    // local catalog fully covers it. Mismatch (out.length <
-    // bench_plans.length) means the library ranked a plan the agent's
-    // /api/plans catalog doesn't carry — usually a county routing bug.
-    console.log(
-      '[agent-v3] bench:',
-      out.length,
-      'of',
-      ranked.result.top_plans.length + ranked.result.bench_plans.length,
-      'eligible (Top 4:',
-      ranked.result.top_plans.length,
-      ')',
-    );
+    if (eligiblePlans.length === 0) return [];
+    const topIds = new Set(scoredPlans.map((p) => p.id));
+    const out = eligiblePlans.filter((p) => !topIds.has(p.id));
+    if (ranked.result) {
+      console.log(
+        '[agent-v3] bench:',
+        out.length,
+        'of',
+        eligiblePlans.length,
+        'county plans (Top 4:',
+        scoredPlans.length,
+        'brain-ranked:',
+        ranked.result.top_plans.length + ranked.result.bench_plans.length,
+        ')',
+      );
+    }
     return out;
-  }, [ranked.result, planById]);
+  }, [eligiblePlans, scoredPlans, ranked.result]);
 
   // The by-plan-id maps below are keyed by the agent's Plan.id (NOT the
   // library's lp.plan_id) because CompareScreen looks them up as
@@ -1152,25 +1169,45 @@ export function AgentV3App() {
         />
       )}
 
-      {/* Bottom-left tag so reviewers know which build they're in. */}
+      {/* Bottom-left tag so reviewers know which build they're in,
+          with the broker / CMS-not-reviewed disclaimer beneath. Agent
+          v3 is internal broker tooling, not a consumer surface, but
+          screen-shares + recordings expose the chrome to consumers so
+          the marketing-attribution + CMS-not-reviewed clause carries
+          through. */}
       <div
         style={{
           position: 'fixed',
           bottom: 12,
           left: 12,
-          fontSize: 10,
-          fontWeight: 700,
-          letterSpacing: 1,
-          textTransform: 'uppercase',
-          color: 'rgba(13,47,94,0.5)',
-          background: 'rgba(255,255,255,0.7)',
+          maxWidth: 320,
+          color: 'rgba(13,47,94,0.6)',
+          background: 'rgba(255,255,255,0.78)',
           backdropFilter: 'blur(4px)',
-          padding: '4px 8px',
+          padding: '6px 10px',
           borderRadius: 6,
           border: '1px solid rgba(13,47,94,0.08)',
+          fontFamily:
+            'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         }}
       >
-        Agent v3 · review build
+        <div
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 1,
+            textTransform: 'uppercase',
+            color: 'rgba(13,47,94,0.5)',
+          }}
+        >
+          Agent v3 · review build
+        </div>
+        <div style={{ fontSize: 9, lineHeight: 1.4, marginTop: 4 }}>
+          GenerationHealth.me · NPN 10447418. Plan data is sourced from
+          CMS public files and has not been reviewed by CMS or any
+          Medicare plan. Official info: Medicare.gov or
+          1-800-MEDICARE (TTY 1-877-486-2048).
+        </div>
       </div>
     </div>
   );

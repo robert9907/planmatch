@@ -49,6 +49,13 @@ export interface UseRankedPlansArgs {
   /** Optional currentPlanId for annual-review flow — library excludes
    *  it from Top 4 selection. */
   currentPlanId?: string | null;
+  /** Self-reported dual-eligibility captured by the broker on Intake.
+   *  Passed through to the library so the brain's population gate
+   *  keeps D-SNP plans in the Top-4 pool when the client qualifies.
+   *  When false / undefined, D-SNPs are stripped from the Top 4 (still
+   *  visible on the bench — bench is sourced from the full county
+   *  catalog upstream). */
+  dsnpEligible?: boolean;
 }
 
 export interface UseRankedPlansState {
@@ -93,6 +100,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     userPriorities,
     csnpConditions,
     currentPlanId,
+    dsnpEligible,
   } = args;
 
   const [state, setState] = useState<UseRankedPlansState>(EMPTY_STATE);
@@ -192,6 +200,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
         extras,
         csnpConditions: csnpList,
         current_plan_id: currentPlanId ?? null,
+        dsnp_eligible: dsnpEligible === true ? true : undefined,
       },
       ctrl.signal,
     )
@@ -224,7 +233,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     // medsKey / provsKey / extrasKey deliberately gate on serialized
     // content, not array identity — see notes above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [county, zip, state_, medsKey, provsKey, extrasKey, csnpKey, currentPlanId]);
+  }, [county, zip, state_, medsKey, provsKey, extrasKey, csnpKey, currentPlanId, dsnpEligible]);
 
   return state;
 }

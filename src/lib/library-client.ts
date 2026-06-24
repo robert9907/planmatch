@@ -232,6 +232,12 @@ export interface LibraryRankInput {
    *  "med-detection only". */
   csnpConditions?: CsnpConditionKey[];
   current_plan_id?: string | null;
+  /** Self-reported dual-eligibility (Medicaid + Medicare). When true,
+   *  the library brain's population gate keeps D-SNP plans in the
+   *  Top-4 candidate pool; when false / undefined, D-SNPs are stripped
+   *  for the standard recommendation flow. Maps to UserProfile
+   *  .dsnpEligible on the server side. */
+  dsnp_eligible?: boolean;
 }
 
 export async function rankPlans(
