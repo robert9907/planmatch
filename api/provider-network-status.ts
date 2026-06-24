@@ -219,7 +219,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET required' });
 
-  const planIds = parseList(req.query.plan_ids, 100);
+  // Brain audit H2: cap raised from 100 → 1000. The 100 ceiling was
+  // dropping plans on counties where the candidate pool exceeded that
+  // number (state-wide queries + dense Medicare-Advantage counties);
+  // the brain's Gate-1 then ran without coverage for the truncated
+  // tail and silently kept plans that should have been eliminated as
+  // out-of-network. 1000 covers every CMS county pool today (≤ ~500
+  // plans observed) with headroom; the per-NPI FHIR fan-out stays
+  // bounded by npis × distinct contract_ids so the upper bound on
+  // upstream calls grows linearly, not as plans × npis.
+  const planIds = parseList(req.query.plan_ids, 1000);
   const npisInput = parseList(req.query.npis, 50);
   const unresolved = parseLookup(req.query.lookup, MAX_UNRESOLVED_LOOKUPS);
 
