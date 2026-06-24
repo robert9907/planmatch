@@ -243,6 +243,7 @@ export function ComplianceScreen({ onBack, onNext }: Props) {
           can expand mid-call when asked "how long do you keep my call?"
           or to confirm a grievance pointer. */}
       <RetentionPolicy />
+      <GrievanceProcedure />
 
       <div
         style={{
@@ -534,3 +535,107 @@ const LIST: CSSProperties = {
   margin: '0 0 6px 0',
   paddingLeft: 18,
 };
+
+// ── Grievance & Appeals Procedure ───────────────────────────────────
+// CMS requires brokers to document how beneficiaries can file
+// grievances. Independent brokers CANNOT file grievances on a member's
+// behalf — they must direct the consumer to the plan or to one of
+// the federal/state escalation paths.
+//
+// Acknowledgment + resolution timelines per CMS Medicare Managed Care
+// Manual ch.13 / 42 CFR §422.564 (MA) and §423.564 (Part D):
+//   • Plan must acknowledge within 5 calendar days
+//   • Plan must resolve within 30 calendar days (60 for Part D)
+
+function GrievanceProcedure() {
+  return (
+    <details
+      style={{
+        background: '#f8fafc',
+        border: '1px solid rgba(13,47,94,0.08)',
+        borderRadius: 10,
+        padding: '10px 14px',
+        marginBottom: 12,
+        fontSize: 12,
+        lineHeight: 1.55,
+        color: '#1e293b',
+      }}
+    >
+      <summary
+        style={{
+          cursor: 'pointer',
+          fontWeight: 700,
+          color: '#0d2f5e',
+          listStyle: 'revert',
+        }}
+      >
+        Grievance &amp; Appeals Procedure <span style={{ color: '#64748b', fontWeight: 500 }}>(broker cannot file on behalf)</span>
+      </summary>
+
+      <div style={{ marginTop: 10 }}>
+        <p style={{ margin: 0 }}>
+          If you have a complaint about your Medicare Advantage or Part D
+          plan, you have the right to file a grievance. Contact your
+          plan directly using the phone number on your member ID card.
+          You may also contact:
+        </p>
+
+        <div style={SECTION_HEAD}>Federal escalation</div>
+        <ul style={LIST}>
+          <li>
+            <strong>1-800-MEDICARE</strong> (1-800-633-4227) — 24/7,
+            TTY 1-877-486-2048.
+          </li>
+          <li>
+            <strong>CMS Ombudsman:</strong>{' '}
+            <a
+              href="https://www.cms.gov/about-cms/what-we-do/ombudsman"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#0071e3' }}
+            >
+              cms.gov/about-cms/what-we-do/ombudsman
+            </a>
+            .
+          </li>
+        </ul>
+
+        <div style={SECTION_HEAD}>State Health Insurance Assistance Program (SHIP)</div>
+        <ul style={LIST}>
+          <li>
+            <strong>North Carolina:</strong> 1-855-408-1212
+          </li>
+          <li>
+            <strong>Texas:</strong> 1-800-252-9240
+          </li>
+          <li>
+            <strong>Georgia:</strong> 1-866-552-4464
+          </li>
+        </ul>
+
+        <div style={SECTION_HEAD}>Broker role</div>
+        <p style={{ margin: '0 0 6px 0' }}>
+          As your independent broker, I can help you understand the
+          grievance process but <strong>cannot file on your behalf</strong>.
+        </p>
+
+        <div style={SECTION_HEAD}>Plan timelines</div>
+        <ul style={LIST}>
+          <li>
+            Plans must <strong>acknowledge grievances within 5 calendar
+            days</strong>.
+          </li>
+          <li>
+            Plans must <strong>resolve within 30 calendar days</strong>
+            (60 calendar days for Part D).
+          </li>
+        </ul>
+
+        <div style={{ fontSize: 10, color: '#64748b', marginTop: 8 }}>
+          Refs: 42 CFR §422.564 (MA grievances) · §423.564 (Part D
+          grievances) · CMS Medicare Managed Care Manual ch. 13.
+        </div>
+      </div>
+    </details>
+  );
+}
