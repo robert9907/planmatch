@@ -38,6 +38,11 @@ interface Plan {
   state: string;
   counties: string[];
   plan_type: AppPlanType;
+  // Raw landscape plan_type string ("HMO" | "Local PPO" | "Regional PPO"
+  // | "HMOPOS" | "PFFS" | "MSA" | "Cost" | "PDP" | null). plan_type
+  // bucketizes these into the app's enum and loses the network shape,
+  // so the compare bench HMO/PPO filter needs this raw value.
+  plan_shape: string | null;
   snp_type: string | null;
   premium: number;
   annual_deductible: number | null;
@@ -1007,6 +1012,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         state: row.state,
         counties: [...counties].sort(),
         plan_type: mapPlanType(row.plan_type, row.snp, row.snp_type),
+        plan_shape: row.plan_type,
         snp_type: row.snp_type,
         has_drug_coverage: row.drug_deductible !== null,
         premium: row.monthly_premium ?? 0,

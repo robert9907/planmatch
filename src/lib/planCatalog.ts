@@ -22,6 +22,7 @@ interface ApiPlan {
   state: string;
   counties: string[];
   plan_type: PlanType;
+  plan_shape: string | null;
   snp_type: string | null;
   premium: number;
   annual_deductible: number | null;
@@ -106,6 +107,10 @@ function toPlan(p: ApiPlan): Plan {
     state: p.state as StateCode,
     counties: p.counties ?? [],
     plan_type: p.plan_type,
+    // Older /api/plans builds didn't return plan_shape; fall back to
+    // null so HMO/PPO filters simply miss instead of crashing the
+    // toUpperCase() call downstream.
+    plan_shape: p.plan_shape ?? null,
     snp_type: p.snp_type ?? null,
     premium: p.premium ?? 0,
     annual_deductible: p.annual_deductible ?? null,

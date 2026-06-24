@@ -1149,9 +1149,16 @@ function Bench({
   const filtered = useMemo(() => {
     return bench.filter((p) => {
       if (filter === 'all') return true;
-      const t = (p.plan_type ?? '').toUpperCase();
-      if (filter === 'hmo') return t.includes('HMO');
-      if (filter === 'ppo') return t.includes('PPO');
+      // plan_shape is the raw landscape plan_type ("HMO" / "Local PPO" /
+      // "Regional PPO" / "HMOPOS" / "PFFS" / "PDP" / "MSA" / "Cost").
+      // p.plan_type is the bucketed app enum (MA / MAPD / DSNP / ...)
+      // and never contains "HMO"/"PPO", so it can't be used here —
+      // HMOPOS matches HMO via substring (point-of-service HMOs are
+      // still HMO-shaped network-wise, which is what the broker filter
+      // means).
+      const shape = (p.plan_shape ?? '').toUpperCase();
+      if (filter === 'hmo') return shape.includes('HMO');
+      if (filter === 'ppo') return shape.includes('PPO');
       if (filter === 'zero') return p.premium === 0;
       // The API exposes the raw landscape snp_type ("D-SNP" / "C-SNP" /
       // "I-SNP" / null); plan_type buckets them differently (DSNP /

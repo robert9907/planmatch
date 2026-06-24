@@ -151,6 +151,11 @@ export interface Plan {
   state: StateCode;
   counties: string[];
   plan_type: PlanType;
+  // Raw landscape plan_type string from pm_plans ("HMO" | "Local PPO" |
+  // "Regional PPO" | "HMOPOS" | "PFFS" | "MSA" | "Cost" | "PDP" | null).
+  // plan_type is the app-level bucket and never contains the network
+  // shape, so the compare bench HMO/PPO filter needs this raw value.
+  plan_shape: string | null;
   // Raw snp_type string from pm_plans ("D-SNP" | "C-SNP" | "I-SNP" | null).
   // plan_type already buckets SNP variants, but the compare bench filter
   // partitions D-SNP vs C-SNP separately and needs the raw value.

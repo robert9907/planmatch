@@ -136,6 +136,7 @@ function p(override: PlanOverride): Plan {
   // carry the correct values.
   return {
     counties,
+    plan_shape: null,
     snp_type: null,
     premium: 0,
     annual_deductible: null,
