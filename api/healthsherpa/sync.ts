@@ -79,12 +79,42 @@ function clean<T extends Record<string, unknown>>(obj: T): T {
   return out as T;
 }
 
+// HealthSherpa's /v1/contacts is strict about phone — it rejects any
+// formatting ("555-123-4567", "(555) 123-4567" both 400 with
+// "must be a valid phone number"). Brokers type phones in any format,
+// so we normalize to digits-only here. <10 digits → omit the field
+// entirely so a partial phone doesn't tank the whole sync.
+function normalizePhone(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const digits = raw.replace(/\D+/g, '');
+  // US numbers: 10 digits, or 11 with leading "1". Drop the country
+  // code so HealthSherpa sees the bare 10-digit form.
+  if (digits.length === 11 && digits.startsWith('1')) return digits.slice(1);
+  if (digits.length === 10) return digits;
+  return undefined;
+}
+
+// MBI format per CMS: 11 chars, alphanumeric uppercase, position-based
+// pattern (positions 2/5/8/9 letters, 1/4/7/10/11 digits, etc.).
+// HealthSherpa enforces this and 422s on bad input. We strip dashes/
+// spaces first so brokers can type "1AB2-CD3-EF45" verbatim; only send
+// if the result is 11 alphanumeric chars. Skip the strict positional
+// regex — HealthSherpa does the final check.
+function normalizeMbi(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const stripped = raw.replace(/[\s-]+/g, '').toUpperCase();
+  return /^[A-Z0-9]{11}$/.test(stripped) ? stripped : undefined;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
   if (req.method !== 'POST') return badRequest(res, 'POST required');
 
+  console.log('[healthsherpa-sync] route hit');
+
   const apiKey = process.env.HEALTHSHERPA_MEDICARE_API_KEY;
   if (!apiKey) {
+    console.error('[healthsherpa-sync] missing HEALTHSHERPA_MEDICARE_API_KEY env var');
     return sendJson(res, 500, {
       error: 'HEALTHSHERPA_MEDICARE_API_KEY not configured',
       fallback_url: HEALTHSHERPA_INTAKE_BASE,
@@ -115,14 +145,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     first_name: firstName || undefined,
     last_name: lastName || undefined,
     birth_date: body.birth_date,
-    phone: body.phone,
+    phone: normalizePhone(body.phone),
     email: body.email,
     sex: body.sex,
     zip: body.zip,
     state: body.state,
     city: body.city,
     address_1: body.address_1,
-    medicare_number: body.medicare_number,
+    medicare_number: normalizeMbi(body.medicare_number),
     medicare_part_a_effective_date: body.medicare_part_a_effective_date,
     medicare_part_b_effective_date: body.medicare_part_b_effective_date,
     extra_help: typeof body.extra_help === 'boolean' ? body.extra_help : undefined,
@@ -130,6 +160,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     type: 'client',
     notes,
   });
+
+  console.log(
+    `[healthsherpa-sync] outbound contact: external_id=${externalId} first=${firstName ? 'y' : 'n'} last=${lastName ? 'y' : 'n'} dob=${contact.birth_date ? 'y' : 'n'} phone=${contact.phone ? 'y' : 'n'} email=${contact.email ? 'y' : 'n'} zip=${contact.zip ?? '?'} state=${contact.state ?? '?'} mbi=${contact.medicare_number ? 'y' : 'n'} plan=${body.cms_plan_id ?? '?'}`,
+  );
 
   res.setHeader('Cache-Control', 'no-store');
 
@@ -163,6 +197,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // upstream returned non-JSON — surface raw text in the error.
     }
 
+    console.log(
+      `[healthsherpa-sync] upstream responded status=${upstream.status} body_len=${text.length}`,
+    );
+
     if (!upstream.ok) {
       console.error(
         `[healthsherpa-sync] upstream ${upstream.status}: ${text.slice(0, 500)}`,
@@ -188,6 +226,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       data.data?.redirect_url ?? data.redirect_url ?? fallback_url;
     const contact_id =
       data.data?.contact?.id ?? data.contact?.id ?? null;
+    const usedFallback = redirect_url === fallback_url;
+
+    console.log(
+      `[healthsherpa-sync] redirect_url=${usedFallback ? 'FALLBACK' : 'partner-api'} contact_id=${contact_id ?? 'null'}`,
+    );
 
     return sendJson(res, 200, {
       redirect_url,
