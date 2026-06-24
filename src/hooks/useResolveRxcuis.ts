@@ -112,6 +112,47 @@ const RELEASE_RE = /\s+(?:XR|ER|CR|SR|IR|DR|XL|MR|PA|LA|SA)\b/gi;
 const DOSE_INSTR_RE =
   /\s+(?:daily|bid|tid|qid|qd|qod|qhs|prn|po|sl|im|iv|sc|hs|am|pm)\b.*$/gi;
 
+// Trailing tokens AgentBase tacks onto ingredient names — dosage
+// forms, salt forms, release modifiers. RxNorm's IN (ingredient)
+// concepts drop these entirely, so the drug-search hits typically land
+// at the bare stem ("Diltiazem", "Metformin"). We chop one trailing
+// token at a time and emit a variant per step so combinations like
+// "Diltiazem HCL ER" → "Diltiazem HCL" → "Diltiazem" each get tried.
+const TRAILING_STRIP_TOKENS: ReadonlySet<string> = new Set([
+  // Dosage forms.
+  'TAB', 'CAP', 'CAPS', 'TABLET', 'CAPSULE', 'INJ', 'SOL', 'SUSP',
+  'CRM', 'OINT', 'GEL', 'PATCH', 'SPRAY',
+  // Salt forms.
+  'HCL', 'HBR', 'SODIUM', 'POTASSIUM', 'SULFATE', 'SUCCINATE',
+  'MALEATE', 'BESYLATE', 'MESYLATE', 'FUMARATE', 'TARTRATE',
+  'CITRATE', 'ACETATE', 'PHOSPHATE',
+  // Release-form modifiers (overlap with RELEASE_RE, which strips
+  // mid-name; this set covers the iterative end-of-name case).
+  'ER', 'XR', 'XL', 'SR', 'CR', 'DR', 'IR', 'LA', 'SA', 'CD',
+]);
+
+// Return each progressively-stripped form of `name`, NOT including the
+// input itself. Stops at the first trailing token outside
+// TRAILING_STRIP_TOKENS so a real word like "Chloride" isn't lopped.
+// Matches whitespace-delimited tokens only — hyphenated combos like
+// "Oxycodone-Acetaminophen" stay intact until the caller's
+// hyphen-expansion pass space-substitutes them.
+function progressiveTrailingStrips(name: string): string[] {
+  const out: string[] = [];
+  let s = name.trim();
+  while (true) {
+    const m = s.match(/^(.+?)\s+(\S+)$/);
+    if (!m) break;
+    // Drop trailing punctuation a CRM paste might carry ("HCL,",
+    // "ER.") before checking membership.
+    const lastToken = m[2].toUpperCase().replace(/[.,;:]+$/g, '');
+    if (!TRAILING_STRIP_TOKENS.has(lastToken)) break;
+    s = m[1].trim();
+    out.push(s);
+  }
+  return out;
+}
+
 function buildNameVariants(rawName: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -161,6 +202,25 @@ function buildNameVariants(rawName: string): string[] {
     // Combined strip in case the original variant skipped a step.
     const stripped = v.replace(DOSE_INSTR_RE, '').replace(STRENGTH_RE, '').replace(RELEASE_RE, '').trim();
     if (stripped !== v) add(stripped);
+  }
+
+  // Hyphenated-combo expansion. "Oxycodone-Acetaminophen TAB" →
+  // "Oxycodone Acetaminophen TAB". Drug-search treats hyphens as
+  // part of the token, so the space-substituted form matches
+  // multi-ingredient rows the hyphen variant misses. Runs BEFORE the
+  // trailing-strip pass so the space-substituted forms also get
+  // their trailing dosage/salt/release tokens chopped below.
+  for (const v of [...out]) {
+    if (v.includes('-')) add(v.replace(/-/g, ' '));
+  }
+
+  // Iterative trailing-token strip. AgentBase appends dosage-form +
+  // salt-form + release-form suffixes in combination ("Diltiazem HCL
+  // ER", "Metoprolol Tartrate ER"). Each progressive strip shortens
+  // toward the RxNorm IN concept, which is where drug-search
+  // reliably returns hits.
+  for (const v of [...out]) {
+    for (const next of progressiveTrailingStrips(v)) add(next);
   }
 
   return out;
