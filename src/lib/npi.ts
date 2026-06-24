@@ -12,7 +12,7 @@ export interface NpiProvider {
 
 export interface ProviderSearchResult {
   providers: NpiProvider[];
-  fallback: 'last_name_only' | null;
+  fallback: 'last_name_only' | 'state_dropped' | null;
 }
 
 // The browser talks to our own Vercel function, which proxies NPPES
@@ -78,7 +78,12 @@ export async function searchProvider(
 
   const results: unknown[] = Array.isArray(body?.results) ? body.results! : [];
   const providers = results.map(normalize).filter((r): r is NpiProvider => !!r);
-  const fallback = body?.fallback === 'last_name_only' ? 'last_name_only' : null;
+  const fallback: 'last_name_only' | 'state_dropped' | null =
+    body?.fallback === 'last_name_only'
+      ? 'last_name_only'
+      : body?.fallback === 'state_dropped'
+        ? 'state_dropped'
+        : null;
   return { providers, fallback };
 }
 

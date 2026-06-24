@@ -24,6 +24,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { usePlanBrain } from '@/hooks/usePlanBrain';
 import { useRankedPlans } from '@/hooks/useRankedPlans';
+import { normalizePlanId } from '@/lib/library-client';
+import { checkNetworkBatch } from '@/lib/networkCheck';
 import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
 import { useScreenShareStore } from '@/hooks/useScreenShare';
@@ -469,19 +471,107 @@ export function AgentV3App() {
     currentPlanId,
   });
 
-  // ── Provider network hydration ────────────────────────────────────
-  // Mirror the per-plan provider network status from the library
-  // response into useSession.providers[*].networkStatus so PinnedPlan,
-  // SwipeCard, AND ProvidersScreen all read from a single source of
-  // truth. Walks both top_plans and bench_plans so every county plan
-  // card has a status. ProvidersScreen is now a pure projection of
-  // this map — no separate checkNetworkBatch race.
+  // ── Provider network hydration: full-county direct call ───────────
+  // Calls /api/library/provider-network (via checkNetworkBatch) for
+  // every (NPI × eligiblePlan) pair so the broker sees in/out/unknown
+  // across all ~34 county plans on ProvidersScreen — not just the
+  // ~10-12 plans that survive rank-plans Gate 1. rank-plans drops any
+  // plan where ANY provider is out-of-network from its response, so a
+  // gate-1 hydration alone left the OON plans permanently "Unverified"
+  // and the broker couldn't see why the carrier was filtered out.
+  //
+  // Safe to run alongside the rank-plans-driven hydration below: both
+  // write to provider.networkStatus[planId] but pull from the same
+  // pm_provider_network_cache + FHIR live source, so the values
+  // agree. The rank-plans effect is kept because its fhir_live rows
+  // can land slightly fresher (rank-plans calls provider-network
+  // server-side as part of Gate 1) and idempotent overwrites are
+  // harmless.
+  //
+  // Dependency key is the NPI list (joined string) rather than
+  // `providers` itself, because we re-fire only when the set of NPIs
+  // changes — not when networkStatus updates on each provider, which
+  // would cause a write→read loop with updateProvider.
+  const providerNpiKey = useMemo(
+    () => providers.map((p) => p.npi ?? '').join('|'),
+    [providers],
+  );
+
+  useEffect(() => {
+    if (eligiblePlans.length === 0) return;
+    if (!client.state || !client.county) return;
+    const npis = providers
+      .map((p) => ({ id: p.id, npi: p.npi }))
+      .filter((p): p is { id: string; npi: string } => !!p.npi);
+    if (npis.length === 0) return;
+
+    let cancelled = false;
+    const ctx = { state: client.state, county: client.county };
+
+    for (const { id: providerId, npi } of npis) {
+      checkNetworkBatch(npi, eligiblePlans, ctx)
+        .then((map) => {
+          if (cancelled) return;
+          // Snapshot the freshest provider record before merging — the
+          // closure-captured `providers` array may be stale by the
+          // time the async response lands. Walk by id to find current.
+          const current = providers.find((p) => p.id === providerId);
+          const prev = current?.networkStatus ?? {};
+          const next: Record<string, 'in' | 'out' | 'unknown'> = { ...prev };
+          let changed = false;
+          let inN = 0;
+          let outN = 0;
+          let unkN = 0;
+          for (const [planId, result] of map) {
+            if (next[planId] !== result.status) {
+              next[planId] = result.status;
+              changed = true;
+            }
+            if (result.status === 'in') inN += 1;
+            else if (result.status === 'out') outN += 1;
+            else unkN += 1;
+          }
+          console.log(
+            `[agent-v3] full-county hydration npi=${npi}: ` +
+              `eligible=${eligiblePlans.length} resolved=${map.size} ` +
+              `→ in=${inN} out=${outN} unknown=${unkN} (changed=${changed})`,
+          );
+          if (changed) updateProvider(providerId, { networkStatus: next });
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          console.warn(
+            `[agent-v3] full-county hydration failed for npi=${npi}:`,
+            err instanceof Error ? err.message : err,
+          );
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally tracks providerNpiKey, not `providers`. See note
+    // above about the write→read loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eligiblePlans, client.state, client.county, providerNpiKey]);
+
+  // ── Provider network hydration: rank-plans confirmer ─────────────
+  // Mirror the per-plan provider network status from the rank-plans
+  // response into useSession.providers[*].networkStatus. This only
+  // covers the Gate-1-survivor subset (typically 10-12 of 34 plans);
+  // the full-county hydration above handles the rest.
   useEffect(() => {
     if (!ranked.result) return;
     const allPlans = [
       ...ranked.result.top_plans,
       ...ranked.result.bench_plans,
     ];
+    // Resolve library triples to the agent's canonical Plan.id so the
+    // networkStatus map keys match what ProvidersScreen iterates
+    // (row.plan.id, from fetchPlansForClient). Without normalization
+    // a library "H1234-005-0" wouldn't collide with the agent's
+    // "H1234-005-000" and every row would render as "Unverified".
+    const agentIdByNormalized = new Map<string, string>();
+    for (const p of eligiblePlans) agentIdByNormalized.set(normalizePlanId(p.id), p.id);
     for (const provider of providers) {
       if (!provider.npi) continue;
       const next: Record<string, 'in' | 'out' | 'unknown'> = {
@@ -493,6 +583,8 @@ export function AgentV3App() {
       let outN = 0;
       let unkN = 0;
       for (const lp of allPlans) {
+        const agentPlanId = agentIdByNormalized.get(normalizePlanId(lp.plan_id));
+        if (!agentPlanId) continue;
         const row = lp.providers.find((pr) => pr.npi === provider.npi);
         if (!row) continue;
         foundInLibrary += 1;
@@ -505,8 +597,8 @@ export function AgentV3App() {
         if (status === 'in') inN += 1;
         else if (status === 'out') outN += 1;
         else unkN += 1;
-        if (next[lp.plan_id] !== status) {
-          next[lp.plan_id] = status;
+        if (next[agentPlanId] !== status) {
+          next[agentPlanId] = status;
           changed = true;
         }
       }
@@ -522,7 +614,7 @@ export function AgentV3App() {
     // library result refreshes. Re-running on every providers update
     // would create a write→read loop with updateProvider.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ranked.result]);
+  }, [ranked.result, eligiblePlans]);
 
   // ── Formulary cache prime (shell-level) ──────────────────────────
   // MedsScreen primes pm_formulary entries for eligiblePlans × user
@@ -556,23 +648,50 @@ export function AgentV3App() {
     annualCost: number;
   };
 
+  // planById is keyed by the normalized triple form so the agent's
+  // Plan.id ("H1234-005-000" — /api/plans pads empty segments) collides
+  // with the library's raw triple ("H1234-005-0" — pm_plans.segment_id
+  // emitted as-is). Without normalization the lookups silently miss and
+  // CompareScreen falls into the "Brain ranking hasn't returned any
+  // plans yet" empty state even when the library returned real plans.
   const planById = useMemo(() => {
     const m = new Map<string, Plan>();
-    for (const p of eligiblePlans) m.set(p.id, p);
+    for (const p of eligiblePlans) m.set(normalizePlanId(p.id), p);
     return m;
   }, [eligiblePlans]);
+
+  // One-shot diagnostic the first time the library returns plans —
+  // prints both id formats side-by-side so future format drift surfaces
+  // immediately in the console instead of silently emptying the deck.
+  useEffect(() => {
+    if (!ranked.result || eligiblePlans.length === 0) return;
+    const agentSample = eligiblePlans.slice(0, 3).map((p) => p.id);
+    const librarySample = ranked.result.top_plans
+      .slice(0, 3)
+      .map((lp) => lp.plan_id);
+    const hits = ranked.result.top_plans.filter((lp) =>
+      planById.has(normalizePlanId(lp.plan_id)),
+    ).length;
+    console.log(
+      '[agent-v3 planById] agent.id sample=',
+      agentSample,
+      'library.plan_id sample=',
+      librarySample,
+      `top_plans hit-rate=${hits}/${ranked.result.top_plans.length}`,
+    );
+  }, [ranked.result, eligiblePlans, planById]);
 
   const scoredPlans = useMemo<Plan[]>(() => {
     if (!ranked.result) return [];
     return ranked.result.top_plans
-      .map((lp) => planById.get(lp.plan_id))
+      .map((lp) => planById.get(normalizePlanId(lp.plan_id)))
       .filter((p): p is Plan => p != null);
   }, [ranked.result, planById]);
 
   const benchPlans = useMemo<Plan[]>(() => {
     if (!ranked.result) return [];
     const out = ranked.result.bench_plans
-      .map((lp) => planById.get(lp.plan_id))
+      .map((lp) => planById.get(normalizePlanId(lp.plan_id)))
       .filter((p): p is Plan => p != null);
     // Diagnostic — confirms the library returned a bench list and the
     // local catalog fully covers it. Mismatch (out.length <
@@ -590,17 +709,24 @@ export function AgentV3App() {
     return out;
   }, [ranked.result, planById]);
 
+  // The by-plan-id maps below are keyed by the agent's Plan.id (NOT the
+  // library's lp.plan_id) because CompareScreen looks them up as
+  // `annualDrugByPlanId[plan.id]` where plan came from fetchPlansForClient.
+  // Routing each library row through planById first guarantees the
+  // keys line up with what the consumer reads.
   const annualDrugByPlanId = useMemo<Record<string, number | null>>(() => {
     if (!ranked.result) return {};
     const out: Record<string, number | null> = {};
     for (const lp of ranked.result.top_plans) {
-      out[lp.plan_id] = lp.total_annual_drug_cost;
+      const p = planById.get(normalizePlanId(lp.plan_id));
+      if (p) out[p.id] = lp.total_annual_drug_cost;
     }
     for (const lp of ranked.result.bench_plans) {
-      out[lp.plan_id] = lp.total_annual_drug_cost;
+      const p = planById.get(normalizePlanId(lp.plan_id));
+      if (p) out[p.id] = lp.total_annual_drug_cost;
     }
     return out;
-  }, [ranked.result]);
+  }, [ranked.result, planById]);
 
   const benchGateResultsByPlanId = useMemo<
     Record<string, { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }>
@@ -608,10 +734,11 @@ export function AgentV3App() {
     if (!ranked.result) return {};
     const out: Record<string, { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }> = {};
     for (const lp of ranked.result.bench_plans) {
-      out[lp.plan_id] = lp.gate_results;
+      const p = planById.get(normalizePlanId(lp.plan_id));
+      if (p) out[p.id] = lp.gate_results;
     }
     return out;
-  }, [ranked.result]);
+  }, [ranked.result, planById]);
 
   const rankedPlanIds = useMemo<string[]>(
     () => scoredPlans.map((p) => p.id),
@@ -622,10 +749,11 @@ export function AgentV3App() {
     if (!ranked.result) return {};
     const out: Record<string, string | null> = {};
     for (const lp of ranked.result.top_plans) {
-      out[lp.plan_id] = lp.ribbon;
+      const p = planById.get(normalizePlanId(lp.plan_id));
+      if (p) out[p.id] = lp.ribbon;
     }
     return out;
-  }, [ranked.result]);
+  }, [ranked.result, planById]);
 
   // The library's strict Gate 2 elimination means no plan in top_plans
   // or bench_plans carries an "unknown drug coverage" disclaimer; the
@@ -639,18 +767,30 @@ export function AgentV3App() {
   const drugsCoveredByPlanId = useMemo<Record<string, number>>(() => {
     if (!ranked.result) return {};
     const out: Record<string, number> = {};
-    for (const lp of ranked.result.top_plans) out[lp.plan_id] = lp.meds_covered;
-    for (const lp of ranked.result.bench_plans) out[lp.plan_id] = lp.meds_covered;
+    for (const lp of ranked.result.top_plans) {
+      const p = planById.get(normalizePlanId(lp.plan_id));
+      if (p) out[p.id] = lp.meds_covered;
+    }
+    for (const lp of ranked.result.bench_plans) {
+      const p = planById.get(normalizePlanId(lp.plan_id));
+      if (p) out[p.id] = lp.meds_covered;
+    }
     return out;
-  }, [ranked.result]);
+  }, [ranked.result, planById]);
 
   const drugsTotalByPlanId = useMemo<Record<string, number>>(() => {
     if (!ranked.result) return {};
     const out: Record<string, number> = {};
-    for (const lp of ranked.result.top_plans) out[lp.plan_id] = lp.meds_total;
-    for (const lp of ranked.result.bench_plans) out[lp.plan_id] = lp.meds_total;
+    for (const lp of ranked.result.top_plans) {
+      const p = planById.get(normalizePlanId(lp.plan_id));
+      if (p) out[p.id] = lp.meds_total;
+    }
+    for (const lp of ranked.result.bench_plans) {
+      const p = planById.get(normalizePlanId(lp.plan_id));
+      if (p) out[p.id] = lp.meds_total;
+    }
     return out;
-  }, [ranked.result]);
+  }, [ranked.result, planById]);
 
   const drugBreakdownByPlanId = useMemo<
     Record<string, ReadonlyArray<DrugRow>>
@@ -675,10 +815,16 @@ export function AgentV3App() {
         monthlyCopay: m.copay,
         annualCost: m.annual_cost,
       }));
-    for (const lp of ranked.result.top_plans) out[lp.plan_id] = adapt(lp.medications);
-    for (const lp of ranked.result.bench_plans) out[lp.plan_id] = adapt(lp.medications);
+    for (const lp of ranked.result.top_plans) {
+      const p = planById.get(normalizePlanId(lp.plan_id));
+      if (p) out[p.id] = adapt(lp.medications);
+    }
+    for (const lp of ranked.result.bench_plans) {
+      const p = planById.get(normalizePlanId(lp.plan_id));
+      if (p) out[p.id] = adapt(lp.medications);
+    }
     return out;
-  }, [ranked.result]);
+  }, [ranked.result, planById]);
 
   // ── Per-plan gate explanations (CompareScreen "Why this plan" pills) ─
   // Sourced from the LOCAL brain (usePlanBrain), not the library response.
@@ -843,6 +989,30 @@ export function AgentV3App() {
           ⚠ Plan Brain data unavailable ({brain.error}). The ranking would be
           unreliable without network/formulary/benefit data, so it is not
           shown. Refresh or check the API logs.
+        </div>
+      )}
+      {/* Library rank-plans failure. Fires on any error — first-load
+          (no previous result) or stale (last result still rendered)
+          alike. Without this, a 5xx / AbortError on cold start leaves
+          providers as "⚠ Unverified" with no plans rendered and no
+          on-screen explanation. */}
+      {ranked.error && (
+        <div
+          style={{
+            margin: '8px 0',
+            padding: '10px 12px',
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            borderRadius: 8,
+            color: '#7f1d1d',
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          ⚠ Plan ranking failed ({ranked.error}).
+          {ranked.result
+            ? ' Showing the last successful result — refresh to retry.'
+            : ' Refresh to retry, or check the Library API logs.'}
         </div>
       )}
       {brain.unresolvedProviderNames.length > 0 && (

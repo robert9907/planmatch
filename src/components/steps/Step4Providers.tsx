@@ -27,7 +27,9 @@ export function Step4Providers({ capture, onAdvance }: Step4Props) {
 
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<NpiProvider[]>([]);
-  const [fallback, setFallback] = useState<'last_name_only' | null>(null);
+  const [fallback, setFallback] = useState<
+    'last_name_only' | 'state_dropped' | null
+  >(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -193,6 +195,25 @@ export function Step4Providers({ capture, onAdvance }: Step4Props) {
             <strong>{query.trim().split(/\s+/).slice(1).join(' ')}</strong>
             {client.state ? ` in ${client.state}` : ''} — first name may be spelled
             differently in NPPES.
+          </div>
+        )}
+        {fallback === 'state_dropped' && results.length > 0 && (
+          <div
+            style={{
+              marginTop: 10,
+              padding: 8,
+              background: 'var(--at)',
+              color: 'var(--amb)',
+              fontSize: 12,
+              borderRadius: 8,
+              border: '1px solid var(--amb)',
+            }}
+          >
+            No matches for "{query.trim()}"
+            {client.state ? ` in ${client.state}` : ''}. Showing results
+            from nearby states — NPPES files providers under their
+            mailing-address state, so a border-area clinician may appear
+            under a different state here.
           </div>
         )}
 

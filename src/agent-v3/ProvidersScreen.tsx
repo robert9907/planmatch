@@ -1,19 +1,25 @@
 // ProvidersScreen — agent-v3 screen 3.
 //
 // Reads per-(provider, plan) network status from the session — populated
-// upstream by AgentV3App's rank-plans hydration effect — and renders one
+// upstream by AgentV3App's two hydration effects — and renders one
 // section per carrier with the In-Network / OON / Unverified split.
 //
-// Why no separate library call here: rank-plans already resolves the
-// provider×plan grid for every county plan and hydrates
-// useSession.providers[*].networkStatus. The earlier additive call to
-// checkNetworkBatch raced the rank-plans hydration — a late
-// 'fallback_unknown' return could overwrite a freshly-confirmed 'in'
-// from the library. Removing it makes the Providers screen a pure
-// projection of session state.
+// Hydration architecture (see AgentV3App.tsx):
+//   1. Full-county direct call. checkNetworkBatch hits
+//      /api/library/provider-network with EVERY eligible plan_id, so
+//      all ~34 county plans get an in/out/unknown status — including
+//      the plans rank-plans dropped at Gate 1.
+//   2. rank-plans confirmer. Walks ranked.result.top_plans +
+//      bench_plans (Gate-1 survivors only, ~10-12 plans) and mirrors
+//      their provider.in_network field. Redundant with #1 for the
+//      gate-1 subset, but harmless (idempotent writes from the same
+//      pm_provider_network_cache + FHIR source).
 //
-// Tradeoff: the Queued → Checking → Verified animation is gone. The
-// resolved state appears immediately when rank-plans has landed.
+// Previously this screen ran its own checkNetworkBatch and the comment
+// here claimed rank-plans alone hydrated every county plan — that was
+// wrong: rank-plans eliminates plans where any provider is OON, so
+// those plans stayed permanently "Unverified". Effect #1 above fixes
+// that gap.
 
 import { useMemo, useState, useEffect } from 'react';
 import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
@@ -582,6 +588,13 @@ function AddProviderPanel({
       {search.fallback === 'last_name_only' && (
         <div style={{ marginTop: 8, fontSize: 11, color: '#92400e' }}>
           No first-name match — showing last-name-only results.
+        </div>
+      )}
+      {search.fallback === 'state_dropped' && (
+        <div style={{ marginTop: 8, fontSize: 11, color: '#92400e' }}>
+          No in-state match — showing results from nearby states. NPPES
+          files providers by mailing address, so a clinician practicing
+          on the border may appear under a different state here.
         </div>
       )}
       {search.results.length > 0 && (

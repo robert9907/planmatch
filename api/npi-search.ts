@@ -267,6 +267,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           query: { tried: { first: tokens[0], last }, fell_back_to: { last } },
         });
       }
+
+      // Second fallback: last-name-only WITH state also returned zero,
+      // and a state filter was in play → drop the state and try once
+      // more. NPPES files providers under their mailing-address state,
+      // not their practice state — a NC border-county client looking
+      // for an SC/GA/VA-mailed clinician would otherwise see an empty
+      // search. Only fires when state was set; without a state filter
+      // there is nothing left to drop.
+      if (state) {
+        const stateDropped = baseParams();
+        stateDropped.set('enumeration_type', 'NPI-1');
+        if (last.length >= 3) stateDropped.set('last_name', last + '*');
+        else stateDropped.set('last_name', last);
+        // state intentionally omitted
+
+        const sdRes = await fetchNppes(stateDropped, controller.signal);
+        console.log('[npi-search] fallback', {
+          url: sdRes.url,
+          reason: 'last-only-zero-in-state',
+          dropped_state: state,
+          ok: sdRes.ok,
+          count: sdRes.ok ? sdRes.body.result_count ?? 0 : null,
+        });
+
+        if (sdRes.ok && (sdRes.body.result_count ?? 0) > 0) {
+          // Pass null for the state argument so rankRecords doesn't
+          // penalize the out-of-state matches we deliberately surfaced.
+          const sdRanked = rankRecords(
+            sdRes.body.results ?? [],
+            last.toLowerCase(),
+            null,
+          );
+          res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60');
+          return sendJson(res, 200, {
+            result_count: sdRanked.length,
+            results: sdRanked,
+            fallback: 'state_dropped',
+            query: {
+              tried: { first: tokens[0], last, state },
+              fell_back_to: { last, state: null },
+            },
+          });
+        }
+      }
     }
 
     res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60');

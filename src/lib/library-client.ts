@@ -18,6 +18,22 @@ const LIBRARY_URL: string =
     .VITE_PLANMATCH_LIBRARY_URL ??
     'https://planmatch.generationhealth.me') as string;
 
+// Canonicalize a plan-id triple so library output and the agent's
+// /api/plans output compare cleanly. The library emits the raw
+// pm_plans.segment_id ("H1234-005-0") while /api/plans pads empty
+// segments to "000" ("H1234-005-000"). Both are valid pointers to the
+// same plan — we normalize by stripping leading zeros from the
+// segment ("H1234-005-0"). A 2-part id ("H1234-005") gets a "-0"
+// appended so combined and triple forms collide on the same key.
+export function normalizePlanId(id: string): string {
+  if (!id) return id;
+  const parts = id.split('-');
+  if (parts.length < 2) return id;
+  const segment = parts[2] ?? '0';
+  const segNormalized = segment.replace(/^0+/, '') || '0';
+  return `${parts[0]}-${parts[1]}-${segNormalized}`;
+}
+
 // ─── drug-search ─────────────────────────────────────────────────
 
 export interface LibraryDrug {

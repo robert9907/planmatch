@@ -31,7 +31,7 @@ export interface UseProviderSearch {
   results: ProviderSearchResult[];
   loading: boolean;
   error: string | null;
-  fallback: 'last_name_only' | null;
+  fallback: 'last_name_only' | 'state_dropped' | null;
 }
 
 const MIN_CHARS = 3;
@@ -43,7 +43,7 @@ const DEBOUNCE_MS = 300;
 // page — no TTL because NPPES results are stable within a session.
 interface CachedResponse {
   rows: ProviderSearchResult[];
-  fallback: 'last_name_only' | null;
+  fallback: 'last_name_only' | 'state_dropped' | null;
 }
 const responseCache = new Map<string, CachedResponse>();
 
@@ -119,7 +119,9 @@ export function useProviderSearch(
   const [results, setResults] = useState<ProviderSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [fallback, setFallback] = useState<'last_name_only' | null>(null);
+  const [fallback, setFallback] = useState<
+    'last_name_only' | 'state_dropped' | null
+  >(null);
 
   const excludeRef = useRef<readonly string[]>(excludeNpis);
   useEffect(() => {
@@ -171,7 +173,12 @@ export function useProviderSearch(
               .map(normalize)
               .filter((r): r is ProviderSearchResult => !!r)
           : [];
-        const fb = body?.fallback === 'last_name_only' ? 'last_name_only' : null;
+        const fb: 'last_name_only' | 'state_dropped' | null =
+          body?.fallback === 'last_name_only'
+            ? 'last_name_only'
+            : body?.fallback === 'state_dropped'
+              ? 'state_dropped'
+              : null;
         responseCache.set(key, { rows, fallback: fb });
         const exclude = new Set(excludeRef.current);
         setResults(rows.filter((r) => !exclude.has(r.npi)));
