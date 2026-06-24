@@ -48,7 +48,16 @@ export const DISCLAIMERS: DisclaimerDef[] = [
   {
     id: 'soa',
     title: 'Scope of Appointment confirmation',
-    when: 'Required before discussing specific plans. SOA form must already be on file.',
+    // W3 Fix 4: CMS-4205-F effective Oct 1 2026 narrowed the same-day
+    // verbal-SOA exemption to INBOUND beneficiary-initiated calls only.
+    // Agent-initiated / outbound calls require a written SOA collected
+    // at least 48 hours before the product-discussion appointment, with
+    // a single same-call exception only when the beneficiary requests
+    // it on a recorded inbound call. 42 CFR \u00a7422.2264(c)(3).
+    when:
+      'INBOUND beneficiary-initiated call: same-day verbal SOA acceptable. ' +
+      'OUTBOUND / agent-initiated call: 48-hour written SOA required before ' +
+      'any specific-product discussion. CMS-4205-F effective Oct 1 2026.',
     body:
       'Before we begin, I want to confirm the types of products we agreed to discuss ' +
       'today. You\u2019ve agreed to discuss Medicare Advantage plans, specifically ' +
