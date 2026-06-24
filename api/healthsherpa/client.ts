@@ -177,11 +177,18 @@ export async function updateContact(
   if (!contactId) {
     throw new HealthSherpaError('updateContact missing contactId', 400, null);
   }
+  // external_id is immutable on the HealthSherpa side — PATCH 422s with
+  // "external_id cannot be updated because it already has a value" when
+  // it's in the body, even if the value matches. Strip it defensively
+  // so callers that reuse the same contact dict for create/update don't
+  // need to remember.
+  const { external_id: _drop, ...patchable } = contact;
+  void _drop;
   const { status, json, text } = await hsFetch(
     `/contacts/${encodeURIComponent(contactId)}`,
     {
       method: 'PATCH',
-      body: { agent_email: AGENT_EMAIL, contact },
+      body: { agent_email: AGENT_EMAIL, contact: patchable },
     },
   );
   if (status < 200 || status >= 300) {
