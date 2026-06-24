@@ -183,6 +183,28 @@ export function ProvidersScreen({
         </AgentInsight>
       )}
 
+      {/* Network-adequacy disclaimer. Surfaces on both agent + client
+          views — carrier directories lag real-time changes, and any
+          binary in-network status the broker reads to the consumer
+          carries the same accuracy obligation as a printed marketing
+          piece. */}
+      {providers.length > 0 && (
+        <p
+          style={{
+            margin: '12px 0 0',
+            fontSize: 11,
+            lineHeight: 1.45,
+            color: '#64748b',
+          }}
+        >
+          Provider network status is sourced from carrier directories
+          and updated periodically. Network participation may change —
+          always verify directly with the plan or provider before
+          enrolling. In-network status shown here is not a guarantee of
+          coverage.
+        </p>
+      )}
+
       <Nav onBack={onBack} onNext={onNext} />
     </Container>
   );
