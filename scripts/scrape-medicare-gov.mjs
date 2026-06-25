@@ -69,6 +69,7 @@ function parseArgs(argv) {
     state: null,
     plan: null,
     planType: 'PLAN_TYPE_MAPD',
+    planTypeExplicit: false,
     targetsFile: null,
     verbose: false,
     forceDom: false,
@@ -82,7 +83,7 @@ function parseArgs(argv) {
       case '--fips': out.fips = next; i++; break;
       case '--state': out.state = (next ?? '').toUpperCase(); i++; break;
       case '--plan': out.plan = next; i++; break;
-      case '--plan-type': out.planType = next; i++; break;
+      case '--plan-type': out.planType = next; out.planTypeExplicit = true; i++; break;
       case '--targets-file': out.targetsFile = next; i++; break;
       case '--limit': out.limit = Number(next); i++; break;
       case '--dry-run': out.dryRun = true; break;
@@ -303,7 +304,8 @@ function rewriteCapturedBody(template, { zip, fips, planType }) {
 // SPA's URL params are how /plans/search receives zip / fips / year /
 // plan_type, NOT the body.
 async function searchPlansViaApi(page, { zip, fips, planType, capturedTemplate, verbose }) {
-  let url = PLAN_SEARCH_URL;
+  // Build base URL + body. Pagination param is appended per page below.
+  let baseUrl = PLAN_SEARCH_URL;
   let reqBody;
   if (capturedTemplate?.url) {
     const u = new URL(capturedTemplate.url);
@@ -320,7 +322,9 @@ async function searchPlansViaApi(page, { zip, fips, planType, capturedTemplate, 
     if (!u.searchParams.has('plan_type') && !u.searchParams.has('planType')) u.searchParams.set('plan_type', planType);
     if (!u.searchParams.has('year')) u.searchParams.set('year', String(YEAR));
     if (!u.searchParams.has('lang')) u.searchParams.set('lang', 'en');
-    url = u.toString();
+    // Strip any captured page param — pagination loop owns it.
+    u.searchParams.delete('page');
+    baseUrl = u.toString();
     reqBody = capturedTemplate.body ?? {};
   } else {
     const qs = new URLSearchParams({
@@ -330,7 +334,7 @@ async function searchPlansViaApi(page, { zip, fips, planType, capturedTemplate, 
       year: String(YEAR),
       lang: 'en',
     });
-    url = `${PLAN_SEARCH_URL}?${qs.toString()}`;
+    baseUrl = `${PLAN_SEARCH_URL}?${qs.toString()}`;
     reqBody = {
       npis: [],
       prescriptions: [],
@@ -339,23 +343,56 @@ async function searchPlansViaApi(page, { zip, fips, planType, capturedTemplate, 
       organizationNames: [],
     };
   }
+  // medicare.gov returns 10 plans per page. Loop ?page=N until
+  // total_results is satisfied, a page returns <10, or we hit the
+  // 30-page safety cap. Dedupe by contract+plan+segment across pages.
+  const merged = new Map();
+  let firstBody = null;
+  let lastStatus = 0;
+  let lastCt = '';
+  for (let pn = 1; pn <= 30; pn += 1) {
+    const sep = baseUrl.includes('?') ? '&' : '?';
+    const url = `${baseUrl}${sep}page=${pn}`;
+    if (verbose) {
+      console.log('  POST', url);
+      if (pn === 1) console.log('       body', JSON.stringify(reqBody));
+    }
+    const resp = await page.request.post(url, {
+      data: reqBody,
+      headers: buildSearchHeaders(),
+      timeout: 60_000,
+    });
+    lastStatus = resp.status();
+    lastCt = resp.headers()['content-type'] ?? '';
+    if (!resp.ok() || !lastCt.includes('json')) {
+      const sample = (await resp.text()).slice(0, 1500);
+      // 400 "page out of bounds" after page 1 is the API's
+      // end-of-list signal — graceful stop rather than a real failure.
+      if (pn > 1 && resp.status() === 400) break;
+      return { ok: false, status: lastStatus, contentType: lastCt, sample };
+    }
+    const pageBody = await resp.json();
+    if (pn === 1) firstBody = pageBody;
+    const pagePlans = extractPlansFromApi(pageBody);
+    for (const p of pagePlans) {
+      const seg = p.segment_id ?? '0';
+      const k = `${p.contract_id}-${p.plan_id}-${seg}`;
+      if (!merged.has(k)) merged.set(k, p);
+    }
+    const total = typeof pageBody.total_results === 'number' ? pageBody.total_results : merged.size;
+    if (merged.size >= total) break;
+    if (pagePlans.length < 10) break;
+  }
+  // Substitute the merged plan list into the first-page body so
+  // downstream payload persistence keeps the SPA response shape while
+  // exposing every plan we collected. extractPlansFromApi() reads
+  // body.plans first, so overwriting it is sufficient.
+  const mergedPlans = [...merged.values()];
+  const mergedBody = firstBody ? { ...firstBody, plans: mergedPlans } : { plans: mergedPlans };
   if (verbose) {
-    console.log('  POST', url);
-    console.log('       body', JSON.stringify(reqBody));
+    console.log(`  merged ${mergedPlans.length} plan(s) for plan_type=${planType}`);
   }
-  const resp = await page.request.post(url, {
-    data: reqBody,
-    headers: buildSearchHeaders(),
-    timeout: 60_000,
-  });
-  const status = resp.status();
-  const ct = resp.headers()['content-type'] ?? '';
-  if (!resp.ok() || !ct.includes('json')) {
-    const sample = (await resp.text()).slice(0, 1500);
-    return { ok: false, status, contentType: ct, sample };
-  }
-  const body = await resp.json();
-  return { ok: true, status, body };
+  return { ok: true, status: lastStatus || 200, body: mergedBody };
 }
 
 // ─── Per-plan detail fetch ─────────────────────────────────────────
@@ -1115,30 +1152,60 @@ async function main() {
 // ─── per-target scrape (broken out so caller can try/catch) ────────
 async function scrapeOneTarget(page, t, { verbose, planLimit, args, bodyTemplate, env, onCounts }) {
       // ─── try API ───
+      // Default sweep covers both MAPD and MA so MA-only plans (no
+      // Part D) are not silently skipped. --plan-type=<X> overrides
+      // to a single explicit plan_type. SNPs already surface under
+      // MAPD so no third plan_type needed.
       let usingDom = args.forceDom;
       let plans = [];
       let rawBody = null;
       if (!usingDom) {
-        const apiResult = await searchPlansViaApi(page, {
-          zip: t.zip,
-          fips: t.fips,
-          planType: args.planType,
-          capturedTemplate: bodyTemplate,
-          verbose,
-        });
-        if (apiResult.ok) {
-          plans = extractPlansFromApi(apiResult.body);
-          rawBody = apiResult.body;
+        const planTypes = args.planTypeExplicit
+          ? [args.planType]
+          : ['PLAN_TYPE_MAPD', 'PLAN_TYPE_MA'];
+        const merged = new Map(); // contract-plan-segment → plan
+        let lastApiResult = null;
+        let anyOk = false;
+        for (const pt of planTypes) {
+          const apiResult = await searchPlansViaApi(page, {
+            zip: t.zip,
+            fips: t.fips,
+            planType: pt,
+            capturedTemplate: bodyTemplate,
+            verbose,
+          });
+          lastApiResult = apiResult;
+          if (apiResult.ok) {
+            anyOk = true;
+            if (!rawBody) rawBody = apiResult.body;
+            for (const p of extractPlansFromApi(apiResult.body)) {
+              const seg = p.segment_id ?? '0';
+              const k = `${p.contract_id}-${p.plan_id}-${seg}`;
+              if (!merged.has(k)) merged.set(k, p);
+            }
+          } else if (planTypes.length > 1) {
+            // Dual-sweep: log but keep going so MA-only doesn't sink
+            // the whole target on a transient.
+            if (verbose) {
+              console.warn(
+                `  ${pt} ${t.zip}/${t.fips} API ${apiResult.status} (${apiResult.contentType}); continuing other plan_types`,
+              );
+            }
+          }
+        }
+        if (!anyOk) {
+          console.warn(
+            `  ${t.zip}/${t.fips} API ${lastApiResult?.status} (${lastApiResult?.contentType}); falling back to DOM`,
+          );
+          if (verbose) console.warn(`    sample: ${lastApiResult?.sample?.slice(0, 200)}`);
+          usingDom = true;
+        } else {
+          plans = [...merged.values()];
+          if (rawBody) rawBody = { ...rawBody, plans };
           if (plans.length === 0) {
-            if (verbose) console.log('  API returned 0 plans — falling back to DOM');
+            if (verbose) console.log('  API returned 0 plans across plan_types — falling back to DOM');
             usingDom = true;
           }
-        } else {
-          console.warn(
-            `  ${t.zip}/${t.fips} API ${apiResult.status} (${apiResult.contentType}); falling back to DOM`,
-          );
-          if (verbose) console.warn(`    sample: ${apiResult.sample?.slice(0, 200)}`);
-          usingDom = true;
         }
       }
 
