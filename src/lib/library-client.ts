@@ -127,6 +127,61 @@ export async function checkProviderNetwork(args: {
   return parsed;
 }
 
+// ─── npi-search ──────────────────────────────────────────────────
+
+export interface LibraryProviderRow {
+  npi: string;
+  enumeration_type: 'NPI-1' | 'NPI-2';
+  first_name: string | null;
+  last_name: string;
+  credential: string | null;
+  specialty: string | null;
+  specialty_code: string | null;
+  specialty_display: string | null;
+  practice_address_1: string | null;
+  practice_city: string | null;
+  practice_state: string;
+  practice_zip: string | null;
+  /** Organization name for NPI-2 rows; null for individuals. */
+  practice_name: string | null;
+  affiliation: string | null;
+  is_independent_contractor: boolean;
+  display_name: string;
+}
+
+export interface LibraryProviderSearchResponse {
+  providers: LibraryProviderRow[];
+  count: number;
+  query: string;
+  state: string;
+  source: 'nppes' | 'cache';
+  fallback?: 'last_name_only' | 'state_dropped';
+}
+
+export async function searchProviders(args: {
+  query: string;
+  state?: string;
+  zip?: string;
+  city?: string;
+  specialty?: string;
+  npi?: string;
+  limit?: number;
+  signal?: AbortSignal;
+}): Promise<LibraryProviderSearchResponse> {
+  const { signal, ...payload } = args;
+  const res = await fetch(`${LIBRARY_URL}/api/library/npi-search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`library/npi-search ${res.status} ${body.slice(0, 200)}`);
+  }
+  return (await res.json()) as LibraryProviderSearchResponse;
+}
+
 // ─── rank-plans ──────────────────────────────────────────────────
 
 export interface LibraryRankMedication {

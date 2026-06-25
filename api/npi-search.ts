@@ -1,3 +1,9 @@
+// DEPRECATED — agent useProviderSearch now calls
+// planmatch.generationhealth.me/api/library/npi-search (POST). This
+// route stays in place as a fallback until a 30-day Vercel access-log
+// review shows zero hits, after which it can be deleted. Do not add
+// new callers.
+//
 // GET /api/npi-search — server-side proxy for the CMS NPPES NPI Registry.
 //
 // NPPES doesn't send Access-Control-Allow-Origin, so direct browser

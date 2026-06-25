@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 
-// Provider/NPI autocomplete backed by the agent's /api/npi-search
-// (NPPES proxy). Mirrors the consumer hook's surface but normalizes
-// raw NPPES JSON on the client because the agent endpoint passes
-// NPPES through unchanged. Used by the inline add-provider panel on
-// agent-v3 ProvidersScreen.
-//
-// The proxy now fires NPI-1 (individuals) + NPI-2 (organizations) in
-// parallel so a query like "Duke Primary Care" surfaces practices
-// alongside named clinicians. enumeration_type rides through so the
-// UI can render org rows differently (no "Dr." prefix, practice chip).
+import {
+  searchProviders,
+  type LibraryProviderRow,
+} from '@/lib/library-client';
+
+// Provider/NPI autocomplete backed by /api/library/npi-search at
+// planmatch.generationhealth.me. The library endpoint normalizes raw
+// NPPES JSON server-side, so the agent no longer needs a local
+// taxonomy-picker / address-picker / display-name builder — it
+// consumes the canonical ProviderRow shape directly. Used by the
+// inline add-provider panel on agent-v3 ProvidersScreen.
 
 export interface ProviderSearchResult {
   npi: string;
@@ -37,10 +38,6 @@ export interface UseProviderSearch {
 const MIN_CHARS = 3;
 const DEBOUNCE_MS = 300;
 
-// Module-scope cache: keyed by `${q}|${state}`, so re-typing a query
-// the user has already issued in this session serves instantly from
-// memory instead of refetching NPPES. Lives for the lifetime of the
-// page — no TTL because NPPES results are stable within a session.
 interface CachedResponse {
   rows: ProviderSearchResult[];
   fallback: 'last_name_only' | 'state_dropped' | null;
@@ -51,63 +48,19 @@ function cacheKey(q: string, state: string): string {
   return `${q.toLowerCase()}|${state}`;
 }
 
-interface NppesAddress {
-  address_purpose?: string;
-  city?: string;
-  state?: string;
-  postal_code?: string;
-}
-
-interface NppesTaxonomy {
-  primary?: boolean;
-  desc?: string;
-}
-
-interface NppesBasic {
-  first_name?: string;
-  last_name?: string;
-  credential?: string;
-  organization_name?: string;
-}
-
-interface NppesResult {
-  number?: string | number;
-  enumeration_type?: string;
-  basic?: NppesBasic;
-  addresses?: NppesAddress[];
-  taxonomies?: NppesTaxonomy[];
-}
-
-function normalize(raw: NppesResult): ProviderSearchResult | null {
-  const npi = String(raw.number ?? '').trim();
-  if (!npi) return null;
-  const basic = raw.basic ?? {};
-  const isOrg = raw.enumeration_type === 'NPI-2';
-  const first = basic.first_name?.trim() || null;
-  const orgName = basic.organization_name?.trim() || null;
-  const last = isOrg
-    ? (orgName ?? '')
-    : (basic.last_name?.trim() ?? '');
-  const display = isOrg
-    ? (orgName ?? `NPI ${npi}`)
-    : [first, last].filter(Boolean).join(' ') || `NPI ${npi}`;
-  const primaryTax =
-    (raw.taxonomies ?? []).find((t) => t.primary) ?? (raw.taxonomies ?? [])[0];
-  const location =
-    (raw.addresses ?? []).find((a) => a.address_purpose === 'LOCATION') ??
-    (raw.addresses ?? [])[0];
+function toResult(row: LibraryProviderRow): ProviderSearchResult {
   return {
-    npi,
-    enumeration_type: isOrg ? 'NPI-2' : 'NPI-1',
-    display_name: display,
-    first_name: first,
-    last_name: last,
-    credential: basic.credential?.trim() || null,
-    specialty: primaryTax?.desc?.trim() || null,
-    practice_name: isOrg ? orgName : null,
-    practice_city: location?.city?.trim() || null,
-    practice_state: location?.state?.trim() || null,
-    practice_zip: location?.postal_code?.trim() || null,
+    npi: row.npi,
+    enumeration_type: row.enumeration_type,
+    display_name: row.display_name,
+    first_name: row.first_name,
+    last_name: row.last_name,
+    credential: row.credential,
+    specialty: row.specialty_display ?? row.specialty,
+    practice_name: row.practice_name,
+    practice_city: row.practice_city,
+    practice_state: row.practice_state || null,
+    practice_zip: row.practice_zip,
   };
 }
 
@@ -139,7 +92,6 @@ export function useProviderSearch(
       return;
     }
 
-    // Cache hit: serve instantly, skip the debounce + fetch entirely.
     const key = cacheKey(q, st);
     const cached = responseCache.get(key);
     if (cached) {
@@ -155,36 +107,24 @@ export function useProviderSearch(
     setLoading(true);
     setError(null);
 
+    const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       try {
-        const params = new URLSearchParams({ name: q });
-        if (/^[A-Z]{2}$/.test(st)) params.set('state', st);
-        const resp = await fetch(`/api/npi-search?${params.toString()}`);
+        const body = await searchProviders({
+          query: q,
+          ...(/^[A-Z]{2}$/.test(st) ? { state: st } : {}),
+          signal: controller.signal,
+        });
         if (cancelled) return;
-        const body = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-          setError(body?.error ?? `HTTP ${resp.status}`);
-          setResults([]);
-          setFallback(null);
-          return;
-        }
-        const rows = Array.isArray(body?.results)
-          ? (body.results as NppesResult[])
-              .map(normalize)
-              .filter((r): r is ProviderSearchResult => !!r)
-          : [];
-        const fb: 'last_name_only' | 'state_dropped' | null =
-          body?.fallback === 'last_name_only'
-            ? 'last_name_only'
-            : body?.fallback === 'state_dropped'
-              ? 'state_dropped'
-              : null;
+        const rows = (body.providers ?? []).map(toResult);
+        const fb = body.fallback ?? null;
         responseCache.set(key, { rows, fallback: fb });
         const exclude = new Set(excludeRef.current);
         setResults(rows.filter((r) => !exclude.has(r.npi)));
         setFallback(fb);
       } catch (err) {
         if (cancelled) return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         setError(err instanceof Error ? err.message : 'Search failed');
         setResults([]);
         setFallback(null);
@@ -195,6 +135,7 @@ export function useProviderSearch(
 
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [rawQuery, state]);
