@@ -2243,7 +2243,7 @@ export function QuoteDeliveryV4({
                         style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}
                         title={tooltipFor(source)}
                       >
-                        {tier != null && source !== 'unavailable' && <TierBadge tier={tier} />}
+                        {tier != null && source !== 'unavailable' && <TierSquareBadge tier={tier} />}
                         <span
                           style={{
                             fontFamily: FONT.mono,
@@ -3194,7 +3194,12 @@ function CopayRowEl({ row, columns, betterIsHigher }: { row: CopayRow; columns: 
   );
 }
 
-function TierBadge({ tier }: { tier: number }) {
+// 18×18 monospace tier chip used in the tight comparison-table cells.
+// Distinct from the wider "Tier N" pill exported by src/agent-v3/atoms
+// (which the MedsScreen uses): different palette, different geometry,
+// different role. Both render a drug's formulary tier but neither
+// substitutes for the other without breaking layout.
+function TierSquareBadge({ tier }: { tier: number }) {
   const palette = TIER_BADGE[tier] ?? { bg: '#e5e7eb', fg: '#374151' };
   return (
     <span
