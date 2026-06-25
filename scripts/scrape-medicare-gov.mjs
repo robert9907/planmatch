@@ -132,30 +132,40 @@ async function sbGet(env, pathQ) {
 
 async function sbDeleteForPlans(env, planIds) {
   if (planIds.length === 0) return;
-  // The pbp_benefits unique index is functional (COALESCE(tier_id,''))
-  // which PostgREST's on_conflict parameter can't target. Delete-then-
-  // insert is fully idempotent and avoids the conflict-target dance.
-  // Only delete medicare_gov rows so we don't clobber pbp_federal /
+  // pbp_benefits is now a view over pbp_benefits_v2 — write path goes
+  // to the base table directly. The v2 key is (contract_id, plan_id,
+  // segment_id, plan_year), so we split each triple and DELETE per
+  // plan. Only medicare_gov rows so we don't clobber pbp_federal /
   // sb_ocr / manual entries from other sources.
-  const ids = planIds.map((id) => `"${id}"`).join(',');
-  const res = await fetch(
-    `${env.SUPABASE_URL}/rest/v1/pbp_benefits?source=eq.medicare_gov&plan_id=in.(${encodeURIComponent(ids)})`,
-    {
-      method: 'DELETE',
-      headers: {
-        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-        Prefer: 'return=minimal',
+  for (const triple of planIds) {
+    const [contract, plan, segment = '0'] = triple.split('-');
+    if (!contract || !plan) continue;
+    const qs = new URLSearchParams({
+      source: 'eq.medicare_gov',
+      plan_year: `eq.${YEAR}`,
+      contract_id: `eq.${contract}`,
+      plan_id: `eq.${plan}`,
+      segment_id: `eq.${segment}`,
+    });
+    const res = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/pbp_benefits_v2?${qs.toString()}`,
+      {
+        method: 'DELETE',
+        headers: {
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          Prefer: 'return=minimal',
+        },
       },
-    },
-  );
-  if (!res.ok && res.status !== 404) {
-    throw new Error(`supabase delete ${res.status}: ${(await res.text()).slice(0, 400)}`);
+    );
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`supabase delete ${res.status}: ${(await res.text()).slice(0, 400)}`);
+    }
   }
 }
 
 async function sbInsert(env, rows) {
-  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/pbp_benefits`, {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/pbp_benefits_v2`, {
     method: 'POST',
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
@@ -169,7 +179,7 @@ async function sbInsert(env, rows) {
     const body = await res.text();
     if (res.status === 404 || /PGRST205/.test(body)) {
       throw new Error(
-        'pbp_benefits table missing. Run scripts/migrations/001_pbp_benefits.sql first.',
+        'pbp_benefits_v2 table missing. The scraper writes to the base table since pbp_benefits became a view.',
       );
     }
     throw new Error(`supabase insert ${res.status}: ${body.slice(0, 400)}`);
@@ -713,7 +723,10 @@ function normalizePlanToBenefits(rawPlan, detailCard, planFilter) {
     if (seenKeys.has(key)) return;
     seenKeys.add(key);
     rows.push({
-      plan_id: triple,
+      contract_id: contract,
+      plan_id: planId,
+      segment_id: segment,
+      plan_year: YEAR,
       benefit_type,
       tier_id: tier,
       copay: copay != null ? Number(copay) : null,
