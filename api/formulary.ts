@@ -1,3 +1,12 @@
+// DEPRECATED — agent's src/lib/formularyLookup.ts now calls the
+// consumer's /api/formulary endpoint cross-origin via
+// planmatch.generationhealth.me, which uses the shared
+// api/_lib/formulary-core.ts ingredient fallback chain. This route
+// stays in place as a fallback until a 30-day Vercel access-log
+// review shows zero hits, after which it can be deleted along with
+// the RxNav /related.json expansion machinery below. Do NOT add new
+// callers.
+//
 // GET /api/formulary — per-(plan, rxcui) formulary lookup.
 //
 // Used by Step 3 Medications to render tier / copay / coinsurance for
