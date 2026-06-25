@@ -111,6 +111,16 @@ type PlanOverride = Omit<Partial<Plan>, 'benefits'> &
     benefits?: Partial<Plan['benefits']>;
   };
 
+// Medicare.gov Plan Compare deep-link — mirrors api/plans.ts
+// planFinderUrl() so static-fallback plans still surface a working SBF
+// link in the agent UI during a Supabase outage.
+const PLAN_YEAR = 2026;
+function sbfUrlFromId(id: string): string {
+  const [contractId, planId, segmentId] = id.split('-');
+  const seg = (segmentId ?? '000').padStart(3, '0');
+  return `https://www.medicare.gov/plan-compare/#/plan-details/${PLAN_YEAR}/${contractId}-${planId}-${seg}?lang=en`;
+}
+
 function p(override: PlanOverride): Plan {
   const counties =
     override.state === 'NC' ? NC_COUNTIES :
@@ -146,6 +156,7 @@ function p(override: PlanOverride): Plan {
     has_drug_coverage: true,
     part_b_giveback: 0,
     star_rating: 4,
+    sbf_url: sbfUrlFromId(override.id),
     benefits: { ...defaultBenefits, ...(benefitsOverride ?? {}) },
     formulary: { ...BASE_FORMULARY },
     in_network_npis: [],

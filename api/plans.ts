@@ -57,6 +57,11 @@ interface Plan {
   has_drug_coverage: boolean;
   part_b_giveback: number;
   star_rating: number;
+  // Medicare.gov Plan Compare deep-link for the plan's Summary of
+  // Benefits page. Always populated — built from the (contract, plan,
+  // segment) triple via planFinderUrl(). The agent UI surfaces this
+  // as a "📄 Summary of Benefits ↗" link.
+  sbf_url: string;
   benefits: PlanBenefits;
   formulary: Record<string, never>; // populated lazily via /api/formulary
   in_network_npis: string[]; // empty — networkCheck.ts stamps its own
@@ -181,6 +186,25 @@ interface PbpRichRow extends PbpBenefitRow {
 // the query and the lookup use the same canonical key — pbp data is
 // uniform per (contract, plan) regardless of segment, so collapsing
 // the segment is safe.
+// Medicare.gov Plan Compare deep-link to the plan's Summary of
+// Benefits page. The route uses the 3-part triple with the segment
+// zero-padded to 3 chars (matches pm_plans.id format). 2026 is the
+// active plan year — bump the literal at the next OEP cutover.
+//
+// Verified shape against medicare.gov live URLs (e.g.
+// https://www.medicare.gov/plan-compare/#/plan-details/2026/H5253-041-000?lang=en
+// for UHC Dual Complete NC). The fragment-based route (`/#/`) is
+// required — without it the page 302s back to the plan search.
+const PLAN_YEAR = 2026;
+function planFinderUrl(
+  contractId: string,
+  planId: string,
+  segmentId: string | null | undefined,
+): string {
+  const seg = (segmentId ?? '000').padStart(3, '0');
+  return `https://www.medicare.gov/plan-compare/#/plan-details/${PLAN_YEAR}/${contractId}-${planId}-${seg}?lang=en`;
+}
+
 function normalizePbpKey(planId: string): string {
   const parts = planId.split('-');
   if (parts.length < 2) return planId;
@@ -1030,6 +1054,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         drug_deductible: row.drug_deductible,
         part_b_giveback: partBGiveback ?? 0,
         star_rating: row.star_rating ?? 0,
+        sbf_url: planFinderUrl(row.contract_id, row.plan_id, row.segment_id),
         benefits,
         formulary: {},
         in_network_npis: [],

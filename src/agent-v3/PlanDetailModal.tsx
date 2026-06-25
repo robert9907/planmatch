@@ -198,6 +198,26 @@ export function PlanDetailModal({
                 </span>
               )}
             </div>
+            <a
+              href={plan.sbf_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                display: 'inline-block',
+                marginTop: 6,
+                background: 'rgba(131,240,249,0.15)',
+                color: '#83f0f9',
+                fontSize: 11,
+                fontWeight: 700,
+                padding: '3px 8px',
+                borderRadius: 4,
+                textDecoration: 'none',
+                letterSpacing: 0.3,
+              }}
+            >
+              📄 Summary of Benefits ↗
+            </a>
           </div>
           <button
             type="button"

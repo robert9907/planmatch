@@ -170,6 +170,14 @@ export interface Plan {
   has_drug_coverage: boolean;
   part_b_giveback: number;
   star_rating: number;
+  // Medicare.gov Plan Compare deep-link for the plan's Summary of
+  // Benefits page (`/plan-compare/#/plan-details/<year>/<triple>`).
+  // /api/plans always populates this; static fallback rows construct
+  // it from the id triple. Used by the agent UI to surface a "📄
+  // Summary of Benefits ↗" link next to every plan rendering so Rob
+  // can read the carrier-filed SoB during a member call without
+  // leaving Plan Match for medicare.gov.
+  sbf_url: string;
   benefits: PlanBenefits;
   formulary: Record<string, FormularyTier>;
   in_network_npis: string[];

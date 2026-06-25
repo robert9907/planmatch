@@ -1544,6 +1544,26 @@ function BenchCard({
         >
           {planIdShort(plan.id)}
         </div>
+        <a
+          href={plan.sbf_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            display: 'inline-block',
+            marginTop: 4,
+            background: 'rgba(131,240,249,0.15)',
+            color: SEAFOAM,
+            fontSize: 9,
+            fontWeight: 700,
+            padding: '2px 6px',
+            borderRadius: 3,
+            textDecoration: 'none',
+            letterSpacing: 0.3,
+          }}
+        >
+          📄 SBF ↗
+        </a>
       </div>
 
       <div style={{ padding: 10 }}>
@@ -2259,6 +2279,26 @@ function SlotCell({
           >
             {planIdShort(plan.id)}
           </div>
+          <a
+            href={plan.sbf_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              display: 'inline-block',
+              marginTop: 4,
+              background: 'rgba(131,240,249,0.15)',
+              color: SEAFOAM,
+              fontSize: 9,
+              fontWeight: 700,
+              padding: '2px 6px',
+              borderRadius: 3,
+              textDecoration: 'none',
+              letterSpacing: 0.3,
+            }}
+          >
+            📄 SBF ↗
+          </a>
         </div>
         <button
           type="button"
@@ -2912,6 +2952,26 @@ function H2HView({
             >
               {baseline.plan_name}
             </div>
+            <a
+              href={baseline.sbf_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                display: 'inline-block',
+                marginTop: 4,
+                background: 'rgba(131,240,249,0.15)',
+                color: SEAFOAM,
+                fontSize: 9,
+                fontWeight: 700,
+                padding: '2px 6px',
+                borderRadius: 3,
+                textDecoration: 'none',
+                letterSpacing: 0.3,
+              }}
+            >
+              📄 SBF ↗
+            </a>
           </div>
           <div style={{ display: 'flex', justifyContent: 'center' }}>
             <div
@@ -2965,6 +3025,26 @@ function H2HView({
             >
               {challenger.plan_name}
             </div>
+            <a
+              href={challenger.sbf_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                display: 'inline-block',
+                marginTop: 4,
+                background: 'rgba(131,240,249,0.15)',
+                color: SEAFOAM,
+                fontSize: 9,
+                fontWeight: 700,
+                padding: '2px 6px',
+                borderRadius: 3,
+                textDecoration: 'none',
+                letterSpacing: 0.3,
+              }}
+            >
+              📄 SBF ↗
+            </a>
           </div>
         </div>
 
