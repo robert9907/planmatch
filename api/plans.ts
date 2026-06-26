@@ -457,6 +457,27 @@ function transformPbpRow(
     if (max_coverage == null) max_coverage = annual;
   }
 
+  // Allowance rescue: medicare.gov often files food_card / hearing /
+  // transportation as copay=0 with a real description like "Food card
+  // benefit included (no Medicare.gov-published ceiling)" or "Combined
+  // with OTC card above". The per-category branches above all gate on
+  // copay > 0, so coverage_amount stays at the raw copay (0) and
+  // buildBenefits falls through to "None". Promote to the presence
+  // marker (1) — buildBenefits already treats coverage_amount === 1
+  // as "offered but no dollar cap" (see the foodCard + transportation
+  // blocks). Affects 257 food_card + 106 hearing_aid + 1 transportation
+  // rows nationally as of the audit at commit time. We don't rescue
+  // when the description is empty — that shape is a true tombstone the
+  // caller correctly surfaces as "not offered".
+  if (
+    isAllowance &&
+    (coverage_amount == null || coverage_amount === 0) &&
+    row.description != null &&
+    row.description.trim() !== ''
+  ) {
+    coverage_amount = 1;
+  }
+
   return {
     contract_id,
     plan_id,
