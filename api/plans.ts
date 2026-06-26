@@ -982,14 +982,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // contract+plan. Pre-fix the wire returned copay=5 desc="$10
     // copay" — contradictory and compliance-risky.
     //
-    // Allowance categories (dental, vision, otc, food_card,
-    // partb_giveback) file dollar values in coverage_amount with
-    // copay+coinsurance both null on the landscape side, so this
-    // predicate still lets synth win for them.
+    // Allowance categories (dental, vision, hearing, otc, food_card,
+    // meals, transportation, rx_deductible, partb_giveback) file the
+    // headline value in coverage_amount, not copay/coinsurance. The
+    // consumer importer can emit coinsurance=0 on the landscape row —
+    // e.g. CMS B17a Vision files coins_pct_mc_min=0 because vision is
+    // an allowance benefit with no exam coinsurance — and the plain
+    // `coinsurance != null` predicate below would treat that 0 as
+    // "real cost-share filed" and block the synth row. H5453-016
+    // surfaced $0 vision even though medicare_gov scraped a $300/yr
+    // allowance, because the landscape's coins=0 won. For allowance
+    // categories the synth blocker is coverage_amount, not cost-share.
+    const ALLOWANCE_CATEGORIES = new Set([
+      'vision', 'hearing', 'dental', 'otc', 'food_card', 'meals',
+      'transportation', 'rx_deductible', 'partb_giveback',
+    ]);
     const synthFiltered = synthBenefits.filter((b) => {
       const triple = `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}`;
       const land = landscapeByKey.get(`${triple}|${b.benefit_category}`);
       if (!land) return true;
+      if (ALLOWANCE_CATEGORIES.has(b.benefit_category)) {
+        return land.coverage_amount == null;
+      }
       // Landscape has a real segment-tagged cost-share — keep it.
       if (land.copay != null || land.coinsurance != null) return false;
       return true;
