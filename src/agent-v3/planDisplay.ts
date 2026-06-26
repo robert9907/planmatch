@@ -123,14 +123,18 @@ export function formatPremium(plan: Plan): string {
   return plan.premium === 0 ? '$0' : `$${plan.premium}`;
 }
 
+// formatPcp / formatSpecialist used to read .copay only and return "—"
+// when copay was null. That hid every coinsurance-only filing — UHC
+// H5453-016 specialist files coinsurance=30 with copay=null and the
+// Compare screen rendered "—" instead of "30%". Delegate to
+// formatCostShare so the full copay → coinsurance → description ladder
+// is honored.
 export function formatPcp(plan: Plan): string {
-  const c = plan.benefits.medical.primary_care.copay;
-  return c == null ? '—' : `$${c}`;
+  return formatCostShare(plan.benefits.medical.primary_care);
 }
 
 export function formatSpecialist(plan: Plan): string {
-  const c = plan.benefits.medical.specialist.copay;
-  return c == null ? '—' : `$${c}`;
+  return formatCostShare(plan.benefits.medical.specialist);
 }
 
 // Generic CostShare formatter — copay wins when present, otherwise
