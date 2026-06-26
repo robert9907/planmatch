@@ -1,0 +1,107 @@
+═══════════════════════════════════════════════════════════
+  CMS CY2026 BENEFIT SYNC — per-category value validation
+  Generated: 2026-06-26T03:18:39.554Z
+═══════════════════════════════════════════════════════════
+
+── Overall ─────────────────────────────────────────────────
+  plans diffed       : 791
+  total comparisons  : 33221
+  MATCH              : 18321
+  MISMATCH           : 3647
+  match rate         : 83.4%
+
+── Per-category match rate (sorted worst first) ───────────
+  category                         match  miss   miss   miss  matchRate
+                                          mtch   DB     CMS   
+  partb_drugs                          20    763      0      0     2.6%
+  otc                                  18    300    357    263     5.7%
+  outpatient_surgery_hospital         190    570      0    107    25.0%
+  outpatient_surgery_asc              300    441      0      3    40.5%
+  dental                               43     52     42   1484    45.3%
+  advanced_imaging                    177    207    497    373    46.1%
+  insulin                             506    506      0    250    50.0%
+  hearing                             431    280    273    207    60.6%
+  podiatry                             94     36      5    643    72.3%
+  xray                                536    204     14      9    72.4%
+  vision                              747    125    581    177    85.7%
+  telehealth                           57      9     99    703    86.4%
+  dme_prosthetics                     762    119      0      7    86.5%
+  inpatient                           558     31      0    168    94.7%
+  acupuncture                          55      3    113     57    94.8%
+  substance_abuse                     115      1     12    632    99.1%
+  rx_tier_1                           702      0      0      0   100.0%
+  rx_tier_2                           702      0      0      0   100.0%
+  rx_tier_3                           702      0      0      0   100.0%
+  rx_tier_4                           702      0      0      0   100.0%
+  rx_tier_5                           702      0      0      0   100.0%
+  primary_care                        537      0      0    302   100.0%
+  specialist                          737      0      0    107   100.0%
+  urgent_care                         735      0      0     55   100.0%
+  emergency                           757      0      0     18   100.0%
+  snf                                 656      0      0      0   100.0%
+  outpatient_observation              730      0      0      3   100.0%
+  lab_services                        706      0      0    148   100.0%
+  diagnostic_procedures               719      0      0     54   100.0%
+  mental_health_individual            698      0      0     23   100.0%
+  mental_health_group                 698      0      0     23   100.0%
+  physical_speech_therapy             152      0      0    590   100.0%
+  occupational_therapy                154      0      0    575   100.0%
+  ambulance                           756      0      0    373   100.0%
+  air_transportation                  757      0      0      0   100.0%
+  chiropractic                        142      0      0    586   100.0%
+  home_health                         510      0      0      0   100.0%
+  renal_dialysis                      217      0    543      1   100.0%
+  mental_health_inpatient             541      0      0      0   100.0%
+  diabetic_supplies                     0      0    750      0     —  
+  food_card                             0      0      0     26     —  
+
+── Per-carrier match rate (top 15 by plan count) ──────────
+  Humana                                  n=145  mismatches= 765  rate~87.9%
+  UnitedHealthcare                        n=142  mismatches= 724  rate~87.8%
+  Aetna Medicare                          n= 92  mismatches= 470  rate~88.5%
+  HealthSpring                            n= 80  mismatches= 423  rate~85.7%
+  Wellcare                                n= 68  mismatches= 182  rate~93.7%
+  Devoted Health                          n= 62  mismatches= 318  rate~87.9%
+  Wellpoint                               n= 25  mismatches=  75  rate~93.6%
+  Blue Cross and Blue Shield of North Ca  n= 17  mismatches=  61  rate~90.7%
+  Alignment Health Plan                   n= 14  mismatches=  44  rate~91.9%
+  Baylor Scott & White Health Plan        n= 14  mismatches=  35  rate~93.4%
+  Prominence Health Plan                  n= 13  mismatches=  44  rate~91.5%
+  Kaiser Permanente                       n= 10  mismatches=  59  rate~85.9%
+  Anthem Blue Cross and Blue Shield       n=  8  mismatches=  38  rate~88.8%
+  Blue Cross and Blue Shield of Texas     n=  8  mismatches=  38  rate~89.0%
+  Molina Healthcare of Texas, Inc.        n=  7  mismatches=  22  rate~93.6%
+
+── Worst 20 plans by mismatch count ────────────────────────
+  H7849-145-000    8 mismatches  HealthSpring              [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, diabetic_supplies…]
+  H5216-203-001    8 mismatches  Humana                    [outpatient_surgery_hospital, outpatient_surgery_asc, advanced_imaging, acupuncture, diabetic_supplies…]
+  H5302-026-000    8 mismatches  Aetna Medicare            [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, telehealth…]
+  H5521-170-000    8 mismatches  Aetna Medicare            [outpatient_surgery_hospital, outpatient_surgery_asc, advanced_imaging, telehealth, dme_prosthetics…]
+  H4513-009-000    8 mismatches  HealthSpring              [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, diabetic_supplies…]
+  H4513-061-001    8 mismatches  HealthSpring              [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, diabetic_supplies…]
+  H4513-083-001    8 mismatches  HealthSpring              [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, diabetic_supplies…]
+  H4513-091-000    8 mismatches  HealthSpring              [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, diabetic_supplies…]
+  H4513-083-007    8 mismatches  HealthSpring              [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, diabetic_supplies…]
+  H4513-083-004    8 mismatches  HealthSpring              [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, diabetic_supplies…]
+  H4523-038-000    8 mismatches  Aetna Medicare            [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, telehealth…]
+  H4513-083-002    8 mismatches  HealthSpring              [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, diabetic_supplies…]
+  H4513-083-005    8 mismatches  HealthSpring              [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, diabetic_supplies…]
+  H4513-083-003    8 mismatches  HealthSpring              [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, diabetic_supplies…]
+  H4513-093-000    8 mismatches  HealthSpring              [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, diabetic_supplies…]
+  H4523-037-000    8 mismatches  Aetna Medicare            [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, telehealth…]
+  H4513-026-000    8 mismatches  HealthSpring              [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, diabetic_supplies…]
+  H4513-083-006    8 mismatches  HealthSpring              [outpatient_surgery_hospital, outpatient_surgery_asc, xray, advanced_imaging, diabetic_supplies…]
+  H5216-154-000    7 mismatches  Humana                    [outpatient_surgery_hospital, outpatient_surgery_asc, advanced_imaging, diabetic_supplies, partb_drugs…]
+  H5216-207-000    7 mismatches  Humana                    [outpatient_surgery_hospital, outpatient_surgery_asc, advanced_imaging, diabetic_supplies, partb_drugs…]
+
+── Coverage ────────────────────────────────────────────────
+  categories with PBP mapping       : 41
+  categories actually compared      : 41
+  skipped (per discovery sign-off)  : 4  (transportation, fitness, diabetic-brand, medical-deductible)
+
+── Artifacts ───────────────────────────────────────────────
+  SQL fix file : migrations/proposed-cms-benefit-sync-2026.sql
+  summary      : _tmp/cms-sync/out/benefit-sync-summary.txt
+  diff JSON    : _tmp/cms-sync/out/benefit-diff.json
+  6637 categories with fix statements
+  3285 of those include INSERT (row was missing entirely)

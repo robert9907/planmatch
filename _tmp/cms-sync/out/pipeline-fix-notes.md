@@ -1,13 +1,54 @@
 # OTC + Telehealth ingest investigation
 
 Generated as Task 4 of the CMS 2026 ground-truth audit. **READ-ONLY** —
-no ingest code modified. Cross-repo investigation: agent app
-(`~/planmatch/planmatch`) plus the consumer-side importers (`~/Code/plan-match/scripts/`).
+no ingest code modified.
 
-The OTC + telehealth corruption surfaced in Pass 2 (`cms-benefit-sync-2026.ts`)
-is a write-path issue. This document records who writes those rows and
-where the bug sits, so the next coding pass can patch the right file
-instead of guessing.
+## ⚠ UPDATE 2026-06-26 — corruption was an AUDIT ARTIFACT, not a DB bug
+
+The original write-up below speculated that "OTC quarterly values landed
+in the copay column" and "telehealth coinsurance has $2000" reflected
+historical bad data in `pm_plan_benefits`. Direct probes against
+plan-match-prod showed this was wrong:
+
+| Probe | Result |
+|---|---|
+| `pm_plan_benefits.otc` rows with `copay > $10` | **0** (583 OTC rows, all clean: copay=NULL, coverage_amount=quarterly, max_coverage=annual) |
+| `pm_plan_benefits.telehealth.coinsurance > 100` | **0** (755 rows, all coinsurance=NULL) |
+| `pbp_benefits.telehealth.coinsurance > 100` | **0** (cms_pbp source has 20.000 = 20%, percent format) |
+
+Where the false "$2000" came from:
+- `pbp_benefits.coinsurance` is stored as **percent** (0–100), confirmed
+  empirically against the `cms_pbp` + `medicare_gov` sources.
+- The audit script (`scripts/cms-benefit-sync-2026.ts:loadDbBenefits`)
+  was multiplying it by 100, based on a mis-port of the `pm_formulary_v2`
+  fraction convention. `20 × 100 = 2000` produced the synthetic
+  "corruption" in benefit-diff.json.
+
+Where the false OTC "$45 copay" came from:
+- For allowance categories (OTC, food_card), `pbp_benefits.copay` holds
+  the **allowance dollar amount** as filed by the source (period varies;
+  description carries the period code). It is NOT a per-visit copay.
+- The audit's `loadDbBenefits` fell back to `pbp_benefits.copay` when
+  `pm_plan_benefits.copay` was NULL (which is correct for OTC). That
+  surfaced the allowance value as if it were a copay mismatch.
+
+Both audit bugs were fixed 2026-06-26 in the same file:
+- Removed the `× 100` multiplication on `pbp_benefits.coinsurance`.
+- Added `ALLOWANCE_FALLBACK_BLOCKED = {otc, food_card}` to skip the
+  `pbp_benefits.copay` fallback for allowance categories.
+
+Re-running the audit after the fix moved telehealth from a 26% to an
+86% match rate (the gap is the audit no longer treating valid CMS
+20% coinsurance as "$2000 DB corruption"). OTC's category-level match
+rate moved DOWN in raw numbers because the audit stopped misreporting
+pbp_benefits allowance values as pm_plan_benefits copays — most of
+the remaining OTC mismatches are now driven by the audit not knowing
+the CMS-side period code (`pbp_b13b_otc_maxplan_per`) so it can't
+normalize $45/month vs $135/quarter into the same units.
+
+**No cleanup migration was written or applied.** The pipeline-fix
+notes below remain as the original speculative write-up; readers
+should weight them against the empirical findings above.
 
 ---
 

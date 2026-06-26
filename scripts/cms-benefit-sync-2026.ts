@@ -524,6 +524,14 @@ async function loadDbBenefits(
     const parts = planId.split('-');
     return parts.length >= 2 ? `${parts[0]}-${parts[1]}` : planId;
   }
+  // For allowance categories (OTC / food_card / dental_annual_max),
+  // pbp_benefits.copay is NOT a per-visit copay — it's the dollar
+  // allowance value as filed by the source (description carries the
+  // period). Pulling it into DbValue.copay made the diff incorrectly
+  // flag those as "DB copay > 0 vs CMS = $0" mismatches. Skip the
+  // fallback for these categories — pm_plan_benefits's normalized
+  // coverage_amount + max_coverage are the right truth.
+  const ALLOWANCE_FALLBACK_BLOCKED = new Set(['otc', 'food_card']);
   for (const r of pbpRows) {
     const cat = PBP_TYPE_TO_CATEGORY[r.benefit_type];
     if (!cat) continue;
@@ -535,12 +543,14 @@ async function loadDbBenefits(
       const inner = out.get(t)!;
       const existing = inner.get(cat);
       if (existing && existing.copay != null) continue; // pm wins
+      // pbp_benefits.coinsurance is already in percent (0-100) for both
+      // cms_pbp and medicare_gov sources — verified empirically against
+      // production data 2026-06-26. The earlier × 100 assumption was a
+      // mis-port of the pm_formulary_v2 fraction convention.
+      const copayFallback = ALLOWANCE_FALLBACK_BLOCKED.has(cat) ? null : r.copay;
       inner.set(cat, {
-        copay: existing?.copay ?? r.copay,
-        // pbp_benefits coinsurance is fraction 0-1; pm_plan_benefits is
-        // percent. Normalize on read.
-        coinsurance: existing?.coinsurance ??
-          (r.coinsurance != null ? r.coinsurance * 100 : null),
+        copay: existing?.copay ?? copayFallback,
+        coinsurance: existing?.coinsurance ?? r.coinsurance,
         max_coverage: existing?.max_coverage ?? r.copay_max,
         source: existing ? 'both' : 'pbp_benefits',
       });
