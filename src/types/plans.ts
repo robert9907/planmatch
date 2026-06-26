@@ -161,6 +161,13 @@ export interface Plan {
   // partitions D-SNP vs C-SNP separately and needs the raw value.
   snp_type: string | null;
   premium: number;
+  // The premium a member actually pays. For D-SNP (dual-eligible) plans
+  // this is $0 because LIS auto-covers the Part D Basic Premium that
+  // D-SNPs carry; for every other plan it equals `premium`. `premium`
+  // itself retains the structural Part D Basic value so the brain's
+  // cost-ranking + annual-total math stay consistent — UI surfaces that
+  // need to show "what the member pays" should read `consumer_premium`.
+  consumer_premium: number;
   annual_deductible: number | null;
   moop_in_network: number;
   moop_out_of_network: number | null;

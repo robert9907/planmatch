@@ -45,6 +45,13 @@ interface Plan {
   plan_shape: string | null;
   snp_type: string | null;
   premium: number;
+  // Member-payable premium. For D-SNPs this is always $0 because LIS
+  // covers the Part D Basic premium; for all other plans it equals
+  // `premium`. See src/types/plans.ts for the rationale — `premium`
+  // stays as the structural value so brain cost-ranking matches
+  // medicare.gov's "premium amount" column, while consumer_premium
+  // matches the "premium you pay" column. Computed below from snp_type.
+  consumer_premium: number;
   annual_deductible: number | null;
   moop_in_network: number;
   moop_out_of_network: number | null;
@@ -1040,6 +1047,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         snp_type: row.snp_type,
         has_drug_coverage: row.drug_deductible !== null,
         premium: row.monthly_premium ?? 0,
+        // D-SNPs file a Part D Basic Premium in monthly_premium (typically
+        // $14–$36) that LIS pays on the member's behalf, so Plan Finder
+        // and broker member-facing surfaces should show $0. snp_type is
+        // the canonical D-SNP/C-SNP/I-SNP marker (normalized via the
+        // pass-1 CMS sync), so this gate stays correct for the 261
+        // landscape-flagged SNPs even if mapPlanType buckets differently.
+        consumer_premium:
+          row.snp_type === 'D-SNP' ? 0 : (row.monthly_premium ?? 0),
         // pm_plans.annual_deductible is sparsely populated (3% of Durham
         // plans) while pbp_benefits.medical_deductible from medicare_gov
         // hits 34%. Prefer PBP when it has a value — it's more current

@@ -25,6 +25,10 @@ interface ApiPlan {
   plan_shape: string | null;
   snp_type: string | null;
   premium: number;
+  // Member-payable premium (D-SNP → $0 via LIS, else equals premium).
+  // Older /api/plans builds didn't return this; toPlan() falls back to
+  // a snp_type-aware derivation so the consumer surface stays correct.
+  consumer_premium?: number;
   annual_deductible: number | null;
   moop_in_network: number;
   moop_out_of_network: number | null;
@@ -127,6 +131,11 @@ function toPlan(p: ApiPlan): Plan {
     plan_shape: p.plan_shape ?? null,
     snp_type: p.snp_type ?? null,
     premium: p.premium ?? 0,
+    // Prefer the server's computed consumer_premium. Fallback derivation
+    // mirrors api/plans.ts (D-SNP → 0, else premium) so older builds
+    // still surface the right value.
+    consumer_premium:
+      p.consumer_premium ?? (p.snp_type === 'D-SNP' ? 0 : (p.premium ?? 0)),
     annual_deductible: p.annual_deductible ?? null,
     moop_in_network: p.moop_in_network ?? 0,
     moop_out_of_network: p.moop_out_of_network ?? null,

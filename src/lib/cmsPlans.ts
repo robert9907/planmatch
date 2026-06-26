@@ -149,6 +149,11 @@ function p(override: PlanOverride): Plan {
     plan_shape: null,
     snp_type: null,
     premium: 0,
+    // Member-payable premium. Seed D-SNPs always pin to $0 (LIS-covered);
+    // any override that supplies snp_type='D-SNP' picks up the same rule
+    // via the explicit ?: below before the `...rest` spread allows the
+    // caller to override consumer_premium directly.
+    consumer_premium: override.snp_type === 'D-SNP' ? 0 : (override.premium ?? 0),
     annual_deductible: null,
     moop_in_network: 4900,
     moop_out_of_network: null,
