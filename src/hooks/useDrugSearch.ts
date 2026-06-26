@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { supabaseBrowser } from '@/lib/supabaseBrowser';
+import { searchDrugs, type LibraryDrug } from '@/lib/library-client';
 
-// Direct pm_drugs autocomplete on plan-match-prod, mirroring the
-// consumer's apps/web/src/hooks/useDrugSearch.ts. Agent-v3 uses this
-// for the inline add-medication panel on MedsScreen; the existing
-// /api/rxnorm-search proxy (RxNav-backed, used by the v4 Step3 page)
-// is still around for callers that want fuzzy approximateTerm hits,
-// but for typeahead against a pre-imported drug table the direct
-// ilike scan is faster and matches the consumer's UX 1:1.
+// Library-backed drug autocomplete for agent-v3's MedsScreen. We used
+// to hit pm_drugs directly via supabaseBrowser — that coupled the agent
+// to the consumer's database credentials and duplicated the ranking
+// behind the library API. Routing through searchDrugs makes the agent
+// and consumer return identical suggestions for the same query and
+// removes the browser-exposed Supabase key requirement for this path.
 
 export interface DrugSearchResult {
   rxcui: string;
@@ -45,6 +44,12 @@ function comboPenalty(name: string): number {
   return /\s\/\s|;\s|\s\+\s/.test(name) ? 2 : 0;
 }
 
+function nullable(v: string | null | undefined): string | null {
+  if (v === null || v === undefined) return null;
+  const trimmed = v.trim();
+  return trimmed.length === 0 ? null : trimmed;
+}
+
 export function useDrugSearch(
   rawQuery: string,
   excludeRxcuis: readonly string[] = [],
@@ -67,31 +72,27 @@ export function useDrugSearch(
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
     const timer = window.setTimeout(async () => {
       try {
-        const supabase = supabaseBrowser();
-        const { data, error: supaErr } = await supabase
-          .from('pm_drugs')
-          .select(
-            'rxcui, name, generic_name, brand_name, strength, dose_form, is_brand',
-          )
-          .ilike('search_text', `%${q}%`)
-          .eq('is_prescribable', true)
-          .limit(FETCH_LIMIT);
+        const drugs: LibraryDrug[] = await searchDrugs(
+          q,
+          FETCH_LIMIT,
+          controller.signal,
+        );
         if (cancelled) return;
-        if (supaErr) throw supaErr;
 
         const qLower = q.toLowerCase();
         const exclude = new Set(excludeRef.current);
-        const ranked = (data ?? [])
-          .filter((d) => !exclude.has(d.rxcui as string))
+        const ranked = drugs
+          .filter((d) => !exclude.has(d.rxcui))
           .map((d) => {
-            const displayName = (d.brand_name || d.generic_name || d.name) as string;
+            const displayName = nullable(d.brand_name) ?? nullable(d.generic_name) ?? d.name;
             const startsRank = displayName.toLowerCase().startsWith(qLower) ? 0 : 1;
-            const combo = comboPenalty(d.name as string);
-            const form = formScore(d.dose_form as string | null);
+            const combo = comboPenalty(d.name);
+            const form = formScore(nullable(d.dose_form));
             return { d, displayName, startsRank, combo, form };
           });
         ranked.sort(
@@ -103,19 +104,20 @@ export function useDrugSearch(
         );
 
         const mapped: DrugSearchResult[] = ranked.slice(0, DISPLAY_LIMIT).map((r) => ({
-          rxcui: r.d.rxcui as string,
-          name: r.d.name as string,
+          rxcui: r.d.rxcui,
+          name: r.d.name,
           displayName: r.displayName,
-          generic_name: (r.d.generic_name as string | null) ?? null,
-          brand_name: (r.d.brand_name as string | null) ?? null,
-          strength: (r.d.strength as string | null) ?? null,
-          dose_form: (r.d.dose_form as string | null) ?? null,
+          generic_name: nullable(r.d.generic_name),
+          brand_name: nullable(r.d.brand_name),
+          strength: nullable(r.d.strength),
+          dose_form: nullable(r.d.dose_form),
           is_brand: Boolean(r.d.is_brand),
         }));
 
         setResults(mapped);
       } catch (err) {
         if (cancelled) return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         setError(err instanceof Error ? err.message : 'Search failed');
         setResults([]);
       } finally {
@@ -125,6 +127,7 @@ export function useDrugSearch(
 
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [rawQuery]);
