@@ -1096,9 +1096,22 @@ async function main() {
   const failures = [];
   const browser = await launchBrowser({ verbose });
   let page = null;
+  let ctx = null;
   let bodyTemplate = null;
+  // recycle() closes the current playwright context and opens a fresh
+  // one. Used both at the cadence boundary and when a 403 is detected,
+  // because Akamai's _abck score survives same-context navigation —
+  // only a brand-new context rotates the cookies enough to recover.
+  async function recycle(reason) {
+    if (verbose) console.log(`  recycling browser context (${reason})…`);
+    try { if (ctx) await ctx.close(); } catch (err) { console.warn('  ctx close failed:', err.message); }
+    const warmed = await warmPage(browser, { verbose });
+    ctx = warmed.ctx;
+    page = warmed.page;
+  }
   try {
     const warmed = await warmPage(browser, { verbose });
+    ctx = warmed.ctx;
     page = warmed.page;
 
     // Discover the real /plans/search request shape from the SPA's
@@ -1117,29 +1130,35 @@ async function main() {
       }
     }
 
+    let zeroStreak = 0;
     for (let i = 0; i < targets.length; i++) {
-      // Re-warm the Akamai session every 15 counties. The _abck / bm_sz
-      // sensors degrade over a long run and the SPA's /plans/search
-      // starts timing out at ~60s after ~15-20 counties without a
-      // refresh. Re-navigating /plan-compare/ rotates the sensors and
-      // restores throughput. Cheap (~6s total) compared to losing 80
-      // counties to soft-throttling.
-      if (i > 0 && i % 15 === 0) {
-        if (verbose) console.log('  re-warming Akamai session...');
-        try {
-          await page.goto(WARM_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-          await page.waitForTimeout(COOKIE_WARM_MS);
-        } catch (err) {
-          console.warn('  re-warm failed (continuing):', err.message);
-        }
+      // Re-warm the Akamai session every 5 counties OR after a target
+      // returned 0 plans (likely throttle). Paginated + dual plan_type
+      // sweep issues ~6 requests per county, so the _abck / bm_sz
+      // sensors degrade ~3× faster than they did under the old single-
+      // call flow. Bumping cadence keeps /plans/search returning JSON
+      // instead of Akamai's 403 challenge HTML.
+      const dueByCadence = i > 0 && i % 5 === 0;
+      const dueByThrottle = zeroStreak > 0;
+      if (dueByCadence || dueByThrottle) {
+        await recycle(dueByThrottle ? 'throttle-detected' : 'cadence');
       }
       const t = targets[i];
+      const plansBefore = totalPlans;
       try { await scrapeOneTarget(page, t, {
         verbose, planLimit, args, bodyTemplate, env,
         onCounts: (p, r, w) => { totalPlans += p; totalRows += r; totalWritten += w; },
       }); } catch (err) {
         failures.push({ target: t, message: err.message });
         console.warn(`  ✗ ${t.zip}/${t.fips} target failed: ${err.message}`);
+      }
+      if (totalPlans === plansBefore) zeroStreak += 1; else zeroStreak = 0;
+      // Three counties in a row with 0 plans = sustained Akamai block.
+      // Abort with non-zero exit so the chain stops rather than burn
+      // through hundreds of empty counties.
+      if (zeroStreak >= 3) {
+        console.error(`\naborting: ${zeroStreak} consecutive counties returned 0 plans (likely Akamai block — try resuming later or reduce concurrency).`);
+        process.exit(3);
       }
       if (i < targets.length - 1) await page.waitForTimeout(PER_COUNTY_DELAY_MS);
     }
