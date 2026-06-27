@@ -306,10 +306,32 @@ function perDrugBest(
     // notional retail. Without the coinsurance branch a Tier 3 25%
     // coinsurance row (Ozempic on most NC plans) rendered as null and
     // the row showed "copay TBD" with no estimate.
+    //
+    // Rx-tier fallback: ~20-30% of Tier 1-2 drugs land on plans whose
+    // SPUF formulary extract carries the tier but not the dollar value
+    // (atorvastatin, lisinopril, metformin — covered on 60-90% of NC
+    // plans but copay=null in pm_formulary on every matching row). The
+    // plan's per-tier cost-share table (Plan.benefits.rx_tiers.tier_N,
+    // sourced from pbp_mrx_tier.txt) DOES carry the dollar value. When
+    // the formulary hit is empty on both copay + coinsurance, look up
+    // the plan's rx_tier_N for the matched tier and use that instead.
+    // Turns "copay TBD" into "$X" on every plan where the tier table
+    // is populated; falls back to monthly=0 (existing behavior) when
+    // the plan didn't file rx_tier_N either.
+    let copayUse = hit.copay;
+    let coinsUse = hit.coinsurance;
+    if (copayUse == null && coinsUse == null && tierNum != null) {
+      const tierKey = `tier_${tierNum}` as keyof typeof p.benefits.rx_tiers;
+      const planTier = p.benefits.rx_tiers[tierKey];
+      if (planTier) {
+        copayUse = planTier.copay;
+        coinsUse = planTier.coinsurance;
+      }
+    }
     const monthly = monthlyCostFromFormulary({
       tier: tierNum,
-      copay: hit.copay,
-      coinsurance: hit.coinsurance,
+      copay: copayUse,
+      coinsurance: coinsUse,
     });
     if (monthly > 0 && (minCopay == null || monthly < minCopay)) {
       minCopay = monthly;
