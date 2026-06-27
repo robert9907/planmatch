@@ -45,3 +45,4 @@ supabase/.branches/
 # into pm_plans / pm_formulary via separate tooling, never into git.
 data/
 *.csv
+_scrape-debug/

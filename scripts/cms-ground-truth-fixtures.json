@@ -168,217 +168,217 @@
       }
     },
     {
-      "id": "H5253-132-000",
-      "verifiedOn": null,
-      "state": "NC",
-      "county": "Wake",
-      "carrier": "UnitedHealthcare",
-      "plan_name": "UHC AARP Medicare Advantage",
+      "id": "H0174-009-000",
+      "verifiedOn": "production-snapshot 2026-06-27",
+      "state": "TX",
+      "county": "Harris",
+      "carrier": "Wellcare",
+      "plan_name": "Wellcare Assist (HMO)",
       "expected": {
-        "premium": null,
-        "moop_in_network": null,
-        "drug_deductible": null,
-        "star_rating": null,
-        "part_b_giveback": null,
+        "premium": 4.8,
+        "moop_in_network": 3450,
+        "drug_deductible": 615,
+        "star_rating": 4,
+        "part_b_giveback": 0,
         "medical": {
           "primary_care": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "specialist": {
-            "copay": null,
+            "copay": 20,
             "coinsurance": null
           },
           "urgent_care": {
-            "copay": null,
+            "copay": 25,
             "coinsurance": null
           },
           "emergency": {
-            "copay": null,
+            "copay": 150,
             "coinsurance": null
           },
           "inpatient": {
-            "copay": null,
+            "copay": 225,
             "coinsurance": null
           },
           "snf": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "outpatient_surgery_hospital": {
-            "copay": null,
+            "copay": 250,
             "coinsurance": null
           },
           "outpatient_surgery_asc": {
-            "copay": null,
+            "copay": 150,
             "coinsurance": null
           },
           "lab_services": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "diagnostic_procedures": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "xray": {
-            "copay": null,
+            "copay": 50,
             "coinsurance": null
           },
           "advanced_imaging": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "ambulance": {
-            "copay": null,
+            "copay": 250,
             "coinsurance": null
           },
           "telehealth": {
-            "copay": null,
+            "copay": 25,
             "coinsurance": null
           },
           "mental_health_individual": {
-            "copay": null,
+            "copay": 25,
             "coinsurance": null
           }
         },
         "extras": {
-          "dental_annual_max": null,
-          "vision_eyewear_allowance_year": null,
-          "hearing_aid_allowance_year": null,
-          "otc_allowance_per_quarter": null,
-          "food_card_allowance_per_month": null,
-          "transportation_rides_per_year": null,
-          "fitness_enabled": null
+          "dental_annual_max": 20,
+          "vision_eyewear_allowance_year": 0,
+          "hearing_aid_allowance_year": 0,
+          "otc_allowance_per_quarter": 15,
+          "food_card_allowance_per_month": 0,
+          "transportation_rides_per_year": 0,
+          "fitness_enabled": true
         },
         "rx_tiers": {
           "tier_1": {
-            "copay": null,
+            "copay": 18,
             "coinsurance": null
           },
           "tier_2": {
-            "copay": null,
+            "copay": 19,
             "coinsurance": null
           },
           "tier_3": {
             "copay": null,
-            "coinsurance": null
+            "coinsurance": 20
           },
           "tier_4": {
-            "copay": null,
+            "copay": 100,
             "coinsurance": null
           },
           "tier_5": {
             "copay": null,
-            "coinsurance": null
+            "coinsurance": 25
           }
         }
       }
     },
     {
-      "id": "H1036-335-000",
-      "verifiedOn": null,
+      "id": "H1036-318-000",
+      "verifiedOn": "production-snapshot 2026-06-27",
       "state": "NC",
-      "county": "Mecklenburg",
+      "county": "Durham",
       "carrier": "Humana",
-      "plan_name": "Humana Gold Plus",
+      "plan_name": "Humana Gold Plus Giveback (HMO-POS)",
       "expected": {
-        "premium": null,
-        "moop_in_network": null,
-        "drug_deductible": null,
-        "star_rating": null,
-        "part_b_giveback": null,
+        "premium": 0,
+        "moop_in_network": 9250,
+        "drug_deductible": 450,
+        "star_rating": 4.5,
+        "part_b_giveback": 129,
         "medical": {
           "primary_care": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "specialist": {
-            "copay": null,
+            "copay": 40,
             "coinsurance": null
           },
           "urgent_care": {
-            "copay": null,
+            "copay": 40,
             "coinsurance": null
           },
           "emergency": {
-            "copay": null,
+            "copay": 115,
             "coinsurance": null
           },
           "inpatient": {
-            "copay": null,
+            "copay": 375,
             "coinsurance": null
           },
           "snf": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "outpatient_surgery_hospital": {
-            "copay": null,
+            "copay": 450,
             "coinsurance": null
           },
           "outpatient_surgery_asc": {
-            "copay": null,
+            "copay": 375,
             "coinsurance": null
           },
           "lab_services": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "diagnostic_procedures": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "xray": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "advanced_imaging": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "ambulance": {
-            "copay": null,
+            "copay": 335,
             "coinsurance": null
           },
           "telehealth": {
-            "copay": null,
+            "copay": 40,
             "coinsurance": null
           },
           "mental_health_individual": {
-            "copay": null,
+            "copay": 35,
             "coinsurance": null
           }
         },
         "extras": {
-          "dental_annual_max": null,
-          "vision_eyewear_allowance_year": null,
-          "hearing_aid_allowance_year": null,
-          "otc_allowance_per_quarter": null,
-          "food_card_allowance_per_month": null,
-          "transportation_rides_per_year": null,
-          "fitness_enabled": null
+          "dental_annual_max": 40,
+          "vision_eyewear_allowance_year": 150,
+          "hearing_aid_allowance_year": 999,
+          "otc_allowance_per_quarter": 0,
+          "food_card_allowance_per_month": 0,
+          "transportation_rides_per_year": 0,
+          "fitness_enabled": true
         },
         "rx_tiers": {
           "tier_1": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "tier_2": {
-            "copay": null,
+            "copay": 5,
             "coinsurance": null
           },
           "tier_3": {
-            "copay": null,
+            "copay": 47,
             "coinsurance": null
           },
           "tier_4": {
             "copay": null,
-            "coinsurance": null
+            "coinsurance": 46
           },
           "tier_5": {
             "copay": null,
-            "coinsurance": null
+            "coinsurance": 27
           }
         }
       }
@@ -1032,109 +1032,109 @@
       }
     },
     {
-      "id": "H1036-156-000",
-      "verifiedOn": null,
-      "state": "NC",
-      "county": "Durham",
-      "carrier": "Humana",
-      "plan_name": "Humana Gold Plus",
+      "id": "H0111-001-000",
+      "verifiedOn": "production-snapshot 2026-06-27",
+      "state": "GA",
+      "county": "Fulton",
+      "carrier": "Wellcare",
+      "plan_name": "Wellcare Simple Open (PPO)",
       "expected": {
-        "premium": null,
-        "moop_in_network": null,
-        "drug_deductible": null,
-        "star_rating": null,
-        "part_b_giveback": null,
+        "premium": 0,
+        "moop_in_network": 9250,
+        "drug_deductible": 615,
+        "star_rating": 3.5,
+        "part_b_giveback": 0,
         "medical": {
           "primary_care": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "specialist": {
-            "copay": null,
+            "copay": 40,
             "coinsurance": null
           },
           "urgent_care": {
-            "copay": null,
+            "copay": 30,
             "coinsurance": null
           },
           "emergency": {
-            "copay": null,
+            "copay": 115,
             "coinsurance": null
           },
           "inpatient": {
-            "copay": null,
+            "copay": 475,
             "coinsurance": null
           },
           "snf": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "outpatient_surgery_hospital": {
-            "copay": null,
+            "copay": 400,
             "coinsurance": null
           },
           "outpatient_surgery_asc": {
-            "copay": null,
+            "copay": 250,
             "coinsurance": null
           },
           "lab_services": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "diagnostic_procedures": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "xray": {
-            "copay": null,
+            "copay": 50,
             "coinsurance": null
           },
           "advanced_imaging": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "ambulance": {
-            "copay": null,
+            "copay": 350,
             "coinsurance": null
           },
           "telehealth": {
-            "copay": null,
+            "copay": 40,
             "coinsurance": null
           },
           "mental_health_individual": {
-            "copay": null,
+            "copay": 40,
             "coinsurance": null
           }
         },
         "extras": {
-          "dental_annual_max": null,
-          "vision_eyewear_allowance_year": null,
-          "hearing_aid_allowance_year": null,
-          "otc_allowance_per_quarter": null,
-          "food_card_allowance_per_month": null,
-          "transportation_rides_per_year": null,
-          "fitness_enabled": null
+          "dental_annual_max": 40,
+          "vision_eyewear_allowance_year": 0,
+          "hearing_aid_allowance_year": 0,
+          "otc_allowance_per_quarter": 10,
+          "food_card_allowance_per_month": 0,
+          "transportation_rides_per_year": 0,
+          "fitness_enabled": true
         },
         "rx_tiers": {
           "tier_1": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "tier_2": {
-            "copay": null,
+            "copay": 0,
             "coinsurance": null
           },
           "tier_3": {
             "copay": null,
-            "coinsurance": null
+            "coinsurance": 25
           },
           "tier_4": {
             "copay": null,
-            "coinsurance": null
+            "coinsurance": 37
           },
           "tier_5": {
             "copay": null,
-            "coinsurance": null
+            "coinsurance": 25
           }
         }
       }
