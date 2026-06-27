@@ -144,7 +144,12 @@ interface FieldCheck {
   expected: number | boolean | null;
   actual: number | boolean | null | undefined;
   tolerance: number | null;
-  status: 'pass' | 'fail' | 'skipped';
+  status: 'pass' | 'fail' | 'skipped' | 'accepted';
+  /** Set when status === 'accepted' — human-readable label for the
+   *  documented carrier-filing-correction convention this drift falls
+   *  under (e.g. "B8b swap convention"). Surfaced in the drift section
+   *  with a ⚡ icon to distinguish accepted deviations from real failures. */
+  acceptedReason?: string;
 }
 
 interface CliArgs {
@@ -232,6 +237,91 @@ function compareField(
   const tol = tolerances[cat];
   const ok = typeof actual === 'number' && nearly(actual, expected, tol);
   return { ...base, tolerance: tol, status: ok ? 'pass' : 'fail' };
+}
+
+/** Tolerance-aware equality that treats null === null as a match.
+ *  Used by the B8b swap detector below — when the swap convention
+ *  drops a value to null (intentional, per import-pbp-benefits.ts),
+ *  both sides should still register as "matching the swap pattern". */
+function valueNear(
+  a: number | boolean | null | undefined,
+  b: number | boolean | null | undefined,
+  tol: number | null,
+): boolean {
+  const aN = a ?? null;
+  const bN = b ?? null;
+  if (aN === null && bN === null) return true;
+  if (aN === null || bN === null) return false;
+  if (typeof aN === 'boolean' || typeof bN === 'boolean') return aN === bN;
+  if (tol == null) return aN === bN;
+  return Math.abs(aN - bN) <= tol;
+}
+
+/**
+ * Reclassify failures that match the documented B8b X-ray ↔ advanced-
+ * imaging swap convention as 'accepted' rather than 'fail'.
+ *
+ * Why this exists: ~69% of NC/GA/TX plans file PBP B8b with the column
+ * meanings inverted vs CMS spec (X-ray under cmc/mc, advanced imaging
+ * under drs). scripts/import-pbp-benefits.ts:detectB8bSwapPattern flips
+ * them at write time so the consumer sees the correct values. The
+ * populator extracts literally per spec, so on swap-convention plans
+ * the agent's xray value matches the populator's advanced_imaging value
+ * (and vice versa). Marking those as 'accepted' surfaces the deviation
+ * with a ⚡ icon while keeping the parity score honest — the importer
+ * intentionally corrects the carrier filing error and the consumer
+ * sees the right numbers.
+ *
+ * Detection: per fixture, for each of (copay, coinsurance):
+ *   - look at the (xray, advanced_imaging) check pair
+ *   - if either fails AND xray.expected ≈ ai.actual AND ai.expected ≈ xray.actual
+ *     → mark both as accepted (the swap is symmetric)
+ *
+ * The valueNear helper handles null pairing — the swap convention drops
+ * xray.coinsurance to null on the agent side ("to avoid double-attribution"
+ * per the importer's inline comment), so populator.xray.coins=20 vs
+ * agent.xray.coins=null is the mirror of populator.ai.coins=null vs
+ * agent.ai.coins=20. Both reclassify together.
+ */
+function applyB8bSwapAcceptance(checks: FieldCheck[]): number {
+  const byPlan = new Map<string, FieldCheck[]>();
+  for (const c of checks) {
+    const list = byPlan.get(c.fixtureId);
+    if (list) list.push(c);
+    else byPlan.set(c.fixtureId, [c]);
+  }
+  let accepted = 0;
+  for (const planChecks of byPlan.values()) {
+    for (const metric of ['copay', 'coinsurance'] as const) {
+      const xray = planChecks.find((c) => c.field === `medical.xray.${metric}`);
+      const ai = planChecks.find(
+        (c) => c.field === `medical.advanced_imaging.${metric}`,
+      );
+      if (!xray || !ai) continue;
+      // Skip if both already pass — nothing to reclassify.
+      if (xray.status === 'pass' && ai.status === 'pass') continue;
+      // Skip if either is 'skipped' on BOTH expected sides — no signal
+      // to confirm a swap pattern (would risk false-accepting one-sided
+      // null mismatches).
+      if (xray.status === 'skipped' && ai.status === 'skipped') continue;
+      const tol = xray.tolerance ?? ai.tolerance;
+      const swapped =
+        valueNear(xray.expected, ai.actual, tol) &&
+        valueNear(ai.expected, xray.actual, tol);
+      if (!swapped) continue;
+      if (xray.status === 'fail') {
+        xray.status = 'accepted';
+        xray.acceptedReason = 'B8b swap convention';
+        accepted += 1;
+      }
+      if (ai.status === 'fail') {
+        ai.status = 'accepted';
+        ai.acceptedReason = 'B8b swap convention';
+        accepted += 1;
+      }
+    }
+  }
+  return accepted;
 }
 
 function checksForFixture(fixture: Fixture, plan: ApiPlan | undefined, tolerances: Tolerances): FieldCheck[] {
@@ -386,26 +476,36 @@ function group<T>(rows: T[], key: (r: T) => string): Map<string, T[]> {
   return m;
 }
 
-function fmtRow(label: string, compared: number, passed: number, failed: number, skipped: number): string {
-  const rate = compared === 0 ? '—' : `${((passed / compared) * 100).toFixed(1)}%`;
-  return `  ${label.padEnd(48)} ${rate.padStart(7)} · ${passed.toString().padStart(3)}/${compared.toString().padStart(3)} pass · ${failed.toString().padStart(3)} fail · ${skipped.toString().padStart(3)} skip`;
+function fmtRow(label: string, s: BucketStats): string {
+  const rate = s.compared === 0 ? '—' : `${((s.passed / s.compared) * 100).toFixed(1)}%`;
+  const acceptedTag = s.accepted > 0 ? ` ⚡${s.accepted}` : '';
+  return `  ${label.padEnd(48)} ${rate.padStart(7)} · ${s.passed.toString().padStart(3)}/${s.compared.toString().padStart(3)} pass${acceptedTag} · ${s.failed.toString().padStart(3)} fail · ${s.skipped.toString().padStart(3)} skip`;
 }
 
 interface BucketStats {
   compared: number;
+  /** Clean passes + accepted deviations. Per the parity-scoring contract:
+   *  accepted deviations count as passes because the agent's
+   *  intentional carrier-filing correction is the right answer. */
   passed: number;
+  /** Subset of `passed` that were reclassified by applyB8bSwapAcceptance
+   *  (or any future accepted-deviation rule). Surfaced separately in
+   *  the report so reviewers can audit what's being absorbed. */
+  accepted: number;
   failed: number;
   skipped: number;
 }
 
 function bucketStats(rows: FieldCheck[]): BucketStats {
-  let passed = 0, failed = 0, skipped = 0;
+  let clean = 0, accepted = 0, failed = 0, skipped = 0;
   for (const r of rows) {
-    if (r.status === 'pass') passed++;
+    if (r.status === 'pass') clean++;
+    else if (r.status === 'accepted') accepted++;
     else if (r.status === 'fail') failed++;
     else skipped++;
   }
-  return { compared: passed + failed, passed, failed, skipped };
+  const passed = clean + accepted;
+  return { compared: passed + failed, passed, accepted, failed, skipped };
 }
 
 function printReport(
@@ -428,19 +528,17 @@ function printReport(
     const rows = checks.filter((c) => c.fixtureId === f.id);
     const s = bucketStats(rows);
     const verifLabel = f.verifiedOn ? `[${f.verifiedOn}]` : '[unverified]';
-    console.log(fmtRow(`${f.id} · ${f.carrier} · ${f.state} ${verifLabel}`, s.compared, s.passed, s.failed, s.skipped));
+    console.log(fmtRow(`${f.id} · ${f.carrier} · ${f.state} ${verifLabel}`, s));
   }
 
   console.log('\nBy carrier');
   for (const [carrier, rows] of group(checks, (c) => c.carrier)) {
-    const s = bucketStats(rows);
-    console.log(fmtRow(carrier, s.compared, s.passed, s.failed, s.skipped));
+    console.log(fmtRow(carrier, bucketStats(rows)));
   }
 
   console.log('\nBy state');
   for (const [state, rows] of group(checks, (c) => c.state)) {
-    const s = bucketStats(rows);
-    console.log(fmtRow(state, s.compared, s.passed, s.failed, s.skipped));
+    console.log(fmtRow(state, bucketStats(rows)));
   }
 
   console.log('\nMost-failed fields (across the suite)');
@@ -459,21 +557,44 @@ function printReport(
   }
 
   if (args.verbose) {
-    console.log('\nDrift (every failure)');
-    const fails = checks.filter((c) => c.status === 'fail');
-    if (fails.length === 0) {
+    console.log('\nDrift (every failure + every accepted deviation)');
+    const surfaced = checks.filter((c) => c.status === 'fail' || c.status === 'accepted');
+    if (surfaced.length === 0) {
       console.log('  (none)');
     } else {
-      for (const f of fails) {
+      for (const f of surfaced) {
         const tol = f.tolerance == null ? 'exact' : `±${f.tolerance}`;
-        console.log(`  ${f.fixtureId} ${f.field}: expected ${JSON.stringify(f.expected)} · got ${JSON.stringify(f.actual)} (${tol})`);
+        const icon = f.status === 'accepted' ? '⚡' : '❌';
+        const tail =
+          f.status === 'accepted' && f.acceptedReason
+            ? ` — accepted: ${f.acceptedReason}`
+            : '';
+        console.log(
+          `  ${icon} ${f.fixtureId} ${f.field}: expected ${JSON.stringify(f.expected)} · got ${JSON.stringify(f.actual)} (${tol})${tail}`,
+        );
       }
     }
   }
 
   const total = bucketStats(checks);
   console.log('\nTotal');
-  console.log(fmtRow('SUITE', total.compared, total.passed, total.failed, total.skipped));
+  console.log(fmtRow('SUITE', total));
+
+  if (total.accepted > 0) {
+    // Roll up which acceptedReason buckets contributed, in case a future
+    // change adds more rules beyond the B8b swap.
+    const reasons = new Map<string, number>();
+    for (const c of checks) {
+      if (c.status !== 'accepted') continue;
+      const r = c.acceptedReason ?? '(unspecified)';
+      reasons.set(r, (reasons.get(r) ?? 0) + 1);
+    }
+    const detail = [...reasons.entries()]
+      .map(([reason, n]) => `${n} ${reason}`)
+      .join(', ');
+    console.log(`  Accepted deviations: ${total.accepted} ⚡ (${detail})`);
+  }
+
   console.log('────────────────────────────────────────────────────────────────────────────────\n');
 }
 
@@ -519,6 +640,13 @@ async function main(): Promise<void> {
     const plan = plans.get(fixture.id);
     allChecks.push(...checksForFixture(fixture, plan, file._meta.tolerances));
   }
+
+  // Reclassify documented-deviation failures (B8b xray ↔ advanced-imaging
+  // swap convention) before reporting. Accepted deviations count toward
+  // the pass rate per the harness's scoring contract — the agent's
+  // importer intentionally corrects the carrier filing inversion, so
+  // the swap-matched values are the right consumer-facing answer.
+  applyB8bSwapAcceptance(allChecks);
 
   printReport(file.fixtures, allChecks, args);
   const totalFail = allChecks.filter((c) => c.status === 'fail').length;
