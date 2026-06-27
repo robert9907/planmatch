@@ -2,15 +2,41 @@
  * medicare.gov Plan Finder scraper → cms-ground-truth-fixtures.json.
  *
  * STATUS: scaffold + extraction pipeline are working; the CMS-side
- * entry point is the blocker. Plan Finder rejects direct plan-detail
- * URLs with "Unable to view Plan Details — It looks like we're having
- * trouble retrieving the Plan Details" unless the SPA has been walked
- * through the wizard (ZIP entry → demographics → optional drugs /
- * pharmacies → plan-list click). Bootstrapping the session via the
- * /#/results URL is NOT enough — CMS's server-side state requires
- * actual button clicks, not just URL params. A production-grade
- * scraper would need ~200-400 more lines walking the wizard for every
- * plan and would need maintenance every time CMS reshuffles the flow.
+ * entry point is the blocker. TWO independent gaps make programmatic
+ * scraping of medicare.gov Plan Finder impractical from this scaffold:
+ *
+ *   1. Direct plan-detail URLs fail with "Unable to view Plan Details
+ *      — It looks like we're having trouble retrieving the Plan
+ *      Details" without a wizard-initialized session. Bootstrapping
+ *      via /#/results with ZIP+FIPS in the URL is NOT enough.
+ *
+ *   2. Walking the wizard from the entry page also fails. The ZIP
+ *      input accepts the value (verified — input.inputValue() returns
+ *      "27701" after Playwright's pressSequentially) and Continue
+ *      clicks register, but medicare.gov responds with "Error: ZIP
+ *      code not found" for a VALID NC ZIP (27701, Durham). The same
+ *      ZIP works in a real browser. Conclusion: CMS bot-detection on
+ *      the ZIP-lookup endpoint flags headless Chromium and serves a
+ *      fake error to suppress the workflow.
+ *
+ * Bypassing (2) would require stealth plugins (playwright-extra +
+ * stealth, fingerprint spoofing) — that's evasion territory against
+ * a federal government website. We don't do that.
+ *
+ * Honest alternatives:
+ *
+ *   (a) Hand-populate each fixture's expected.* by opening medicare.gov
+ *       in a normal logged-out browser, copying values, then stripping
+ *       the production-snapshot prefix from verifiedOn.
+ *
+ *   (b) Use Rob's authenticated SunFire or HealthSherpa broker tool's
+ *       export endpoints. Authenticated paths sidestep public Plan
+ *       Finder bot-detection entirely.
+ *
+ *   (c) Pivot the harness target: trust pm_plans + pm_plan_benefits
+ *       (sourced from the same CMS PBP / Landscape files Plan Finder
+ *       reads), and use the validator's --snapshot mode purely for
+ *       regression detection rather than CMS parity.
  *
  * What IS here, ready to use the moment the entry-point gap closes:
  *
