@@ -1,0 +1,5663 @@
+{
+  "generated_at": "2026-06-25T15:40:08.200Z",
+  "filter": {
+    "state": "NC",
+    "county": null,
+    "carrier": null
+  },
+  "totals": {
+    "plans": 187,
+    "mean_score": 84.5
+  },
+  "plans": [
+    {
+      "id": "S4802-143-0",
+      "contract_id": "S4802",
+      "plan_id": "143",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Wellcare",
+      "plan_name": "Wellcare Value Script (PDP)",
+      "plan_type": "PDP",
+      "county_count": 1,
+      "score": 35.4,
+      "core_pct": 57.1,
+      "medical_pct": 3.2,
+      "rx_pct": 100,
+      "extras_pct": 0,
+      "missing_core": [
+        "monthly_premium",
+        "moop",
+        "star_rating"
+      ],
+      "missing_medical": [
+        "primary_care",
+        "specialist",
+        "urgent_care",
+        "emergency",
+        "inpatient",
+        "mental_health_inpatient",
+        "snf",
+        "outpatient_surgery_hospital",
+        "outpatient_surgery_asc",
+        "outpatient_observation",
+        "lab_services",
+        "diagnostic_procedures",
+        "xray",
+        "advanced_imaging",
+        "mental_health_individual",
+        "mental_health_group",
+        "physical_speech_therapy",
+        "occupational_therapy",
+        "telehealth",
+        "ambulance",
+        "air_transportation",
+        "chiropractic",
+        "acupuncture",
+        "podiatry",
+        "substance_abuse",
+        "dme_prosthetics",
+        "partb_drugs",
+        "insulin",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "dental",
+        "vision",
+        "hearing",
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "S4802-081-0",
+      "contract_id": "S4802",
+      "plan_id": "081",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Wellcare",
+      "plan_name": "Wellcare Classic (PDP)",
+      "plan_type": "PDP",
+      "county_count": 1,
+      "score": 35.4,
+      "core_pct": 57.1,
+      "medical_pct": 3.2,
+      "rx_pct": 100,
+      "extras_pct": 0,
+      "missing_core": [
+        "monthly_premium",
+        "moop",
+        "star_rating"
+      ],
+      "missing_medical": [
+        "primary_care",
+        "specialist",
+        "urgent_care",
+        "emergency",
+        "inpatient",
+        "mental_health_inpatient",
+        "snf",
+        "outpatient_surgery_hospital",
+        "outpatient_surgery_asc",
+        "outpatient_observation",
+        "lab_services",
+        "diagnostic_procedures",
+        "xray",
+        "advanced_imaging",
+        "mental_health_individual",
+        "mental_health_group",
+        "physical_speech_therapy",
+        "occupational_therapy",
+        "telehealth",
+        "ambulance",
+        "air_transportation",
+        "chiropractic",
+        "acupuncture",
+        "podiatry",
+        "substance_abuse",
+        "dme_prosthetics",
+        "partb_drugs",
+        "insulin",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "dental",
+        "vision",
+        "hearing",
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "S5540-002-0",
+      "contract_id": "S5540",
+      "plan_id": "002",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Rx Standard (PDP)",
+      "plan_type": "PDP",
+      "county_count": 1,
+      "score": 35.4,
+      "core_pct": 57.1,
+      "medical_pct": 3.2,
+      "rx_pct": 100,
+      "extras_pct": 0,
+      "missing_core": [
+        "monthly_premium",
+        "moop",
+        "star_rating"
+      ],
+      "missing_medical": [
+        "primary_care",
+        "specialist",
+        "urgent_care",
+        "emergency",
+        "inpatient",
+        "mental_health_inpatient",
+        "snf",
+        "outpatient_surgery_hospital",
+        "outpatient_surgery_asc",
+        "outpatient_observation",
+        "lab_services",
+        "diagnostic_procedures",
+        "xray",
+        "advanced_imaging",
+        "mental_health_individual",
+        "mental_health_group",
+        "physical_speech_therapy",
+        "occupational_therapy",
+        "telehealth",
+        "ambulance",
+        "air_transportation",
+        "chiropractic",
+        "acupuncture",
+        "podiatry",
+        "substance_abuse",
+        "dme_prosthetics",
+        "partb_drugs",
+        "insulin",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "dental",
+        "vision",
+        "hearing",
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "S5540-004-0",
+      "contract_id": "S5540",
+      "plan_id": "004",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Rx Enhanced (PDP)",
+      "plan_type": "PDP",
+      "county_count": 1,
+      "score": 35.4,
+      "core_pct": 57.1,
+      "medical_pct": 3.2,
+      "rx_pct": 100,
+      "extras_pct": 0,
+      "missing_core": [
+        "monthly_premium",
+        "moop",
+        "star_rating"
+      ],
+      "missing_medical": [
+        "primary_care",
+        "specialist",
+        "urgent_care",
+        "emergency",
+        "inpatient",
+        "mental_health_inpatient",
+        "snf",
+        "outpatient_surgery_hospital",
+        "outpatient_surgery_asc",
+        "outpatient_observation",
+        "lab_services",
+        "diagnostic_procedures",
+        "xray",
+        "advanced_imaging",
+        "mental_health_individual",
+        "mental_health_group",
+        "physical_speech_therapy",
+        "occupational_therapy",
+        "telehealth",
+        "ambulance",
+        "air_transportation",
+        "chiropractic",
+        "acupuncture",
+        "podiatry",
+        "substance_abuse",
+        "dme_prosthetics",
+        "partb_drugs",
+        "insulin",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "dental",
+        "vision",
+        "hearing",
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "S5601-016-0",
+      "contract_id": "S5601",
+      "plan_id": "016",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "SilverScript Choice (PDP)",
+      "plan_type": "PDP",
+      "county_count": 1,
+      "score": 35.4,
+      "core_pct": 57.1,
+      "medical_pct": 3.2,
+      "rx_pct": 100,
+      "extras_pct": 0,
+      "missing_core": [
+        "monthly_premium",
+        "moop",
+        "star_rating"
+      ],
+      "missing_medical": [
+        "primary_care",
+        "specialist",
+        "urgent_care",
+        "emergency",
+        "inpatient",
+        "mental_health_inpatient",
+        "snf",
+        "outpatient_surgery_hospital",
+        "outpatient_surgery_asc",
+        "outpatient_observation",
+        "lab_services",
+        "diagnostic_procedures",
+        "xray",
+        "advanced_imaging",
+        "mental_health_individual",
+        "mental_health_group",
+        "physical_speech_therapy",
+        "occupational_therapy",
+        "telehealth",
+        "ambulance",
+        "air_transportation",
+        "chiropractic",
+        "acupuncture",
+        "podiatry",
+        "substance_abuse",
+        "dme_prosthetics",
+        "partb_drugs",
+        "insulin",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "dental",
+        "vision",
+        "hearing",
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "S5617-358-0",
+      "contract_id": "S5617",
+      "plan_id": "358",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Extra Rx (PDP)",
+      "plan_type": "PDP",
+      "county_count": 1,
+      "score": 35.4,
+      "core_pct": 57.1,
+      "medical_pct": 3.2,
+      "rx_pct": 100,
+      "extras_pct": 0,
+      "missing_core": [
+        "monthly_premium",
+        "moop",
+        "star_rating"
+      ],
+      "missing_medical": [
+        "primary_care",
+        "specialist",
+        "urgent_care",
+        "emergency",
+        "inpatient",
+        "mental_health_inpatient",
+        "snf",
+        "outpatient_surgery_hospital",
+        "outpatient_surgery_asc",
+        "outpatient_observation",
+        "lab_services",
+        "diagnostic_procedures",
+        "xray",
+        "advanced_imaging",
+        "mental_health_individual",
+        "mental_health_group",
+        "physical_speech_therapy",
+        "occupational_therapy",
+        "telehealth",
+        "ambulance",
+        "air_transportation",
+        "chiropractic",
+        "acupuncture",
+        "podiatry",
+        "substance_abuse",
+        "dme_prosthetics",
+        "partb_drugs",
+        "insulin",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "dental",
+        "vision",
+        "hearing",
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "S5617-217-0",
+      "contract_id": "S5617",
+      "plan_id": "217",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Assurance Rx (PDP)",
+      "plan_type": "PDP",
+      "county_count": 1,
+      "score": 35.4,
+      "core_pct": 57.1,
+      "medical_pct": 3.2,
+      "rx_pct": 100,
+      "extras_pct": 0,
+      "missing_core": [
+        "monthly_premium",
+        "moop",
+        "star_rating"
+      ],
+      "missing_medical": [
+        "primary_care",
+        "specialist",
+        "urgent_care",
+        "emergency",
+        "inpatient",
+        "mental_health_inpatient",
+        "snf",
+        "outpatient_surgery_hospital",
+        "outpatient_surgery_asc",
+        "outpatient_observation",
+        "lab_services",
+        "diagnostic_procedures",
+        "xray",
+        "advanced_imaging",
+        "mental_health_individual",
+        "mental_health_group",
+        "physical_speech_therapy",
+        "occupational_therapy",
+        "telehealth",
+        "ambulance",
+        "air_transportation",
+        "chiropractic",
+        "acupuncture",
+        "podiatry",
+        "substance_abuse",
+        "dme_prosthetics",
+        "partb_drugs",
+        "insulin",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "dental",
+        "vision",
+        "hearing",
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "S5884-187-0",
+      "contract_id": "S5884",
+      "plan_id": "187",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Value Rx Plan (PDP)",
+      "plan_type": "PDP",
+      "county_count": 1,
+      "score": 35.4,
+      "core_pct": 57.1,
+      "medical_pct": 3.2,
+      "rx_pct": 100,
+      "extras_pct": 0,
+      "missing_core": [
+        "monthly_premium",
+        "moop",
+        "star_rating"
+      ],
+      "missing_medical": [
+        "primary_care",
+        "specialist",
+        "urgent_care",
+        "emergency",
+        "inpatient",
+        "mental_health_inpatient",
+        "snf",
+        "outpatient_surgery_hospital",
+        "outpatient_surgery_asc",
+        "outpatient_observation",
+        "lab_services",
+        "diagnostic_procedures",
+        "xray",
+        "advanced_imaging",
+        "mental_health_individual",
+        "mental_health_group",
+        "physical_speech_therapy",
+        "occupational_therapy",
+        "telehealth",
+        "ambulance",
+        "air_transportation",
+        "chiropractic",
+        "acupuncture",
+        "podiatry",
+        "substance_abuse",
+        "dme_prosthetics",
+        "partb_drugs",
+        "insulin",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "dental",
+        "vision",
+        "hearing",
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "S5884-154-0",
+      "contract_id": "S5884",
+      "plan_id": "154",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Premier Rx Plan (PDP)",
+      "plan_type": "PDP",
+      "county_count": 1,
+      "score": 35.4,
+      "core_pct": 57.1,
+      "medical_pct": 3.2,
+      "rx_pct": 100,
+      "extras_pct": 0,
+      "missing_core": [
+        "monthly_premium",
+        "moop",
+        "star_rating"
+      ],
+      "missing_medical": [
+        "primary_care",
+        "specialist",
+        "urgent_care",
+        "emergency",
+        "inpatient",
+        "mental_health_inpatient",
+        "snf",
+        "outpatient_surgery_hospital",
+        "outpatient_surgery_asc",
+        "outpatient_observation",
+        "lab_services",
+        "diagnostic_procedures",
+        "xray",
+        "advanced_imaging",
+        "mental_health_individual",
+        "mental_health_group",
+        "physical_speech_therapy",
+        "occupational_therapy",
+        "telehealth",
+        "ambulance",
+        "air_transportation",
+        "chiropractic",
+        "acupuncture",
+        "podiatry",
+        "substance_abuse",
+        "dme_prosthetics",
+        "partb_drugs",
+        "insulin",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "dental",
+        "vision",
+        "hearing",
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "S5884-133-0",
+      "contract_id": "S5884",
+      "plan_id": "133",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Basic Rx Plan (PDP)",
+      "plan_type": "PDP",
+      "county_count": 1,
+      "score": 35.4,
+      "core_pct": 57.1,
+      "medical_pct": 3.2,
+      "rx_pct": 100,
+      "extras_pct": 0,
+      "missing_core": [
+        "monthly_premium",
+        "moop",
+        "star_rating"
+      ],
+      "missing_medical": [
+        "primary_care",
+        "specialist",
+        "urgent_care",
+        "emergency",
+        "inpatient",
+        "mental_health_inpatient",
+        "snf",
+        "outpatient_surgery_hospital",
+        "outpatient_surgery_asc",
+        "outpatient_observation",
+        "lab_services",
+        "diagnostic_procedures",
+        "xray",
+        "advanced_imaging",
+        "mental_health_individual",
+        "mental_health_group",
+        "physical_speech_therapy",
+        "occupational_therapy",
+        "telehealth",
+        "ambulance",
+        "air_transportation",
+        "chiropractic",
+        "acupuncture",
+        "podiatry",
+        "substance_abuse",
+        "dme_prosthetics",
+        "partb_drugs",
+        "insulin",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "dental",
+        "vision",
+        "hearing",
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "S5921-353-0",
+      "contract_id": "S5921",
+      "plan_id": "353",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Rx Saver from UHC (PDP)",
+      "plan_type": "PDP",
+      "county_count": 1,
+      "score": 35.4,
+      "core_pct": 57.1,
+      "medical_pct": 3.2,
+      "rx_pct": 100,
+      "extras_pct": 0,
+      "missing_core": [
+        "monthly_premium",
+        "moop",
+        "star_rating"
+      ],
+      "missing_medical": [
+        "primary_care",
+        "specialist",
+        "urgent_care",
+        "emergency",
+        "inpatient",
+        "mental_health_inpatient",
+        "snf",
+        "outpatient_surgery_hospital",
+        "outpatient_surgery_asc",
+        "outpatient_observation",
+        "lab_services",
+        "diagnostic_procedures",
+        "xray",
+        "advanced_imaging",
+        "mental_health_individual",
+        "mental_health_group",
+        "physical_speech_therapy",
+        "occupational_therapy",
+        "telehealth",
+        "ambulance",
+        "air_transportation",
+        "chiropractic",
+        "acupuncture",
+        "podiatry",
+        "substance_abuse",
+        "dme_prosthetics",
+        "partb_drugs",
+        "insulin",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "dental",
+        "vision",
+        "hearing",
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "S5921-390-0",
+      "contract_id": "S5921",
+      "plan_id": "390",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Rx Preferred from UHC (PDP)",
+      "plan_type": "PDP",
+      "county_count": 1,
+      "score": 35.4,
+      "core_pct": 57.1,
+      "medical_pct": 3.2,
+      "rx_pct": 100,
+      "extras_pct": 0,
+      "missing_core": [
+        "monthly_premium",
+        "moop",
+        "star_rating"
+      ],
+      "missing_medical": [
+        "primary_care",
+        "specialist",
+        "urgent_care",
+        "emergency",
+        "inpatient",
+        "mental_health_inpatient",
+        "snf",
+        "outpatient_surgery_hospital",
+        "outpatient_surgery_asc",
+        "outpatient_observation",
+        "lab_services",
+        "diagnostic_procedures",
+        "xray",
+        "advanced_imaging",
+        "mental_health_individual",
+        "mental_health_group",
+        "physical_speech_therapy",
+        "occupational_therapy",
+        "telehealth",
+        "ambulance",
+        "air_transportation",
+        "chiropractic",
+        "acupuncture",
+        "podiatry",
+        "substance_abuse",
+        "dme_prosthetics",
+        "partb_drugs",
+        "insulin",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "dental",
+        "vision",
+        "hearing",
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H9700-007-0",
+      "contract_id": "H9700",
+      "plan_id": "007",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED CHOICE MA ONLY 007 NC (PPO)",
+      "plan_type": "PPO",
+      "county_count": 49,
+      "score": 60.6,
+      "core_pct": 71.4,
+      "medical_pct": 93.5,
+      "rx_pct": 0,
+      "extras_pct": 50,
+      "missing_core": [
+        "star_rating",
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5652-002-0",
+      "contract_id": "H5652",
+      "plan_id": "002",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "Erickson Advantage Liberty no Rx (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 1,
+      "score": 61.7,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 0,
+      "extras_pct": 37.5,
+      "missing_core": [
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H6351-005-0",
+      "contract_id": "H6351",
+      "plan_id": "005",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Liberty Medicare Advantage",
+      "plan_name": "Liberty Medicare Dual Plan (HMO D-SNP)",
+      "plan_type": "HMO D-SNP",
+      "county_count": 54,
+      "score": 61.9,
+      "core_pct": 85.7,
+      "medical_pct": 87.1,
+      "rx_pct": 0,
+      "extras_pct": 50,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H9725-005-0",
+      "contract_id": "H9725",
+      "plan_id": "005",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Courage (HMO)",
+      "plan_type": "HMO",
+      "county_count": 37,
+      "score": 63,
+      "core_pct": 85.7,
+      "medical_pct": 90.3,
+      "rx_pct": 0,
+      "extras_pct": 50,
+      "missing_core": [
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H4439-001-0",
+      "contract_id": "H4439",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Provider Partners Health Plans",
+      "plan_name": "Provider Partners North Carolina Advantage Plan (HMO I-SNP)",
+      "plan_type": "HMO I-SNP",
+      "county_count": 14,
+      "score": 63.3,
+      "core_pct": 85.7,
+      "medical_pct": 83.9,
+      "rx_pct": 0,
+      "extras_pct": 62.5,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "occupational_therapy",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H2001-103-0",
+      "contract_id": "H2001",
+      "plan_id": "103",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage Patriot No Rx NC-MA01 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 41,
+      "score": 64.2,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 0,
+      "extras_pct": 50,
+      "missing_core": [
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5216-343-0",
+      "contract_id": "H5216",
+      "plan_id": "343",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana USAA Honor Giveback (PPO)",
+      "plan_type": "PPO",
+      "county_count": 42,
+      "score": 64.2,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 0,
+      "extras_pct": 50,
+      "missing_core": [
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-040-0",
+      "contract_id": "H5253",
+      "plan_id": "040",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage Patriot No Rx NC-MA02 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 99,
+      "score": 64.2,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 0,
+      "extras_pct": 50,
+      "missing_core": [
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5525-065-0",
+      "contract_id": "H5525",
+      "plan_id": "065",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana USAA Honor Giveback (PPO)",
+      "plan_type": "PPO",
+      "county_count": 97,
+      "score": 64.2,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 0,
+      "extras_pct": 50,
+      "missing_core": [
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "R0110-006-0",
+      "contract_id": "R0110",
+      "plan_id": "006",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana USAA Honor Giveback (Regional PPO)",
+      "plan_type": "Regional PPO",
+      "county_count": 100,
+      "score": 64.2,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 0,
+      "extras_pct": 50,
+      "missing_core": [
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H6351-001-0",
+      "contract_id": "H6351",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Liberty Medicare Advantage",
+      "plan_name": "Liberty Medicare Advantage Nursing Home Plan (HMO I-SNP)",
+      "plan_type": "HMO I-SNP",
+      "county_count": 54,
+      "score": 64.4,
+      "core_pct": 85.7,
+      "medical_pct": 87.1,
+      "rx_pct": 0,
+      "extras_pct": 62.5,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H1914-011-0",
+      "contract_id": "H1914",
+      "plan_id": "011",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Wellcare",
+      "plan_name": "Wellcare Patriot Giveback Open (PPO)",
+      "plan_type": "PPO",
+      "county_count": 70,
+      "score": 65.3,
+      "core_pct": 85.7,
+      "medical_pct": 96.8,
+      "rx_pct": 0,
+      "extras_pct": 50,
+      "missing_core": [
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5521-241-0",
+      "contract_id": "H5521",
+      "plan_id": "241",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Eagle Giveback (PPO)",
+      "plan_type": "PPO",
+      "county_count": 96,
+      "score": 66.7,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 0,
+      "extras_pct": 62.5,
+      "missing_core": [
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "R0110-004-0",
+      "contract_id": "R0110",
+      "plan_id": "004",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "HumanaChoice R0110-004 (Regional PPO)",
+      "plan_type": "Regional PPO",
+      "county_count": 100,
+      "score": 66.7,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 0,
+      "extras_pct": 62.5,
+      "missing_core": [
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H4439-002-0",
+      "contract_id": "H4439",
+      "plan_id": "002",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Provider Partners Health Plans",
+      "plan_name": "Provider Partners North Carolina Community Plan (HMO I-SNP)",
+      "plan_type": "HMO I-SNP",
+      "county_count": 14,
+      "score": 66.9,
+      "core_pct": 85.7,
+      "medical_pct": 87.1,
+      "rx_pct": 0,
+      "extras_pct": 75,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H4439-003-0",
+      "contract_id": "H4439",
+      "plan_id": "003",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Provider Partners Health Plans",
+      "plan_name": "Provider Partners North Carolina Essential Plan (HMO I-SNP)",
+      "plan_type": "HMO I-SNP",
+      "county_count": 14,
+      "score": 66.9,
+      "core_pct": 85.7,
+      "medical_pct": 87.1,
+      "rx_pct": 0,
+      "extras_pct": 75,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H5374-001-0",
+      "contract_id": "H5374",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Longevity Health Plan",
+      "plan_name": "Longevity Health Plan (HMO I-SNP)",
+      "plan_type": "HMO I-SNP",
+      "county_count": 40,
+      "score": 66.9,
+      "core_pct": 100,
+      "medical_pct": 83.9,
+      "rx_pct": 0,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "occupational_therapy",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H9808-009-0",
+      "contract_id": "H9808",
+      "plan_id": "009",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "HealthTeam Advantage",
+      "plan_name": "HealthTeam Advantage Eagle Plan (PPO)",
+      "plan_type": "PPO",
+      "county_count": 33,
+      "score": 66.9,
+      "core_pct": 85.7,
+      "medical_pct": 87.1,
+      "rx_pct": 0,
+      "extras_pct": 75,
+      "missing_core": [
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "outpatient_observation",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3404-004-0",
+      "contract_id": "H3404",
+      "plan_id": "004",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Freedom+ (PPO)",
+      "plan_type": "PPO",
+      "county_count": 100,
+      "score": 68,
+      "core_pct": 85.7,
+      "medical_pct": 90.3,
+      "rx_pct": 0,
+      "extras_pct": 75,
+      "missing_core": [
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H4172-001-0",
+      "contract_id": "H4172",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "NHC Advantage",
+      "plan_name": "NHC Advantage (HMO I-SNP)",
+      "plan_type": "HMO I-SNP",
+      "county_count": 2,
+      "score": 68,
+      "core_pct": 100,
+      "medical_pct": 87.1,
+      "rx_pct": 0,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H3449-012-0",
+      "contract_id": "H3449",
+      "plan_id": "012",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Medical Only (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 100,
+      "score": 69.2,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 0,
+      "extras_pct": 75,
+      "missing_core": [
+        "drug_deductible"
+      ],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_1",
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H6345-001-0",
+      "contract_id": "H6345",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "PruittHealth Premier",
+      "plan_name": "PruittHealth Premier (HMO I-SNP)",
+      "plan_type": "HMO I-SNP",
+      "county_count": 11,
+      "score": 70.9,
+      "core_pct": 85.7,
+      "medical_pct": 87.1,
+      "rx_pct": 20,
+      "extras_pct": 75,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [
+        "rx_tier_2",
+        "rx_tier_3",
+        "rx_tier_4",
+        "rx_tier_5"
+      ],
+      "missing_extras": [
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H7074-001-0",
+      "contract_id": "H7074",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Alignment Health Plan",
+      "plan_name": "Alignment Health AVA (PPO)",
+      "plan_type": "PPO",
+      "county_count": 16,
+      "score": 80.8,
+      "core_pct": 85.7,
+      "medical_pct": 83.9,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "outpatient_observation",
+        "occupational_therapy",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9700-009-0",
+      "contract_id": "H9700",
+      "plan_id": "009",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED CHOICE GIVEBACK 009 NC (PPO)",
+      "plan_type": "PPO",
+      "county_count": 8,
+      "score": 84.2,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9700-006-0",
+      "contract_id": "H9700",
+      "plan_id": "006",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED CHOICE GIVEBACK 006 NC (PPO)",
+      "plan_type": "PPO",
+      "county_count": 17,
+      "score": 84.2,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5216-017-0",
+      "contract_id": "H5216",
+      "plan_id": "017",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "HumanaChoice Giveback H5216-017 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 37,
+      "score": 85.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 37.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H5525-049-0",
+      "contract_id": "H5525",
+      "plan_id": "049",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "HumanaChoice H5525-049 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 46,
+      "score": 85.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 37.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H5652-008-0",
+      "contract_id": "H5652",
+      "plan_id": "008",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "Erickson Advantage Liberty (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 1,
+      "score": 85.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 37.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H5296-011-0",
+      "contract_id": "H5296",
+      "plan_id": "011",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Alignment Health Plan",
+      "plan_name": "Alignment Health Heart & Diabetes Care (HMO C-SNP)",
+      "plan_type": "HMO C-SNP",
+      "county_count": 16,
+      "score": 86.2,
+      "core_pct": 100,
+      "medical_pct": 67.7,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "outpatient_observation",
+        "xray",
+        "mental_health_individual",
+        "mental_health_group",
+        "occupational_therapy",
+        "acupuncture",
+        "podiatry",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-003-0",
+      "contract_id": "H9725",
+      "plan_id": "003",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring TotalCare (HMO D-SNP)",
+      "plan_type": "HMO D-SNP",
+      "county_count": 37,
+      "score": 86.2,
+      "core_pct": 100,
+      "medical_pct": 67.7,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "mental_health_individual",
+        "mental_health_group",
+        "physical_speech_therapy",
+        "occupational_therapy",
+        "chiropractic",
+        "acupuncture",
+        "podiatry",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5525-034-0",
+      "contract_id": "H5525",
+      "plan_id": "034",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Full Access H5525-034 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 5,
+      "score": 86.6,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5652-001-0",
+      "contract_id": "H5652",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "Erickson Advantage Signature (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 1,
+      "score": 86.6,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H7849-113-2",
+      "contract_id": "H7849",
+      "plan_id": "113",
+      "segment_id": "2",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring True Choice (PPO)",
+      "plan_type": "PPO",
+      "county_count": 10,
+      "score": 86.6,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H7849-113-3",
+      "contract_id": "H7849",
+      "plan_id": "113",
+      "segment_id": "3",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring True Choice (PPO)",
+      "plan_type": "PPO",
+      "county_count": 10,
+      "score": 86.6,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H7849-113-4",
+      "contract_id": "H7849",
+      "plan_id": "113",
+      "segment_id": "4",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring True Choice (PPO)",
+      "plan_type": "PPO",
+      "county_count": 6,
+      "score": 86.6,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H7849-113-1",
+      "contract_id": "H7849",
+      "plan_id": "113",
+      "segment_id": "1",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring True Choice (PPO)",
+      "plan_type": "PPO",
+      "county_count": 11,
+      "score": 86.6,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9700-004-0",
+      "contract_id": "H9700",
+      "plan_id": "004",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED CHOICE GIVEBACK 004 NC (PPO)",
+      "plan_type": "PPO",
+      "county_count": 11,
+      "score": 86.7,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9700-008-0",
+      "contract_id": "H9700",
+      "plan_id": "008",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED CHOICE 008 NC (PPO)",
+      "plan_type": "PPO",
+      "county_count": 8,
+      "score": 86.7,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9700-002-0",
+      "contract_id": "H9700",
+      "plan_id": "002",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED CHOICE GIVEBACK 002 NC (PPO)",
+      "plan_type": "PPO",
+      "county_count": 13,
+      "score": 86.7,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1036-233-0",
+      "contract_id": "H1036",
+      "plan_id": "233",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Plus H1036-233 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 1,
+      "score": 87.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H2001-102-0",
+      "contract_id": "H2001",
+      "plan_id": "102",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-0004 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 39,
+      "score": 87.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H2406-115-0",
+      "contract_id": "H2406",
+      "plan_id": "115",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-0019 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 30,
+      "score": 87.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5216-211-0",
+      "contract_id": "H5216",
+      "plan_id": "211",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "HumanaChoice H5216-211 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 48,
+      "score": 87.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5521-609-0",
+      "contract_id": "H5521",
+      "plan_id": "609",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Signature (PPO)",
+      "plan_type": "PPO",
+      "county_count": 2,
+      "score": 87.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5652-006-0",
+      "contract_id": "H5652",
+      "plan_id": "006",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "Erickson Advantage Freedom (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 1,
+      "score": 87.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H6622-026-0",
+      "contract_id": "H6622",
+      "plan_id": "026",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Plus H6622-026 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 18,
+      "score": 87.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H6622-061-0",
+      "contract_id": "H6622",
+      "plan_id": "061",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Plus H6622-061 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 5,
+      "score": 87.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H6622-057-0",
+      "contract_id": "H6622",
+      "plan_id": "057",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Plus H6622-057 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 3,
+      "score": 87.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H9725-015-1",
+      "contract_id": "H9725",
+      "plan_id": "015",
+      "segment_id": "1",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Preferred Savings (HMO)",
+      "plan_type": "HMO",
+      "county_count": 11,
+      "score": 87.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-015-2",
+      "contract_id": "H9725",
+      "plan_id": "015",
+      "segment_id": "2",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Preferred Savings (HMO)",
+      "plan_type": "HMO",
+      "county_count": 10,
+      "score": 87.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-015-3",
+      "contract_id": "H9725",
+      "plan_id": "015",
+      "segment_id": "3",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Preferred Savings (HMO)",
+      "plan_type": "HMO",
+      "county_count": 10,
+      "score": 87.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-015-4",
+      "contract_id": "H9725",
+      "plan_id": "015",
+      "segment_id": "4",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Preferred Savings (HMO)",
+      "plan_type": "HMO",
+      "county_count": 6,
+      "score": 87.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9808-005-0",
+      "contract_id": "H9808",
+      "plan_id": "005",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "HealthTeam Advantage",
+      "plan_name": "HealthTeam Advantage Plan II (PPO)",
+      "plan_type": "PPO",
+      "county_count": 12,
+      "score": 88,
+      "core_pct": 100,
+      "medical_pct": 87.1,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "outpatient_observation",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5296-006-0",
+      "contract_id": "H5296",
+      "plan_id": "006",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Alignment Health Plan",
+      "plan_name": "Alignment Health smartHMO (HMO)",
+      "plan_type": "HMO",
+      "county_count": 16,
+      "score": 88.2,
+      "core_pct": 100,
+      "medical_pct": 80.6,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "outpatient_observation",
+        "xray",
+        "occupational_therapy",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H2001-090-0",
+      "contract_id": "H2001",
+      "plan_id": "090",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-0001 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 39,
+      "score": 88.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-105-0",
+      "contract_id": "H5253",
+      "plan_id": "105",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage Giveback from UHC NC-13 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 18,
+      "score": 88.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-110-0",
+      "contract_id": "H5253",
+      "plan_id": "110",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage Giveback from UHC NC-14 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 20,
+      "score": 88.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5299-012-0",
+      "contract_id": "H5299",
+      "plan_id": "012",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED GIVEBACK 012 NC (HMO)",
+      "plan_type": "HMO",
+      "county_count": 13,
+      "score": 88.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H0710-034-0",
+      "contract_id": "H0710",
+      "plan_id": "034",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "UHC Nursing Home Plan NC-F001 (PPO I-SNP)",
+      "plan_type": "PPO I-SNP",
+      "county_count": 36,
+      "score": 89.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H2001-084-0",
+      "contract_id": "H2001",
+      "plan_id": "084",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage Access from UHC NC-23 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 99,
+      "score": 89.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-017-2",
+      "contract_id": "H9725",
+      "plan_id": "017",
+      "segment_id": "2",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Preferred Plus (HMO)",
+      "plan_type": "HMO",
+      "county_count": 10,
+      "score": 89.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-017-3",
+      "contract_id": "H9725",
+      "plan_id": "017",
+      "segment_id": "3",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Preferred Plus (HMO)",
+      "plan_type": "HMO",
+      "county_count": 10,
+      "score": 89.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-017-4",
+      "contract_id": "H9725",
+      "plan_id": "017",
+      "segment_id": "4",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Preferred Plus (HMO)",
+      "plan_type": "HMO",
+      "county_count": 6,
+      "score": 89.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-014-0",
+      "contract_id": "H9725",
+      "plan_id": "014",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Preferred Select (HMO)",
+      "plan_type": "HMO",
+      "county_count": 8,
+      "score": 89.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-017-1",
+      "contract_id": "H9725",
+      "plan_id": "017",
+      "segment_id": "1",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Preferred Plus (HMO)",
+      "plan_type": "HMO",
+      "county_count": 11,
+      "score": 89.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9808-010-0",
+      "contract_id": "H9808",
+      "plan_id": "010",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "HealthTeam Advantage",
+      "plan_name": "HealthTeam Advantage Vitality Plan (PPO)",
+      "plan_type": "PPO",
+      "county_count": 33,
+      "score": 89.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "outpatient_observation",
+        "acupuncture",
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9808-004-0",
+      "contract_id": "H9808",
+      "plan_id": "004",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "HealthTeam Advantage",
+      "plan_name": "HealthTeam Advantage Plan I (PPO)",
+      "plan_type": "PPO",
+      "county_count": 12,
+      "score": 89.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "outpatient_observation",
+        "acupuncture",
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9700-005-0",
+      "contract_id": "H9700",
+      "plan_id": "005",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED CHOICE 005 NC (PPO)",
+      "plan_type": "PPO",
+      "county_count": 17,
+      "score": 89.2,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9700-001-0",
+      "contract_id": "H9700",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED CHOICE 001 NC (PPO)",
+      "plan_type": "PPO",
+      "county_count": 13,
+      "score": 89.2,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9700-003-0",
+      "contract_id": "H9700",
+      "plan_id": "003",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED CHOICE 003 NC (PPO)",
+      "plan_type": "PPO",
+      "county_count": 11,
+      "score": 89.2,
+      "core_pct": 85.7,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H6351-004-0",
+      "contract_id": "H6351",
+      "plan_id": "004",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Liberty Medicare Advantage",
+      "plan_name": "Liberty Medicare Advantage (HMO C-SNP)",
+      "plan_type": "HMO C-SNP",
+      "county_count": 54,
+      "score": 89.4,
+      "core_pct": 85.7,
+      "medical_pct": 87.1,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H8212-001-0",
+      "contract_id": "H8212",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "AmeriHealth Caritas VIP Care",
+      "plan_name": "AmeriHealth Caritas VIP Care (HMO D-SNP)",
+      "plan_type": "HMO D-SNP",
+      "county_count": 3,
+      "score": 89.4,
+      "core_pct": 85.7,
+      "medical_pct": 87.1,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [
+        "star_rating"
+      ],
+      "missing_medical": [
+        "telehealth",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-013-0",
+      "contract_id": "H9725",
+      "plan_id": "013",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring TotalCare Plus (HMO D-SNP)",
+      "plan_type": "HMO D-SNP",
+      "county_count": 37,
+      "score": 89.6,
+      "core_pct": 100,
+      "medical_pct": 77.4,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "mental_health_individual",
+        "mental_health_group",
+        "acupuncture",
+        "podiatry",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1036-318-0",
+      "contract_id": "H1036",
+      "plan_id": "318",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Plus Giveback H1036-318 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 40,
+      "score": 90,
+      "core_pct": 100,
+      "medical_pct": 100,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5525-035-0",
+      "contract_id": "H5525",
+      "plan_id": "035",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "HumanaChoice Giveback H5525-035 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 92,
+      "score": 90,
+      "core_pct": 100,
+      "medical_pct": 100,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5525-083-0",
+      "contract_id": "H5525",
+      "plan_id": "083",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "HumanaChoice H5525-083 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 94,
+      "score": 90,
+      "core_pct": 100,
+      "medical_pct": 100,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5525-050-0",
+      "contract_id": "H5525",
+      "plan_id": "050",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "HumanaChoice H5525-050 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 93,
+      "score": 90,
+      "core_pct": 100,
+      "medical_pct": 100,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H6622-060-0",
+      "contract_id": "H6622",
+      "plan_id": "060",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Plus H6622-060 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 9,
+      "score": 90,
+      "core_pct": 100,
+      "medical_pct": 100,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "R0110-005-0",
+      "contract_id": "R0110",
+      "plan_id": "005",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Full Access R0110-005 (Regional PPO)",
+      "plan_type": "Regional PPO",
+      "county_count": 100,
+      "score": 90,
+      "core_pct": 100,
+      "medical_pct": 100,
+      "rx_pct": 100,
+      "extras_pct": 50,
+      "missing_core": [],
+      "missing_medical": [],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H2406-034-0",
+      "contract_id": "H2406",
+      "plan_id": "034",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-0016 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 35,
+      "score": 90.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3146-001-0",
+      "contract_id": "H3146",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Signature (HMO)",
+      "plan_type": "HMO",
+      "county_count": 13,
+      "score": 90.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3146-004-0",
+      "contract_id": "H3146",
+      "plan_id": "004",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Signature (HMO)",
+      "plan_type": "HMO",
+      "county_count": 5,
+      "score": 90.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3146-039-0",
+      "contract_id": "H3146",
+      "plan_id": "039",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Enhanced (HMO)",
+      "plan_type": "HMO",
+      "county_count": 7,
+      "score": 90.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3777-002-0",
+      "contract_id": "H3777",
+      "plan_id": "002",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Experience Health",
+      "plan_name": "Experience Health Medicare Advantage (HMO)",
+      "plan_type": "HMO",
+      "county_count": 8,
+      "score": 90.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-037-0",
+      "contract_id": "H5253",
+      "plan_id": "037",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-0021 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 30,
+      "score": 90.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-080-0",
+      "contract_id": "H5253",
+      "plan_id": "080",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-0009 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 17,
+      "score": 90.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-104-0",
+      "contract_id": "H5253",
+      "plan_id": "104",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-0012 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 14,
+      "score": 90.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5521-139-0",
+      "contract_id": "H5521",
+      "plan_id": "139",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Enhanced (PPO)",
+      "plan_type": "PPO",
+      "county_count": 10,
+      "score": 90.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5521-169-0",
+      "contract_id": "H5521",
+      "plan_id": "169",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Enhanced (PPO)",
+      "plan_type": "PPO",
+      "county_count": 14,
+      "score": 90.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5525-070-0",
+      "contract_id": "H5525",
+      "plan_id": "070",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "HumanaChoice H5525-070 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 97,
+      "score": 90.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5652-003-0",
+      "contract_id": "H5652",
+      "plan_id": "003",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "Erickson Advantage Guardian (HMO-POS I-SNP)",
+      "plan_type": "HMO-POS I-SNP",
+      "county_count": 1,
+      "score": 90.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H1914-010-0",
+      "contract_id": "H1914",
+      "plan_id": "010",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Wellcare",
+      "plan_name": "Wellcare Giveback Open (PPO)",
+      "plan_type": "PPO",
+      "county_count": 70,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "otc",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H2406-098-0",
+      "contract_id": "H2406",
+      "plan_id": "098",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-0017 (PPO)",
+      "plan_type": "PPO",
+      "county_count": 35,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-038-0",
+      "contract_id": "H5253",
+      "plan_id": "038",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-0022 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 30,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-039-0",
+      "contract_id": "H5253",
+      "plan_id": "039",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-0007 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 2,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-079-0",
+      "contract_id": "H5253",
+      "plan_id": "079",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-0008 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 17,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-103-0",
+      "contract_id": "H5253",
+      "plan_id": "103",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-0011 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 14,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-117-0",
+      "contract_id": "H5253",
+      "plan_id": "117",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-0015 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 42,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-185-0",
+      "contract_id": "H5253",
+      "plan_id": "185",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-24 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 25,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-187-0",
+      "contract_id": "H5253",
+      "plan_id": "187",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "AARP Medicare Advantage from UHC NC-26 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 33,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5299-002-0",
+      "contract_id": "H5299",
+      "plan_id": "002",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED GIVEBACK 002 NC (HMO)",
+      "plan_type": "HMO",
+      "county_count": 11,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5521-348-0",
+      "contract_id": "H5521",
+      "plan_id": "348",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Signature Giveback (PPO)",
+      "plan_type": "PPO",
+      "county_count": 86,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5521-243-0",
+      "contract_id": "H5521",
+      "plan_id": "243",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Signature (PPO)",
+      "plan_type": "PPO",
+      "county_count": 28,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5521-081-0",
+      "contract_id": "H5521",
+      "plan_id": "081",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Signature (PPO)",
+      "plan_type": "PPO",
+      "county_count": 29,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5521-236-0",
+      "contract_id": "H5521",
+      "plan_id": "236",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Signature (PPO)",
+      "plan_type": "PPO",
+      "county_count": 16,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5521-170-0",
+      "contract_id": "H5521",
+      "plan_id": "170",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Signature Extra (PPO)",
+      "plan_type": "PPO",
+      "county_count": 17,
+      "score": 91.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H4172-003-0",
+      "contract_id": "H4172",
+      "plan_id": "003",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "NHC Advantage",
+      "plan_name": "Senior Care (HMO I-SNP)",
+      "plan_type": "HMO I-SNP",
+      "county_count": 2,
+      "score": 91.6,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H4676-001-0",
+      "contract_id": "H4676",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Troy Medicare",
+      "plan_name": "Troy Medicare (HMO)",
+      "plan_type": "HMO",
+      "county_count": 35,
+      "score": 91.6,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5525-036-0",
+      "contract_id": "H5525",
+      "plan_id": "036",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "HumanaChoice SNP-DE H5525-036 (PPO D-SNP)",
+      "plan_type": "PPO D-SNP",
+      "county_count": 95,
+      "score": 91.6,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H5652-004-0",
+      "contract_id": "H5652",
+      "plan_id": "004",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "Erickson Advantage Champion (HMO-POS C-SNP)",
+      "plan_type": "HMO-POS C-SNP",
+      "county_count": 1,
+      "score": 91.6,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H5296-004-0",
+      "contract_id": "H5296",
+      "plan_id": "004",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Alignment Health Plan",
+      "plan_name": "Alignment Health NC Duals (HMO-POS D-SNP)",
+      "plan_type": "HMO-POS D-SNP",
+      "county_count": 16,
+      "score": 91.9,
+      "core_pct": 100,
+      "medical_pct": 83.9,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "chiropractic",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5296-009-0",
+      "contract_id": "H5296",
+      "plan_id": "009",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Alignment Health Plan",
+      "plan_name": "Alignment Health Heart & Diabetes NCPlus (HMO-POS C-SNP)",
+      "plan_type": "HMO-POS C-SNP",
+      "county_count": 16,
+      "score": 91.9,
+      "core_pct": 100,
+      "medical_pct": 83.9,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "chiropractic",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1036-137-0",
+      "contract_id": "H1036",
+      "plan_id": "137",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Plus H1036-137 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 15,
+      "score": 92.5,
+      "core_pct": 100,
+      "medical_pct": 100,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1036-335-1",
+      "contract_id": "H1036",
+      "plan_id": "335",
+      "segment_id": "1",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Plus H1036-335 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 7,
+      "score": 92.5,
+      "core_pct": 100,
+      "medical_pct": 100,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1036-335-2",
+      "contract_id": "H1036",
+      "plan_id": "335",
+      "segment_id": "2",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Plus H1036-335 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 74,
+      "score": 92.5,
+      "core_pct": 100,
+      "medical_pct": 100,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H6622-025-0",
+      "contract_id": "H6622",
+      "plan_id": "025",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Plus H6622-025 (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 14,
+      "score": 92.5,
+      "core_pct": 100,
+      "medical_pct": 100,
+      "rx_pct": 100,
+      "extras_pct": 62.5,
+      "missing_core": [],
+      "missing_medical": [],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1036-308-0",
+      "contract_id": "H1036",
+      "plan_id": "308",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Plus - Diabetes and Heart (HMO C-SNP)",
+      "plan_type": "HMO C-SNP",
+      "county_count": 96,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic",
+        "fitness"
+      ]
+    },
+    {
+      "id": "H3146-007-0",
+      "contract_id": "H3146",
+      "plan_id": "007",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Prime (HMO)",
+      "plan_type": "HMO",
+      "county_count": 9,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3146-021-0",
+      "contract_id": "H3146",
+      "plan_id": "021",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Signature Care (HMO)",
+      "plan_type": "HMO",
+      "county_count": 14,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3404-003-1",
+      "contract_id": "H3404",
+      "plan_id": "003",
+      "segment_id": "1",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare PPO Enhanced (PPO)",
+      "plan_type": "PPO",
+      "county_count": 21,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3404-003-2",
+      "contract_id": "H3404",
+      "plan_id": "003",
+      "segment_id": "2",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare PPO Enhanced (PPO)",
+      "plan_type": "PPO",
+      "county_count": 61,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3449-026-0",
+      "contract_id": "H3449",
+      "plan_id": "026",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Choice (HMO)",
+      "plan_type": "HMO",
+      "county_count": 8,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3449-027-1",
+      "contract_id": "H3449",
+      "plan_id": "027",
+      "segment_id": "1",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Essential (HMO)",
+      "plan_type": "HMO",
+      "county_count": 20,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3449-027-2",
+      "contract_id": "H3449",
+      "plan_id": "027",
+      "segment_id": "2",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Essential (HMO)",
+      "plan_type": "HMO",
+      "county_count": 80,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5296-003-0",
+      "contract_id": "H5296",
+      "plan_id": "003",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Alignment Health Plan",
+      "plan_name": "Alignment Health Platinum (HMO)",
+      "plan_type": "HMO",
+      "county_count": 16,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "outpatient_observation",
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5296-010-0",
+      "contract_id": "H5296",
+      "plan_id": "010",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Alignment Health Plan",
+      "plan_name": "Alignment Health Platinum Select (HMO)",
+      "plan_type": "HMO",
+      "county_count": 16,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "outpatient_observation",
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H8145-004-0",
+      "contract_id": "H8145",
+      "plan_id": "004",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Choice H8145-004 (PFFS)",
+      "plan_type": "PFFS",
+      "county_count": 17,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-009-2",
+      "contract_id": "H9725",
+      "plan_id": "009",
+      "segment_id": "2",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Preferred (HMO)",
+      "plan_type": "HMO",
+      "county_count": 10,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-009-3",
+      "contract_id": "H9725",
+      "plan_id": "009",
+      "segment_id": "3",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Preferred (HMO)",
+      "plan_type": "HMO",
+      "county_count": 10,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-009-4",
+      "contract_id": "H9725",
+      "plan_id": "009",
+      "segment_id": "4",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Preferred (HMO)",
+      "plan_type": "HMO",
+      "county_count": 6,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9725-009-1",
+      "contract_id": "H9725",
+      "plan_id": "009",
+      "segment_id": "1",
+      "state": "NC",
+      "carrier": "HealthSpring",
+      "plan_name": "HealthSpring Preferred (HMO)",
+      "plan_type": "HMO",
+      "county_count": 11,
+      "score": 92.7,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H2624-001-0",
+      "contract_id": "H2624",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "HealthTeam Advantage",
+      "plan_name": "HealthTeam Advantage Diabetes & Heart Care (HMO C-SNP)",
+      "plan_type": "HMO C-SNP",
+      "county_count": 7,
+      "score": 93,
+      "core_pct": 100,
+      "medical_pct": 87.1,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "outpatient_observation",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H4676-002-0",
+      "contract_id": "H4676",
+      "plan_id": "002",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Troy Medicare",
+      "plan_name": "Troy Medicare for Dual-eligible Beneficiaries (HMO D-SNP)",
+      "plan_type": "HMO D-SNP",
+      "county_count": 35,
+      "score": 93,
+      "core_pct": 100,
+      "medical_pct": 87.1,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1914-009-0",
+      "contract_id": "H1914",
+      "plan_id": "009",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Wellcare",
+      "plan_name": "Wellcare Assist Open (PPO)",
+      "plan_type": "PPO",
+      "county_count": 70,
+      "score": 93.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3449-023-1",
+      "contract_id": "H3449",
+      "plan_id": "023",
+      "segment_id": "1",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Essential Plus (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 19,
+      "score": 93.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3449-023-2",
+      "contract_id": "H3449",
+      "plan_id": "023",
+      "segment_id": "2",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Essential Plus (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 20,
+      "score": 93.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3449-023-4",
+      "contract_id": "H3449",
+      "plan_id": "023",
+      "segment_id": "4",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Essential Plus (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 19,
+      "score": 93.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3449-023-5",
+      "contract_id": "H3449",
+      "plan_id": "023",
+      "segment_id": "5",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Essential Plus (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 42,
+      "score": 93.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3449-024-1",
+      "contract_id": "H3449",
+      "plan_id": "024",
+      "segment_id": "1",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Enhanced (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 20,
+      "score": 93.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3449-024-2",
+      "contract_id": "H3449",
+      "plan_id": "024",
+      "segment_id": "2",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Enhanced (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 33,
+      "score": 93.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3449-024-3",
+      "contract_id": "H3449",
+      "plan_id": "024",
+      "segment_id": "3",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Blue Medicare Enhanced (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 47,
+      "score": 93.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H4073-001-0",
+      "contract_id": "H4073",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Wellcare",
+      "plan_name": "Wellcare Simple (HMO-POS)",
+      "plan_type": "HMO-POS",
+      "county_count": 71,
+      "score": 93.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5299-001-0",
+      "contract_id": "H5299",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED CORE 001 NC (HMO)",
+      "plan_type": "HMO",
+      "county_count": 11,
+      "score": 93.9,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [
+        "home_health"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "transportation",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1036-167-0",
+      "contract_id": "H1036",
+      "plan_id": "167",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Plus SNP-DE H1036-167 (HMO D-SNP)",
+      "plan_type": "HMO D-SNP",
+      "county_count": 96,
+      "score": 94.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1036-331-0",
+      "contract_id": "H1036",
+      "plan_id": "331",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Gold Plus SNP-DE H1036-331 (HMO D-SNP)",
+      "plan_type": "HMO D-SNP",
+      "county_count": 96,
+      "score": 94.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1889-005-0",
+      "contract_id": "H1889",
+      "plan_id": "005",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "UHC Dual Complete NC-S001 (PPO D-SNP)",
+      "plan_type": "PPO D-SNP",
+      "county_count": 99,
+      "score": 94.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1889-034-0",
+      "contract_id": "H1889",
+      "plan_id": "034",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "UHC Dual Complete NC-S2 (PPO D-SNP)",
+      "plan_type": "PPO D-SNP",
+      "county_count": 99,
+      "score": 94.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3146-002-0",
+      "contract_id": "H3146",
+      "plan_id": "002",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Dual (HMO D-SNP)",
+      "plan_type": "HMO D-SNP",
+      "county_count": 96,
+      "score": 94.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3146-022-0",
+      "contract_id": "H3146",
+      "plan_id": "022",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Full Dual Care (HMO D-SNP)",
+      "plan_type": "HMO D-SNP",
+      "county_count": 29,
+      "score": 94.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-041-0",
+      "contract_id": "H5253",
+      "plan_id": "041",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "UHC Dual Complete NC-D001 (HMO-POS D-SNP)",
+      "plan_type": "HMO-POS D-SNP",
+      "county_count": 100,
+      "score": 94.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-184-0",
+      "contract_id": "H5253",
+      "plan_id": "184",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "UHC Dual Complete NC-S3 (HMO-POS D-SNP)",
+      "plan_type": "HMO-POS D-SNP",
+      "county_count": 100,
+      "score": 94.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5299-006-0",
+      "contract_id": "H5299",
+      "plan_id": "006",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED DUAL PLUS 006 NC (HMO D-SNP)",
+      "plan_type": "HMO D-SNP",
+      "county_count": 49,
+      "score": 94.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5299-013-0",
+      "contract_id": "H5299",
+      "plan_id": "013",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED DUAL FULL 013 NC (HMO D-SNP)",
+      "plan_type": "HMO D-SNP",
+      "county_count": 49,
+      "score": 94.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5299-015-0",
+      "contract_id": "H5299",
+      "plan_id": "015",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED C-SNP PLUS 015 NC (HMO C-SNP)",
+      "plan_type": "HMO C-SNP",
+      "county_count": 49,
+      "score": 94.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H9147-001-0",
+      "contract_id": "H9147",
+      "plan_id": "001",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Blue Cross and Blue Shield of North Carolina",
+      "plan_name": "Healthy Blue + Medicare (HMO-POS D-SNP)",
+      "plan_type": "HMO-POS D-SNP",
+      "county_count": 100,
+      "score": 94.1,
+      "core_pct": 100,
+      "medical_pct": 90.3,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1914-007-0",
+      "contract_id": "H1914",
+      "plan_id": "007",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Wellcare",
+      "plan_name": "Wellcare Simple Open (PPO)",
+      "plan_type": "PPO",
+      "county_count": 70,
+      "score": 95,
+      "core_pct": 100,
+      "medical_pct": 100,
+      "rx_pct": 100,
+      "extras_pct": 75,
+      "missing_core": [],
+      "missing_medical": [],
+      "missing_rx": [],
+      "missing_extras": [
+        "food_card",
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1036-307-0",
+      "contract_id": "H1036",
+      "plan_id": "307",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Dual Select H1036-307 (HMO D-SNP)",
+      "plan_type": "HMO D-SNP",
+      "county_count": 96,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H1914-008-0",
+      "contract_id": "H1914",
+      "plan_id": "008",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Wellcare",
+      "plan_name": "Wellcare Dual Liberty Open (PPO D-SNP)",
+      "plan_type": "PPO D-SNP",
+      "county_count": 70,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3146-037-0",
+      "contract_id": "H3146",
+      "plan_id": "037",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Chronic Care (HMO C-SNP)",
+      "plan_type": "HMO C-SNP",
+      "county_count": 4,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3146-044-0",
+      "contract_id": "H3146",
+      "plan_id": "044",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Chronic Care Value (HMO C-SNP)",
+      "plan_type": "HMO C-SNP",
+      "county_count": 4,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H4073-002-0",
+      "contract_id": "H4073",
+      "plan_id": "002",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Wellcare",
+      "plan_name": "Wellcare Dual Access (HMO-POS D-SNP)",
+      "plan_type": "HMO-POS D-SNP",
+      "county_count": 71,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H4073-003-0",
+      "contract_id": "H4073",
+      "plan_id": "003",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Wellcare",
+      "plan_name": "Wellcare Dual Reserve (HMO-POS D-SNP)",
+      "plan_type": "HMO-POS D-SNP",
+      "county_count": 71,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H4073-004-0",
+      "contract_id": "H4073",
+      "plan_id": "004",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Wellcare",
+      "plan_name": "Wellcare Dual Liberty (HMO-POS D-SNP)",
+      "plan_type": "HMO-POS D-SNP",
+      "county_count": 71,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "mental_health_inpatient",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-116-0",
+      "contract_id": "H5253",
+      "plan_id": "116",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "UHC Dual Complete NC-V001 (HMO-POS D-SNP)",
+      "plan_type": "HMO-POS D-SNP",
+      "county_count": 100,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-186-0",
+      "contract_id": "H5253",
+      "plan_id": "186",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "UHC Complete Care NC-25 (HMO-POS C-SNP)",
+      "plan_type": "HMO-POS C-SNP",
+      "county_count": 25,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-188-0",
+      "contract_id": "H5253",
+      "plan_id": "188",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "UHC Complete Care NC-27 (HMO-POS C-SNP)",
+      "plan_type": "HMO-POS C-SNP",
+      "county_count": 33,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5253-189-0",
+      "contract_id": "H5253",
+      "plan_id": "189",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "UnitedHealthcare",
+      "plan_name": "UHC Complete Care NC-28 (HMO-POS C-SNP)",
+      "plan_type": "HMO-POS C-SNP",
+      "county_count": 42,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5299-009-0",
+      "contract_id": "H5299",
+      "plan_id": "009",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED DUAL 009 NC (HMO D-SNP)",
+      "plan_type": "HMO D-SNP",
+      "county_count": 49,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5299-014-0",
+      "contract_id": "H5299",
+      "plan_id": "014",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED C-SNP PREMIUM 014 NC (HMO C-SNP)",
+      "plan_type": "HMO C-SNP",
+      "county_count": 8,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5299-016-0",
+      "contract_id": "H5299",
+      "plan_id": "016",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED C-SNP PREMIUM 016 NC (HMO C-SNP)",
+      "plan_type": "HMO C-SNP",
+      "county_count": 13,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5299-017-0",
+      "contract_id": "H5299",
+      "plan_id": "017",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED C-SNP PREMIUM 017 NC (HMO C-SNP)",
+      "plan_type": "HMO C-SNP",
+      "county_count": 11,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5299-018-0",
+      "contract_id": "H5299",
+      "plan_id": "018",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Devoted Health",
+      "plan_name": "DEVOTED C-SNP PREMIUM 018 NC (HMO C-SNP)",
+      "plan_type": "HMO C-SNP",
+      "county_count": 17,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "home_health",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H5525-072-0",
+      "contract_id": "H5525",
+      "plan_id": "072",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Dual Select H5525-072 (PPO D-SNP)",
+      "plan_type": "PPO D-SNP",
+      "county_count": 97,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H6622-027-0",
+      "contract_id": "H6622",
+      "plan_id": "027",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Humana",
+      "plan_name": "Humana Dual Select H6622-027 (HMO-POS D-SNP)",
+      "plan_type": "HMO-POS D-SNP",
+      "county_count": 16,
+      "score": 95.2,
+      "core_pct": 100,
+      "medical_pct": 93.5,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture",
+        "renal_dialysis"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    },
+    {
+      "id": "H3146-006-0",
+      "contract_id": "H3146",
+      "plan_id": "006",
+      "segment_id": "0",
+      "state": "NC",
+      "carrier": "Aetna Medicare",
+      "plan_name": "Aetna Medicare Value Plus (HMO)",
+      "plan_type": "HMO",
+      "county_count": 91,
+      "score": 96.4,
+      "core_pct": 100,
+      "medical_pct": 96.8,
+      "rx_pct": 100,
+      "extras_pct": 87.5,
+      "missing_core": [],
+      "missing_medical": [
+        "acupuncture"
+      ],
+      "missing_rx": [],
+      "missing_extras": [
+        "diabetic"
+      ]
+    }
+  ]
+}

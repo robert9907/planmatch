@@ -46,3 +46,6 @@ supabase/.branches/
 data/
 *.csv
 _scrape-debug/
+.env.local.bak*
+.claude/
+_tmp/
