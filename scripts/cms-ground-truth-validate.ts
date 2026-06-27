@@ -272,41 +272,67 @@ function checksForFixture(fixture: Fixture, plan: ApiPlan | undefined, tolerance
   return out;
 }
 
-async function fetchPlans(base: string, ids: string[]): Promise<Map<string, ApiPlan>> {
-  // One request per id. The deployed /api/plans?ids= handler accepts
-  // comma-separated ids on paper, but its IN(contract_id) × IN(plan_id)
-  // cartesian filter + segment-expansion makes the multi-id path drop
-  // most of the requested ids when the resulting cross-product over-
-  // fills the row limit. Single-id queries are unambiguous and
-  // adequately fast for the 10-plan suite. Concurrency 5 keeps total
-  // wall-clock under 3s.
+async function fetchPlans(base: string, fixtures: Fixture[]): Promise<Map<string, ApiPlan>> {
+  // Query by (state, county) and resolve each fixture by contract+plan
+  // afterwards. The /api/plans?ids= path enforces a strict id-string
+  // filter that compares the queried id verbatim against the
+  // constructed `${contract_id}-${plan_id}-${segment_id || '000'}`
+  // response id — pm_plans stores segment_id as '0' (1-char) so the
+  // constructed id is e.g. 'H5253-041-0', which mismatches fixture
+  // ids written in CMS 3-char form ('H5253-041-000'). Querying by
+  // (state, county) bypasses the segment-string filter and lets us
+  // match the fixture's contract_id + plan_id against any segment the
+  // plan has filed (one of which is what the consumer + agent surface).
   const out = new Map<string, ApiPlan>();
-  const queue = ids.slice();
-  const workers: Promise<void>[] = [];
+  // Dedupe (state, county) so two NC/Durham fixtures share one fetch.
+  const locations = new Map<string, { state: string; county: string }>();
+  for (const f of fixtures) {
+    locations.set(`${f.state}|${f.county}`, { state: f.state, county: f.county });
+  }
+  const plansByLocation = new Map<string, ApiPlan[]>();
+  const queue = [...locations.entries()];
   const concurrency = Math.min(5, queue.length);
-  for (let w = 0; w < concurrency; w++) {
-    workers.push((async () => {
+  await Promise.all(
+    new Array(concurrency).fill(0).map(async () => {
       while (queue.length > 0) {
-        const id = queue.shift();
-        if (!id) return;
-        const url = `${base}/api/plans?ids=${encodeURIComponent(id)}&limit=5`;
+        const item = queue.shift();
+        if (!item) return;
+        const [key, loc] = item;
+        const url =
+          `${base}/api/plans?state=${encodeURIComponent(loc.state)}` +
+          `&county=${encodeURIComponent(loc.county)}&limit=500`;
         const res = await fetch(url);
         if (!res.ok) {
           throw new Error(`GET ${url} → HTTP ${res.status}`);
         }
         const body = (await res.json()) as ApiPlansResponse;
-        // The handler can return multiple rows for one queried id when
-        // pm_plans has the plan filed across multiple segments. Pick
-        // the row whose .id matches verbatim; fall back to the first
-        // row when nothing matches verbatim (covers segment-id format
-        // drift between '0' and '000').
-        const exact = (body.plans ?? []).find((p) => p.id === id);
-        if (exact) out.set(id, exact);
-        else if (body.plans?.[0]) out.set(id, body.plans[0]);
+        plansByLocation.set(key, body.plans ?? []);
       }
-    })());
+    }),
+  );
+  for (const f of fixtures) {
+    const plans = plansByLocation.get(`${f.state}|${f.county}`) ?? [];
+    const [contractId, planId] = f.id.split('-');
+    const segment = f.id.split('-')[2] ?? '';
+    // Prefer the exact (contract, plan, segment) match; fall back to
+    // (contract, plan) so a fixture id with a non-existent segment-id
+    // form still resolves to whatever segment the agent surfaces.
+    const exact = plans.find(
+      (p) =>
+        p.contract_id === contractId &&
+        // Segment in api response carries either '0' or '000' depending
+        // on row shape; normalize both sides by stripping leading zeros.
+        p.id.startsWith(`${contractId}-${planId}-`) &&
+        p.id.replace(/-0+$/, '-0') === `${contractId}-${planId}-0` &&
+        (segment === '' || segment.replace(/^0+/, '') === (p.id.split('-')[2] ?? '').replace(/^0+/, '')),
+    );
+    const looseMatch =
+      exact ??
+      plans.find(
+        (p) => p.contract_id === contractId && p.id.startsWith(`${contractId}-${planId}-`),
+      );
+    if (looseMatch) out.set(f.id, looseMatch);
   }
-  await Promise.all(workers);
   return out;
 }
 
@@ -464,7 +490,7 @@ async function main(): Promise<void> {
   const ids = file.fixtures.map((f) => f.id);
   let plans: Map<string, ApiPlan>;
   try {
-    plans = await fetchPlans(args.base, ids);
+    plans = await fetchPlans(args.base, file.fixtures);
   } catch (err) {
     console.error('API fetch failed:', err);
     process.exit(2);
