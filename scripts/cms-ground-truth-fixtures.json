@@ -61,7 +61,7 @@
   "fixtures": [
     {
       "id": "H5253-041-000",
-      "verifiedOn": "production-snapshot 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
       "state": "NC",
       "county": "Durham",
       "carrier": "UnitedHealthcare",
@@ -71,7 +71,7 @@
         "moop_in_network": 9250,
         "drug_deductible": 615,
         "star_rating": 4,
-        "part_b_giveback": 0,
+        "part_b_giveback": null,
         "medical": {
           "primary_care": {
             "copay": null,
@@ -90,7 +90,7 @@
             "coinsurance": null
           },
           "inpatient": {
-            "copay": 1885,
+            "copay": null,
             "coinsurance": null
           },
           "snf": {
@@ -126,7 +126,7 @@
             "coinsurance": 20
           },
           "telehealth": {
-            "copay": 0,
+            "copay": null,
             "coinsurance": null
           },
           "mental_health_individual": {
@@ -136,12 +136,12 @@
         },
         "extras": {
           "dental_annual_max": 2000,
-          "vision_eyewear_allowance_year": 300,
-          "hearing_aid_allowance_year": 0,
-          "otc_allowance_per_quarter": 230,
-          "food_card_allowance_per_month": 1,
+          "vision_eyewear_allowance_year": null,
+          "hearing_aid_allowance_year": null,
+          "otc_allowance_per_quarter": null,
+          "food_card_allowance_per_month": null,
           "transportation_rides_per_year": 24,
-          "fitness_enabled": true
+          "fitness_enabled": null
         },
         "rx_tiers": {
           "tier_1": {
@@ -169,7 +169,7 @@
     },
     {
       "id": "H0174-009-000",
-      "verifiedOn": "production-snapshot 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
       "state": "TX",
       "county": "Harris",
       "carrier": "Wellcare",
@@ -179,7 +179,7 @@
         "moop_in_network": 3450,
         "drug_deductible": 615,
         "star_rating": 4,
-        "part_b_giveback": 0,
+        "part_b_giveback": null,
         "medical": {
           "primary_care": {
             "copay": 0,
@@ -222,11 +222,11 @@
             "coinsurance": null
           },
           "xray": {
-            "copay": 50,
+            "copay": 0,
             "coinsurance": null
           },
           "advanced_imaging": {
-            "copay": 0,
+            "copay": 50,
             "coinsurance": null
           },
           "ambulance": {
@@ -234,7 +234,7 @@
             "coinsurance": null
           },
           "telehealth": {
-            "copay": 25,
+            "copay": null,
             "coinsurance": null
           },
           "mental_health_individual": {
@@ -243,13 +243,13 @@
           }
         },
         "extras": {
-          "dental_annual_max": 20,
-          "vision_eyewear_allowance_year": 0,
-          "hearing_aid_allowance_year": 0,
-          "otc_allowance_per_quarter": 15,
-          "food_card_allowance_per_month": 0,
-          "transportation_rides_per_year": 0,
-          "fitness_enabled": true
+          "dental_annual_max": null,
+          "vision_eyewear_allowance_year": null,
+          "hearing_aid_allowance_year": null,
+          "otc_allowance_per_quarter": null,
+          "food_card_allowance_per_month": null,
+          "transportation_rides_per_year": null,
+          "fitness_enabled": null
         },
         "rx_tiers": {
           "tier_1": {
@@ -277,7 +277,7 @@
     },
     {
       "id": "H1036-318-000",
-      "verifiedOn": "production-snapshot 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
       "state": "NC",
       "county": "Durham",
       "carrier": "Humana",
@@ -342,7 +342,7 @@
             "coinsurance": null
           },
           "telehealth": {
-            "copay": 40,
+            "copay": null,
             "coinsurance": null
           },
           "mental_health_individual": {
@@ -351,13 +351,13 @@
           }
         },
         "extras": {
-          "dental_annual_max": 40,
-          "vision_eyewear_allowance_year": 150,
-          "hearing_aid_allowance_year": 999,
-          "otc_allowance_per_quarter": 0,
-          "food_card_allowance_per_month": 0,
-          "transportation_rides_per_year": 0,
-          "fitness_enabled": true
+          "dental_annual_max": null,
+          "vision_eyewear_allowance_year": null,
+          "hearing_aid_allowance_year": null,
+          "otc_allowance_per_quarter": null,
+          "food_card_allowance_per_month": null,
+          "transportation_rides_per_year": null,
+          "fitness_enabled": null
         },
         "rx_tiers": {
           "tier_1": {
@@ -385,7 +385,7 @@
     },
     {
       "id": "H3449-027-000",
-      "verifiedOn": "production-snapshot 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
       "state": "NC",
       "county": "Durham",
       "carrier": "Blue Cross and Blue Shield of North Carolina",
@@ -439,7 +439,7 @@
           },
           "xray": {
             "copay": 0,
-            "coinsurance": null
+            "coinsurance": 20
           },
           "advanced_imaging": {
             "copay": 0,
@@ -450,7 +450,7 @@
             "coinsurance": null
           },
           "telehealth": {
-            "copay": 45,
+            "copay": null,
             "coinsurance": null
           },
           "mental_health_individual": {
@@ -459,13 +459,13 @@
           }
         },
         "extras": {
-          "dental_annual_max": 45,
+          "dental_annual_max": null,
           "vision_eyewear_allowance_year": 100,
-          "hearing_aid_allowance_year": 999,
-          "otc_allowance_per_quarter": 100,
-          "food_card_allowance_per_month": 0,
-          "transportation_rides_per_year": 24,
-          "fitness_enabled": true
+          "hearing_aid_allowance_year": null,
+          "otc_allowance_per_quarter": null,
+          "food_card_allowance_per_month": null,
+          "transportation_rides_per_year": null,
+          "fitness_enabled": null
         },
         "rx_tiers": {
           "tier_1": {
@@ -493,7 +493,7 @@
     },
     {
       "id": "H3146-004-000",
-      "verifiedOn": "production-snapshot 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
       "state": "NC",
       "county": "Durham",
       "carrier": "Aetna Medicare",
@@ -503,7 +503,7 @@
         "moop_in_network": 6750,
         "drug_deductible": 615,
         "star_rating": 4,
-        "part_b_giveback": 0,
+        "part_b_giveback": null,
         "medical": {
           "primary_care": {
             "copay": 0,
@@ -555,10 +555,10 @@
           },
           "ambulance": {
             "copay": 275,
-            "coinsurance": 20
+            "coinsurance": null
           },
           "telehealth": {
-            "copay": 50,
+            "copay": null,
             "coinsurance": null
           },
           "mental_health_individual": {
@@ -567,13 +567,13 @@
           }
         },
         "extras": {
-          "dental_annual_max": 45,
-          "vision_eyewear_allowance_year": 0,
-          "hearing_aid_allowance_year": 1250,
+          "dental_annual_max": null,
+          "vision_eyewear_allowance_year": null,
+          "hearing_aid_allowance_year": null,
           "otc_allowance_per_quarter": 30,
-          "food_card_allowance_per_month": 0,
-          "transportation_rides_per_year": 0,
-          "fitness_enabled": true
+          "food_card_allowance_per_month": null,
+          "transportation_rides_per_year": null,
+          "fitness_enabled": null
         },
         "rx_tiers": {
           "tier_1": {
@@ -601,7 +601,7 @@
     },
     {
       "id": "H5453-016-000",
-      "verifiedOn": "production-snapshot 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
       "state": "GA",
       "county": "Bulloch",
       "carrier": "Devoted Health",
@@ -610,11 +610,11 @@
         "premium": 25.4,
         "moop_in_network": 9250,
         "drug_deductible": 615,
-        "star_rating": 0,
-        "part_b_giveback": 0,
+        "star_rating": null,
+        "part_b_giveback": null,
         "medical": {
           "primary_care": {
-            "copay": 0,
+            "copay": null,
             "coinsurance": null
           },
           "specialist": {
@@ -630,7 +630,7 @@
             "coinsurance": null
           },
           "inpatient": {
-            "copay": 2230,
+            "copay": null,
             "coinsurance": null
           },
           "snf": {
@@ -667,7 +667,7 @@
           },
           "telehealth": {
             "copay": null,
-            "coinsurance": 30
+            "coinsurance": null
           },
           "mental_health_individual": {
             "copay": null,
@@ -676,12 +676,12 @@
         },
         "extras": {
           "dental_annual_max": 4000,
-          "vision_eyewear_allowance_year": 300,
-          "hearing_aid_allowance_year": 699,
+          "vision_eyewear_allowance_year": null,
+          "hearing_aid_allowance_year": null,
           "otc_allowance_per_quarter": 50,
-          "food_card_allowance_per_month": 1,
-          "transportation_rides_per_year": 0,
-          "fitness_enabled": true
+          "food_card_allowance_per_month": null,
+          "transportation_rides_per_year": null,
+          "fitness_enabled": null
         },
         "rx_tiers": {
           "tier_1": {
@@ -709,7 +709,7 @@
     },
     {
       "id": "H5453-017-000",
-      "verifiedOn": "production-snapshot 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
       "state": "GA",
       "county": "Bulloch",
       "carrier": "Devoted Health",
@@ -718,11 +718,11 @@
         "premium": 25.4,
         "moop_in_network": 8950,
         "drug_deductible": 615,
-        "star_rating": 0,
-        "part_b_giveback": 0,
+        "star_rating": null,
+        "part_b_giveback": null,
         "medical": {
           "primary_care": {
-            "copay": 0,
+            "copay": null,
             "coinsurance": null
           },
           "specialist": {
@@ -771,10 +771,10 @@
           },
           "ambulance": {
             "copay": 0,
-            "coinsurance": 20
+            "coinsurance": null
           },
           "telehealth": {
-            "copay": 40,
+            "copay": null,
             "coinsurance": null
           },
           "mental_health_individual": {
@@ -784,12 +784,12 @@
         },
         "extras": {
           "dental_annual_max": 2000,
-          "vision_eyewear_allowance_year": 300,
-          "hearing_aid_allowance_year": 699,
+          "vision_eyewear_allowance_year": null,
+          "hearing_aid_allowance_year": null,
           "otc_allowance_per_quarter": 50,
-          "food_card_allowance_per_month": 1,
-          "transportation_rides_per_year": 0,
-          "fitness_enabled": true
+          "food_card_allowance_per_month": null,
+          "transportation_rides_per_year": null,
+          "fitness_enabled": null
         },
         "rx_tiers": {
           "tier_1": {
@@ -817,7 +817,7 @@
     },
     {
       "id": "H5253-189-000",
-      "verifiedOn": "production-snapshot 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
       "state": "NC",
       "county": "Alamance",
       "carrier": "UnitedHealthcare",
@@ -827,7 +827,7 @@
         "moop_in_network": 4200,
         "drug_deductible": 355,
         "star_rating": 4,
-        "part_b_giveback": 0,
+        "part_b_giveback": null,
         "medical": {
           "primary_care": {
             "copay": 0,
@@ -870,11 +870,11 @@
             "coinsurance": null
           },
           "xray": {
-            "copay": 20,
+            "copay": 0,
             "coinsurance": null
           },
           "advanced_imaging": {
-            "copay": 0,
+            "copay": 20,
             "coinsurance": null
           },
           "ambulance": {
@@ -882,7 +882,7 @@
             "coinsurance": null
           },
           "telehealth": {
-            "copay": 0,
+            "copay": null,
             "coinsurance": null
           },
           "mental_health_individual": {
@@ -891,13 +891,13 @@
           }
         },
         "extras": {
-          "dental_annual_max": 0,
-          "vision_eyewear_allowance_year": 75,
-          "hearing_aid_allowance_year": 1249,
-          "otc_allowance_per_quarter": 55,
-          "food_card_allowance_per_month": 1,
-          "transportation_rides_per_year": 24,
-          "fitness_enabled": true
+          "dental_annual_max": null,
+          "vision_eyewear_allowance_year": null,
+          "hearing_aid_allowance_year": null,
+          "otc_allowance_per_quarter": null,
+          "food_card_allowance_per_month": null,
+          "transportation_rides_per_year": null,
+          "fitness_enabled": null
         },
         "rx_tiers": {
           "tier_1": {
@@ -925,14 +925,14 @@
     },
     {
       "id": "H3404-004-000",
-      "verifiedOn": "production-snapshot 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
       "state": "NC",
       "county": "Guilford",
       "carrier": "Blue Cross and Blue Shield of North Carolina",
       "plan_name": "Blue Medicare (BCBSNC)",
       "expected": {
-        "premium": 0,
-        "moop_in_network": 13900,
+        "premium": null,
+        "moop_in_network": 9250,
         "drug_deductible": null,
         "star_rating": 4.5,
         "part_b_giveback": 100,
@@ -954,7 +954,7 @@
             "coinsurance": null
           },
           "inpatient": {
-            "copay": 2230,
+            "copay": null,
             "coinsurance": null
           },
           "snf": {
@@ -991,7 +991,7 @@
           },
           "telehealth": {
             "copay": null,
-            "coinsurance": 20
+            "coinsurance": null
           },
           "mental_health_individual": {
             "copay": null,
@@ -999,13 +999,13 @@
           }
         },
         "extras": {
-          "dental_annual_max": 0,
-          "vision_eyewear_allowance_year": 0,
-          "hearing_aid_allowance_year": 0,
-          "otc_allowance_per_quarter": 0,
-          "food_card_allowance_per_month": 0,
+          "dental_annual_max": null,
+          "vision_eyewear_allowance_year": null,
+          "hearing_aid_allowance_year": null,
+          "otc_allowance_per_quarter": null,
+          "food_card_allowance_per_month": null,
           "transportation_rides_per_year": 24,
-          "fitness_enabled": true
+          "fitness_enabled": null
         },
         "rx_tiers": {
           "tier_1": {
@@ -1033,7 +1033,7 @@
     },
     {
       "id": "H0111-001-000",
-      "verifiedOn": "production-snapshot 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
       "state": "GA",
       "county": "Fulton",
       "carrier": "Wellcare",
@@ -1043,7 +1043,7 @@
         "moop_in_network": 9250,
         "drug_deductible": 615,
         "star_rating": 3.5,
-        "part_b_giveback": 0,
+        "part_b_giveback": null,
         "medical": {
           "primary_care": {
             "copay": 0,
@@ -1086,11 +1086,11 @@
             "coinsurance": null
           },
           "xray": {
-            "copay": 50,
+            "copay": 0,
             "coinsurance": null
           },
           "advanced_imaging": {
-            "copay": 0,
+            "copay": 50,
             "coinsurance": null
           },
           "ambulance": {
@@ -1098,7 +1098,7 @@
             "coinsurance": null
           },
           "telehealth": {
-            "copay": 40,
+            "copay": null,
             "coinsurance": null
           },
           "mental_health_individual": {
@@ -1107,13 +1107,13 @@
           }
         },
         "extras": {
-          "dental_annual_max": 40,
-          "vision_eyewear_allowance_year": 0,
-          "hearing_aid_allowance_year": 0,
-          "otc_allowance_per_quarter": 10,
-          "food_card_allowance_per_month": 0,
-          "transportation_rides_per_year": 0,
-          "fitness_enabled": true
+          "dental_annual_max": null,
+          "vision_eyewear_allowance_year": null,
+          "hearing_aid_allowance_year": null,
+          "otc_allowance_per_quarter": null,
+          "food_card_allowance_per_month": null,
+          "transportation_rides_per_year": null,
+          "fitness_enabled": null
         },
         "rx_tiers": {
           "tier_1": {
