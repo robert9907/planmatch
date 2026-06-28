@@ -880,28 +880,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // medical_deductible isn't in PBP_TYPE_TO_CATEGORY (no
-    // pm_plan_benefits row stores it as a benefit), but pbp_benefits
-    // does carry it from medicare_gov. Build a per-plan lookup so the
-    // Plan.annual_deductible fallback below can read it. Source-
-    // priority dedup already happened in bestByKey, so the first match
-    // here is the highest-rank source. Real data: 25/74 Durham plans
-    // have pbp_benefits.medical_deductible vs 2/74 in pm_plans —
-    // ~12× more coverage. Where both exist they sometimes disagree
-    // (H9725-015: pm=$365, pbp medicare_gov=$325) — we prefer PBP per
-    // the audit recommendation.
-    const medicalDeductibleByPlanKey = new Map<string, number>();
-    for (const row of bestByKey.values()) {
-      if (row.benefit_type !== 'medical_deductible') continue;
-      if (typeof row.copay !== 'number') continue;
-      const canonical = normalizePbpKey(row.plan_id);
-      // Skip duplicates — bestByKey already keeps the highest-rank row
-      // per (plan_id, benefit_type, tier_id), but a plan could file
-      // medical_deductible at multiple tier_ids. Take the smallest non-
-      // null copay as the headline deductible (Plan Finder convention).
-      const prior = medicalDeductibleByPlanKey.get(canonical);
-      if (prior == null || row.copay < prior) {
-        medicalDeductibleByPlanKey.set(canonical, row.copay);
+    // medical_deductible: pbp_benefits_v2 stores per-segment values
+    // (e.g. H7849-113 segments 1/2/3/4 file $820/$570/$710/$675) but
+    // the legacy `pbp_benefits` compatibility view concatenates
+    // contract||plan and drops segment_id, so the broadPbpRows pull
+    // above can't tell which $ goes to which segment. Querying the
+    // base table directly with segment_id avoids that.
+    //
+    // Per-segment matching matters: H5216-043 has segments 1, 5, 6
+    // with values $0, $750, $0 — the prior 2-part min-pick handed
+    // every segment the smaller value ($0) which under-stated segment
+    // 5 by $750. CMS reports the per-segment value; we match it.
+    //
+    // medicare_gov source only — cms_pbp is the cooked landscape
+    // extract, medicare_gov is the live Plan Finder scrape and is
+    // more current. Where they disagree, prefer medicare_gov.
+    const tripleContracts = [...new Set([...byTriple.keys()].map(k => k.split('-')[0]))];
+    const triplePlanIds = [...new Set([...byTriple.keys()].map(k => k.split('-')[1]))];
+    const medicalDeductibleBySegmentKey = new Map<string, number>();
+    if (tripleContracts.length > 0) {
+      const ddxRows = await fetchAllRows<{ contract_id: string; plan_id: string; segment_id: string | null; copay: number | null }>(async (from, to) => {
+        const { data, error } = await sb
+          .from('pbp_benefits_v2')
+          .select('contract_id, plan_id, segment_id, copay')
+          .eq('benefit_type', 'medical_deductible')
+          .eq('source', 'medicare_gov')
+          .in('contract_id', tripleContracts)
+          .in('plan_id', triplePlanIds)
+          .not('copay', 'is', null)
+          .order('contract_id', { ascending: true })
+          .order('plan_id', { ascending: true })
+          .order('segment_id', { ascending: true, nullsFirst: true })
+          .range(from, to);
+        if (error) throw error;
+        return (data ?? []) as { contract_id: string; plan_id: string; segment_id: string | null; copay: number | null }[];
+      });
+      for (const r of ddxRows) {
+        if (r.copay == null) continue;
+        // Normalize segment: strip leading zeros so '000'/'00'/'0' all
+        // map to '0', matching the 3-part key shape used by byTriple.
+        const seg = String(r.segment_id ?? '0').replace(/^0+/, '') || '0';
+        const key = `${r.contract_id}-${r.plan_id}-${seg}`;
+        const prior = medicalDeductibleBySegmentKey.get(key);
+        // Same tie-break convention as the prior 2-part version —
+        // prefer smallest non-null when duplicates exist.
+        if (prior == null || r.copay < prior) {
+          medicalDeductibleBySegmentKey.set(key, r.copay);
+        }
       }
     }
 
@@ -1095,11 +1120,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // hits 34%. Prefer PBP when it has a value — it's more current
         // and authoritative than the landscape extract. The final `?? 0`
         // is the NULL-vs-$0 coalesce: pm_plans treats "no medical
-        // deductible" as NULL, but consumers expect $0. The audit's RED
-        // diff against Medicare.gov (Margaret 25/26, suite 176/189) was
-        // entirely this NULL leaking through.
-        annual_deductible:
-          medicalDeductibleByPlanKey.get(normalizePbpKey(key)) ?? row.annual_deductible ?? 0,
+        // deductible" as NULL, but consumers expect $0.
+        //
+        // Lookup is segment-aware: key is the 3-part triple
+        // (contract-plan-segment) and we match the matching pbp row
+        // built above from pbp_benefits_v2.segment_id. Normalize the
+        // segment to strip leading zeros so '000' and '0' both hit.
+        annual_deductible: (() => {
+          const parts = key.split('-');
+          const seg = (parts[2] ?? '0').replace(/^0+/, '') || '0';
+          const pbp = medicalDeductibleBySegmentKey.get(`${parts[0]}-${parts[1]}-${seg}`);
+          return pbp ?? row.annual_deductible ?? 0;
+        })(),
         moop_in_network: row.moop ?? 0,
         // pm_plans only carries in-network MOOP; OON isn't in the
         // landscape extract, so we leave it null and let the UI render
