@@ -941,6 +941,12 @@ async function loadPmFormularyForDrugs(
   // because PostgREST .or() across many ILIKE clauses gets gnarly. For
   // brand drugs, the anchor list includes the generic name (apixaban
   // for Eliquis, etc.) so pm_formulary's generic-keyed rows match.
+  //
+  // SUBSTRING match (%anchor%) not prefix: pm_formulary stores SCD/SBD
+  // names that frequently lead with the strength or package size, e.g.
+  // "0.8 ML adalimumab 50 MG/ML Auto-Injector [Humira]" — a prefix
+  // match for "adalimumab" misses every row of that shape, which was
+  // R6's false-positive source for Rosa's Humira finding.
   const nameRows: PmFormularyHit[] = [];
   for (const d of drugs) {
     for (const anchor of nameAnchorsFor(d.drug)) {
@@ -948,7 +954,7 @@ async function loadPmFormularyForDrugs(
         .select('contract_id, plan_id, rxcui, drug_name, tier, copay, coinsurance, prior_auth, step_therapy, quantity_limit')
         .in('contract_id', contracts)
         .in('plan_id', planIds)
-        .ilike('drug_name', `${anchor}%`)
+        .ilike('drug_name', `%${anchor}%`)
         .range(0, 9999);
       if (error) throw error;
       if (data) for (const r of data as PmFormularyHit[]) nameRows.push(r);
@@ -1188,10 +1194,6 @@ function runRegressionChecks(persona: Persona, ctx: RegressionContext): Regressi
     } else {
       // "Resolved" = at least 50% of plans show some hit (either path).
       const zeroCoverage = personaBrands.filter(b => b.plans_exact_match === 0 && b.plans_name_match === 0);
-      const lowCoverage = personaBrands.filter(b =>
-        (b.plans_exact_match === 0 && b.plans_name_match === 0) ||
-        (b.plans_exact_match + b.plans_name_match) / Math.max(1, b.plans_total_with_pm) < 0.5,
-      );
       const needFallback = personaBrands.filter(b => b.requires_ingredient_fallback);
       const status: 'PASS' | 'FAIL' = zeroCoverage.length === 0 ? 'PASS' : 'FAIL';
       out.push({
@@ -1200,7 +1202,7 @@ function runRegressionChecks(persona: Persona, ctx: RegressionContext): Regressi
         description: 'Brand drugs resolve (via exact rxcui or ingredient fallback)',
         status,
         detail: zeroCoverage.length === 0
-          ? `${personaBrands.length} brand drugs covered (${needFallback.length} via name-match fallback only: ${needFallback.map(b => b.drug).join(', ') || 'none'}; ${lowCoverage.length - needFallback.length} with <50% plan coverage)`
+          ? `${personaBrands.length} brand drugs covered (${needFallback.length} via name-match fallback only${needFallback.length > 0 ? ': ' + needFallback.map(b => b.drug).join(', ') : ''})`
           : `${zeroCoverage.length} brand drugs with ZERO coverage: ${zeroCoverage.map(b => b.drug).join(', ')}`,
       });
     }
@@ -1286,7 +1288,11 @@ async function runPersona(persona: Persona, page: Page): Promise<PersonaSummary>
       if (rx && hits.some(h => h.rxcui === rx)) exact += 1;
       if (hits.some(h => {
         const dn = (h.drug_name ?? '').toLowerCase();
-        return anchors.some(a => dn.startsWith(a));
+        // Substring (includes) not startsWith — pm_formulary names lead
+        // with strength/package size ("0.8 ML adalimumab..."), so
+        // prefix matching missed real Humira/Stelara/Cosentyx rows and
+        // produced R6's false positive for Rosa.
+        return anchors.some(a => dn.includes(a));
       })) byName += 1;
     }
     drugCoverage.push({
