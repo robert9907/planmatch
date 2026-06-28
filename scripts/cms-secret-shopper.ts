@@ -1146,25 +1146,30 @@ function runRegressionChecks(persona: Persona, ctx: RegressionContext): Regressi
     out.push({ id: 'R4_food_card_zero', fix_commit: 'd6a3952', description: 'D-SNP food/meals shape', status: 'SKIP', detail: 'persona not D-SNP eligible' });
   }
 
-  // (5) $1 sentinel (fix f33d6eb) — coverage_amount=1 surfaces as
-  // description text, not "$1/mo". pm_plan_benefits.copay==1 would be
-  // the regression shape; flag any row where copay is exactly 1 (a real
-  // $1 copay is essentially nonexistent in this dataset).
+  // (5) $1 sentinel (fix f33d6eb) — coverage_amount=1 in extras/perks
+  // (food_card, otc, vision, hearing, transportation) surfaces as
+  // description text, not "$1/mo". pm_plan_benefits.copay==1 in those
+  // categories is the regression shape. EXCLUDE rx_tier_* — some D-SNPs
+  // genuinely file $1 generic copays (Tier 1/2 Preferred Generic at
+  // 30-day retail) and flagging those would degrade the surfaced data.
+  // Verified against the data 2026-06-28: every copay=1 row in the
+  // snapshot was in rx_tier_1/rx_tier_2 with description "Tier N ·
+  // Generic · 30-day retail · $1 copay" — real values, not sentinels.
   {
     let sentinel = 0;
     for (const rows of ctx.pmBenefitsByKey.values()) {
       for (const r of rows) {
-        if (r.copay === 1) sentinel += 1;
+        if (r.copay !== 1) continue;
+        if (r.benefit_category.startsWith('rx_tier_')) continue;
+        sentinel += 1;
       }
     }
-    // The flag is only meaningful at >0 — this regression is a "should
-    // never see this" check, not a percentage threshold.
     out.push({
       id: 'R5_dollar_one_sentinel',
       fix_commit: 'f33d6eb',
-      description: 'No $1-sentinel rows leaking through pm_plan_benefits',
+      description: 'No $1-sentinel rows leaking through pm_plan_benefits (excl. rx_tier_*)',
       status: sentinel === 0 ? 'PASS' : 'FAIL',
-      detail: `${sentinel} rows with copay exactly = 1`,
+      detail: `${sentinel} non-rx_tier_* rows with copay exactly = 1`,
     });
   }
 
