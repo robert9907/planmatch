@@ -44,6 +44,7 @@ import {
 import type { LibraryRankPlan } from '@/lib/library-client';
 import { QuoteBuilder } from './QuoteBuilder';
 import { useHealthSherpaEnroll } from './lib/useHealthSherpaEnroll';
+import { formatOtc } from '@/lib/extractBenefitValue';
 
 // Per the current product rule: rows stay visible, but unfiled values
 // render as em-dash, not "Not available" (which read as "we can't
@@ -324,10 +325,8 @@ function buildMetrics(args: {
     {
       key: 'otc',
       label: 'OTC / qtr',
-      format: (p) => {
-        const v = p.benefits.otc.allowance_per_quarter;
-        return v > 0 ? `$${v}/qtr` : '—';
-      },
+      format: (p) =>
+        formatOtc(p.benefits.otc.allowance_per_quarter, p.benefits.otc.description),
       numeric: (p) => p.benefits.otc.allowance_per_quarter,
       higherIsBetter: true,
     },

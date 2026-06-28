@@ -44,32 +44,49 @@ export function planDisplay(plan: Plan): PlanDisplay {
       ? 'No annual cap filed'
       : 'None';
 
+  // Allowance amount === 1 is the importer's "offered, no Medicare.gov-
+  // published ceiling" sentinel (api/plans.ts transformPbpRow rescue,
+  // commit d6a3952) — applies to vision_allowance, hearing_aid_allowance,
+  // otc_allowance, and food_card. Surfacing the raw "$1" would read as
+  // a real $1 cap; prefer the filed description, fall back to "Included".
+  const visionEyewear = b.vision.eyewear_allowance_year;
+  const visionDesc = b.vision.description?.trim();
   const vision = b.vision.exam
-    ? b.vision.eyewear_allowance_year > 0
+    ? visionEyewear > 0
       ? 'Routine + eyewear'
       : 'Exam only'
     : 'None';
-  const visionAllowance = b.vision.eyewear_allowance_year > 0
-    ? `${fmtMoney(b.vision.eyewear_allowance_year)}`
-    : '$0';
+  const visionAllowance = visionEyewear > 1
+    ? `${fmtMoney(visionEyewear)}`
+    : visionEyewear === 1
+      ? (visionDesc || 'Included')
+      : '$0';
 
-  const hearing = b.hearing.aid_allowance_year > 0
+  const hearingAids = b.hearing.aid_allowance_year;
+  const hearingDesc = b.hearing.description?.trim();
+  const hearingAidsLabel = hearingAids > 1
+    ? `${fmtMoney(hearingAids)}/yr aids`
+    : hearingAids === 1
+      ? (hearingDesc || 'Included')
+      : null;
+  const hearing = hearingAidsLabel
     ? b.hearing.exam
-      ? `Routine + ${fmtMoney(b.hearing.aid_allowance_year)}/yr aids`
-      : `${fmtMoney(b.hearing.aid_allowance_year)}/yr aids`
+      ? `Routine + ${hearingAidsLabel}`
+      : hearingAidsLabel
     : b.hearing.exam
       ? 'Routine only'
       : 'None';
 
   // OTC pm_plan_benefits files quarterly; spec headers in $/mo.
-  const otcMonthly = Math.round(b.otc.allowance_per_quarter / 3);
-  const otcText = otcMonthly > 0 ? `$${otcMonthly}/mo` : '$0/mo';
+  const otcQuarterly = b.otc.allowance_per_quarter;
+  const otcDesc = b.otc.description?.trim();
+  const otcMonthly = otcQuarterly > 1 ? Math.round(otcQuarterly / 3) : 0;
+  const otcText = otcQuarterly > 1
+    ? `$${otcMonthly}/mo`
+    : otcQuarterly === 1
+      ? (otcDesc || 'Included')
+      : '$0/mo';
 
-  // allowance_per_month === 1 is the importer's "offered, no
-  // Medicare.gov-published ceiling" sentinel (see commit d6a3952),
-  // not a real $1 cap. Prefer the filed description text for those
-  // rows ("Combined with OTC card above" etc.); fall back to
-  // "Included" when the row carries no description.
   const foodMonthly = b.food_card.allowance_per_month;
   const foodDesc = b.food_card.description?.trim();
   const meals = foodMonthly > 1

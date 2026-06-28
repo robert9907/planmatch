@@ -239,7 +239,14 @@ export function formatVision(
   description: string | null | undefined,
 ): string {
   const v = extractBenefitValue(description, 'vision');
-  const eyewearAmt = v.eyewearAllowance ?? (structuredEyewear > 0 ? structuredEyewear : null);
+  // structuredEyewear === 1 is the "offered, no published ceiling"
+  // sentinel (see commit d6a3952). Don't surface as "$1 eyewear".
+  if (structuredEyewear === 1 && (v.eyewearAllowance == null || v.eyewearAllowance <= 1)) {
+    const trimmed = description?.trim();
+    if (trimmed) return trimmed;
+    return examIncluded ? 'Exam + eyewear' : 'Eyewear covered';
+  }
+  const eyewearAmt = v.eyewearAllowance ?? (structuredEyewear > 1 ? structuredEyewear : null);
 
   if (eyewearAmt != null && examIncluded) {
     return `Exam + $${eyewearAmt.toLocaleString()} eyewear`;
@@ -274,7 +281,14 @@ export function formatHearing(
 ): string {
   const v = extractBenefitValue(description, 'hearing');
   const perEar = /per\s+ear/i.test(v.raw ?? '');
-  const allowance = v.amount ?? (structuredAllowance > 0 ? structuredAllowance : null);
+  // structuredAllowance === 1 is the "offered, no published ceiling"
+  // sentinel (see commit d6a3952). Don't surface as "$1/yr aids".
+  if (structuredAllowance === 1 && (v.amount == null || v.amount <= 1)) {
+    const trimmed = description?.trim();
+    if (trimmed) return trimmed;
+    return examIncluded ? 'Aids + exam' : 'Aids covered';
+  }
+  const allowance = v.amount ?? (structuredAllowance > 1 ? structuredAllowance : null);
 
   if (allowance != null && perEar) return `$${allowance.toLocaleString()} per ear`;
   if (allowance != null) return `$${allowance.toLocaleString()}/yr aids`;
@@ -300,7 +314,12 @@ export function formatHearing(
  *   • Empty → "—"
  */
 export function formatOtc(structuredQuarterly: number, description: string | null | undefined): string {
-  if (structuredQuarterly > 0) return `$${structuredQuarterly.toLocaleString()}/qtr`;
+  if (structuredQuarterly > 1) return `$${structuredQuarterly.toLocaleString()}/qtr`;
+  if (structuredQuarterly === 1) {
+    // "Offered, no published ceiling" sentinel (see commit d6a3952).
+    const trimmed = description?.trim();
+    return trimmed || 'Included';
+  }
   const v = extractBenefitValue(description, 'otc');
   if (v.amount != null && v.period === 'quarter') return `$${v.amount.toLocaleString()}/qtr`;
   if (v.amount != null && v.period === 'month') return `$${(v.amount * 3).toLocaleString()}/qtr`;
