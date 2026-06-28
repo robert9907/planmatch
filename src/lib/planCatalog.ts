@@ -136,7 +136,10 @@ function toPlan(p: ApiPlan): Plan {
     // still surface the right value.
     consumer_premium:
       p.consumer_premium ?? (p.snp_type === 'D-SNP' ? 0 : (p.premium ?? 0)),
-    annual_deductible: p.annual_deductible ?? null,
+    // Coalesce NULL → 0. pm_plans treats "no medical deductible" as
+    // NULL, but consumers should see $0. Audit suite showed 176 RED
+    // diffs against Medicare.gov, every one a NULL-vs-$0 leak.
+    annual_deductible: p.annual_deductible ?? 0,
     moop_in_network: p.moop_in_network ?? 0,
     moop_out_of_network: p.moop_out_of_network ?? null,
     drug_deductible: p.drug_deductible ?? null,

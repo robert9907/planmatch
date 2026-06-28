@@ -664,7 +664,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
         snfPerDay: snfDayOneCopay(benefits),
         ambulancePerTrip: copayForCategory(benefits, 'ambulance'),
         dmeCoinsurancePct: dmeCoinsurance(benefits),
-        annualDeductible: row.annual_deductible,
+        annualDeductible: row.annual_deductible ?? 0,
       },
     });
 

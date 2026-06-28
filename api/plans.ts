@@ -1093,9 +1093,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // pm_plans.annual_deductible is sparsely populated (3% of Durham
         // plans) while pbp_benefits.medical_deductible from medicare_gov
         // hits 34%. Prefer PBP when it has a value — it's more current
-        // and authoritative than the landscape extract.
+        // and authoritative than the landscape extract. The final `?? 0`
+        // is the NULL-vs-$0 coalesce: pm_plans treats "no medical
+        // deductible" as NULL, but consumers expect $0. The audit's RED
+        // diff against Medicare.gov (Margaret 25/26, suite 176/189) was
+        // entirely this NULL leaking through.
         annual_deductible:
-          medicalDeductibleByPlanKey.get(normalizePbpKey(key)) ?? row.annual_deductible,
+          medicalDeductibleByPlanKey.get(normalizePbpKey(key)) ?? row.annual_deductible ?? 0,
         moop_in_network: row.moop ?? 0,
         // pm_plans only carries in-network MOOP; OON isn't in the
         // landscape extract, so we leave it null and let the UI render

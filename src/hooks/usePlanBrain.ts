@@ -378,7 +378,7 @@ function planToPmRow(plan: Plan, county: string, idx: number): PmPlanRow {
     county_name: county,
     county_fips: null,
     monthly_premium: plan.premium,
-    annual_deductible: plan.annual_deductible,
+    annual_deductible: plan.annual_deductible ?? 0,
     moop: plan.moop_in_network,
     drug_deductible: plan.drug_deductible,
     star_rating: plan.star_rating,
