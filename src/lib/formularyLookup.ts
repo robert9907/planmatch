@@ -91,6 +91,19 @@ interface LibraryPostResponse {
 
 const cache = new Map<string, FormularyHit>();
 
+// Per-attempt fetch budget. Consumer cold starts on Vercel land in the
+// 5–15s range for /api/formulary; pick something above the warm-path
+// time (~2–3s) so warm requests never abort, but well below the
+// MedsScreen 12s UI-timeout so a retry has a chance to land before the
+// row would otherwise flip to "No formulary data".
+const PER_REQUEST_TIMEOUT_MS = 10_000;
+
+// Consumer (api/formulary.ts) caps POST contractIds at this limit and
+// silently `.slice()`s the rest — plans on dropped contracts return
+// zero matches and time out. Keep this in sync with that endpoint's
+// MAX_CONTRACTIDS_POST constant.
+const CONSUMER_CONTRACTIDS_CAP = 20;
+
 function cacheKey(contractPlanId: string, rxcui: string): string {
   return `${contractPlanId}::${rxcui}`;
 }
@@ -185,11 +198,54 @@ export async function lookupFormulary(
   }
 }
 
+async function fetchBulkChunk(
+  contractIds: string[],
+  rxcuis: string[],
+): Promise<LibraryPostResponse> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), PER_REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${LIBRARY_URL}/api/formulary`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ contractIds, rxcuis }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) throw new Error(`formulary bulk ${res.status}`);
+    return (await res.json()) as LibraryPostResponse;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// One retry on failure. A cold consumer Function takes long enough that
+// a single attempt regularly aborts; the warm-up from the first attempt
+// usually makes the retry land fast.
+async function fetchBulkChunkWithRetry(
+  contractIds: string[],
+  rxcuis: string[],
+): Promise<LibraryPostResponse> {
+  try {
+    return await fetchBulkChunk(contractIds, rxcuis);
+  } catch (err) {
+    console.warn('[formularyLookup] chunk attempt 1 failed, retrying:', err);
+    return fetchBulkChunk(contractIds, rxcuis);
+  }
+}
+
 /**
  * Bulk lookup — one POST per Step 5 funnel pass spanning N contracts
  * × M rxcuis. Returns a Map keyed identically to cacheKey() and
  * populates the module-level cache so subsequent single lookups hit
  * memory.
+ *
+ * Chunks contractIds at the consumer's POST cap so plans on contracts
+ * beyond #20 don't silently miss the cache. Each chunk is independently
+ * retried once and runs in parallel via Promise.allSettled — a single
+ * chunk failure doesn't blank the other chunks' results.
  */
 export async function bulkLookupFormulary(
   contractIds: string[],
@@ -200,21 +256,21 @@ export async function bulkLookupFormulary(
   const realContracts = contractIds.filter(Boolean);
   if (realRxcuis.length === 0 || realContracts.length === 0) return out;
 
-  try {
-    const res = await fetch(`${LIBRARY_URL}/api/formulary`, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contractIds: realContracts,
-        rxcuis: realRxcuis,
-      }),
-    });
-    if (!res.ok) throw new Error(`formulary bulk ${res.status}`);
-    const body = (await res.json()) as LibraryPostResponse;
-    for (const m of body.matches ?? []) {
+  const chunks: string[][] = [];
+  for (let i = 0; i < realContracts.length; i += CONSUMER_CONTRACTIDS_CAP) {
+    chunks.push(realContracts.slice(i, i + CONSUMER_CONTRACTIDS_CAP));
+  }
+
+  const settled = await Promise.allSettled(
+    chunks.map((chunk) => fetchBulkChunkWithRetry(chunk, realRxcuis)),
+  );
+
+  for (const result of settled) {
+    if (result.status !== 'fulfilled') {
+      console.warn('[formularyLookup] chunk failed after retry:', result.reason);
+      continue;
+    }
+    for (const m of result.value.matches ?? []) {
       const hit = rowToHit(m);
       // Agent has historically keyed the cache on `contractId_planId`
       // (underscore). The endpoint returns `contractId_planId` in
@@ -223,11 +279,8 @@ export async function bulkLookupFormulary(
       out.set(key, hit);
       cache.set(key, hit);
     }
-    return out;
-  } catch (err) {
-    console.warn('[formularyLookup] bulk fetch failed:', err);
-    return out;
   }
+  return out;
 }
 
 /** Flush the cache — call from a "retry all network checks" button. */

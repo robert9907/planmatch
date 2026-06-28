@@ -136,6 +136,41 @@ export function MedsScreen({ onNext, onBack, clientView, capture }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [primeNonce]);
 
+  // Bounded re-prime safety net. If the first prime completed but every
+  // drug still has zero cache hits across every eligible plan, the bulk
+  // POST likely failed transparently (cold-start abort, network blip,
+  // chunked retries that all rejected). Without this the rows sit at
+  // "No formulary data" until a hard reload — see commit referencing
+  // bulkLookupFormulary silent-failure recurrence. One retry per
+  // primeNonce; if it stays empty after the retry, we accept the result.
+  const reprimeRef = useRef<Record<string, number>>({});
+  useEffect(() => {
+    if (formularyTick === 0) return;
+    if (eligiblePlans.length === 0 || medications.length === 0) return;
+    const rxcuis = medications
+      .map((m) => m.rxcui)
+      .filter((s): s is string => !!s);
+    if (rxcuis.length === 0) return;
+    const allDry = rxcuis.every(
+      (rxcui) =>
+        !eligiblePlans.some((p) =>
+          getCachedFormulary(`${p.contract_id}_${p.plan_number}`, rxcui),
+        ),
+    );
+    if (!allDry) return;
+    if ((reprimeRef.current[primeNonce] ?? 0) >= 1) return;
+    reprimeRef.current[primeNonce] = 1;
+    let cancelled = false;
+    const contractIds = [...new Set(eligiblePlans.map((p) => p.contract_id))];
+    bulkLookupFormulary(contractIds, rxcuis).then(() => {
+      if (!cancelled) setFormularyTick((t) => t + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formularyTick, primeNonce]);
+
   // Live pm_drug_cost_cache totals per plan. Used in the footer
   // AgentInsight to surface the absolute-best annual drug spend.
   const drugCosts = useDrugCosts(eligiblePlans, medications, 'retail');
