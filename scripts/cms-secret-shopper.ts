@@ -808,7 +808,28 @@ function diffPlan(cms: CmsScalar, pm: PmScalar, cmsBenefits?: CmsBenefitRow[], p
   out.push(moneyDiff('monthly_premium', cms.monthly_premium, pm.monthly_premium, 'RED'));
   out.push(moneyDiff('moop', cms.moop, pm.moop, 'RED'));
   out.push(moneyDiff('annual_deductible', cms.annual_deductible, pm.annual_deductible, 'RED'));
-  out.push(moneyDiff('drug_deductible', cms.drug_deductible, pm.drug_deductible, 'RED'));
+
+  // drug_deductible: CMS returns 0 for MA-only plans (PLAN_TYPE_MA, no
+  // Part D), but PM stores NULL on those plans so the has_drug_coverage
+  // flag (api/plans.ts:1083 — `row.drug_deductible !== null`) correctly
+  // reads false. Same semantics, different encoding. Coercing NULL→0
+  // in pm_plans would break that flag.
+  //
+  // Treat the (cms=0, pm=null) pair as GREEN when the plan is MA-only;
+  // for MAPD plans, any divergence is a real bug. Verified 2026-06-28
+  // against the 13 RED hits — all 13 were PLAN_TYPE_MA with no rx_tier
+  // rows in pm_plan_benefits.
+  if (cms.plan_type === 'MA' && cms.drug_deductible === 0 && pm.drug_deductible === null) {
+    out.push({
+      field: 'drug_deductible',
+      severity: 'GREEN',
+      cms: 0,
+      pm: null,
+      note: 'MA-only plan: CMS encodes 0, pm encodes NULL (no Part D)',
+    });
+  } else {
+    out.push(moneyDiff('drug_deductible', cms.drug_deductible, pm.drug_deductible, 'RED'));
+  }
 
   // ORANGE — plan_type / SNP designation
   out.push({
