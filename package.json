@@ -16,7 +16,8 @@
     "formulary:test": "tsx --test scripts/cms-spuf/parser.test.ts",
     "pbp:import": "tsx scripts/import-cms-pbp.ts",
     "pbp:test": "tsx --test scripts/cms-pbp/parser.test.ts",
-    "provider:fhir-lookup": "tsx scripts/fhir-provider-lookup.ts"
+    "provider:fhir-lookup": "tsx scripts/fhir-provider-lookup.ts",
+    "test:persona-audit": "tsx scripts/cms-secret-shopper.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",
