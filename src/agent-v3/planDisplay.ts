@@ -65,9 +65,18 @@ export function planDisplay(plan: Plan): PlanDisplay {
   const otcMonthly = Math.round(b.otc.allowance_per_quarter / 3);
   const otcText = otcMonthly > 0 ? `$${otcMonthly}/mo` : '$0/mo';
 
-  const meals = b.food_card.allowance_per_month > 0
-    ? `$${b.food_card.allowance_per_month}/mo`
-    : 'None';
+  // allowance_per_month === 1 is the importer's "offered, no
+  // Medicare.gov-published ceiling" sentinel (see commit d6a3952),
+  // not a real $1 cap. Prefer the filed description text for those
+  // rows ("Combined with OTC card above" etc.); fall back to
+  // "Included" when the row carries no description.
+  const foodMonthly = b.food_card.allowance_per_month;
+  const foodDesc = b.food_card.description?.trim();
+  const meals = foodMonthly > 1
+    ? `$${foodMonthly}/mo`
+    : foodMonthly === 1
+      ? (foodDesc || 'Included')
+      : 'None';
 
   const transport = b.transportation.rides_per_year > 0
     ? `${b.transportation.rides_per_year} trips/yr`

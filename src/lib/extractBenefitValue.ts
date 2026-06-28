@@ -318,7 +318,13 @@ export function formatOtc(structuredQuarterly: number, description: string | nul
  */
 export function formatFoodCard(structuredMonthly: number, description: string | null | undefined): string {
   if (structuredMonthly > 1) return `$${structuredMonthly}/mo`;
-  if (structuredMonthly === 1) return 'Included';
+  if (structuredMonthly === 1) {
+    // "Offered, no published ceiling" sentinel. Prefer the filed
+    // description text ("Combined with OTC card above" etc.) over the
+    // generic "Included" label.
+    const trimmed = description?.trim();
+    return trimmed || 'Included';
+  }
   const v = extractBenefitValue(description, 'food_card');
   if (v.amount != null && v.period === 'month') return `$${v.amount}/mo`;
   if (v.amount != null && v.period === 'year') return `$${Math.round(v.amount / 12)}/mo`;
