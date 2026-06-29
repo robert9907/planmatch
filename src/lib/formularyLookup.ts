@@ -201,17 +201,20 @@ export async function lookupFormulary(
 async function fetchBulkChunk(
   contractIds: string[],
   rxcuis: string[],
+  names: Record<string, string> | undefined,
 ): Promise<LibraryPostResponse> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), PER_REQUEST_TIMEOUT_MS);
   try {
+    const body: Record<string, unknown> = { contractIds, rxcuis };
+    if (names && Object.keys(names).length > 0) body.names = names;
     const res = await fetch(`${LIBRARY_URL}/api/formulary`, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ contractIds, rxcuis }),
+      body: JSON.stringify(body),
       signal: ctrl.signal,
     });
     if (!res.ok) throw new Error(`formulary bulk ${res.status}`);
@@ -227,12 +230,13 @@ async function fetchBulkChunk(
 async function fetchBulkChunkWithRetry(
   contractIds: string[],
   rxcuis: string[],
+  names: Record<string, string> | undefined,
 ): Promise<LibraryPostResponse> {
   try {
-    return await fetchBulkChunk(contractIds, rxcuis);
+    return await fetchBulkChunk(contractIds, rxcuis, names);
   } catch (err) {
     console.warn('[formularyLookup] chunk attempt 1 failed, retrying:', err);
-    return fetchBulkChunk(contractIds, rxcuis);
+    return fetchBulkChunk(contractIds, rxcuis, names);
   }
 }
 
@@ -246,15 +250,36 @@ async function fetchBulkChunkWithRetry(
  * beyond #20 don't silently miss the cache. Each chunk is independently
  * retried once and runs in parallel via Promise.allSettled — a single
  * chunk failure doesn't blank the other chunks' results.
+ *
+ * `names` is an optional rxcui → user-typed medication name map. The
+ * consumer endpoint's ingredient-stem fallback seeds its candidate-
+ * rxcui expansion from pm_drug_ndc/pm_drugs by rxcui when no `names`
+ * row is provided — that works for most drugs, but breaks down when
+ * the resolved rxcui is in pm_drugs only under a salt-laden generic
+ * label (e.g. "pramipexole dihydrochloride 1 MG Oral Tablet" rxcui
+ * 859052 vs the broker's "Pramipexole 1MG"). Passing the broker's
+ * typed name gives extractStems a brand→generic substitution chance
+ * too, so the fallback can widen to the right ingredient family even
+ * when the direct rxcui isn't on the user's eligible-contract scope.
  */
 export async function bulkLookupFormulary(
   contractIds: string[],
   rxcuis: string[],
+  names?: Record<string, string>,
 ): Promise<Map<string, FormularyHit>> {
   const out = new Map<string, FormularyHit>();
   const realRxcuis = rxcuis.filter(Boolean);
   const realContracts = contractIds.filter(Boolean);
   if (realRxcuis.length === 0 || realContracts.length === 0) return out;
+
+  // Scope the names map to the rxcuis we're actually querying — the
+  // consumer endpoint ignores entries with no corresponding rxcui in
+  // the request, but trimming keeps the wire payload tidy.
+  const scopedNames: Record<string, string> | undefined = names
+    ? Object.fromEntries(
+        Object.entries(names).filter(([k, v]) => realRxcuis.includes(k) && v.trim().length > 0),
+      )
+    : undefined;
 
   const chunks: string[][] = [];
   for (let i = 0; i < realContracts.length; i += CONSUMER_CONTRACTIDS_CAP) {
@@ -262,7 +287,7 @@ export async function bulkLookupFormulary(
   }
 
   const settled = await Promise.allSettled(
-    chunks.map((chunk) => fetchBulkChunkWithRetry(chunk, realRxcuis)),
+    chunks.map((chunk) => fetchBulkChunkWithRetry(chunk, realRxcuis, scopedNames)),
   );
 
   for (const result of settled) {

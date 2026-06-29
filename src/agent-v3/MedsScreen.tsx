@@ -127,7 +127,16 @@ export function MedsScreen({ onNext, onBack, clientView, capture }: Props) {
     lastPrimedRef.current = primeNonce;
     let cancelled = false;
     const contractIds = [...new Set(eligiblePlans.map((p) => p.contract_id))];
-    bulkLookupFormulary(contractIds, rxcuis).then(() => {
+    // rxcui → broker-typed name, threaded to the consumer endpoint's
+    // ingredient-stem fallback. Lets the fallback widen via the
+    // user's label (e.g. "Pramipexole 1MG") even when the resolved
+    // rxcui's pm_drug_ndc seed name doesn't carry the right stem.
+    const names = Object.fromEntries(
+      medications
+        .filter((m) => m.rxcui && m.name)
+        .map((m) => [m.rxcui as string, m.name]),
+    );
+    bulkLookupFormulary(contractIds, rxcuis, names).then(() => {
       if (!cancelled) setFormularyTick((t) => t + 1);
     });
     return () => {
@@ -162,7 +171,12 @@ export function MedsScreen({ onNext, onBack, clientView, capture }: Props) {
     reprimeRef.current[primeNonce] = 1;
     let cancelled = false;
     const contractIds = [...new Set(eligiblePlans.map((p) => p.contract_id))];
-    bulkLookupFormulary(contractIds, rxcuis).then(() => {
+    const names = Object.fromEntries(
+      medications
+        .filter((m) => m.rxcui && m.name)
+        .map((m) => [m.rxcui as string, m.name]),
+    );
+    bulkLookupFormulary(contractIds, rxcuis, names).then(() => {
       if (!cancelled) setFormularyTick((t) => t + 1);
     });
     return () => {
