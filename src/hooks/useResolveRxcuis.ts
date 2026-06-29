@@ -111,6 +111,17 @@ const RELEASE_RE = /\s+(?:XR|ER|CR|SR|IR|DR|XL|MR|PA|LA|SA)\b/gi;
 // brokers sometimes paste off a script.
 const DOSE_INSTR_RE =
   /\s+(?:daily|bid|tid|qid|qd|qod|qhs|prn|po|sl|im|iv|sc|hs|am|pm)\b.*$/gi;
+// Device sub-brand labels carriers/manufacturers stamp on injectable
+// or pen products — Amgen's Sureclick / Pushtronex, Novo Nordisk's
+// FlexPen / FlexTouch, Lilly's KwikPen, Sanofi's SoloStar, etc. These
+// never appear in pm_drugs.search_text (RxNorm encodes the form as
+// "Auto-Injector" / "Prefilled Syringe" / "Pen Injector") so any
+// variant carrying a sub-brand token guarantees an ilike miss. Strip
+// anywhere in the string, not just at the trailing edge — "Repatha
+// Sureclick SOLN AUTO-INJ" needs Sureclick removed from the middle
+// before progressive trailing-token strips can land on "Repatha".
+const DEVICE_SUBBRAND_RE =
+  /\b(?:Sureclick|Pushtronex|FlexPen|FlexTouch|KwikPen|SoloStar|Solostar|HumaPen|InPen|Tempo|Cyltezo|Mounjaro\s+KwikPen)\b/gi;
 
 // Trailing tokens AgentBase tacks onto ingredient names — dosage
 // forms, salt forms, release modifiers. RxNorm's IN (ingredient)
@@ -120,15 +131,19 @@ const DOSE_INSTR_RE =
 // "Diltiazem HCL ER" → "Diltiazem HCL" → "Diltiazem" each get tried.
 const TRAILING_STRIP_TOKENS: ReadonlySet<string> = new Set([
   // Dosage forms.
-  'TAB', 'CAP', 'CAPS', 'TABLET', 'CAPSULE', 'INJ', 'SOL', 'SUSP',
-  'CRM', 'OINT', 'GEL', 'PATCH', 'SPRAY',
+  'TAB', 'CAP', 'CAPS', 'TABLET', 'CAPSULE', 'INJ', 'SOL', 'SOLN',
+  'SUSP', 'CRM', 'OINT', 'GEL', 'PATCH', 'SPRAY',
+  'PEN', 'SYRINGE', 'PFS', 'VIAL', 'KIT', 'AUTOINJ', 'INJECTOR',
+  // "AUTO-INJ" arrives as a hyphenated combo and hyphen-expansion
+  // splits it into "AUTO INJ" — both tokens need to be strippable.
+  'AUTO',
   // Salt forms.
   'HCL', 'HBR', 'SODIUM', 'POTASSIUM', 'SULFATE', 'SUCCINATE',
   'MALEATE', 'BESYLATE', 'MESYLATE', 'FUMARATE', 'TARTRATE',
   'CITRATE', 'ACETATE', 'PHOSPHATE',
   'CALCIUM', 'CHLORIDE', 'BROMIDE', 'CARBONATE', 'OXIDE',
   'GLUCONATE', 'STEARATE', 'NITRATE', 'BITARTRATE', 'MALATE',
-  'HYDROCHLORIDE', 'HYDROBROMIDE',
+  'HYDROCHLORIDE', 'HYDROBROMIDE', 'DIHYDROCHLORIDE',
   // Release-form modifiers (overlap with RELEASE_RE, which strips
   // mid-name; this set covers the iterative end-of-name case).
   'ER', 'XR', 'XL', 'SR', 'CR', 'DR', 'IR', 'LA', 'SA', 'CD',
@@ -170,6 +185,16 @@ function buildNameVariants(rawName: string): string[] {
 
   const name = rawName.trim();
   add(name);
+
+  // Device sub-brand strip — "Repatha Sureclick SOLN AUTO-INJ" →
+  // "Repatha SOLN AUTO-INJ". Runs before parenthetical split so a
+  // generic-inside-parens still gets the sub-brand removed from its
+  // brand counterpart. DEVICE_SUBBRAND_RE matches anywhere in the
+  // string so mid-name tokens (Sureclick / FlexPen / KwikPen) lift
+  // cleanly; trailing tokens like "AUTO-INJ" still come off via the
+  // progressive-trailing pass below.
+  const noSubbrand = name.replace(DEVICE_SUBBRAND_RE, ' ').replace(/\s+/g, ' ').trim();
+  if (noSubbrand !== name) add(noSubbrand);
 
   // Parenthetical: "Synthroid (Levothyroxine)" → variants in this
   // order: ["Levothyroxine", "Synthroid"]. AgentBase's convention is
