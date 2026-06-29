@@ -268,11 +268,34 @@ function parseStrengthMg(raw: string): number | null {
   return v;
 }
 
+// Detect the unit the broker actually typed, separately from the
+// MG-normalized value. Drives the MG↔MCG flip retry in pickBest for
+// the broker-typo case (e.g. "Fluoxetine 40 MCG" filed against a drug
+// only dosed in MG — RxNorm has fluoxetine 10/20/40/60 MG, never MCG).
+function parseStrengthUnit(raw: string): 'MG' | 'MCG' | 'G' | 'ML' | '%' | null {
+  const m = raw.match(/(\d+(?:\.\d+)?)\s*(MG|MCG|G|ML|%)/i);
+  if (!m) return null;
+  return m[2].toUpperCase() as 'MG' | 'MCG' | 'G' | 'ML' | '%';
+}
+
 // Pick the best candidate from a search-result list. When a strength
 // is supplied, prefer the first candidate whose name parses to the
 // same numeric strength; fall back to the raw [0] when no candidate
 // matches (search returned nothing strength-relevant — better to
 // resolve to something than nothing).
+//
+// MG↔MCG flip retry: brokers occasionally type "mcg" when they mean
+// "mg" (and vice versa) — e.g. "Fluoxetine HCL CAP 40mcg" when
+// fluoxetine is only dosed in 10/20/40/60 MG. With the typo as-typed,
+// pickBest finds no 0.04 MG candidate and falls back to results[0]
+// (the 60 MG tablet) — the meds row then renders "Covered on 5/84
+// plans" because the 60 MG strength is the rare one. Before falling
+// back, retry the strength comparison with the value multiplied (or
+// divided) by 1000 to see whether the candidates land at the
+// unit-flipped value. Only triggers when the as-typed strength
+// matched zero candidates AND the flipped value matches at least
+// one, so it never overrides a legitimate MCG dose (levothyroxine
+// 50 MCG → 0.05 MG hits an existing 0.05 MG candidate directly).
 function pickBest(results: RxNormDrug[], rawStrength: string): RxNormDrug | null {
   if (results.length === 0) return null;
   const target = parseStrengthMg(rawStrength);
@@ -282,5 +305,18 @@ function pickBest(results: RxNormDrug[], rawStrength: string): RxNormDrug | null
     if (s == null) return false;
     return Math.abs(s - target) < 0.0001;
   });
-  return strengthMatch ?? results[0];
+  if (strengthMatch) return strengthMatch;
+
+  const inputUnit = parseStrengthUnit(rawStrength);
+  if (inputUnit === 'MCG' || inputUnit === 'MG') {
+    const altTarget = inputUnit === 'MCG' ? target * 1000 : target / 1000;
+    const altMatch = results.find((r) => {
+      const s = parseStrengthMg(r.name);
+      if (s == null) return false;
+      return Math.abs(s - altTarget) < 0.0001;
+    });
+    if (altMatch) return altMatch;
+  }
+
+  return results[0];
 }
