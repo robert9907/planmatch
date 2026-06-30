@@ -15,7 +15,6 @@
 // to the existing compliance → enroll funnel.
 
 import {
-  Fragment,
   useMemo,
   useState,
   type CSSProperties,
@@ -23,6 +22,8 @@ import {
 } from 'react';
 import type { CostShare, Plan } from '@/types/plans';
 import { useSession } from '@/hooks/useSession';
+import { useBenchFilters } from './hooks/useBenchFilters';
+import { BenchFilterBar } from './components/compare/BenchFilterBar';
 import {
   firstTierCopay,
   formatInpatientLadder,
@@ -1126,21 +1127,6 @@ const RIBBON_STYLE: Record<string, { label: string; bg: string; color: string }>
   ALL_DOCS_IN_NETWORK: { label: 'All Docs', bg: '#5eead4', color: '#134e4a' },
 };
 
-// Two filter groups on the bench, both mutually exclusive within
-// themselves but `zero` (premium = $0) layers on top of any plan-type
-// filter. Plan-type filters split between "structure" (hmo / ppo) and
-// "category" (dsnp / csnp / va). The structure pills share the navy
-// active treatment of the existing pills; the category pills get a
-// teal active treatment so the broker can tell at a glance that the
-// row is filtering on "what kind of plan" not "what network shape."
-//   dsnp → snp_type === 'D-SNP'
-//   csnp → snp_type === 'C-SNP'
-//   va   → MA-only (no Part D bundled, i.e. !has_drug_coverage). Named
-//          for the veterans who get Rx through VA pharmacy and only
-//          need medical coverage; the actual landscape rows include
-//          USAA Honor, Eagle, Patriot, Courage, "MA ONLY" plans.
-type BenchFilter = 'all' | 'hmo' | 'ppo' | 'zero' | 'dsnp' | 'csnp' | 'va';
-
 function Bench({
   bench,
   baseline,
@@ -1165,35 +1151,23 @@ function Bench({
   onAddToBoard: (plan: Plan) => void;
   onOpenH2H: (plan: Plan) => void;
 }) {
-  const [filter, setFilter] = useState<BenchFilter>('all');
+  // Multi-dimensional filter engine. Replaces the legacy single-axis
+  // chip row (All / HMO / PPO / $0 / D-SNP / C-SNP / VA) with five
+  // multi-selects, a search input, and a sort dropdown. VA stays
+  // reachable via the SNP dropdown ('VA' option → MA-only plans).
+  // Audit reachable from the browser console as `filters.audit()`
+  // for unmapped network / carrier rows.
+  const filters = useBenchFilters(bench, {
+    annualDrugByPlanId,
+    selectedProviderCount: providers.length,
+  });
 
-  const filtered = useMemo(() => {
-    return bench.filter((p) => {
-      if (filter === 'all') return true;
-      // plan_shape is the raw landscape plan_type ("HMO" / "Local PPO" /
-      // "Regional PPO" / "HMOPOS" / "PFFS" / "PDP" / "MSA" / "Cost").
-      // p.plan_type is the bucketed app enum (MA / MAPD / DSNP / ...)
-      // and never contains "HMO"/"PPO", so it can't be used here —
-      // HMOPOS matches HMO via substring (point-of-service HMOs are
-      // still HMO-shaped network-wise, which is what the broker filter
-      // means).
-      const shape = (p.plan_shape ?? '').toUpperCase();
-      if (filter === 'hmo') return shape.includes('HMO');
-      if (filter === 'ppo') return shape.includes('PPO');
-      if (filter === 'zero') return p.premium === 0;
-      // The API exposes the raw landscape snp_type ("D-SNP" / "C-SNP" /
-      // "I-SNP" / null); plan_type buckets them differently (DSNP /
-      // CSNP / ISNP) but the raw column is the source of truth and
-      // matches exactly what the broker reads on screen.
-      if (filter === 'dsnp') return p.snp_type === 'D-SNP';
-      if (filter === 'csnp') return p.snp_type === 'C-SNP';
-      // VA = MA-only (no Part D bundled). drug_deductible IS NULL is
-      // the landscape signal — verified against pbp_benefits (no
-      // rx_tier rows when has_drug_coverage is false).
-      if (filter === 'va') return !p.has_drug_coverage;
-      return true;
-    });
-  }, [bench, filter]);
+  // Bridge to legacy filters debugging — exposes the hook result on the
+  // window so Rob can run `filters.audit()` from devtools without
+  // touching React internals. Cleared when the component unmounts.
+  if (typeof window !== 'undefined') {
+    (window as unknown as { __benchFilters?: typeof filters }).__benchFilters = filters;
+  }
 
   if (bench.length === 0) {
     return (
@@ -1215,114 +1189,18 @@ function Bench({
 
   return (
     <div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: 8,
-          gap: 12,
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span
-            style={{
-              fontFamily: FONT_LABEL,
-              fontSize: 10,
-              fontWeight: 700,
-              color: NAVY,
-              textTransform: 'uppercase',
-              letterSpacing: 0.8,
-            }}
-          >
-            Bench — plans not on the board
-          </span>
-          <span
-            style={{
-              background: NAVY,
-              color: SEAFOAM,
-              fontFamily: FONT_NUM,
-              fontSize: 10,
-              fontWeight: 700,
-              padding: '2px 7px',
-              borderRadius: 10,
-            }}
-          >
-            {filter === 'all' ? bench.length : `${filtered.length}/${bench.length}`}
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-          {/* Group 1: structure filters (navy active) — plan_type shape. */}
-          {([
-            ['all', 'All', 'structure'],
-            ['hmo', 'HMO', 'structure'],
-            ['ppo', 'PPO', 'structure'],
-            ['zero', '$0 only', 'structure'],
-            // Vertical divider between the structure and category groups.
-            // Category pills filter on snp_type / has_drug_coverage and
-            // get a teal active treatment so the broker reads the row
-            // as two distinct facets rather than one giant pile.
-            ['dsnp', 'D-SNP', 'category'],
-            ['csnp', 'C-SNP', 'category'],
-            ['va', 'VA', 'category'],
-          ] as Array<[BenchFilter, string, 'structure' | 'category']>).map(
-            ([key, label, group], idx, arr) => {
-              const active = filter === key;
-              const isCategory = group === 'category';
-              const activeBg = isCategory ? TEAL : NAVY;
-              const inactiveColor = isCategory ? TEAL : NAVY;
-              const prevGroup = idx > 0 ? arr[idx - 1][2] : group;
-              const showDivider = idx > 0 && prevGroup !== group;
-              return (
-                <Fragment key={key}>
-                  {showDivider && (
-                    <span
-                      aria-hidden="true"
-                      style={{
-                        display: 'inline-block',
-                        width: 1,
-                        height: 16,
-                        background: BORDER,
-                        margin: '0 4px',
-                      }}
-                    />
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setFilter(key)}
-                    style={{
-                      background: active ? activeBg : 'white',
-                      color: active ? 'white' : inactiveColor,
-                      border: `1px solid ${active ? activeBg : BORDER}`,
-                      borderRadius: 14,
-                      padding: '4px 10px',
-                      fontFamily: FONT_LABEL,
-                      fontSize: 10,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      letterSpacing: 0.3,
-                    }}
-                  >
-                    {label}
-                  </button>
-                </Fragment>
-              );
-            },
-          )}
-        </div>
-      </div>
+      <BenchFilterBar filters={filters} />
 
       <div
         style={{
           display: 'flex',
           gap: 12,
           overflowX: 'auto',
-          padding: '4px 2px 12px',
+          padding: '12px 2px 12px',
           scrollSnapType: 'x mandatory',
         }}
       >
-        {filtered.length === 0 ? (
+        {filters.filtered.length === 0 ? (
           <div
             style={{
               fontFamily: FONT_LABEL,
@@ -1335,13 +1213,13 @@ function Bench({
               flex: 1,
             }}
           >
-            No bench plans match this filter.
+            No bench plans match these filters.
           </div>
         ) : (
-          filtered.map((p) => (
+          filters.filtered.map((p) => (
             <BenchCard
               key={p.id}
-              plan={p}
+              plan={p._raw}
               baseline={baseline}
               annualDrugByPlanId={annualDrugByPlanId}
               ribbon={ribbonByPlanId[p.id] ?? null}
