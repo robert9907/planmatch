@@ -105,14 +105,17 @@ export async function fetchPlansByIds(ids: string[]): Promise<Plan[]> {
   return fetchPlansForClient({ state: null, county: '', planType: null, ids });
 }
 
-// Medicare.gov Plan Compare deep-link fallback — mirrors api/plans.ts
-// planFinderUrl() so older /api/plans builds that don't return sbf_url
-// still produce a working link client-side. Keep PLAN_YEAR in sync.
+// Summary-of-Benefits fallback — mirrors api/plans.ts planFinderUrl()
+// so older /api/plans builds that don't return sbf_url still produce
+// a working link client-side. See api/plans.ts for why this points at
+// a Google search instead of a medicare.gov deep-link. Keep PLAN_YEAR
+// in sync.
 const PLAN_YEAR = 2026;
 function fallbackSbfUrl(id: string): string {
   const [contractId, planId, segmentId] = id.split('-');
   const seg = (segmentId ?? '000').padStart(3, '0');
-  return `https://www.medicare.gov/plan-compare/#/plan-details/${PLAN_YEAR}/${contractId}-${planId}-${seg}?lang=en`;
+  const q = `"${contractId}-${planId}-${seg}" "Summary of Benefits" ${PLAN_YEAR} filetype:pdf`;
+  return `https://www.google.com/search?q=${encodeURIComponent(q)}`;
 }
 
 function toPlan(p: ApiPlan): Plan {

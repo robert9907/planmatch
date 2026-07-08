@@ -193,15 +193,26 @@ interface PbpRichRow extends PbpBenefitRow {
 // the query and the lookup use the same canonical key — pbp data is
 // uniform per (contract, plan) regardless of segment, so collapsing
 // the segment is safe.
-// Medicare.gov Plan Compare deep-link to the plan's Summary of
-// Benefits page. The route uses the 3-part triple with the segment
-// zero-padded to 3 chars (matches pm_plans.id format). 2026 is the
-// active plan year — bump the literal at the next OEP cutover.
+// Broker-facing Summary of Benefits link. Historically pointed at
+// medicare.gov's /plan-compare/ SPA (#/plan-details/{year}/{triple}),
+// but that route stopped working in CY2026 — the SPA migrated from
+// HashRouter to BrowserRouter, so hash routes silently drop callers
+// on the plan-finder homepage. The replacement path form
+// /plan-details/{year}-{triple} also 404s from external navigation
+// because the server doesn't rewrite unknown paths to the SPA shell,
+// and CMS doesn't host SoB PDFs directly (carrier SoBs live on carrier
+// CDNs like content.medicareadvantage.com under unpredictable
+// filenames — verified against the /plan-compare/ bundle's route
+// table + the CMS document library).
 //
-// Verified shape against medicare.gov live URLs (e.g.
-// https://www.medicare.gov/plan-compare/#/plan-details/2026/H5253-041-000?lang=en
-// for UHC Dual Complete NC). The fragment-based route (`/#/`) is
-// required — without it the page 302s back to the plan search.
+// So we lean on Google: search for the CMS triple + "Summary of
+// Benefits" + year, filtered to PDFs. First result is reliably the
+// exact carrier-filed SoB (verified live: query
+// `"H1036-307-000" "Summary of Benefits" 2026 filetype:pdf` returns
+// content.medicareadvantage.com/2026/Humana-H1036307000SB26pdf-…pdf
+// as result #1). Broker still gets to the real document in one click.
+//
+// PLAN_YEAR is baked into the query. Bump at the next OEP cutover.
 const PLAN_YEAR = 2026;
 function planFinderUrl(
   contractId: string,
@@ -209,7 +220,8 @@ function planFinderUrl(
   segmentId: string | null | undefined,
 ): string {
   const seg = (segmentId ?? '000').padStart(3, '0');
-  return `https://www.medicare.gov/plan-compare/#/plan-details/${PLAN_YEAR}/${contractId}-${planId}-${seg}?lang=en`;
+  const q = `"${contractId}-${planId}-${seg}" "Summary of Benefits" ${PLAN_YEAR} filetype:pdf`;
+  return `https://www.google.com/search?q=${encodeURIComponent(q)}`;
 }
 
 function normalizePbpKey(planId: string): string {

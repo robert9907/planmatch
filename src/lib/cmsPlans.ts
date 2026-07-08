@@ -111,14 +111,16 @@ type PlanOverride = Omit<Partial<Plan>, 'benefits'> &
     benefits?: Partial<Plan['benefits']>;
   };
 
-// Medicare.gov Plan Compare deep-link — mirrors api/plans.ts
-// planFinderUrl() so static-fallback plans still surface a working SBF
-// link in the agent UI during a Supabase outage.
+// Summary-of-Benefits link — mirrors api/plans.ts planFinderUrl() so
+// static-fallback plans still surface a working SBF link during a
+// Supabase outage. See api/plans.ts for why this points at a Google
+// search instead of a medicare.gov deep-link.
 const PLAN_YEAR = 2026;
 function sbfUrlFromId(id: string): string {
   const [contractId, planId, segmentId] = id.split('-');
   const seg = (segmentId ?? '000').padStart(3, '0');
-  return `https://www.medicare.gov/plan-compare/#/plan-details/${PLAN_YEAR}/${contractId}-${planId}-${seg}?lang=en`;
+  const q = `"${contractId}-${planId}-${seg}" "Summary of Benefits" ${PLAN_YEAR} filetype:pdf`;
+  return `https://www.google.com/search?q=${encodeURIComponent(q)}`;
 }
 
 function p(override: PlanOverride): Plan {
