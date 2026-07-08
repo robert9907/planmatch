@@ -113,6 +113,25 @@ export interface SyncInput {
     brainArchetype?: string;
     estimatedAnnualCost?: number;
   } | null;
+  /** Optional CRM health-profile snapshot. Populated on syncs that
+   *  fire after the broker completes the AgentBase Health Intake — the
+   *  caller passes the CRM's client_health_profiles row (fetched via
+   *  /api/client-health-profile) so the /api/agentbase-recommend
+   *  endpoint can upsert it back into the CRM Supabase's
+   *  client_health_profiles table with synced_to_planmatch_at set. */
+  healthContext?: {
+    conditions: string[];
+    family_history: Record<string, string[]>;
+    lifestyle: Record<string, unknown>;
+    utilization: Record<string, unknown>;
+    complexity_scores: Record<string, number>;
+    risk_flags: Array<{
+      level: string;
+      cat: string;
+      text: string;
+      actions: string[];
+    }>;
+  } | null;
 }
 
 const RETRY_DELAY_MS = 2_000;
@@ -219,6 +238,7 @@ export function useAgentBaseRecommend() {
       client_id: input.agentbaseClientId ?? undefined,
       compliance: input.compliance ?? undefined,
       session_summary: input.sessionSummary ?? undefined,
+      health_profile: input.healthContext ?? undefined,
     };
   }, []);
 

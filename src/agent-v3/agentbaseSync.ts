@@ -57,6 +57,12 @@ interface BuildArgs {
   compliance?: SyncInput['compliance'];
   /** Optional session summary for the activity log. */
   sessionSummary?: SyncInput['sessionSummary'];
+  /** Optional CRM health-profile snapshot — passed straight through to
+   *  the endpoint so it can upsert client_health_profiles with
+   *  synced_to_planmatch_at set. Callers hydrate this from the CRM's
+   *  /api/client-health-profile GET when the deep-link carried a
+   *  clientId; absent otherwise (endpoint no-ops the write). */
+  healthContext?: SyncInput['healthContext'];
 }
 
 export function buildAgentV3SyncInput(args: BuildArgs): SyncInput | null {
@@ -71,6 +77,7 @@ export function buildAgentV3SyncInput(args: BuildArgs): SyncInput | null {
     agentbaseClientId,
     compliance,
     sessionSummary,
+    healthContext,
   } = args;
   if (!brainResult) return null;
   const recommendedScored = brainResult.scored.find((s) => s.plan.id === plan.id);
@@ -116,5 +123,6 @@ export function buildAgentV3SyncInput(args: BuildArgs): SyncInput | null {
     agentbaseClientId: agentbaseClientId ?? null,
     compliance: compliance ?? null,
     sessionSummary: sessionSummary ?? null,
+    healthContext: healthContext ?? null,
   };
 }

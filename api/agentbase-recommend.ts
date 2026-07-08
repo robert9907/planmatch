@@ -95,6 +95,18 @@ interface RecommendBody {
     specialty: string | null;
     network_status: 'in' | 'out' | 'unknown';
   }>;
+  /** Optional CRM health-profile snapshot. When present, the handler
+   *  upserts client_health_profiles for this client and stamps
+   *  synced_to_planmatch_at. Absent === no health data yet; the write
+   *  branch no-ops. */
+  health_profile?: {
+    conditions: string[];
+    family_history: Record<string, string[]>;
+    lifestyle: Record<string, unknown>;
+    utilization: Record<string, unknown>;
+    complexity_scores: Record<string, number>;
+    risk_flags: Array<{ level: string; cat: string; text: string; actions: string[] }>;
+  };
   /** Plan Brain snapshot — stored as JSON via the webhook side, not
    *  the direct write. We accept it here so the single endpoint can
    *  fan out both writes from one client request. */
@@ -734,6 +746,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         client_id: clientId,
         message: (provErr as Error).message,
       });
+    }
+
+    // ─── Health Profile sync ─────────────────────────────────────
+    // Independent try/catch, same shape as the meds/providers
+    // branches. Absent health_profile === no-op. Uses the same `sb`
+    // client (Supabase service-role) as the meds/providers upserts;
+    // client_health_profiles has a UNIQUE(client_id) index so
+    // onConflict='client_id' is the correct upsert key.
+    if (fullBody.health_profile) {
+      try {
+        const { error: hpError } = await sb
+          .from('client_health_profiles')
+          .upsert({
+            client_id: clientId,
+            conditions: fullBody.health_profile.conditions,
+            family_history: fullBody.health_profile.family_history,
+            lifestyle: fullBody.health_profile.lifestyle,
+            utilization: fullBody.health_profile.utilization,
+            complexity_scores: fullBody.health_profile.complexity_scores,
+            risk_flags: fullBody.health_profile.risk_flags,
+            synced_to_planmatch_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'client_id' });
+        if (hpError) {
+          console.error('[recommend] health profile sync failed', {
+            client_id: clientId,
+            code: hpError.code,
+            message: hpError.message,
+          });
+        } else {
+          console.log('[recommend] health profile synced', { client_id: clientId });
+        }
+      } catch (hpErr) {
+        console.error('[recommend] health profile branch aborted', {
+          client_id: clientId,
+          message: (hpErr as Error).message,
+        });
+      }
     }
 
     // ─── Activity log row (CMS audit trail) ──────────────────────
