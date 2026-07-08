@@ -971,7 +971,7 @@ export function AgentV3App() {
     const idParam = getClientIdParam();
     const agentbaseClientId =
       idParam && /^\d+$/.test(idParam) ? Number(idParam) : null;
-    const input = buildAgentV3SyncInput({
+    const input = await buildAgentV3SyncInput({
       plan,
       client,
       medications,

@@ -65,7 +65,7 @@ interface BuildArgs {
   healthContext?: SyncInput['healthContext'];
 }
 
-export function buildAgentV3SyncInput(args: BuildArgs): SyncInput | null {
+export async function buildAgentV3SyncInput(args: BuildArgs): Promise<SyncInput | null> {
   const {
     plan,
     client,
@@ -77,7 +77,7 @@ export function buildAgentV3SyncInput(args: BuildArgs): SyncInput | null {
     agentbaseClientId,
     compliance,
     sessionSummary,
-    healthContext,
+    healthContext: providedHealthContext,
   } = args;
   if (!brainResult) return null;
   const recommendedScored = brainResult.scored.find((s) => s.plan.id === plan.id);
@@ -107,6 +107,39 @@ export function buildAgentV3SyncInput(args: BuildArgs): SyncInput | null {
     network_status: providerNetworkStatus(p, plan.id),
   }));
 
+  // Pull the CRM's health profile via the same-origin proxy endpoint
+  // (server-side reads client_health_profiles from the CRM Supabase
+  // using agentbaseSupabase — see api/agentbase-health-profile.ts).
+  // Same-origin so the browser doesn't CORS-block against
+  // agentbase-crm.vercel.app. Caller-provided healthContext wins if
+  // present — that path is reserved for future flows that hydrate
+  // health data alongside the session, so a re-fetch here would be
+  // wasted. Fires only when agentbaseClientId is known (deep-linked
+  // flow); anonymous sessions have no CRM row to read.
+  let healthContext: SyncInput['healthContext'] = providedHealthContext ?? null;
+  if (!healthContext && agentbaseClientId != null) {
+    try {
+      const hpRes = await fetch(
+        `/api/agentbase-health-profile?client_id=${agentbaseClientId}`,
+      );
+      if (hpRes.ok) {
+        const hpData = await hpRes.json();
+        if (hpData?.profile) {
+          healthContext = {
+            conditions: hpData.profile.conditions ?? [],
+            family_history: hpData.profile.family_history ?? {},
+            lifestyle: hpData.profile.lifestyle ?? {},
+            utilization: hpData.profile.utilization ?? {},
+            complexity_scores: hpData.profile.complexity_scores ?? {},
+            risk_flags: hpData.profile.risk_flags ?? [],
+          };
+        }
+      }
+    } catch (e) {
+      console.error('[agentbaseSync] health profile fetch failed:', e);
+    }
+  }
+
   return {
     client,
     sessionId,
@@ -123,6 +156,6 @@ export function buildAgentV3SyncInput(args: BuildArgs): SyncInput | null {
     agentbaseClientId: agentbaseClientId ?? null,
     compliance: compliance ?? null,
     sessionSummary: sessionSummary ?? null,
-    healthContext: healthContext ?? null,
+    healthContext,
   };
 }
