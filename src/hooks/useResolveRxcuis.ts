@@ -171,7 +171,7 @@ function progressiveTrailingStrips(name: string): string[] {
   return out;
 }
 
-function buildNameVariants(rawName: string): string[] {
+export function buildNameVariants(rawName: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   const add = (s: string): void => {

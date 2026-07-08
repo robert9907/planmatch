@@ -31,7 +31,7 @@
 //     navigation lands so we can decide whether to keep the v4
 //     implementation as-is or restyle.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
 import { useDrugCosts } from '@/hooks/useDrugCosts';
 import { useDrugSearch } from '@/hooks/useDrugSearch';
@@ -83,6 +83,23 @@ export function MedsScreen({ onNext, onBack, clientView, capture }: Props) {
   const medications = useSession((s) => s.medications);
   const addMedication = useSession((s) => s.addMedication);
   const removeMedication = useSession((s) => s.removeMedication);
+
+  // Pre-fill for the AddMedPanel search input. Set when the broker
+  // taps the yellow "couldn't match" warning on an unresolved
+  // AgentBase-hydrated row — pre-fills the raw broker-typed name and
+  // scrolls the search into view so a re-pick is one click away.
+  const [presetQuery, setPresetQuery] = useState<string | null>(null);
+  const addPanelRef = useRef<HTMLDivElement>(null);
+  const handleRepick = (med: Medication) => {
+    setPresetQuery(med.originalName || med.name);
+    // Remove the unresolved row so a successful re-pick doesn't leave
+    // a stale "couldn't match" card below the new resolved one.
+    removeMedication(med.id);
+    addPanelRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    });
+  };
 
   // Eligible plan set drives the formulary prime + the live total
   // drug-cost lookup. planType is null so the prime covers the full
@@ -221,6 +238,9 @@ export function MedsScreen({ onNext, onBack, clientView, capture }: Props) {
       <SnapInbox capture={capture} accept="medication" />
 
       <AddMedPanel
+        panelRef={addPanelRef}
+        presetQuery={presetQuery}
+        onPresetConsumed={() => setPresetQuery(null)}
         excludeRxcuis={medications
           .map((m) => m.rxcui)
           .filter((r): r is string => !!r)}
@@ -258,6 +278,7 @@ export function MedsScreen({ onNext, onBack, clientView, capture }: Props) {
             plans={eligiblePlans}
             tick={formularyTick}
             onRemove={() => removeMedication(med.id)}
+            onRepick={() => handleRepick(med)}
           />
         ))
       )}
@@ -412,12 +433,14 @@ function MedRow({
   plans,
   tick,
   onRemove,
+  onRepick,
 }: {
   med: Medication;
   index: number;
   plans: Plan[];
   tick: number;
   onRemove: () => void;
+  onRepick: () => void;
 }) {
   const stats = useMemo(() => perDrugBest(med, plans, tick), [med, plans, tick]);
   const tierForIcon = stats.bestTier ?? 0;
@@ -490,9 +513,33 @@ function MedRow({
       </button>
       <div style={{ textAlign: 'right', minWidth: 95 }}>
         {!med.rxcui ? (
-          <div style={{ fontSize: 10, color: '#a32d2d', fontWeight: 600 }}>
-            No RxNorm match
-          </div>
+          // Yellow "couldn't match to formulary" warning. Tap fires
+          // onRepick, which pre-fills the AddMedPanel search with the
+          // original broker-typed name so a re-search is one click.
+          // The row itself gets removed on repick so a successful
+          // re-pick doesn't leave the stale warning row below the new
+          // resolved card.
+          <button
+            type="button"
+            onClick={onRepick}
+            aria-label={`Re-search ${med.originalName || med.name}`}
+            style={{
+              background: '#fef3c7',
+              border: '1px solid #f59e0b',
+              borderRadius: 8,
+              padding: '6px 8px',
+              cursor: 'pointer',
+              textAlign: 'right',
+              lineHeight: 1.25,
+            }}
+          >
+            <div style={{ fontSize: 10, color: '#92400e', fontWeight: 700 }}>
+              Could not match to formulary
+            </div>
+            <div style={{ fontSize: 9, color: '#b45309', fontWeight: 600 }}>
+              tap to re-search
+            </div>
+          </button>
         ) : !stats.ready ? (
           timedOut ? (
             <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600 }}>
@@ -540,6 +587,9 @@ function MedRow({
 function AddMedPanel({
   excludeRxcuis,
   onAdd,
+  panelRef,
+  presetQuery,
+  onPresetConsumed,
 }: {
   excludeRxcuis: readonly string[];
   onAdd: (r: {
@@ -548,11 +598,27 @@ function AddMedPanel({
     strength: string | null;
     dose_form: string | null;
   }) => void;
+  panelRef?: RefObject<HTMLDivElement>;
+  presetQuery?: string | null;
+  onPresetConsumed?: () => void;
 }) {
   const [query, setQuery] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
   const search = useDrugSearch(query, excludeRxcuis);
 
+  // Sync presetQuery → local input state. Fires when the broker taps
+  // a yellow "couldn't match" warning on an unresolved med row.
+  // Consumes the preset immediately so a subsequent manual clear
+  // doesn't get overridden if the parent hasn't updated state yet.
+  useEffect(() => {
+    if (presetQuery == null) return;
+    setQuery(presetQuery);
+    inputRef.current?.focus();
+    onPresetConsumed?.();
+  }, [presetQuery, onPresetConsumed]);
+
   return (
+    <div ref={panelRef}>
     <Card style={{ marginBottom: 12, padding: '16px 20px' }}>
       <label
         style={{
@@ -568,6 +634,7 @@ function AddMedPanel({
         Add medication
       </label>
       <input
+        ref={inputRef}
         type="text"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -660,5 +727,6 @@ function AddMedPanel({
         </ul>
       )}
     </Card>
+    </div>
   );
 }

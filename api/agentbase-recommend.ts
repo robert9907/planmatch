@@ -77,8 +77,10 @@ interface RecommendBody {
     rxcui: string | null;
     dose?: string | null;
     /** Dose form parsed from the RxNorm display string ("Oral Capsule",
-     *  "Pen Injector"). Currently dropped at the structured write —
-     *  reserved for a future client_medications.form column. */
+     *  "Pen Injector"). Written to client_medications.form (migration
+     *  032 added the column). Round-trips back through
+     *  loadClientSession → agent-v3 hydration so a subsequent quote
+     *  starts with the form pre-filled. */
     form?: string | null;
     frequency?: string | null;
     /** "30" or "90" — drives client_medications.refill_days. */
@@ -497,6 +499,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const patch = {
             name: m.name,
             dose: m.dose ?? null,
+            form: m.form ?? null,
             frequency: m.frequency ?? null,
             rxcui: m.rxcui ?? null,
             refill_days: m.refill_days ?? null,

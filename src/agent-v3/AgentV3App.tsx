@@ -46,6 +46,7 @@ import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
 import { useScreenShareStore } from '@/hooks/useScreenShare';
 import { fetchClientSession } from '@/lib/agentbase';
+import { resolveAgentBaseDrugs } from '@/lib/resolveAgentBaseDrugs';
 import { bulkLookupFormulary } from '@/lib/formularyLookup';
 import { fetchPlansForClient } from '@/lib/planCatalog';
 import { totalComplianceItems } from '@/lib/compliance';
@@ -352,34 +353,53 @@ export function AgentV3App() {
       // surface that mode the way v4 does.
       if (c.plan_id) store.setCurrentPlanId(c.plan_id);
 
-      for (const m of detail.medications) {
-        if (!m.name.trim()) continue;
+      const parseDigit = (s: string | null | undefined): number | undefined => {
+        if (!s) return undefined;
+        const n = parseInt(String(s).replace(/[^0-9]/g, ''), 10);
+        return Number.isFinite(n) ? n : undefined;
+      };
+      const rawMeds = detail.medications.filter((m) => m.name.trim());
+      // Pre-resolve every AgentBase drug against /api/library/drug-search
+      // BEFORE the meds land in the store. CRM rows arrive as free-text
+      // ("Atorvastatin Calcium TAB 20MG") with no rxcui — resolving in
+      // place means the MedsScreen paints canonical names + tier badges
+      // on first render instead of flashing "No RxNorm match" while
+      // useResolveRxcuis catches up asynchronously.
+      const resolvedMeds = await resolveAgentBaseDrugs(
+        rawMeds.map((m) => ({
+          name: m.name,
+          dose: m.dose || undefined,
+          form: m.form || undefined,
+          rxcui: m.rxcui || undefined,
+        })),
+        ctl.signal,
+      );
+      if (ctl.signal.aborted) return;
+      for (let i = 0; i < rawMeds.length; i++) {
+        const m = rawMeds[i];
+        const r = resolvedMeds[i];
         // Parse tier and refillDays from the AgentBase text columns
         // into the numeric Medication shape. Tier carries "Tier N" today
         // and (post-migration) just "N" — both produce a clean digit
         // here. refill_days is always a numeric string. NaN falls back
         // to undefined so we don't pollute the store with bad values.
-        const parseDigit = (s: string | null | undefined): number | undefined => {
-          if (!s) return undefined;
-          const n = parseInt(String(s).replace(/[^0-9]/g, ''), 10);
-          return Number.isFinite(n) ? n : undefined;
-        };
         store.addMedication({
-          name: m.name,
-          rxcui: m.rxcui || undefined,
-          dose: m.dose || undefined,
+          name: r.canonicalName,
+          originalName: r.originalName,
+          rxcui: r.rxcui ?? undefined,
+          dose: r.dose ?? undefined,
+          form: r.form ?? undefined,
           frequency: m.frequency || undefined,
           tier: parseDigit(m.tier),
           quantity: m.quantity || undefined,
           refillDays: parseDigit(m.refill_days),
           // Phase 4: form + broker-entry context now round-trip
           // through the store.
-          form: m.form || undefined,
           pharmacyId: m.pharmacy_id ?? undefined,
           refillDate: m.refill_date || undefined,
           notes: m.notes || undefined,
           source: 'agentbase',
-          confidence: 'high',
+          confidence: r.resolved ? 'high' : 'low',
         });
       }
       for (const p of detail.providers) {

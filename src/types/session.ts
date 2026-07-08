@@ -47,6 +47,11 @@ export interface Medication {
   id: string;
   rxcui?: string;
   name: string;
+  /** Original free-text drug name as it arrived from an external
+   *  source (CRM row, photo capture OCR). Preserved so the agent can
+   *  see what was filed and re-search from that starting point when
+   *  the RxNorm resolver couldn't map it to a canonical drug. */
+  originalName?: string;
   // Canonical-type alignment. Currently not populated by Agent A's
   // hydration path (CRM only stores `name`); kept for the brain
   // input rule `name: m.genericName ?? m.name`, which is a no-op
