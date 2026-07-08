@@ -160,6 +160,24 @@ export interface Plan {
   // plan_type already buckets SNP variants, but the compare bench filter
   // partitions D-SNP vs C-SNP separately and needs the raw value.
   snp_type: string | null;
+  // Landscape-sourced D-SNP integration status. Populated only when
+  // snp_type === 'D-SNP'; null otherwise. Value space: 'FIDE' |
+  // 'HIDE' | 'Coordination Only' | 'AIP' (CY2027 target). Drives the
+  // Compare bench's SNP sub-filter — brokers routinely need to pull
+  // just FIDE plans for care-management workflows that differ from
+  // HIDE / coord-only, so this can't be inferred from snp_type alone.
+  dsnp_integration_status: string | null;
+  // Landscape-sourced D-SNP "zero-dollar cost-sharing" flag. True only
+  // when snp_type === 'D-SNP' AND the plan is fully-integrated enough
+  // that QMB+ / full-benefit duals pay nothing at point-of-service. A
+  // sub-slice of D-SNPs (usually FIDE + some HIDE) — surfaced as its
+  // own Cost & Quality predicate on the bench.
+  zero_cost_sharing: boolean;
+  // Landscape-sourced C-SNP condition type. Populated only when
+  // snp_type === 'C-SNP'; null otherwise. CMS files this as a CamelCase
+  // comma-separated list ("CardiovascularDisorders,DiabetesMellitus")
+  // — display code humanizes; the raw string is the filter key.
+  csnp_condition_type: string | null;
   premium: number;
   // The premium a member actually pays. For D-SNP (dual-eligible) plans
   // this is $0 because LIS auto-covers the Part D Basic Premium that

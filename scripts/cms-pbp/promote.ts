@@ -21,6 +21,7 @@ import {
   RX_TIER_SOURCE_TABLE,
   RX_TIER_ID_COLUMN,
 } from './benefit_map.js';
+import { refreshLandscapeSnpDetails } from './landscape_snp.js';
 
 // Pre-fetches the actual column list for every source_table referenced
 // by BENEFIT_MAP, so the SQL builder can replace references to missing
@@ -89,7 +90,9 @@ export async function promote(opts: {
         premium_part_c, premium_b_only, part_b_giveback,
         moop_in_network, moop_combined, moop_oon, moop_non_network,
         annual_deductible, rx_deductible,
-        plan_type, snp_type, ben_cov, contract_name, plan_name,
+        plan_type, snp_type,
+        zero_cost_sharing, dsnp_integration_status, csnp_condition_type,
+        ben_cov, contract_name, plan_name,
         release_id
       )
       SELECT
@@ -129,6 +132,24 @@ export async function promote(opts: {
           WHEN '3' THEN 'I-SNP'
           ELSE NULL
         END                       AS snp_type,
+        -- SNP detail fields. PBP Section A only carries the D-SNP
+        -- zero-dollar cost-sharing flag (pbp_a_dsnp_zerodollar='1' →
+        -- Yes, '2' → No, NULL → non-DSNP). The remaining two —
+        -- dsnp_integration_status (FIDE/HIDE/Coordination Only/AIP)
+        -- and csnp_condition_type — are Landscape-only in the CMS
+        -- distribution, so they land on pbp_plan_facts_v2 as NULL from
+        -- this SQL. The tail-of-promote refreshLandscapeSnpDetails()
+        -- call below back-fills them into pm_plans directly using the
+        -- Landscape CSV. Keep the column list here so app queries can
+        -- read all three off pbp_plan_facts_v2 once the schema catches
+        -- up.
+        CASE a.pbp_a_dsnp_zerodollar
+          WHEN '1' THEN true
+          WHEN '2' THEN false
+          ELSE NULL
+        END                       AS zero_cost_sharing,
+        NULL::text                AS dsnp_integration_status,
+        NULL::text                AS csnp_condition_type,
         a.pbp_a_ben_cov           AS ben_cov,
         a.pbp_a_org_marketing_name AS contract_name,
         a.pbp_a_plan_name         AS plan_name,
@@ -411,6 +432,41 @@ export async function promote(opts: {
       [releaseId],
     );
   });
+
+  // ─── Landscape SNP-detail refresh (pm_plans) ──────────────────────
+  //
+  // Runs OUTSIDE the PBP transaction on purpose — pm_plans is a
+  // separate app table populated from the Landscape CSV (not PBP),
+  // so landscape data doesn't need to be atomic with the PBP promote.
+  // Failure here logs a warning but doesn't roll back a successful
+  // pbp_plan_facts_v2 promote — the two data sources are independent.
+  //
+  // The refresh reads _tmp/cms-sync/landscape/.../CY202X_Landscape_*.csv
+  // (override via env LANDSCAPE_CSV_PATH) and UPDATEs three columns on
+  // pm_plans keyed by (contract_id, plan_id):
+  //   • dsnp_integration_status  (D-SNP only — Landscape-only field)
+  //   • csnp_condition_type      (C-SNP only — Landscape-only field)
+  //   • zero_cost_sharing        (D-SNP only — also stamped in
+  //                               pbp_plan_facts_v2 above from
+  //                               pbp_a_dsnp_zerodollar)
+  //
+  // Idempotent — safe to skip on partial CMS syncs where the Landscape
+  // extract isn't present yet; the try/catch surfaces the failure so
+  // an operator can rerun scripts/populate-landscape-snp-details.ts.
+  try {
+    const stats = await withClient((c) => refreshLandscapeSnpDetails(c));
+    counts.pm_plans_dsnp_updated = stats.dsnpUpdated;
+    counts.pm_plans_csnp_updated = stats.csnpUpdated;
+    console.log(
+      `[promote] landscape SNP refresh: D-SNP ${stats.dsnpUpdated} row(s) updated (${stats.dsnpUnmatched} keys unmatched); ` +
+        `C-SNP ${stats.csnpUpdated} row(s) updated (${stats.csnpUnmatched} keys unmatched)`,
+    );
+  } catch (err) {
+    console.warn(
+      `[promote] landscape SNP refresh skipped: ${(err as Error).message}. ` +
+        `Rerun scripts/populate-landscape-snp-details.ts once the Landscape CSV is available.`,
+    );
+  }
 
   return { counts };
 }

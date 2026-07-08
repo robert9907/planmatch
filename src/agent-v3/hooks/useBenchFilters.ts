@@ -123,6 +123,15 @@ function buildCostQualityDefs(selectedProviderCount: number): CostQualityDef[] {
       label: 'Has Drug Coverage',
       predicate: (p) => p.hasDrugCoverage,
     },
+    // Landscape's zero-dollar cost-sharing D-SNP flag — the sub-slice
+    // of D-SNPs where QMB+ / full-benefit duals pay nothing at POS.
+    // Only surfaces when at least one bench plan qualifies (avoids a
+    // permanently 0-count checkbox for non-SNP counties).
+    {
+      key: 'zero_cost_sharing',
+      label: 'Zero-Cost Sharing',
+      predicate: (p) => p.zeroCostSharing,
+    },
   ];
 }
 
@@ -158,6 +167,18 @@ export interface NormalizedPlan {
   planType: 'MA' | 'MAPD';
   network: string;
   snpType: string | null; // 'D-SNP' | 'C-SNP' | 'I-SNP' | null
+  /** Landscape D-SNP integration status ('FIDE' | 'HIDE' |
+   *  'Coordination Only' | 'AIP'). Null unless snpType === 'D-SNP'. */
+  dsnpIntegration: string | null;
+  /** Landscape "Medicare Zero-Dollar Cost Sharing D-SNP Plan" flag.
+   *  Sub-slice of D-SNPs where QMB+ / full-benefit duals pay nothing.
+   *  Surfaces as its own Cost & Quality predicate. */
+  zeroCostSharing: boolean;
+  /** Landscape C-SNP condition type — CMS's CamelCase / comma-separated
+   *  raw string (e.g. "CardiovascularDisorders,DiabetesMellitus").
+   *  Kept raw so filter equality holds; humanizeCsnpCondition() below
+   *  is responsible for the display label. */
+  csnpCondition: string | null;
   isVa: boolean; // MA-only (no Part D bundled)
   consumerPremium: number;
   premium: number;
@@ -201,6 +222,9 @@ function normalizePlan(
     planType: plan.has_drug_coverage ? 'MAPD' : 'MA',
     network: inferNetwork(plan),
     snpType: plan.snp_type ?? null,
+    dsnpIntegration: plan.dsnp_integration_status || null,
+    zeroCostSharing: Boolean(plan.zero_cost_sharing),
+    csnpCondition: plan.csnp_condition_type || null,
     isVa: !plan.has_drug_coverage,
     consumerPremium,
     premium: plan.premium ?? 0,
@@ -271,7 +295,12 @@ export interface ActiveChip {
 
 export interface AuditIssue {
   planId: string;
-  issue: 'unknown_network' | 'unknown_carrier' | 'missing_plan_type';
+  issue:
+    | 'unknown_network'
+    | 'unknown_carrier'
+    | 'missing_plan_type'
+    | 'missing_dsnp_integration'
+    | 'missing_csnp_condition';
   detail: string;
 }
 
@@ -305,12 +334,65 @@ const PLAN_TYPE_LABELS: Record<string, string> = {
   MAPD: 'MAPD (Medical + Rx)',
 };
 
+// Top-level SNP bucket labels. Sub-filter labels (FIDE / HIDE /
+// Coordination Only / a humanized C-SNP condition) are computed
+// dynamically inside the filterOptions memo below because their set
+// depends on which values Landscape files for the plans in the bench.
 const SNP_LABELS: Record<string, string> = {
   'D-SNP': 'D-SNP (dual-eligible)',
   'C-SNP': 'C-SNP (chronic)',
   'I-SNP': 'I-SNP (institutional)',
   VA: 'VA / MA-only',
 };
+
+// ── SNP filter value encoding ─────────────────────────────────────
+// The SNP dropdown mixes top-level buckets (D-SNP, C-SNP, I-SNP, VA)
+// with per-plan sub-filters (D-SNP:FIDE, C-SNP:Diabetes, ...). We
+// encode both as strings in the same array to reuse FilterDropdown's
+// multi-select shape.
+//
+//   Top-level:  "D-SNP"
+//   Sub-filter: "D-SNP:FIDE"                          (integration status)
+//               "C-SNP:CardiovascularDisorders,DiabetesMellitus"
+//                                                     (raw condition string)
+//
+// Selecting a top-level bucket matches every plan in that bucket
+// (superset semantics). Selecting a sub-filter matches only plans
+// whose Landscape field equals the sub value. If both are selected,
+// the top-level's OR-in-dimension semantics still catch every plan.
+const SNP_SUB_SEP = ':';
+
+function parseSnpFilter(value: string): { top: string; sub: string | null } {
+  const idx = value.indexOf(SNP_SUB_SEP);
+  if (idx < 0) return { top: value, sub: null };
+  return { top: value.slice(0, idx), sub: value.slice(idx + 1) };
+}
+
+// CMS files C-SNP condition types as CamelCase, comma-joined for multi-
+// condition plans ("CardiovascularDisorders,DiabetesMellitus"). Split
+// on the comma and pull the CamelCase apart so the dropdown shows
+// "Cardiovascular Disorders, Diabetes Mellitus" — actionable when
+// scanning a long list. Known shorthands ("HIV_AIDS") get their own
+// entry; anything unknown falls back to the naive CamelCase split.
+const CSNP_CONDITION_LABEL: Record<string, string> = {
+  HIV_AIDS: 'HIV / AIDS',
+  ESRD: 'ESRD',
+};
+
+function splitCamelCase(s: string): string {
+  return s
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+}
+
+export function humanizeCsnpCondition(raw: string): string {
+  return raw
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => CSNP_CONDITION_LABEL[part] ?? splitCamelCase(part))
+    .join(', ');
+}
 
 // ── The hook ──────────────────────────────────────────────────────
 export function useBenchFilters(
@@ -346,12 +428,25 @@ export function useBenchFilters(
     const planTypeCounts: Record<string, number> = { MA: 0, MAPD: 0 };
     const networkCounts: Record<string, number> = {};
     const snpCounts: Record<string, number> = {};
+    // Sub-filter counts, one map per parent bucket. Keyed by the raw
+    // Landscape value (integration status for D-SNPs; CamelCase
+    // condition string for C-SNPs) so filter equality is exact.
+    const dsnpIntegrationCounts: Record<string, number> = {};
+    const csnpConditionCounts: Record<string, number> = {};
     const carrierCounts: Record<string, number> = {};
 
     for (const p of normalized) {
       planTypeCounts[p.planType] = (planTypeCounts[p.planType] ?? 0) + 1;
       networkCounts[p.network] = (networkCounts[p.network] ?? 0) + 1;
       if (p.snpType) snpCounts[p.snpType] = (snpCounts[p.snpType] ?? 0) + 1;
+      if (p.snpType === 'D-SNP' && p.dsnpIntegration) {
+        dsnpIntegrationCounts[p.dsnpIntegration] =
+          (dsnpIntegrationCounts[p.dsnpIntegration] ?? 0) + 1;
+      }
+      if (p.snpType === 'C-SNP' && p.csnpCondition) {
+        csnpConditionCounts[p.csnpCondition] =
+          (csnpConditionCounts[p.csnpCondition] ?? 0) + 1;
+      }
       if (p.isVa) snpCounts.VA = (snpCounts.VA ?? 0) + 1;
       carrierCounts[p.carrier] = (carrierCounts[p.carrier] ?? 0) + 1;
     }
@@ -369,14 +464,73 @@ export function useBenchFilters(
         count: networkCounts[k],
       }));
 
-    const snpOrder = ['D-SNP', 'C-SNP', 'I-SNP', 'VA'];
-    const snp: FilterOption[] = snpOrder
-      .filter((k) => (snpCounts[k] ?? 0) > 0)
-      .map((k) => ({
-        value: k,
-        label: SNP_LABELS[k] ?? k,
-        count: snpCounts[k],
-      }));
+    // SNP dropdown — nested layout. Each top-level bucket that exists
+    // in the bench emits one row; if that bucket has sub-filter values
+    // (D-SNP integration status, C-SNP condition type) each distinct
+    // value emits one indented row underneath. Integration statuses
+    // display in a stable order (FIDE > HIDE > Coordination Only > AIP
+    // > anything else). C-SNP conditions display in descending count
+    // order so the most common shows first.
+    const snp: FilterOption[] = [];
+    const dsnpIntegrationOrder = ['FIDE', 'HIDE', 'Coordination Only', 'AIP'];
+    const orderedDsnpKeys = [
+      ...dsnpIntegrationOrder.filter((k) => dsnpIntegrationCounts[k] > 0),
+      ...Object.keys(dsnpIntegrationCounts)
+        .filter((k) => !dsnpIntegrationOrder.includes(k))
+        .sort(),
+    ];
+    const orderedCsnpKeys = Object.entries(csnpConditionCounts)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([k]) => k);
+
+    // Indented label prefix for sub-filter rows. FilterDropdown just
+    // renders opt.label verbatim, so the two leading spaces + arrow
+    // are the entire indentation mechanism. Keep short — the popover
+    // panel is 220px wide and long C-SNP condition names wrap awkwardly.
+    const subPrefix = '  ↳ ';
+
+    if (snpCounts['D-SNP'] > 0) {
+      snp.push({
+        value: 'D-SNP',
+        label: SNP_LABELS['D-SNP'],
+        count: snpCounts['D-SNP'],
+      });
+      for (const k of orderedDsnpKeys) {
+        snp.push({
+          value: `D-SNP${SNP_SUB_SEP}${k}`,
+          label: `${subPrefix}${k}`,
+          count: dsnpIntegrationCounts[k],
+        });
+      }
+    }
+    if (snpCounts['C-SNP'] > 0) {
+      snp.push({
+        value: 'C-SNP',
+        label: SNP_LABELS['C-SNP'],
+        count: snpCounts['C-SNP'],
+      });
+      for (const k of orderedCsnpKeys) {
+        snp.push({
+          value: `C-SNP${SNP_SUB_SEP}${k}`,
+          label: `${subPrefix}${humanizeCsnpCondition(k)}`,
+          count: csnpConditionCounts[k],
+        });
+      }
+    }
+    if (snpCounts['I-SNP'] > 0) {
+      snp.push({
+        value: 'I-SNP',
+        label: SNP_LABELS['I-SNP'],
+        count: snpCounts['I-SNP'],
+      });
+    }
+    if (snpCounts.VA > 0) {
+      snp.push({
+        value: 'VA',
+        label: SNP_LABELS.VA,
+        count: snpCounts.VA,
+      });
+    }
 
     const carrier: FilterOption[] = Object.entries(carrierCounts)
       .sort((a, b) => a[0].localeCompare(b[0]))
@@ -412,9 +566,22 @@ export function useBenchFilters(
       if (!passDimension(planTypeSet, p.planType)) return false;
       if (!passDimension(networkSet, p.network)) return false;
       if (snpSet.size > 0) {
-        const matches =
-          (p.snpType != null && snpSet.has(p.snpType)) ||
-          (p.isVa && snpSet.has('VA'));
+        // OR across every selected token. Top-level ("D-SNP") passes
+        // any plan in that bucket. Sub-filter ("D-SNP:FIDE") passes
+        // only plans whose Landscape sub-value equals the token. See
+        // parseSnpFilter above for encoding.
+        let matches = false;
+        for (const token of snpSet) {
+          const { top, sub } = parseSnpFilter(token);
+          if (top === 'VA') {
+            if (p.isVa) { matches = true; break; }
+            continue;
+          }
+          if (p.snpType !== top) continue;
+          if (sub == null) { matches = true; break; }
+          if (top === 'D-SNP' && p.dsnpIntegration === sub) { matches = true; break; }
+          if (top === 'C-SNP' && p.csnpCondition === sub) { matches = true; break; }
+        }
         if (!matches) return false;
       }
       if (!passDimension(carrierSet, p.carrier)) return false;
@@ -508,7 +675,17 @@ export function useBenchFilters(
       (v) => NETWORK_LABELS[v] ?? v,
       setters.setNetwork,
     );
-    buildChips('snp', state.snp, (v) => SNP_LABELS[v] ?? v, setters.setSnp);
+    buildChips(
+      'snp',
+      state.snp,
+      (v) => {
+        const { top, sub } = parseSnpFilter(v);
+        if (sub == null) return SNP_LABELS[top] ?? top;
+        if (top === 'C-SNP') return `C-SNP: ${humanizeCsnpCondition(sub)}`;
+        return `${top}: ${sub}`;
+      },
+      setters.setSnp,
+    );
     buildChips('carrier', state.carrier, (v) => v, setters.setCarrier);
     buildChips(
       'costQuality',
@@ -556,6 +733,26 @@ export function useBenchFilters(
           planId: p.id,
           issue: 'missing_plan_type',
           detail: `has_drug_coverage=${String(p._raw.has_drug_coverage)}`,
+        });
+      }
+      // SNP-detail completeness (migration 014). Landscape files
+      // integration status on every D-SNP and condition type on every
+      // C-SNP; a null on the bench points at either a pre-migration
+      // static-fallback plan or a stale pm_plans row that missed the
+      // last landscape refresh. zero_cost_sharing has a NOT NULL DEFAULT
+      // false on the column so nothing to flag there.
+      if (p.snpType === 'D-SNP' && !p.dsnpIntegration) {
+        issues.push({
+          planId: p.id,
+          issue: 'missing_dsnp_integration',
+          detail: `snp_type=D-SNP but dsnp_integration_status=null on ${p.planName}`,
+        });
+      }
+      if (p.snpType === 'C-SNP' && !p.csnpCondition) {
+        issues.push({
+          planId: p.id,
+          issue: 'missing_csnp_condition',
+          detail: `snp_type=C-SNP but csnp_condition_type=null on ${p.planName}`,
         });
       }
     }

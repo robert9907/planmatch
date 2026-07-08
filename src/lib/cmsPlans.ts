@@ -113,8 +113,8 @@ type PlanOverride = Omit<Partial<Plan>, 'benefits'> &
 
 // Summary-of-Benefits link — mirrors api/plans.ts planFinderUrl() so
 // static-fallback plans still surface a working SBF link during a
-// Supabase outage. See api/plans.ts for why this points at a Google
-// search instead of a medicare.gov deep-link.
+// Supabase outage. See api/plans.ts for why we build a Google search
+// URL instead of a medicare.gov deep-link.
 const PLAN_YEAR = 2026;
 function sbfUrlFromId(id: string): string {
   const [contractId, planId, segmentId] = id.split('-');
@@ -150,6 +150,9 @@ function p(override: PlanOverride): Plan {
     counties,
     plan_shape: null,
     snp_type: null,
+    dsnp_integration_status: null,
+    zero_cost_sharing: false,
+    csnp_condition_type: null,
     premium: 0,
     // Member-payable premium. Seed D-SNPs always pin to $0 (LIS-covered);
     // any override that supplies snp_type='D-SNP' picks up the same rule

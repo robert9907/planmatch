@@ -24,6 +24,12 @@ interface ApiPlan {
   plan_type: PlanType;
   plan_shape: string | null;
   snp_type: string | null;
+  // Landscape-sourced SNP details. Optional on the wire so older
+  // /api/plans builds without migration 014 still deserialize —
+  // toPlan() coalesces missing/undefined to null / false.
+  dsnp_integration_status?: string | null;
+  zero_cost_sharing?: boolean;
+  csnp_condition_type?: string | null;
   premium: number;
   // Member-payable premium (D-SNP → $0 via LIS, else equals premium).
   // Older /api/plans builds didn't return this; toPlan() falls back to
@@ -107,9 +113,9 @@ export async function fetchPlansByIds(ids: string[]): Promise<Plan[]> {
 
 // Summary-of-Benefits fallback — mirrors api/plans.ts planFinderUrl()
 // so older /api/plans builds that don't return sbf_url still produce
-// a working link client-side. See api/plans.ts for why this points at
-// a Google search instead of a medicare.gov deep-link. Keep PLAN_YEAR
-// in sync.
+// a working link client-side. See api/plans.ts for why we build a
+// Google search URL instead of a medicare.gov deep-link. Keep
+// PLAN_YEAR in sync.
 const PLAN_YEAR = 2026;
 function fallbackSbfUrl(id: string): string {
   const [contractId, planId, segmentId] = id.split('-');
@@ -133,6 +139,9 @@ function toPlan(p: ApiPlan): Plan {
     // toUpperCase() call downstream.
     plan_shape: p.plan_shape ?? null,
     snp_type: p.snp_type ?? null,
+    dsnp_integration_status: p.dsnp_integration_status ?? null,
+    zero_cost_sharing: p.zero_cost_sharing === true,
+    csnp_condition_type: p.csnp_condition_type ?? null,
     premium: p.premium ?? 0,
     // Prefer the server's computed consumer_premium. Fallback derivation
     // mirrors api/plans.ts (D-SNP → 0, else premium) so older builds

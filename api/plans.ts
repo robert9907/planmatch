@@ -44,6 +44,16 @@ interface Plan {
   // so the compare bench HMO/PPO filter needs this raw value.
   plan_shape: string | null;
   snp_type: string | null;
+  // Landscape-sourced SNP details. See src/types/plans.ts for the
+  // full value spaces + rationale — briefly: dsnp_integration_status
+  // is 'FIDE' | 'HIDE' | 'Coordination Only' | 'AIP' | null (populated
+  // only on D-SNPs); csnp_condition_type is the CMS CamelCase / comma-
+  // separated chronic-condition string (populated only on C-SNPs);
+  // zero_cost_sharing is the D-SNP "member pays nothing" flag. All
+  // three drive the Compare bench SNP sub-filter and predicate list.
+  dsnp_integration_status: string | null;
+  zero_cost_sharing: boolean;
+  csnp_condition_type: string | null;
   premium: number;
   // Member-payable premium. For D-SNPs this is always $0 because LIS
   // covers the Part D Basic premium; for all other plans it equals
@@ -151,6 +161,9 @@ interface PlanRow {
   star_rating: number | null;
   snp: boolean;
   snp_type: string | null;
+  dsnp_integration_status: string | null;
+  zero_cost_sharing: boolean | null;
+  csnp_condition_type: string | null;
   sanctioned: boolean;
 }
 
@@ -196,20 +209,19 @@ interface PbpRichRow extends PbpBenefitRow {
 // Broker-facing Summary of Benefits link. Historically pointed at
 // medicare.gov's /plan-compare/ SPA (#/plan-details/{year}/{triple}),
 // but that route stopped working in CY2026 — the SPA migrated from
-// HashRouter to BrowserRouter, so hash routes silently drop callers
-// on the plan-finder homepage. The replacement path form
+// HashRouter to BrowserRouter, so hash routes silently drop callers on
+// the plan-finder homepage. The replacement path form
 // /plan-details/{year}-{triple} also 404s from external navigation
 // because the server doesn't rewrite unknown paths to the SPA shell,
-// and CMS doesn't host SoB PDFs directly (carrier SoBs live on carrier
-// CDNs like content.medicareadvantage.com under unpredictable
-// filenames — verified against the /plan-compare/ bundle's route
-// table + the CMS document library).
+// and CMS doesn't host SoB PDFs directly (carrier SoBs live on
+// carrier CDNs like content.medicareadvantage.com under unpredictable
+// filenames).
 //
 // So we lean on Google: search for the CMS triple + "Summary of
 // Benefits" + year, filtered to PDFs. First result is reliably the
-// exact carrier-filed SoB (verified live: query
+// exact carrier-filed SoB (verified via DDG live: query
 // `"H1036-307-000" "Summary of Benefits" 2026 filetype:pdf` returns
-// content.medicareadvantage.com/2026/Humana-H1036307000SB26pdf-…pdf
+// content.medicareadvantage.com/2026/Humana-H1036307000SB26pdf-...pdf
 // as result #1). Broker still gets to the real document in one click.
 //
 // PLAN_YEAR is baked into the query. Bump at the next OEP cutover.
@@ -639,7 +651,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let plansQuery = sb
       .from('pm_plans')
       .select(
-        'contract_id, plan_id, segment_id, plan_name, carrier, parent_organization, plan_type, state, county_name, monthly_premium, annual_deductible, moop, drug_deductible, star_rating, snp, snp_type, sanctioned',
+        'contract_id, plan_id, segment_id, plan_name, carrier, parent_organization, plan_type, state, county_name, monthly_premium, annual_deductible, moop, drug_deductible, star_rating, snp, snp_type, dsnp_integration_status, zero_cost_sharing, csnp_condition_type, sanctioned',
       )
       .eq('sanctioned', false)
       .limit(limit);
@@ -1117,6 +1129,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         plan_type: mapPlanType(row.plan_type, row.snp, row.snp_type),
         plan_shape: row.plan_type,
         snp_type: row.snp_type,
+        dsnp_integration_status: row.dsnp_integration_status,
+        // Column has a NOT NULL DEFAULT false, but coalesce anyway so
+        // the type stays boolean end-to-end regardless of what PostgREST
+        // sends back (older cached rows may deserialize as null before
+        // the migration ran everywhere).
+        zero_cost_sharing: row.zero_cost_sharing === true,
+        csnp_condition_type: row.csnp_condition_type,
         has_drug_coverage: row.drug_deductible !== null,
         premium: row.monthly_premium ?? 0,
         // D-SNPs file a Part D Basic Premium in monthly_premium (typically
