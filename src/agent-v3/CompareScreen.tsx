@@ -515,7 +515,7 @@ function deltaText(metric: Metric, plan: Plan, current: Plan | null): string | n
   if (a === b) return null;
   const diff = Math.abs(a - b);
   if (metric.key === 'premium' || metric.key === 'giveback' || metric.key === 'otc') {
-    return `$${diff}`;
+    return `$${diff.toFixed(2)}`;
   }
   if (
     metric.key === 'moop' ||
