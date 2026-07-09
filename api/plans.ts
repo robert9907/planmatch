@@ -171,6 +171,11 @@ interface PlanRow {
   csnp_condition_type: string | null;
   dsnp_accepted_populations: string[] | null;
   dsnp_only_contract: boolean | null;
+  // Cached medicareadvantage.com plan-page URL when a real page
+  // resolves (via scripts/probe-sbf-urls.ts). NULL for carriers /
+  // plans without a page there — the response builder then falls
+  // through to planFinderUrl()'s Google-search URL.
+  sbf_url: string | null;
   sanctioned: boolean;
 }
 
@@ -658,7 +663,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let plansQuery = sb
       .from('pm_plans')
       .select(
-        'contract_id, plan_id, segment_id, plan_name, carrier, parent_organization, plan_type, state, county_name, monthly_premium, annual_deductible, moop, drug_deductible, star_rating, snp, snp_type, dsnp_integration_status, zero_cost_sharing, csnp_condition_type, dsnp_accepted_populations, dsnp_only_contract, sanctioned',
+        'contract_id, plan_id, segment_id, plan_name, carrier, parent_organization, plan_type, state, county_name, monthly_premium, annual_deductible, moop, drug_deductible, star_rating, snp, snp_type, dsnp_integration_status, zero_cost_sharing, csnp_condition_type, dsnp_accepted_populations, dsnp_only_contract, sbf_url, sanctioned',
       )
       .eq('sanctioned', false)
       .limit(limit);
@@ -1180,7 +1185,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         drug_deductible: row.drug_deductible,
         part_b_giveback: partBGiveback ?? 0,
         star_rating: row.star_rating ?? 0,
-        sbf_url: planFinderUrl(row.contract_id, row.plan_id, row.segment_id),
+        // Prefer the cached medicareadvantage.com plan-page URL when
+        // scripts/probe-sbf-urls.ts landed one — brokers get a rich
+        // plan-detail page with an inline SoB PDF link, one click.
+        // Fall through to planFinderUrl()'s Google-search URL for
+        // plans whose carriers aren't on medicareadvantage.com.
+        sbf_url: row.sbf_url ?? planFinderUrl(row.contract_id, row.plan_id, row.segment_id),
         benefits,
         formulary: {},
         in_network_npis: [],

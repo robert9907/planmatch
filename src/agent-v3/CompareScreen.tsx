@@ -1116,6 +1116,57 @@ function ModeToggle({
 // category leaders only; most plans return null. Unknown ribbon
 // strings render with the default seafoam treatment so a future brain
 // ribbon doesn't blank-render here.
+// Compact D-SNP accepted-Medicaid-population chip row for the header
+// block of BenchCard / SlotCell. Renders one small badge per entry in
+// plan.dsnp_accepted_populations (populated by CMS SNP Comprehensive
+// Report ingest); green for full-benefit-dual codes (FBDE / QMB+ /
+// SLMB+), amber for partial-benefit codes (QMB / SLMB / QI / QDWI).
+// No-op on non-D-SNP plans so the same JSX slot can render every card
+// unconditionally.
+const FULL_BENEFIT_POPULATIONS = new Set(['FBDE', 'QMB+', 'SLMB+']);
+function DsnpPopulationBadges({ plan }: { plan: Plan }) {
+  if (plan.snp_type !== 'D-SNP') return null;
+  const pops = plan.dsnp_accepted_populations;
+  if (!pops || pops.length === 0) return null;
+  return (
+    <div
+      title="Accepted Medicaid populations (CMS SNP Comprehensive Report)"
+      style={{
+        display: 'flex',
+        gap: 3,
+        flexWrap: 'wrap',
+        marginTop: 4,
+      }}
+    >
+      {pops.map((pop) => {
+        const full = FULL_BENEFIT_POPULATIONS.has(pop);
+        return (
+          <span
+            key={pop}
+            style={{
+              // Translucent-fill chip on the navy header. Full-benefit
+              // codes get GREEN (#22c55e), partial-benefit codes get
+              // GOLD (#f59e0b) — matches the palette used by
+              // MetricMini's winning-vs-baseline highlight.
+              background: full ? 'rgba(34,197,94,0.22)' : 'rgba(245,158,11,0.22)',
+              color: full ? '#a7f3d0' : '#fde68a',
+              fontFamily: FONT_LABEL,
+              fontSize: 8,
+              fontWeight: 800,
+              padding: '2px 5px',
+              borderRadius: 3,
+              letterSpacing: 0.4,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {pop}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 const RIBBON_STYLE: Record<string, { label: string; bg: string; color: string }> = {
   BEST_OVERALL: { label: '★ Top Pick', bg: '#a78bfa', color: 'white' },
   LOWEST_DRUG_COST: { label: 'Lowest Rx', bg: TEAL, color: 'white' },
@@ -1421,6 +1472,7 @@ function BenchCard({
         >
           {planIdShort(plan.id)}
         </div>
+        <DsnpPopulationBadges plan={plan} />
         <a
           href={plan.sbf_url}
           target="_blank"
@@ -2156,6 +2208,7 @@ function SlotCell({
           >
             {planIdShort(plan.id)}
           </div>
+          <DsnpPopulationBadges plan={plan} />
           <a
             href={plan.sbf_url}
             target="_blank"
