@@ -45,6 +45,9 @@ supabase/.branches/
 # into pm_plans / pm_formulary via separate tooling, never into git.
 data/
 *.csv
+# Hand-off capture spreadsheets (Cowork manual-fill workflow) are the
+# exception — small, human-curated, need to be in git.
+!scripts/captures/*.csv
 _scrape-debug/
 .env.local.bak*
 .claude/
