@@ -132,6 +132,59 @@ function buildCostQualityDefs(selectedProviderCount: number): CostQualityDef[] {
       label: 'Zero-Cost Sharing',
       predicate: (p) => p.zeroCostSharing,
     },
+    // CMS-SNP-report accepted-populations predicates. All read the
+    // dsnpAcceptedPopulations array populated by migration 015. Non-
+    // D-SNP plans have a null array and therefore fail every check
+    // — which is what we want, since these predicates only make
+    // sense for D-SNPs.
+    //
+    // "Accepts QMB / SLMB" match on either the plus or standalone
+    // variant so brokers looking at partial-dual clients get the
+    // full set. "Full-Benefit Only" is exact-match on the three-
+    // element array; "Accepts Partial Duals" mirrors the Partial
+    // Dual = Yes filing.
+    {
+      key: 'accepts_qmb',
+      label: 'Accepts QMB',
+      predicate: (p) =>
+        (p.dsnpAcceptedPopulations ?? []).some((v) => v === 'QMB' || v === 'QMB+'),
+    },
+    {
+      key: 'accepts_slmb',
+      label: 'Accepts SLMB',
+      predicate: (p) =>
+        (p.dsnpAcceptedPopulations ?? []).some((v) => v === 'SLMB' || v === 'SLMB+'),
+    },
+    {
+      key: 'full_benefit_only',
+      label: 'Full-Benefit Duals Only',
+      predicate: (p) => {
+        const pops = p.dsnpAcceptedPopulations;
+        if (!pops || pops.length === 0) return false;
+        // CMS files this as Partial Dual = No; ingest expands to the
+        // exact three-element set. Compare-as-set instead of exact-
+        // order so a future CMS ordering change doesn't break the
+        // predicate silently.
+        const set = new Set(pops);
+        return set.size === 3 && set.has('FBDE') && set.has('QMB+') && set.has('SLMB+');
+      },
+    },
+    {
+      key: 'accepts_partial_duals',
+      label: 'Accepts Partial Duals',
+      predicate: (p) =>
+        (p.dsnpAcceptedPopulations ?? []).some(
+          (v) => v === 'QMB' || v === 'SLMB' || v === 'QI',
+        ),
+    },
+    // Bonus signal from the same SNP report: the plan's contract is
+    // exclusively D-SNP (no mixed MA/D-SNP under the same contract).
+    // Steer members to carriers built ground-up for dual populations.
+    {
+      key: 'dsnp_only_contract',
+      label: 'D-SNP-Only Contract',
+      predicate: (p) => p.dsnpOnlyContract === true,
+    },
   ];
 }
 
@@ -179,6 +232,13 @@ export interface NormalizedPlan {
    *  Kept raw so filter equality holds; humanizeCsnpCondition() below
    *  is responsible for the display label. */
   csnpCondition: string | null;
+  /** CMS SNP Comprehensive Report accepted-populations set. Non-null
+   *  only on D-SNPs. Either ['FBDE','QMB+','SLMB+'] (full-benefit
+   *  only) or ['FBDE','QMB+','QMB','SLMB+','SLMB','QI'] (accepts every
+   *  subgroup). Predicates below read this. */
+  dsnpAcceptedPopulations: string[] | null;
+  /** True when the plan's CMS contract is D-SNP-only. */
+  dsnpOnlyContract: boolean | null;
   isVa: boolean; // MA-only (no Part D bundled)
   consumerPremium: number;
   premium: number;
@@ -225,6 +285,8 @@ function normalizePlan(
     dsnpIntegration: plan.dsnp_integration_status || null,
     zeroCostSharing: Boolean(plan.zero_cost_sharing),
     csnpCondition: plan.csnp_condition_type || null,
+    dsnpAcceptedPopulations: plan.dsnp_accepted_populations ?? null,
+    dsnpOnlyContract: plan.dsnp_only_contract ?? null,
     isVa: !plan.has_drug_coverage,
     consumerPremium,
     premium: plan.premium ?? 0,
@@ -300,7 +362,8 @@ export interface AuditIssue {
     | 'unknown_carrier'
     | 'missing_plan_type'
     | 'missing_dsnp_integration'
-    | 'missing_csnp_condition';
+    | 'missing_csnp_condition'
+    | 'missing_dsnp_populations';
   detail: string;
 }
 
@@ -753,6 +816,16 @@ export function useBenchFilters(
           planId: p.id,
           issue: 'missing_csnp_condition',
           detail: `snp_type=C-SNP but csnp_condition_type=null on ${p.planName}`,
+        });
+      }
+      if (
+        p.snpType === 'D-SNP' &&
+        (!p.dsnpAcceptedPopulations || p.dsnpAcceptedPopulations.length === 0)
+      ) {
+        issues.push({
+          planId: p.id,
+          issue: 'missing_dsnp_populations',
+          detail: `snp_type=D-SNP but dsnp_accepted_populations empty on ${p.planName} — rerun scripts/import-snp-comprehensive-report.ts`,
         });
       }
     }

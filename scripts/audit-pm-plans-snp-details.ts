@@ -1,14 +1,18 @@
 // scripts/audit-pm-plans-snp-details.ts
 //
 // __benchFilters.audit() equivalent for the DB tier. Confirms the
-// three Landscape-sourced columns added by migration 014 are populated
-// on every eligible pm_plans row:
+// SNP-detail columns added by migrations 014 (Landscape-sourced) and
+// 015 (CMS SNP Comprehensive Report-sourced) are populated on every
+// eligible pm_plans row:
 //
 //   • Every snp_type='D-SNP' row has a non-null dsnp_integration_status
 //   • Every snp_type='C-SNP' row has a non-null csnp_condition_type
 //   • Every snp_type='D-SNP' row has a boolean zero_cost_sharing (not
 //     null — the column NOT NULL DEFAULT false makes this trivially
 //     true, but we check anyway to catch a silent DDL regression)
+//   • Every snp_type='D-SNP' row has a non-null dsnp_accepted_populations
+//     array (migration 015 — sourced from the monthly CMS SNP
+//     Comprehensive Report; rerun the import script if any are NULL)
 //
 // Any row that fails the check is listed with (contract_id, plan_id,
 // segment_id, state, county, plan_name, carrier) so the operator can
@@ -40,6 +44,8 @@ async function main() {
       missing_condition: string;
       missing_zero_bool: string;
       zero_true: string;
+      missing_populations: string;
+      partial_true: string;
     }>(`
       SELECT
         snp_type,
@@ -47,7 +53,9 @@ async function main() {
         COUNT(*) FILTER (WHERE snp_type='D-SNP' AND dsnp_integration_status IS NULL)::text AS missing_integration,
         COUNT(*) FILTER (WHERE snp_type='C-SNP' AND csnp_condition_type   IS NULL)::text AS missing_condition,
         COUNT(*) FILTER (WHERE snp_type='D-SNP' AND zero_cost_sharing IS NULL)::text AS missing_zero_bool,
-        COUNT(*) FILTER (WHERE snp_type='D-SNP' AND zero_cost_sharing = true)::text AS zero_true
+        COUNT(*) FILTER (WHERE snp_type='D-SNP' AND zero_cost_sharing = true)::text AS zero_true,
+        COUNT(*) FILTER (WHERE snp_type='D-SNP' AND dsnp_accepted_populations IS NULL)::text AS missing_populations,
+        COUNT(*) FILTER (WHERE snp_type='D-SNP' AND dsnp_partial_duals = true)::text AS partial_true
       FROM pm_plans
       WHERE snp_type IN ('D-SNP','C-SNP','I-SNP')
       GROUP BY snp_type
@@ -63,11 +71,13 @@ async function main() {
       if (r.snp_type === 'D-SNP') {
         const missInt = Number(r.missing_integration);
         const missZero = Number(r.missing_zero_bool);
+        const missPops = Number(r.missing_populations);
         const zeroT = Number(r.zero_true);
+        const partialT = Number(r.partial_true);
         console.log(
-          `  D-SNP: ${total} rows | missing dsnp_integration_status=${missInt} | missing zero_cost_sharing (NULL)=${missZero} | zero_cost_sharing=true → ${zeroT}`,
+          `  D-SNP: ${total} rows | missing dsnp_integration_status=${missInt} | missing zero_cost_sharing (NULL)=${missZero} | missing dsnp_accepted_populations=${missPops} | zero_cost_sharing=true → ${zeroT} | dsnp_partial_duals=true → ${partialT}`,
         );
-        if (missInt > 0 || missZero > 0) anyMissing = true;
+        if (missInt > 0 || missZero > 0 || missPops > 0) anyMissing = true;
       } else if (r.snp_type === 'C-SNP') {
         const missCond = Number(r.missing_condition);
         console.log(
@@ -97,9 +107,10 @@ async function main() {
                  WHEN snp_type='D-SNP' AND dsnp_integration_status IS NULL THEN 'missing_dsnp_integration_status'
                  WHEN snp_type='C-SNP' AND csnp_condition_type IS NULL THEN 'missing_csnp_condition_type'
                  WHEN snp_type='D-SNP' AND zero_cost_sharing IS NULL THEN 'missing_zero_cost_sharing'
+                 WHEN snp_type='D-SNP' AND dsnp_accepted_populations IS NULL THEN 'missing_dsnp_accepted_populations'
                END AS issue
           FROM pm_plans
-         WHERE (snp_type='D-SNP' AND (dsnp_integration_status IS NULL OR zero_cost_sharing IS NULL))
+         WHERE (snp_type='D-SNP' AND (dsnp_integration_status IS NULL OR zero_cost_sharing IS NULL OR dsnp_accepted_populations IS NULL))
             OR (snp_type='C-SNP' AND csnp_condition_type IS NULL)
          ORDER BY snp_type, contract_id, plan_id, segment_id, state
          LIMIT 100
@@ -111,7 +122,7 @@ async function main() {
         );
       }
     } else {
-      console.log(`\n  PASS — every D-SNP has dsnp_integration_status + zero_cost_sharing; every C-SNP has csnp_condition_type.`);
+      console.log(`\n  PASS — every D-SNP has dsnp_integration_status + zero_cost_sharing + dsnp_accepted_populations; every C-SNP has csnp_condition_type.`);
     }
   } finally {
     await client.end();

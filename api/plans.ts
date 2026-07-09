@@ -54,6 +54,11 @@ interface Plan {
   dsnp_integration_status: string | null;
   zero_cost_sharing: boolean;
   csnp_condition_type: string | null;
+  // CMS-SNP-report-sourced D-SNP fields. See src/types/plans.ts for
+  // the accepted-populations value set + ingest lineage. Both are
+  // null on non-D-SNP plans.
+  dsnp_accepted_populations: string[] | null;
+  dsnp_only_contract: boolean | null;
   premium: number;
   // Member-payable premium. For D-SNPs this is always $0 because LIS
   // covers the Part D Basic premium; for all other plans it equals
@@ -164,6 +169,8 @@ interface PlanRow {
   dsnp_integration_status: string | null;
   zero_cost_sharing: boolean | null;
   csnp_condition_type: string | null;
+  dsnp_accepted_populations: string[] | null;
+  dsnp_only_contract: boolean | null;
   sanctioned: boolean;
 }
 
@@ -651,7 +658,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let plansQuery = sb
       .from('pm_plans')
       .select(
-        'contract_id, plan_id, segment_id, plan_name, carrier, parent_organization, plan_type, state, county_name, monthly_premium, annual_deductible, moop, drug_deductible, star_rating, snp, snp_type, dsnp_integration_status, zero_cost_sharing, csnp_condition_type, sanctioned',
+        'contract_id, plan_id, segment_id, plan_name, carrier, parent_organization, plan_type, state, county_name, monthly_premium, annual_deductible, moop, drug_deductible, star_rating, snp, snp_type, dsnp_integration_status, zero_cost_sharing, csnp_condition_type, dsnp_accepted_populations, dsnp_only_contract, sanctioned',
       )
       .eq('sanctioned', false)
       .limit(limit);
@@ -1136,6 +1143,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // the migration ran everywhere).
         zero_cost_sharing: row.zero_cost_sharing === true,
         csnp_condition_type: row.csnp_condition_type,
+        dsnp_accepted_populations: row.dsnp_accepted_populations ?? null,
+        dsnp_only_contract: row.dsnp_only_contract ?? null,
         has_drug_coverage: row.drug_deductible !== null,
         premium: row.monthly_premium ?? 0,
         // D-SNPs file a Part D Basic Premium in monthly_premium (typically

@@ -178,6 +178,19 @@ export interface Plan {
   // comma-separated list ("CardiovascularDisorders,DiabetesMellitus")
   // — display code humanizes; the raw string is the filter key.
   csnp_condition_type: string | null;
+  // D-SNP accepted Medicaid populations, sourced from the CMS SNP
+  // Comprehensive Report. Populated only when snp_type === 'D-SNP'.
+  // CMS files this at the (contract, plan) grain as a single
+  // "Partial Dual" boolean; the ingest expands it to the concrete set:
+  //   • Partial Dual = No  → ['FBDE','QMB+','SLMB+']  (full-benefit only)
+  //   • Partial Dual = Yes → ['FBDE','QMB+','QMB','SLMB+','SLMB','QI']
+  // Bench filter predicates read the array — "Accepts Partial Duals",
+  // "Full-Benefit Only" — so the raw set stays the filter key.
+  dsnp_accepted_populations: string[] | null;
+  // True when the plan's contract is D-SNP-only (no mixed MA/D-SNP
+  // under the same contract number). Signals a carrier with a
+  // dedicated dual-population network + care model.
+  dsnp_only_contract: boolean | null;
   premium: number;
   // The premium a member actually pays. For D-SNP (dual-eligible) plans
   // this is $0 because LIS auto-covers the Part D Basic Premium that

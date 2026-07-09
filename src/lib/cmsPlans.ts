@@ -153,6 +153,8 @@ function p(override: PlanOverride): Plan {
     dsnp_integration_status: null,
     zero_cost_sharing: false,
     csnp_condition_type: null,
+    dsnp_accepted_populations: null,
+    dsnp_only_contract: null,
     premium: 0,
     // Member-payable premium. Seed D-SNPs always pin to $0 (LIS-covered);
     // any override that supplies snp_type='D-SNP' picks up the same rule

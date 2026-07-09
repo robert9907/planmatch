@@ -30,6 +30,10 @@ interface ApiPlan {
   dsnp_integration_status?: string | null;
   zero_cost_sharing?: boolean;
   csnp_condition_type?: string | null;
+  // CMS-SNP-report-sourced D-SNP fields (migration 015). Same
+  // optional-wire treatment for graceful degradation.
+  dsnp_accepted_populations?: string[] | null;
+  dsnp_only_contract?: boolean | null;
   premium: number;
   // Member-payable premium (D-SNP → $0 via LIS, else equals premium).
   // Older /api/plans builds didn't return this; toPlan() falls back to
@@ -142,6 +146,8 @@ function toPlan(p: ApiPlan): Plan {
     dsnp_integration_status: p.dsnp_integration_status ?? null,
     zero_cost_sharing: p.zero_cost_sharing === true,
     csnp_condition_type: p.csnp_condition_type ?? null,
+    dsnp_accepted_populations: p.dsnp_accepted_populations ?? null,
+    dsnp_only_contract: p.dsnp_only_contract ?? null,
     premium: p.premium ?? 0,
     // Prefer the server's computed consumer_premium. Fallback derivation
     // mirrors api/plans.ts (D-SNP → 0, else premium) so older builds
