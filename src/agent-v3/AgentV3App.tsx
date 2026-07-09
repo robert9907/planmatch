@@ -1154,6 +1154,7 @@ export function AgentV3App() {
                 ? [...ranked.result.top_plans, ...ranked.result.bench_plans]
                 : undefined
             }
+            priorities={priorities}
             onRecommend={onRecommend}
             onBack={() => setScreen('priorities')}
             onNext={() => setScreen('compliance')}

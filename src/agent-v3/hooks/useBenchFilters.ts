@@ -378,6 +378,14 @@ export interface UseBenchFiltersOptions {
     | Map<string, number | null>
     | Record<string, number | null>;
   selectedProviderCount: number;
+  /** Optional partial seed for the filter state on first render. The
+   *  CompareScreen shell derives this from intake data (dsnpEligible →
+   *  ['D-SNP'] on snp; providers.length > 0 → ['has_docs_in_net']; etc.)
+   *  so the agent lands on Compare with the bench already narrowed to
+   *  plans that match the client's situation. Only reads on mount — the
+   *  agent's later toggles win and aren't reverted when this prop
+   *  changes. Missing keys fall back to EMPTY_STATE values. */
+  initialState?: Partial<BenchFilterState>;
 }
 
 export interface UseBenchFiltersResult {
@@ -462,9 +470,17 @@ export function useBenchFilters(
   benchPlans: Plan[],
   opts: UseBenchFiltersOptions,
 ): UseBenchFiltersResult {
-  const { annualDrugByPlanId, selectedProviderCount } = opts;
+  const { annualDrugByPlanId, selectedProviderCount, initialState } = opts;
 
-  const [state, setState] = useState<BenchFilterState>(EMPTY_STATE);
+  // initialState is applied once on mount only. Subsequent renders
+  // that pass a different initialState do NOT reset — a re-render
+  // triggered by intake data changes shouldn't clobber the agent's
+  // in-flight filter tweaks. React's useState lazy initializer runs
+  // once; that's exactly the semantic we want here.
+  const [state, setState] = useState<BenchFilterState>(() => ({
+    ...EMPTY_STATE,
+    ...(initialState ?? {}),
+  }));
 
   const annualDrugMap = useMemo(
     () => normalizeAnnualDrugMap(annualDrugByPlanId),

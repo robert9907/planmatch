@@ -153,6 +153,11 @@ interface Props {
    *  it as a flat array keeps CompareScreen's other props focused on
    *  the brain-derived per-plan maps. */
   rankedPlans?: LibraryRankPlan[];
+  /** Selected priorities from the Priorities screen. Consumed here to
+   *  seed the initial bench-filter state — 'healthy_foods' → "Has Food
+   *  Card", 'partb_giveback' → "Part B Giveback". Optional so older
+   *  test wrappers / storybook callers don't need to change. */
+  priorities?: readonly string[];
 }
 
 /** Subset of the brain's GateExplanations rendered on each SlotCell. */
@@ -530,10 +535,22 @@ function deltaText(metric: Metric, plan: Plan, current: Plan | null): string | n
   return null;
 }
 
-function initSlots(pool: Plan[]): (Plan | null)[] {
+// Optional `preferIds` reorders pool so filter-matching plans get
+// slotted first — used on mount when the initial bench-filter state
+// (dsnpEligible → D-SNP-only, etc.) means the brain's top-4 doesn't
+// necessarily overlap with what the agent will actually consider.
+// Preserves brain rank within each partition (matched-then-unmatched)
+// so a low-cost D-SNP still beats a costlier D-SNP.
+function initSlots(pool: Plan[], preferIds?: ReadonlySet<string>): (Plan | null)[] {
   const out: (Plan | null)[] = [null, null, null, null];
-  for (let i = 0; i < Math.min(4, pool.length); i++) {
-    out[i] = pool[i];
+  const ordered = preferIds && preferIds.size > 0
+    ? [
+        ...pool.filter((p) => preferIds.has(p.id)),
+        ...pool.filter((p) => !preferIds.has(p.id)),
+      ]
+    : pool;
+  for (let i = 0; i < Math.min(4, ordered.length); i++) {
+    out[i] = ordered[i];
   }
   return out;
 }
@@ -554,6 +571,7 @@ export function CompareScreen({
   onBack,
   onNext,
   rankedPlans,
+  priorities,
 }: Props) {
   const providers = useSession((s) => s.providers);
   const medications = useSession((s) => s.medications);
@@ -630,9 +648,73 @@ export function CompareScreen({
     return [baseline, ...others];
   }, [baseline, scoredPlans, benchPlans]);
 
-  const [slots, setSlots] = useState<(Plan | null)[]>(() => initSlots(pool));
   const [mode, setMode] = useState<'grid' | 'h2h'>('grid');
   const [challenger, setChallenger] = useState<Plan | null>(null);
+
+  // ── Bench filter engine (shared between slots + bench) ─────────────
+  // Historically the filter engine lived inside Bench and only touched
+  // bench cards. That made the board (Top Pick + slots 1-3) ignore
+  // active filters entirely — an agent who chose "D-SNP only" still
+  // saw non-D-SNP plans in the top slots, which forced them to reload
+  // the workspace and manually re-evaluate. Lift the hook to the
+  // CompareScreen level so a single filter state drives BOTH the
+  // board (via matchedPlanIds) and the bench (via filters.filtered).
+  //
+  // Seed the initial filter state from intake data. The intent is
+  // "start the agent where they were probably going to end up":
+  //   • dsnpEligible === true → SNP filter pre-set to ['D-SNP']
+  //   • ≥1 provider on file  → Cost & Quality pre-set to
+  //                             ['has_docs_in_net']
+  //   • priorities includes 'healthy_foods' → 'has_food_card'
+  //   • priorities includes 'partb_giveback' → 'part_b_giveback'
+  //
+  // Fields the intake screen doesn't currently capture (specific
+  // Medicaid determination like QMB / SLMB, HMO-vs-PPO network
+  // preference) can slot into the seed later — the initialState
+  // shape is just a Partial<BenchFilterState>.
+  const initialFilterState = useMemo(() => {
+    const snp: string[] = [];
+    if (client.dsnpEligible === true) snp.push('D-SNP');
+    const costQuality: string[] = [];
+    if (providers.length > 0) costQuality.push('has_docs_in_net');
+    if (priorities?.includes('healthy_foods')) costQuality.push('has_food_card');
+    if (priorities?.includes('partb_giveback')) costQuality.push('part_b_giveback');
+    return { snp, costQuality };
+    // Seed is captured once on hook mount (see useBenchFilters). Later
+    // changes to client.dsnpEligible or priorities do NOT retroactively
+    // rewrite the agent's active filter state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const filters = useBenchFilters(pool, {
+    annualDrugByPlanId,
+    selectedProviderCount: providers.length,
+    initialState: initialFilterState,
+  });
+
+  // Bridge to legacy filters debugging — exposes the hook result on
+  // the window so Rob can run `__benchFilters.audit()` from devtools
+  // without touching React internals. Cleared when the shell unmounts.
+  if (typeof window !== 'undefined') {
+    (window as unknown as { __benchFilters?: typeof filters }).__benchFilters = filters;
+  }
+
+  // Plan IDs that survived every active predicate. Board slots consult
+  // this to decide whether to render a card or fall back to the empty
+  // drop-target placeholder — a mismatched slot behaves the same as an
+  // agent who explicitly cleared that slot.
+  const matchedPlanIds = useMemo(
+    () => new Set(filters.filtered.map((p) => p.id)),
+    [filters.filtered],
+  );
+
+  // Slot state — seeded with filter-matching pool plans first so a
+  // D-SNP-eligible client's landing view already has D-SNPs on the
+  // board without the agent lifting a finger. Captured on mount only;
+  // later filter changes don't clobber the agent's slot placements.
+  const [slots, setSlots] = useState<(Plan | null)[]>(() =>
+    initSlots(pool, matchedPlanIds),
+  );
 
   // Reconcile: any slot whose plan is no longer in the pool becomes
   // null. Bench = pool minus slot occupants.
@@ -648,14 +730,15 @@ export function CompareScreen({
       ),
     [reconciledSlots],
   );
-  const bench = useMemo(
-    () => pool.filter((p) => !slotIds.has(p.id)),
-    [pool, slotIds],
+
+  const filteredSlots = useMemo<(Plan | null)[]>(
+    () => reconciledSlots.map((s) => (s && matchedPlanIds.has(s.id) ? s : null)),
+    [reconciledSlots, matchedPlanIds],
   );
 
   const visibleSlotPlans = useMemo(
-    () => reconciledSlots.filter((p): p is Plan => !!p),
-    [reconciledSlots],
+    () => filteredSlots.filter((p): p is Plan => !!p),
+    [filteredSlots],
   );
 
   const bestByMetric = useMemo<Record<string, number | null>>(() => {
@@ -745,11 +828,15 @@ export function CompareScreen({
   }
 
   function fillEmptySlot(slotIdx: number) {
-    if (bench.length === 0) return;
-    const first = bench[0];
+    // Fill from the FILTERED bench so "auto-fill" honors whichever
+    // constraints the agent set — filling an empty D-SNP-only board
+    // with a non-D-SNP plan would just get filtered out again on the
+    // next render.
+    const candidate = filters.filtered.find((p) => !slotIds.has(p.id));
+    if (!candidate) return;
     setSlots((s) => {
       const next = [...s];
-      next[slotIdx] = first;
+      next[slotIdx] = candidate._raw;
       return next;
     });
   }
@@ -817,7 +904,8 @@ export function CompareScreen({
       />
 
       <Bench
-        bench={bench}
+        filters={filters}
+        slotIds={slotIds}
         baseline={baseline}
         annualDrugByPlanId={annualDrugByPlanId}
         ribbonByPlanId={ribbonByPlanId ?? {}}
@@ -836,7 +924,7 @@ export function CompareScreen({
           margin: '14px 0',
         }}
       >
-        {reconciledSlots.map((plan, i) => (
+        {filteredSlots.map((plan, i) => (
           <SlotCell
             key={i}
             slotIdx={i}
@@ -1179,7 +1267,8 @@ const RIBBON_STYLE: Record<string, { label: string; bg: string; color: string }>
 };
 
 function Bench({
-  bench,
+  filters,
+  slotIds,
   baseline,
   annualDrugByPlanId,
   ribbonByPlanId,
@@ -1189,7 +1278,15 @@ function Bench({
   onAddToBoard,
   onOpenH2H,
 }: {
-  bench: Plan[];
+  /** Lifted from CompareScreen so board slots and bench cards apply
+   *  the same predicate chain. Bench renders filters.filtered minus
+   *  whatever slots currently occupy the board. */
+  filters: ReturnType<typeof useBenchFilters>;
+  /** Set of plan ids currently on the board. Bench cards are the pool
+   *  minus these — same "pool minus slots" partition the CompareScreen
+   *  shell has always used, just recomputed from the shared filter
+   *  result rather than a separately-filtered bench array. */
+  slotIds: Set<string>;
   baseline: Plan | null;
   annualDrugByPlanId: Record<string, number | null>;
   ribbonByPlanId: Record<string, string | null>;
@@ -1202,25 +1299,18 @@ function Bench({
   onAddToBoard: (plan: Plan) => void;
   onOpenH2H: (plan: Plan) => void;
 }) {
-  // Multi-dimensional filter engine. Replaces the legacy single-axis
-  // chip row (All / HMO / PPO / $0 / D-SNP / C-SNP / VA) with five
-  // multi-selects, a search input, and a sort dropdown. VA stays
-  // reachable via the SNP dropdown ('VA' option → MA-only plans).
-  // Audit reachable from the browser console as `filters.audit()`
-  // for unmapped network / carrier rows.
-  const filters = useBenchFilters(bench, {
-    annualDrugByPlanId,
-    selectedProviderCount: providers.length,
-  });
+  // Bench items = filter-matched pool minus whatever's on the board.
+  // Bench filter counts still cover the FULL pool (both slot + bench
+  // plans) because filters is seeded with the pool in CompareScreen —
+  // the count on each chip is more useful when it reflects total
+  // supply, not "what's left after slot allocation".
+  const benchCards = useMemo(
+    () => filters.filtered.filter((p) => !slotIds.has(p.id)),
+    [filters.filtered, slotIds],
+  );
 
-  // Bridge to legacy filters debugging — exposes the hook result on the
-  // window so Rob can run `filters.audit()` from devtools without
-  // touching React internals. Cleared when the component unmounts.
-  if (typeof window !== 'undefined') {
-    (window as unknown as { __benchFilters?: typeof filters }).__benchFilters = filters;
-  }
-
-  if (bench.length === 0) {
+  const totalBenchInPool = filters.totalCount - slotIds.size;
+  if (totalBenchInPool <= 0) {
     return (
       <div
         style={{
@@ -1251,7 +1341,7 @@ function Bench({
           scrollSnapType: 'x mandatory',
         }}
       >
-        {filters.filtered.length === 0 ? (
+        {benchCards.length === 0 ? (
           <div
             style={{
               fontFamily: FONT_LABEL,
@@ -1267,7 +1357,7 @@ function Bench({
             No bench plans match these filters.
           </div>
         ) : (
-          filters.filtered.map((p) => (
+          benchCards.map((p) => (
             <BenchCard
               key={p.id}
               plan={p._raw}
