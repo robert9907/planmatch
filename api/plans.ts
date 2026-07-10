@@ -471,12 +471,26 @@ function transformPbpRow(
 
   // food_card normalization → monthly (matches Plan.benefits
   // .food_card.allowance_per_month contract).
+  //
+  // Priority order (perMonth wins first): manual_capture descriptions
+  // routinely bundle ancillary quarterly context — "Devoted Food & Home
+  // Card $442/mo … separate OTC $50/qtr" or Kaiser's "Healthy Food Card
+  // $275/quarter" alongside a "$100/qtr OTC card" side note. The raw
+  // regex-anywhere check would match "/qtr" from that ancillary phrase
+  // and divide the already-monthly copay by 3, surfacing $147/mo for a
+  // real $442/mo card (31 rows across NC/TX/GA D-SNPs affected
+  // 2026-07-10). Manual capture descriptions always lead with
+  // "$X.XX per month" — trust that marker first. See OTC block above
+  // (which has the same ordering issue but with OTC's canonical unit
+  // being quarterly, the practical impact differs).
   if (row.benefit_type === 'food_card' && typeof row.copay === 'number' && row.copay > 0) {
     const desc = (row.description ?? '').toLowerCase();
+    const perMonth = /per month|\/mo\b|monthly/.test(desc);
     const perQuarter = /per quarter|every quarter|\/qtr\b|\bqtr\b|quarterly/.test(desc);
     const perYear = /per year|\/yr\b|annual|yearly/.test(desc);
     let monthly: number;
-    if (perQuarter) monthly = row.copay / 3;
+    if (perMonth) monthly = row.copay;
+    else if (perQuarter) monthly = row.copay / 3;
     else if (perYear) monthly = row.copay / 12;
     else monthly = row.copay;
     coverage_amount = Math.round(monthly);
