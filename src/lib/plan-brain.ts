@@ -690,6 +690,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
         tier: est.tier,
         monthlyCopay: cov?.copay ?? null,
         annualCost: Math.round(est.yearlyCost),
+        isBrand: est.isBrand,
       };
     });
 

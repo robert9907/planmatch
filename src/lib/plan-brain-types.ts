@@ -254,6 +254,10 @@ export interface BrainScore {
     tier: number | null;
     monthlyCopay: number | null;
     annualCost: number;
+    // Brand vs. generic — mirrors Medication.isBrand from session.
+    // Enables Generic/Brand chips on cards and the LIS L3+ copay
+    // override in dual-eligible.ts.
+    isBrand: boolean;
   }>;
   // Per-gate customer-facing micro-explainer strings. One entry per
   // user-supplied provider / drug / priority for gates 1–3; a single
@@ -385,7 +389,17 @@ export interface PriorityCheckResult {
 
 // User profile for SNP detection + utilization derivation.
 export interface UserProfile {
-  drugs: ReadonlyArray<{ rxcui?: string; name: string; dose?: string }>;
+  drugs: ReadonlyArray<{
+    rxcui?: string;
+    name: string;
+    dose?: string;
+    /** Brand vs. generic flag from pm_drugs.is_brand (via drug-search).
+     *  Consumed by the LIS override in dual-eligible.ts (step 3) to
+     *  pick the correct generic vs. brand copay cap. Defaults to
+     *  false when omitted — LIS generic copay is lower so
+     *  undercharging is the safer failure mode. */
+    isBrand?: boolean;
+  }>;
   providers: ReadonlyArray<{ npi?: string; name: string }>;
   priorities: ReadonlySet<string>;     // user-selected extras preferences
   /** Per-tiered-priority dollar threshold (dental/vision/otc/giveback). */

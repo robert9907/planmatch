@@ -251,6 +251,7 @@ export function MedsScreen({ onNext, onBack, clientView, capture }: Props) {
             dose: r.strength ?? undefined,
             form: r.dose_form ?? undefined,
             source: 'manual',
+            isBrand: r.is_brand,
           });
         }}
       />
@@ -597,6 +598,7 @@ function AddMedPanel({
     displayName: string;
     strength: string | null;
     dose_form: string | null;
+    is_brand: boolean;
   }) => void;
   panelRef?: RefObject<HTMLDivElement>;
   presetQuery?: string | null;
@@ -686,6 +688,7 @@ function AddMedPanel({
                     displayName: r.displayName,
                     strength: r.strength,
                     dose_form: r.dose_form,
+                    is_brand: r.is_brand,
                   });
                   setQuery('');
                 }}

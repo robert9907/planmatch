@@ -600,7 +600,7 @@ function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
   // ── userProfile ───────────────────────────────────────────────────
   const conditionCsnp = conditionToCsnp(args.conditionProfile);
   const userProfile: UserProfile = {
-    drugs: medications.map((m) => ({ rxcui: m.rxcui, name: m.name })),
+    drugs: medications.map((m) => ({ rxcui: m.rxcui, name: m.name, isBrand: m.isBrand ?? false })),
     providers: providers.map((p) => ({ npi: p.npi, name: p.name })),
     priorities: new Set(args.userPriorities ?? []),
     dsnpEligible: client.medicaidConfirmed === true ? true : null,

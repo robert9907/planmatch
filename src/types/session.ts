@@ -60,6 +60,15 @@ export interface Medication {
   genericName?: string;
   brandName?: string;
   brandRxcui?: string;
+  // True when the drug-search hit that produced this medication was a
+  // branded product (pm_drugs.is_brand, derived from RxNorm TTY = SBD/
+  // BPCK at import). Threaded through UserProfile.drugs into the
+  // brain's per-drug cost breakdown so the LIS override in
+  // dual-eligible.ts (rollout step 3) can pick the correct generic
+  // vs. brand copay cap. Optional — capture / AgentBase-hydration
+  // paths that don't carry the flag default it to false (safer: LIS
+  // generic copay is lower).
+  isBrand?: boolean;
   // Renamed from `strength` to align with CanonicalMedication.
   dose?: string;
   form?: string;

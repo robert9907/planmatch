@@ -122,6 +122,7 @@ export function Step3Medications({ capture, onAdvance }: Step3Props) {
       rxcui: d.rxcui,
       name: d.name,
       source: 'manual',
+      isBrand: d.is_brand ?? false,
     });
     setQuery('');
     setResults([]);

@@ -113,7 +113,7 @@ export function MedsPage({ capture, onBack, onContinue }: Props) {
     // (Quote, AgentBase sync) show what the agent actually picked
     // rather than the raw RxNorm SCD/SBD canonical string.
     const name = displayLabel(d) || d.name;
-    addMedication({ rxcui: d.rxcui, name, source: 'manual' });
+    addMedication({ rxcui: d.rxcui, name, source: 'manual', isBrand: d.is_brand ?? false });
     setQuery(''); setResults([]);
   }
 
