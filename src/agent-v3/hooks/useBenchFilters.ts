@@ -143,17 +143,25 @@ function buildCostQualityDefs(selectedProviderCount: number): CostQualityDef[] {
     // full set. "Full-Benefit Only" is exact-match on the three-
     // element array; "Accepts Partial Duals" mirrors the Partial
     // Dual = Yes filing.
+    // The four accepted-population predicates below are hidden from
+    // the Cost & Quality dropdown (show: false) and instead auto-
+    // activated from client.medicaidLevel in CompareScreen's
+    // initialFilterState. They still function as normal filters when
+    // present in state.costQuality — the auto-populated chip stays
+    // dismissible via the standard activeChips row.
     {
       key: 'accepts_qmb',
       label: 'Accepts QMB',
       predicate: (p) =>
         (p.dsnpAcceptedPopulations ?? []).some((v) => v === 'QMB' || v === 'QMB+'),
+      show: false,
     },
     {
       key: 'accepts_slmb',
       label: 'Accepts SLMB',
       predicate: (p) =>
         (p.dsnpAcceptedPopulations ?? []).some((v) => v === 'SLMB' || v === 'SLMB+'),
+      show: false,
     },
     {
       key: 'full_benefit_only',
@@ -168,6 +176,7 @@ function buildCostQualityDefs(selectedProviderCount: number): CostQualityDef[] {
         const set = new Set(pops);
         return set.size === 3 && set.has('FBDE') && set.has('QMB+') && set.has('SLMB+');
       },
+      show: false,
     },
     {
       key: 'accepts_partial_duals',
@@ -176,6 +185,7 @@ function buildCostQualityDefs(selectedProviderCount: number): CostQualityDef[] {
         (p.dsnpAcceptedPopulations ?? []).some(
           (v) => v === 'QMB' || v === 'SLMB' || v === 'QI',
         ),
+      show: false,
     },
     // Bonus signal from the same SNP report: the plan's contract is
     // exclusively D-SNP (no mixed MA/D-SNP under the same contract).

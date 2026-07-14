@@ -667,11 +667,15 @@ export function CompareScreen({
   //                             ['has_docs_in_net']
   //   • priorities includes 'healthy_foods' → 'has_food_card'
   //   • priorities includes 'partb_giveback' → 'part_b_giveback'
+  //   • medicaidLevel = 'qmb'  → 'accepts_qmb'
+  //   • medicaidLevel = 'slmb' → 'accepts_slmb'
+  //   • medicaidLevel = 'qi'   → 'accepts_partial_duals'
+  //   • medicaidLevel = 'fbde' → 'accepts_qmb' + 'full_benefit_only'
   //
-  // Fields the intake screen doesn't currently capture (specific
-  // Medicaid determination like QMB / SLMB, HMO-vs-PPO network
-  // preference) can slot into the seed later — the initialState
-  // shape is just a Partial<BenchFilterState>.
+  // The Medicaid-derived pills are pulled out of the Cost & Quality
+  // dropdown entirely (show: false in useBenchFilters) so they only
+  // reach state via this seed. They stay dismissible via the standard
+  // activeChips row.
   const initialFilterState = useMemo(() => {
     const snp: string[] = [];
     if (client.dsnpEligible === true) snp.push('D-SNP');
@@ -679,6 +683,28 @@ export function CompareScreen({
     if (providers.length > 0) costQuality.push('has_docs_in_net');
     if (priorities?.includes('healthy_foods')) costQuality.push('has_food_card');
     if (priorities?.includes('partb_giveback')) costQuality.push('part_b_giveback');
+    // Medicaid-derived auto-pills. QMB/SLMB/QI map 1:1 to the
+    // CMS-filed accepted-populations predicates; FBDE gets both
+    // accepts_qmb (QMB+ is a member of the FBDE row) and
+    // full_benefit_only so the bench narrows to plans built for
+    // full duals.
+    switch (client.medicaidLevel) {
+      case 'qmb':
+        costQuality.push('accepts_qmb');
+        break;
+      case 'slmb':
+        costQuality.push('accepts_slmb');
+        break;
+      case 'qi':
+        costQuality.push('accepts_partial_duals');
+        break;
+      case 'fbde':
+        costQuality.push('accepts_qmb');
+        costQuality.push('full_benefit_only');
+        break;
+      default:
+        break;
+    }
     return { snp, costQuality };
     // Seed is captured once on hook mount (see useBenchFilters). Later
     // changes to client.dsnpEligible or priorities do NOT retroactively
