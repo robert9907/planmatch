@@ -23,6 +23,8 @@ import type { Plan } from '@/types/plans';
 import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
 import { useSession } from '@/hooks/useSession';
 import type { StateCode } from '@/types/session';
+import type { LisTier, LivingSetting, MedicaidLevel } from '@/lib/dual-eligible';
+import { deemLisTier } from '@/lib/dual-eligible';
 import { DISCLAIMERS } from '@/lib/compliance';
 import {
   Card,
@@ -34,6 +36,70 @@ import {
   Nav,
 } from './atoms';
 import { SnapTrigger } from './SnapTrigger';
+
+// ── Eligibility segmented-pill options ────────────────────────────
+// Chip labels for the Medicaid category, living setting, and LIS tier
+// pill rows on the Eligibility card. Keys match the enums in
+// src/lib/dual-eligible.ts; the brain reads client.medicaidLevel /
+// livingSetting / lisTier verbatim.
+
+const MEDICAID_LEVEL_CHIPS: ReadonlyArray<{ key: MedicaidLevel; label: string }> = [
+  { key: 'none', label: 'None' },
+  { key: 'qi',   label: 'QI' },
+  { key: 'slmb', label: 'SLMB' },
+  { key: 'qmb',  label: 'QMB' },
+  { key: 'fbde', label: 'FBDE' },
+];
+
+const LIVING_SETTING_CHIPS: ReadonlyArray<{ key: LivingSetting; label: string }> = [
+  { key: 'community',              label: 'Community' },
+  { key: 'institutional_or_hcbs',  label: 'Institution / HCBS' },
+];
+
+const LIS_TIER_CHIPS: ReadonlyArray<{ key: LisTier; label: string }> = [
+  { key: 'none',                label: 'None' },
+  { key: 'full_institutional',  label: 'Full institutional ($0/$0)' },
+  { key: 'full_low',            label: 'Full low ($1.60/$4.90)' },
+  { key: 'full_high',           label: 'Full high ($5.10/$12.65)' },
+];
+
+/** Segmented pill button used across the three Eligibility rows.
+ *  Style matches the existing "Dual eligible" pill so the card feels
+ *  cohesive. Not exported — local to IntakeScreen. */
+function SegmentedPill({
+  on,
+  label,
+  onClick,
+}: {
+  on: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={on}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '6px 12px',
+        borderRadius: 999,
+        border: on ? '1.5px solid #0d2f5e' : '1px solid rgba(13,47,94,0.18)',
+        background: on ? 'rgba(131,240,249,0.18)' : 'white',
+        color: '#0d2f5e',
+        fontSize: 12,
+        fontWeight: on ? 700 : 500,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      }}
+    >
+      {label}
+      {on && <span aria-hidden>✓</span>}
+    </button>
+  );
+}
 
 function splitNameForCreate(full: string): { first: string; last: string } {
   const parts = (full ?? '').trim().split(/\s+/);
@@ -652,12 +718,14 @@ export function IntakeScreen({
         <SnapTrigger capture={capture} />
       </div>
 
-      {/* Dual-eligible self-report — routes the brain's D-SNP
-        * population gate (plan-brain.ts:filterPlanPool). Without this
-        * flag, D-SNP plans are stripped from the Compare bench pool
-        * before scoring, so the bench's D-SNP filter shows zero. Auto-
-        * detected from the current plan's name when it contains
-        * "D-SNP" or "Dual"; broker can override. */}
+      {/* Dual-eligible + LIS self-report — routes the brain's D-SNP
+        * population gate AND applyDualEligibleCostAdjustment (medical
+        * cost-sharing zeroing for QMB/FBDE, drug copay caps for LIS
+        * tiers). Medicaid category is the primary selector; LIS tier
+        * auto-deems via deemLisTier() when Medicaid changes, but the
+        * broker can override for LIS-only clients who applied directly
+        * without Medicaid. Any Medicaid category (non-'none') also
+        * sets dsnpEligible=true so D-SNPs stay in the bench pool. */}
       <Card style={{ marginTop: 14, padding: '14px 16px' }}>
         <div
           style={{
@@ -671,7 +739,97 @@ export function IntakeScreen({
         >
           Eligibility
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+
+        {/* Medicaid category — segmented pill row. Selection auto-deems
+            LIS via deemLisTier and marks the client dsnpEligible. */}
+        <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>
+          Medicaid category
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+          {MEDICAID_LEVEL_CHIPS.map((chip) => {
+            const on = (client.medicaidLevel ?? 'none') === chip.key;
+            return (
+              <SegmentedPill
+                key={chip.key}
+                on={on}
+                label={chip.label}
+                onClick={() => {
+                  const nextLevel = chip.key;
+                  const nextLiving: LivingSetting =
+                    client.livingSetting ?? 'community';
+                  const nextLis: LisTier = deemLisTier(nextLevel, nextLiving);
+                  updateClient({
+                    medicaidLevel: nextLevel,
+                    lisTier: nextLis,
+                    livingSetting: nextLiving,
+                    // Any Medicaid category means dual-eligible; 'none'
+                    // clears the flag (broker can still flip the manual
+                    // dsnpEligible below for edge-case D-SNP allowances).
+                    dsnpEligible: nextLevel !== 'none' ? true : undefined,
+                    // Legacy compat — kept until every downstream reader
+                    // (AgentBase sync, QuoteDelivery ContextField) is
+                    // migrated off the boolean.
+                    medicaidConfirmed: nextLevel !== 'none',
+                  });
+                }}
+              />
+            );
+          })}
+        </div>
+
+        {/* Living setting — only relevant for FBDE. HCBS/institutional
+            promotes LIS to full_institutional ($0/$0 copays). */}
+        {client.medicaidLevel === 'fbde' && (
+          <>
+            <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>
+              Living setting
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+              {LIVING_SETTING_CHIPS.map((chip) => {
+                const on = (client.livingSetting ?? 'community') === chip.key;
+                return (
+                  <SegmentedPill
+                    key={chip.key}
+                    on={on}
+                    label={chip.label}
+                    onClick={() =>
+                      updateClient({
+                        livingSetting: chip.key,
+                        lisTier: deemLisTier('fbde', chip.key),
+                      })
+                    }
+                  />
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {/* LIS tier — auto-deemed from Medicaid + living setting, but
+            editable for LIS-only clients (no Medicaid, applied for
+            Extra Help directly). */}
+        <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>
+          Extra Help (LIS) tier
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+          {LIS_TIER_CHIPS.map((chip) => {
+            const on = (client.lisTier ?? 'none') === chip.key;
+            return (
+              <SegmentedPill
+                key={chip.key}
+                on={on}
+                label={chip.label}
+                onClick={() => updateClient({ lisTier: chip.key })}
+              />
+            );
+          })}
+        </div>
+
+        {/* Manual D-SNP override — kept for edge cases (SLMB/QI on
+            plans that don't file the standard D-SNP marker, or "not
+            sure" cases pre-verification). Auto-checks when Medicaid
+            is set; broker can uncheck. */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
           {(() => {
             const on = client.dsnpEligible === true;
             return (

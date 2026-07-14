@@ -603,10 +603,25 @@ function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
     drugs: medications.map((m) => ({ rxcui: m.rxcui, name: m.name, isBrand: m.isBrand ?? false })),
     providers: providers.map((p) => ({ npi: p.npi, name: p.name })),
     priorities: new Set(args.userPriorities ?? []),
-    dsnpEligible: client.medicaidConfirmed === true ? true : null,
+    // dsnpEligible: prefer the explicit client.dsnpEligible flag (set
+    // by the Intake pill), else fall back to medicaidLevel (any non-
+    // 'none' category means dual), else the legacy medicaidConfirmed
+    // checkbox from the older Step2Intake path.
+    dsnpEligible:
+      client.dsnpEligible === true ||
+      (client.medicaidLevel != null && client.medicaidLevel !== 'none') ||
+      client.medicaidConfirmed === true
+        ? true
+        : null,
     csnpConditions: conditionCsnp ? [conditionCsnp] : [],
     age: ageFromDob(client.dob),
     hasVaDrugCoverage: false,
+    // Dual-eligible / LIS wiring — activates the brain's
+    // applyDualEligibleCostAdjustment. Defaults keep the adjustment
+    // a no-op for older sessions that haven't captured these fields.
+    medicaidLevel: client.medicaidLevel ?? 'none',
+    lisTier: client.lisTier ?? 'none',
+    livingSetting: client.livingSetting ?? 'community',
   };
 
   return {

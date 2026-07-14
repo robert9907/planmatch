@@ -41,6 +41,26 @@ export interface Client {
    *  otherwise they're stripped before scoring. Optional so older
    *  session payloads / AgentBase hydrations don't need a backfill. */
   dsnpEligible?: boolean;
+  /** Medicaid category — drives the brain's medical cost-sharing
+   *  zeroing (QMB or FBDE) and Part C premium payment (QMB+ on
+   *  D-SNP). Broker sets on the Intake screen; usePlanBrain forwards
+   *  to UserProfile.medicaidLevel. Optional so hydrated sessions
+   *  and older AgentBase payloads keep decoding — undefined means
+   *  "not yet captured" and the brain treats it as 'none'.
+   *  Runs alongside `medicaidConfirmed` during the transition; the
+   *  boolean stays until every downstream reader (D-SNP eligibility
+   *  gate, AgentBase sync, QuoteDelivery ContextField) is migrated. */
+  medicaidLevel?: 'none' | 'qi' | 'slmb' | 'qmb' | 'fbde';
+  /** LIS (Extra Help) copay tier — drives the brain's Part D copay
+   *  override. Auto-deemed from `medicaidLevel` + `livingSetting`
+   *  by IntakeScreen via deemLisTier(); broker can override for
+   *  LIS-only clients who applied directly (no Medicaid). Optional
+   *  for the same session-decode reason as medicaidLevel. */
+  lisTier?: 'none' | 'full_institutional' | 'full_low' | 'full_high';
+  /** Living setting — only affects LIS tier for FBDE (community →
+   *  full_low, institutional/HCBS → full_institutional). Defaults
+   *  to 'community' when omitted. */
+  livingSetting?: 'community' | 'institutional_or_hcbs';
 }
 
 export interface Medication {
