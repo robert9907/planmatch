@@ -46,6 +46,7 @@ import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
 import { useScreenShareStore } from '@/hooks/useScreenShare';
 import { fetchClientSession } from '@/lib/agentbase';
+import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
 import { resolveAgentBaseDrugs } from '@/lib/resolveAgentBaseDrugs';
 import { bulkLookupFormulary } from '@/lib/formularyLookup';
 import { fetchPlansForClient } from '@/lib/planCatalog';
@@ -894,6 +895,26 @@ export function AgentV3App() {
   // by plan_id keeps the two surfaces phrasing-identical without waiting
   // on a library-server change. Walks both scored + bench so every county
   // plan in CompareScreen's grid + bench has a "Why this plan" expander.
+  // Per-plan dual-eligible cost adjustment. Populated from
+  // brain.result.scored + bench, keyed by agent Plan.id so the
+  // CompareScreen board slots + bench cards can render badges +
+  // strikethroughs when the client has Medicaid or LIS on file.
+  // Falls back to an empty record when the local brain hasn't run
+  // (library-only render path).
+  const dualEligibleByPlanId = useMemo<
+    Record<string, DualEligibleAdjustment | undefined>
+  >(() => {
+    if (!brain.result) return {};
+    const out: Record<string, DualEligibleAdjustment | undefined> = {};
+    for (const sp of brain.result.scored) {
+      if (sp.dualEligibleAdjustment) out[sp.plan.id] = sp.dualEligibleAdjustment;
+    }
+    for (const sp of brain.result.bench) {
+      if (sp.dualEligibleAdjustment) out[sp.plan.id] = sp.dualEligibleAdjustment;
+    }
+    return out;
+  }, [brain.result]);
+
   const explanationsByPlanId = useMemo<
     Record<
       string,
@@ -1149,6 +1170,7 @@ export function AgentV3App() {
             drugsTotalByPlanId={drugsTotalByPlanId}
             drugBreakdownByPlanId={drugBreakdownByPlanId}
             explanationsByPlanId={explanationsByPlanId}
+            dualEligibleByPlanId={dualEligibleByPlanId}
             rankedPlans={
               ranked.result
                 ? [...ranked.result.top_plans, ...ranked.result.bench_plans]

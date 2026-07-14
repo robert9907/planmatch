@@ -43,6 +43,7 @@ import {
   summarizeExplanations,
 } from '@/lib/classify-explanation';
 import type { LibraryRankPlan } from '@/lib/library-client';
+import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
 import { QuoteBuilder } from './QuoteBuilder';
 import { useHealthSherpaEnroll } from './lib/useHealthSherpaEnroll';
 import { formatOtc } from '@/lib/extractBenefitValue';
@@ -139,6 +140,13 @@ interface Props {
    *  list (e.g., the user's current plan when it failed Gates 1+2) get
    *  undefined and the SlotCell renders nothing for that section. */
   explanationsByPlanId?: Record<string, ExplanationsForPlan>;
+  /** Per-plan dual-eligible / LIS cost adjustment sourced from
+   *  BrainScore.dualEligibleAdjustment via AgentV3App's adapter.
+   *  When present for a plan, the board slot / bench card / Quick
+   *  Preview render subsidy badges and strikethrough the adjusted
+   *  premium + drug cost. Empty record when the client has no
+   *  Medicaid / LIS on file (adjustment was a no-op in the brain). */
+  dualEligibleByPlanId?: Record<string, DualEligibleAdjustment | undefined>;
   /**
    * Fire-and-forget AgentBase write-back. CompareScreen calls this with
    * the picked plan when the broker clicks Enroll on a card or the
@@ -567,6 +575,7 @@ export function CompareScreen({
   benchPlans,
   benchGateResultsByPlanId,
   explanationsByPlanId,
+  dualEligibleByPlanId,
   onRecommend,
   onBack,
   onNext,
@@ -937,6 +946,7 @@ export function CompareScreen({
         ribbonByPlanId={ribbonByPlanId ?? {}}
         gateResultsByPlanId={benchGateResultsByPlanId ?? {}}
         drugBreakdownByPlanId={drugBreakdownByPlanId ?? {}}
+        dualEligibleByPlanId={dualEligibleByPlanId}
         providers={providers}
         onAddToBoard={addToBoard}
         onOpenH2H={openH2H}
@@ -970,6 +980,11 @@ export function CompareScreen({
               plan != null && drugCoverageUnknownByPlanId
                 ? drugCoverageUnknownByPlanId[plan.id] === true
                 : false
+            }
+            dualEligible={
+              plan != null && dualEligibleByPlanId
+                ? dualEligibleByPlanId[plan.id]
+                : undefined
             }
             explanations={
               plan != null && explanationsByPlanId
@@ -1281,6 +1296,74 @@ function DsnpPopulationBadges({ plan }: { plan: Plan }) {
   );
 }
 
+/** Dual-eligible / LIS chip row rendered under DsnpPopulationBadges on
+ *  each BenchCard. Reuses the same tiny-chip visual (font, padding,
+ *  radius, letter-spacing) with three semantic colors:
+ *    green — Medicaid $0 cost-sharing (QMB or FBDE), or partial MSP
+ *    blue  — LIS drug cap (shows actual $/$ from lisCopaysApplied)
+ *    gold  — Premium paid by Medicaid
+ *  Returns null when no adjustment applies. */
+function DualEligibleBadges({ adj }: { adj?: DualEligibleAdjustment }) {
+  if (!adj) return null;
+  const { context, premiumPaidByMedicaid, medicalCostSharingZeroed, lisCopaysApplied } = adj;
+
+  let medicaidLabel: string | null = null;
+  if (medicalCostSharingZeroed) {
+    medicaidLabel = context.medicaidLevel === 'fbde' ? 'FBDE $0 copays' : 'QMB $0 copays';
+  } else if (context.medicaidLevel === 'slmb') {
+    medicaidLabel = 'SLMB Part B';
+  } else if (context.medicaidLevel === 'qi') {
+    medicaidLabel = 'QI Part B';
+  }
+
+  let lisLabel: string | null = null;
+  if (lisCopaysApplied) {
+    if (lisCopaysApplied.generic === 0 && lisCopaysApplied.brand === 0) {
+      lisLabel = 'Full LIS $0';
+    } else {
+      lisLabel = `LIS $${lisCopaysApplied.generic.toFixed(2)}/$${lisCopaysApplied.brand.toFixed(2)}`;
+    }
+  }
+
+  if (!medicaidLabel && !lisLabel && !premiumPaidByMedicaid) return null;
+
+  const CHIP_BASE: React.CSSProperties = {
+    fontFamily: FONT_LABEL,
+    fontSize: 8,
+    fontWeight: 800,
+    padding: '2px 5px',
+    borderRadius: 3,
+    letterSpacing: 0.4,
+    whiteSpace: 'nowrap',
+  };
+  const GREEN_CHIP: React.CSSProperties = {
+    ...CHIP_BASE,
+    background: 'rgba(34,197,94,0.22)',
+    color: '#a7f3d0',
+  };
+  const BLUE_CHIP: React.CSSProperties = {
+    ...CHIP_BASE,
+    background: 'rgba(59,130,246,0.22)',
+    color: '#bfdbfe',
+  };
+  const GOLD_CHIP: React.CSSProperties = {
+    ...CHIP_BASE,
+    background: 'rgba(245,158,11,0.22)',
+    color: '#fde68a',
+  };
+
+  return (
+    <div
+      title="Medicaid / LIS cost adjustment active — costs reflect what the beneficiary actually pays"
+      style={{ display: 'flex', gap: 3, flexWrap: 'wrap', marginTop: 4 }}
+    >
+      {medicaidLabel && <span style={GREEN_CHIP}>{medicaidLabel}</span>}
+      {lisLabel && <span style={BLUE_CHIP}>{lisLabel}</span>}
+      {premiumPaidByMedicaid && <span style={GOLD_CHIP}>Premium paid by Medicaid</span>}
+    </div>
+  );
+}
+
 const RIBBON_STYLE: Record<string, { label: string; bg: string; color: string }> = {
   BEST_OVERALL: { label: '★ Top Pick', bg: '#a78bfa', color: 'white' },
   LOWEST_DRUG_COST: { label: 'Lowest Rx', bg: TEAL, color: 'white' },
@@ -1300,6 +1383,7 @@ function Bench({
   ribbonByPlanId,
   gateResultsByPlanId,
   drugBreakdownByPlanId,
+  dualEligibleByPlanId,
   providers,
   onAddToBoard,
   onOpenH2H,
@@ -1321,6 +1405,7 @@ function Bench({
     { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }
   >;
   drugBreakdownByPlanId: Record<string, ReadonlyArray<DrugRow>>;
+  dualEligibleByPlanId?: Record<string, DualEligibleAdjustment | undefined>;
   providers: ProviderRow[];
   onAddToBoard: (plan: Plan) => void;
   onOpenH2H: (plan: Plan) => void;
@@ -1392,6 +1477,7 @@ function Bench({
               ribbon={ribbonByPlanId[p.id] ?? null}
               gateResults={gateResultsByPlanId[p.id] ?? null}
               drugBreakdown={drugBreakdownByPlanId[p.id] ?? null}
+              dualEligible={dualEligibleByPlanId?.[p.id]}
               providers={providers}
               onAddToBoard={onAddToBoard}
               onOpenH2H={onOpenH2H}
@@ -1410,6 +1496,7 @@ function BenchCard({
   ribbon,
   gateResults,
   drugBreakdown,
+  dualEligible,
   providers,
   onAddToBoard,
   onOpenH2H,
@@ -1420,6 +1507,7 @@ function BenchCard({
   ribbon: string | null;
   gateResults: { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean } | null;
   drugBreakdown: ReadonlyArray<DrugRow> | null;
+  dualEligible?: DualEligibleAdjustment;
   providers: ProviderRow[];
   onAddToBoard: (plan: Plan) => void;
   onOpenH2H: (plan: Plan) => void;
@@ -1589,6 +1677,7 @@ function BenchCard({
           {planIdShort(plan.id)}
         </div>
         <DsnpPopulationBadges plan={plan} />
+        <DualEligibleBadges adj={dualEligible} />
         <a
           href={plan.sbf_url}
           target="_blank"
@@ -1619,12 +1708,30 @@ function BenchCard({
             gap: 6,
           }}
         >
-          <MetricMini label="Premium" value={`$${plan.premium}/mo`} winning={premiumWins} />
+          <MetricMini
+            label="Premium"
+            value={
+              dualEligible?.premiumPaidByMedicaid && plan.premium > 0
+                ? '$0/mo'
+                : `$${plan.premium}/mo`
+            }
+            strike={
+              dualEligible?.premiumPaidByMedicaid && plan.premium > 0
+                ? `$${plan.premium}/mo`
+                : null
+            }
+            winning={premiumWins || dualEligible?.premiumPaidByMedicaid === true}
+          />
           <MetricMini label="MOOP" value={fmt(plan.moop_in_network)} winning={moopWins} />
           <MetricMini
             label="Drug / yr"
             value={drug == null ? '—' : fmt(drug)}
-            winning={drugWins}
+            strike={
+              dualEligible?.lisCopaysApplied
+                ? fmt(dualEligible.original.totalAnnualDrugCost)
+                : null
+            }
+            winning={drugWins || dualEligible?.lisCopaysApplied != null}
           />
           <MetricMini
             label="Stars"
@@ -1775,10 +1882,15 @@ function MetricMini({
   label,
   value,
   winning,
+  strike,
 }: {
   label: string;
   value: string;
   winning: boolean;
+  /** Optional pre-adjustment value rendered above `value` with a
+   *  strikethrough. Used for the LIS / Medicaid drug + premium
+   *  strikethroughs when the client has a dual-eligible adjustment. */
+  strike?: string | null;
 }) {
   return (
     <div
@@ -1805,6 +1917,20 @@ function MetricMini({
       >
         {label}
       </div>
+      {strike && (
+        <div
+          style={{
+            fontFamily: FONT_NUM,
+            fontSize: 9,
+            color: MUTED,
+            textDecoration: 'line-through',
+            fontWeight: 500,
+            marginTop: 1,
+          }}
+        >
+          {strike}
+        </div>
+      )}
       <div
         style={{
           fontFamily: FONT_NUM,
@@ -2142,6 +2268,7 @@ function SlotCell({
   providers,
   drugBreakdown,
   drugCoverageUnknown,
+  dualEligible,
   explanations,
   onDrop,
   onClear,
@@ -2170,6 +2297,11 @@ function SlotCell({
    *  true, the drug-cost row in this slot card renders an amber
    *  "confirm with your pharmacist" disclaimer. */
   drugCoverageUnknown: boolean;
+  /** Dual-eligible / LIS cost adjustment for this plan. When present,
+   *  the slot header renders DualEligibleBadges under the contract-ID
+   *  line to signal the beneficiary's Medicaid / LIS coverage on
+   *  every board slot. Absent when the client has no adjustment. */
+  dualEligible?: DualEligibleAdjustment;
   /** Per-gate micro-explainer strings for this plan. Null when the
    *  parent didn't supply explanationsByPlanId for this plan id — the
    *  "Why this plan" expander is skipped entirely in that case. */
@@ -2325,6 +2457,7 @@ function SlotCell({
             {planIdShort(plan.id)}
           </div>
           <DsnpPopulationBadges plan={plan} />
+          <DualEligibleBadges adj={dualEligible} />
           <a
             href={plan.sbf_url}
             target="_blank"

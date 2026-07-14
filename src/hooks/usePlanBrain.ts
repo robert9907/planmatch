@@ -49,6 +49,7 @@ import type {
 import type { DetectedConditionKey } from '@/lib/condition-detector';
 import { BROKER_IMPLICATIONS } from '@/lib/condition-detector';
 import { ARCHETYPE_RULES } from '@/lib/broker-playbook';
+import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
 import type {
   AnnualCostEstimate,
   AnnualUtilization,
@@ -251,6 +252,12 @@ export interface ScoredPlan {
    *  backfill ever fires. Field kept for caller compat. */
   medicationBackfill: boolean;
   realAnnualCost: CompatRealAnnualCost | null;
+  /** Passed through from BrainScore.dualEligibleAdjustment when the
+   *  client answered any Medicaid / LIS question on IntakeScreen.
+   *  When present, `realAnnualCost` and `totalAnnualDrugCost` above
+   *  are ALREADY adjusted — the pre-adjustment snapshot lives on
+   *  `.original` for strikethrough rendering on the Compare surfaces. */
+  dualEligibleAdjustment?: DualEligibleAdjustment;
   redFlags: CompatRedFlag[];
   disqualified: boolean;
   whySwitchCopy: string;
@@ -746,6 +753,7 @@ function adaptScored(
     csnpReservedSlot: score.csnpReservedSlot,
     medicationBackfill: score.medicationBackfill,
     realAnnualCost: realAnnual,
+    dualEligibleAdjustment: score.dualEligibleAdjustment,
     redFlags,
     // No longer treats unverified-network plans as disqualified — Gate 1
     // passes Unknown with a flag, and QuoteDeliveryV4 filters on this
