@@ -65,6 +65,7 @@ import {
   combineUtilization,
   type UtilizationCondition,
 } from './utilization-model';
+import { applyDualEligibleCostAdjustment } from './dual-eligible';
 import { firstTierCopay } from './inpatient-format';
 
 // Day-1 SNF copay from the ladder description ("Days 1-20: $0/day · …"),
@@ -775,6 +776,29 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     };
     return { row, benefits, formulary, score };
   });
+
+  // ── Dual-eligible / LIS cost adjustment ────────────────────────────
+  // Runs after every raw BrainScore is computed and BEFORE any cost-
+  // based sort or axis-score normalization. Overwrites realAnnualCost
+  // sub-fields (medical zeroing for QMB/FBDE, premium zeroing for
+  // QMB+D-SNP, drug copays capped at the LIS tier) and attaches a
+  // snapshot of the originals to score.dualEligibleAdjustment. No-op
+  // when both medicaidLevel and lisTier are 'none' (the default until
+  // intake in step 5 wires the fields through usePlanBrain).
+  const medicaidLevel = input.userProfile.medicaidLevel ?? 'none';
+  const lisTier = input.userProfile.lisTier ?? 'none';
+  const livingSetting = input.userProfile.livingSetting ?? 'community';
+  if (medicaidLevel !== 'none' || lisTier !== 'none') {
+    for (const scored of rawScored) {
+      scored.score = applyDualEligibleCostAdjustment(
+        scored.score,
+        scored.row,
+        medicaidLevel,
+        livingSetting,
+        lisTier,
+      );
+    }
+  }
 
   // ── Informational axis scores ─────────────────────────────────────
   // Populated for analytics + brain-snapshot serialization. Lower

@@ -21,6 +21,12 @@ import type { PmPlanRow } from './brain-foreign-types';
 import type { PlanBenefitRow } from './brain-foreign-types';
 import type { FormularyCoverage } from './brain-foreign-types';
 import type { AnnualCostEstimate, AnnualUtilization } from './utilization-model';
+import type {
+  DualEligibleAdjustment,
+  LisTier,
+  LivingSetting,
+  MedicaidLevel,
+} from './dual-eligible';
 
 /** Which ranking population the user falls into. Determines weight
  *  profile, ribbon labels, and SNP-type plan filtering. */
@@ -259,6 +265,13 @@ export interface BrainScore {
     // override in dual-eligible.ts.
     isBrand: boolean;
   }>;
+  /** Present ONLY when applyDualEligibleCostAdjustment ran (i.e.
+   *  userProfile.medicaidLevel !== 'none' OR lisTier !== 'none').
+   *  When present, realAnnualCost, annualMedicalCost,
+   *  totalAnnualDrugCost, and drugBreakdown above are already
+   *  ADJUSTED — the pre-adjustment snapshot lives on
+   *  dualEligibleAdjustment.original for strikethrough rendering. */
+  dualEligibleAdjustment?: DualEligibleAdjustment;
   // Per-gate customer-facing micro-explainer strings. One entry per
   // user-supplied provider / drug / priority for gates 1–3; a single
   // line for gate 4 (cost rank). Empty array when the user didn't
@@ -394,12 +407,26 @@ export interface UserProfile {
     name: string;
     dose?: string;
     /** Brand vs. generic flag from pm_drugs.is_brand (via drug-search).
-     *  Consumed by the LIS override in dual-eligible.ts (step 3) to
-     *  pick the correct generic vs. brand copay cap. Defaults to
-     *  false when omitted — LIS generic copay is lower so
-     *  undercharging is the safer failure mode. */
+     *  Consumed by the LIS override in dual-eligible.ts to pick the
+     *  correct generic vs. brand copay cap. Defaults to false when
+     *  omitted — LIS generic copay is lower so undercharging is the
+     *  safer failure mode. */
     isBrand?: boolean;
   }>;
+  /** Medicaid category. Drives medical cost-sharing zeroing (QMB or
+   *  FBDE) and Part C premium payment (QMB+ on D-SNP). Defaults to
+   *  'none' when omitted. Orthogonal to dsnpEligible — a QMB
+   *  beneficiary can be enrolled in a non-D-SNP MAPD. */
+  medicaidLevel?: MedicaidLevel;
+  /** LIS (Extra Help) copay tier. Usually derived by intake via
+   *  deemLisTier(medicaidLevel, livingSetting) but can be set
+   *  explicitly for beneficiaries who applied for LIS directly
+   *  without Medicaid. Defaults to 'none' when omitted. */
+  lisTier?: LisTier;
+  /** Living setting — only affects LIS tier for FBDE (community →
+   *  full_low, institutional/HCBS → full_institutional). Defaults
+   *  to 'community' when omitted. */
+  livingSetting?: LivingSetting;
   providers: ReadonlyArray<{ npi?: string; name: string }>;
   priorities: ReadonlySet<string>;     // user-selected extras preferences
   /** Per-tiered-priority dollar threshold (dental/vision/otc/giveback). */

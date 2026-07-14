@@ -152,6 +152,12 @@ const INSULIN_NAME_RE =
   /\b(insulin|lantus|basaglar|toujeo|levemir|tresiba|humalog|novolog|fiasp|admelog|apidra|lyumjev|humulin|novolin|afrezza|semglee|rezvoglar)\b/i;
 const INSULIN_MONTHLY_CAP_2026 = 35;
 
+// 2026 IRA Part D true-out-of-pocket (TrOOP) cap. Above this
+// threshold cost-sharing is $0 for ALL Part D beneficiaries (IRA
+// §11201), LIS or not. Consumed by the LIS override in
+// dual-eligible.ts as a backstop after LIS copay caps are applied.
+export const PART_D_OOP_CAP_2026 = 2100;
+
 // Notional retail price per tier — used when the per-NDC drug cost
 // cache hasn't been populated yet for this plan. Empirically sane for
 // Medicare-age generics + brand baskets.
