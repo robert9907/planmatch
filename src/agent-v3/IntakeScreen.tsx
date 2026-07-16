@@ -22,7 +22,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Plan } from '@/types/plans';
 import type { UseCaptureSessionResult } from '@/hooks/useCaptureSession';
 import { useSession } from '@/hooks/useSession';
-import type { StateCode } from '@/types/session';
+import type { EnrollmentPeriod, SepLifeEvent, StateCode } from '@/types/session';
+import { SEP_LIFE_EVENT_LABELS, SEP_LIFE_EVENT_TO_CMS } from '@/types/session';
 import type { LisTier, LivingSetting, MedicaidLevel } from '@/lib/dual-eligible';
 import { deemLisTier } from '@/lib/dual-eligible';
 import { DISCLAIMERS } from '@/lib/compliance';
@@ -61,6 +62,35 @@ const LIS_TIER_CHIPS: ReadonlyArray<{ key: LisTier; label: string }> = [
   { key: 'full_institutional',  label: 'Full institutional ($0/$0)' },
   { key: 'full_low',            label: 'Full low ($1.60/$4.90)' },
   { key: 'full_high',           label: 'Full high ($5.10/$12.65)' },
+];
+
+// ── Enrollment period options ─────────────────────────────────────
+// Five CMS periods the broker/consumer can pick. Matches types in
+// src/types/session.ts. Body copy is a one-liner shown under the pill
+// row once a period is picked.
+const ENROLLMENT_PERIODS: ReadonlyArray<{
+  value: EnrollmentPeriod;
+  label: string;
+  body: string;
+}> = [
+  { value: 'IEP',  label: 'IEP',  body: 'Turning 65, first time enrolling' },
+  { value: 'ICEP', label: 'ICEP', body: 'New to Medicare, choosing first plan' },
+  { value: 'AEP',  label: 'AEP',  body: 'Annual enrollment, Oct 15 – Dec 7' },
+  { value: 'OEP',  label: 'OEP',  body: 'Open enrollment, Jan 1 – Mar 31' },
+  { value: 'SEP',  label: 'SEP',  body: 'Life event (lost coverage, moved, etc.)' },
+];
+
+// Six plain-English SEP life events. Same set the consumer surfaces —
+// the agent deliberately sees identical language. Order chosen to
+// front-load the most common triggers. NO CMS reason code dropdown
+// anywhere; the codes are derived from these keys via SEP_LIFE_EVENT_TO_CMS.
+const SEP_LIFE_EVENT_ORDER: ReadonlyArray<SepLifeEvent> = [
+  'moved',
+  'lost_employer',
+  'lost_aca',
+  'left_facility',
+  'new_medicaid',
+  'doctor_left',
 ];
 
 /** Segmented pill button used across the three Eligibility rows.
@@ -230,8 +260,36 @@ export function IntakeScreen({
       client.dob &&
       /^\d{5}$/.test(client.zip) &&
       client.phone &&
-      callRecordingDisclosed,
+      callRecordingDisclosed &&
+      client.enrollmentPeriod &&
+      (client.enrollmentPeriod !== 'SEP' || client.sepLifeEvent),
   );
+
+  // Enrollment period write path — non-SEP picks clear stale SEP fields
+  // so re-picking (e.g. broker fat-fingers SEP → switches to AEP) can't
+  // leave an orphaned life event / CMS code on the session.
+  function onEnrollmentPeriodChange(period: EnrollmentPeriod) {
+    if (period === 'SEP') {
+      updateClient({ enrollmentPeriod: 'SEP' });
+    } else {
+      updateClient({
+        enrollmentPeriod: period,
+        sepLifeEvent: undefined,
+        sepReasonCode: undefined,
+      });
+    }
+  }
+
+  // SEP life-event → CMS code derivation. This is the SEP fraud gate:
+  // the broker never types or picks a raw CMS code; the six plain-
+  // English cards are the only path to a sepReasonCode.
+  function onSepLifeEventChange(event: SepLifeEvent) {
+    updateClient({
+      enrollmentPeriod: 'SEP',
+      sepLifeEvent: event,
+      sepReasonCode: SEP_LIFE_EVENT_TO_CMS[event],
+    });
+  }
 
   // Inline create-client. Fires only when the broker landed on
   // /agent-v3 without a ?clientId= (new caller, no CRM row yet) and
@@ -864,6 +922,148 @@ export function IntakeScreen({
         </div>
         <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 8 }}>
           Enables D-SNP plan recommendations on the Compare screen.
+        </div>
+      </Card>
+
+      {/* Enrollment period — required for compliance documentation and
+        * enrollment gating. Brain reads client.enrollmentPeriod +
+        * (SEP) sepReasonCode to compute enrollmentGated: outside AEP/
+        * OEP windows the UI blocks enrollment CTAs but the brain still
+        * runs a full ranking so beneficiaries can window-shop.
+        *
+        * SEP fraud gate: neither this UI nor the consumer flow exposes
+        * raw CMS SEP codes. Broker picks a plain-English life event and
+        * sepReasonCode is derived via SEP_LIFE_EVENT_TO_CMS. */}
+      <Card style={{ marginTop: 14, padding: '14px 16px' }}>
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: 0.6,
+            textTransform: 'uppercase',
+            color: '#64748b',
+            marginBottom: 4,
+          }}
+        >
+          Enrollment period
+        </div>
+        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 10 }}>
+          Determines whether enrollment is legally permitted right now. Compliance-required.
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: client.enrollmentPeriod ? 8 : 0 }}>
+          {ENROLLMENT_PERIODS.map((ep) => (
+            <SegmentedPill
+              key={ep.value}
+              on={client.enrollmentPeriod === ep.value}
+              label={ep.label}
+              onClick={() => onEnrollmentPeriodChange(ep.value)}
+            />
+          ))}
+        </div>
+        {client.enrollmentPeriod && (
+          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: client.enrollmentPeriod === 'SEP' ? 12 : 0 }}>
+            {ENROLLMENT_PERIODS.find((e) => e.value === client.enrollmentPeriod)?.body}
+          </div>
+        )}
+        {client.enrollmentPeriod === 'SEP' && (
+          <>
+            <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>
+              What qualifies this SEP? <span style={{ color: '#94a3b8' }}>(CMS reason code is derived automatically)</span>
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                gap: 8,
+              }}
+            >
+              {SEP_LIFE_EVENT_ORDER.map((key) => {
+                const label = SEP_LIFE_EVENT_LABELS[key];
+                const on = client.sepLifeEvent === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => onSepLifeEventChange(key)}
+                    aria-pressed={on}
+                    style={{
+                      textAlign: 'left',
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      border: on
+                        ? '1.5px solid #0d2f5e'
+                        : '1px solid rgba(13,47,94,0.18)',
+                      background: on
+                        ? 'rgba(131,240,249,0.18)'
+                        : 'white',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 13,
+                        fontWeight: on ? 700 : 600,
+                        color: '#0d2f5e',
+                      }}
+                    >
+                      {label.title}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: '#64748b',
+                        marginTop: 2,
+                        lineHeight: 1.3,
+                      }}
+                    >
+                      {label.subtitle}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            {client.sepLifeEvent && client.sepReasonCode && (
+              <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 8 }}>
+                CMS reason code: <strong style={{ color: '#0d2f5e' }}>{client.sepReasonCode}</strong> (auto-derived, stored for compliance audit)
+              </div>
+            )}
+          </>
+        )}
+      </Card>
+
+      {/* VA / TRICARE drug coverage — lets the brain include MA-only
+        * plans (no Part D) in the pool. These plans often have better
+        * extras but no drug coverage, which is fine for veterans who
+        * fill Rx through VA or Express Scripts. Default No preserves
+        * the standard population's MAPD-only filter. */}
+      <Card style={{ marginTop: 14, padding: '14px 16px' }}>
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: 0.6,
+            textTransform: 'uppercase',
+            color: '#64748b',
+            marginBottom: 4,
+          }}
+        >
+          VA or TRICARE drug coverage
+        </div>
+        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 10 }}>
+          Tick yes only if prescriptions are filled through VA or Express Scripts (TRICARE). Includes MA-only plans with better extras but no built-in drug coverage.
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <SegmentedPill
+            on={client.hasVaDrugCoverage !== true}
+            label="No"
+            onClick={() => updateClient({ hasVaDrugCoverage: false })}
+          />
+          <SegmentedPill
+            on={client.hasVaDrugCoverage === true}
+            label="Yes — VA or TRICARE"
+            onClick={() => updateClient({ hasVaDrugCoverage: true })}
+          />
         </div>
       </Card>
 
