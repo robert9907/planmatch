@@ -12,6 +12,47 @@ export type PlanType = 'MA' | 'MAPD' | 'DSNP' | 'CSNP' | 'ISNP' | 'PDP' | 'MEDSU
  *  self-report. Matches CsnpConditionKey in lib/library-client.ts. */
 export type CsnpConditionCode = 'diabetes' | 'cardio' | 'copd' | 'esrd';
 
+/** CMS enrollment period the beneficiary is using. Determines whether
+ *  enrollment is legally permitted and which compliance language applies. */
+export type EnrollmentPeriod = 'IEP' | 'ICEP' | 'SEP' | 'OEP' | 'AEP';
+
+/** The six life-event SEP reasons a beneficiary can select. These are
+ *  the ONLY SEP paths exposed in the UI (consumer or agent). The system
+ *  auto-maps each to the correct CMS SEP reason code internally.
+ *  Full CMS taxonomy is intentionally excluded to prevent SEP fraud. */
+export type SepLifeEvent =
+  | 'moved'            // → CMS code MOV
+  | 'lost_employer'    // → CMS code LEC
+  | 'lost_aca'         // → CMS code LCC
+  | 'left_facility'    // → CMS code LTC
+  | 'new_medicaid'     // → CMS code MCD
+  | 'doctor_left';     // → CMS code DIF
+
+/** Internal CMS SEP reason code. Never shown in the UI — auto-derived
+ *  from SepLifeEvent. Stored in session and synced to AgentBase for
+ *  compliance audit trail. */
+export type SepReasonCode = 'MOV' | 'LEC' | 'LCC' | 'LTC' | 'MCD' | 'DIF';
+
+/** Maps a plain-English life event to its CMS SEP reason code. */
+export const SEP_LIFE_EVENT_TO_CMS: Record<SepLifeEvent, SepReasonCode> = {
+  moved: 'MOV',
+  lost_employer: 'LEC',
+  lost_aca: 'LCC',
+  left_facility: 'LTC',
+  new_medicaid: 'MCD',
+  doctor_left: 'DIF',
+};
+
+/** Display labels for each life event (used in both consumer and agent UI). */
+export const SEP_LIFE_EVENT_LABELS: Record<SepLifeEvent, { title: string; subtitle: string }> = {
+  moved:          { title: 'I recently moved',                              subtitle: 'New address, might need different plans' },
+  lost_employer:  { title: "I'm losing my job's health insurance",          subtitle: "Retiring, laid off, or spouse's plan ending" },
+  lost_aca:       { title: "I'm losing my ACA / Marketplace plan",          subtitle: 'Coverage ending or unaffordable' },
+  left_facility:  { title: "I'm leaving a nursing home or rehab",           subtitle: 'Being discharged, need a plan' },
+  new_medicaid:   { title: 'I just qualified for Medicaid or Extra Help',   subtitle: 'Income changed, now eligible' },
+  doctor_left:    { title: "My doctor left my plan's network",              subtitle: "Can't see my doctor without switching" },
+};
+
 export interface Client {
   name: string;
   phone: string;
@@ -61,6 +102,21 @@ export interface Client {
    *  full_low, institutional/HCBS → full_institutional). Defaults
    *  to 'community' when omitted. */
   livingSetting?: 'community' | 'institutional_or_hcbs';
+  /** Enrollment period the beneficiary is using. Required for compliance
+   *  documentation and enrollment gating. Undefined means not yet captured. */
+  enrollmentPeriod?: EnrollmentPeriod;
+  /** Plain-English life event when enrollmentPeriod === 'SEP'. The system
+   *  derives the CMS sepReasonCode from this via SEP_LIFE_EVENT_TO_CMS. */
+  sepLifeEvent?: SepLifeEvent;
+  /** CMS SEP reason code — auto-derived from sepLifeEvent, NEVER set
+   *  directly by the user. Stored for AgentBase sync and compliance. */
+  sepReasonCode?: SepReasonCode;
+  /** True when the user fills prescriptions through VA or Express Scripts
+   *  (TRICARE). Lets the brain include MA-only plans (no Part D) in the
+   *  pool — these plans often have better extras but no drug coverage,
+   *  which is fine when the beneficiary already has creditable drug
+   *  coverage through VA/TRICARE. */
+  hasVaDrugCoverage?: boolean;
 }
 
 export interface Medication {

@@ -476,6 +476,45 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     console.info('[brain-funnel]', ...args);
   };
 
+  // ── Enrollment period gating ──────────────────────────────────────
+  // Runs BEFORE the gate funnel. The brain still runs the full pipeline
+  // so the beneficiary can window-shop; enrollmentGated=true just tells
+  // the UI to block enrollment CTAs and switch to compliance-safe copy.
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const day = now.getDate();
+  const ep = input.enrollmentPeriod;
+
+  let enrollmentGated = false;
+  let enrollmentPeriodLabel: string | undefined;
+
+  if (ep) {
+    switch (ep) {
+      case 'AEP':
+        enrollmentGated = !((month === 10 && day >= 15) || month === 11 || (month === 12 && day <= 7));
+        enrollmentPeriodLabel = 'AEP — Annual Enrollment (Oct 15 – Dec 7)';
+        break;
+      case 'OEP':
+        enrollmentGated = !(month >= 1 && month <= 3);
+        enrollmentPeriodLabel = 'OEP — Open Enrollment (Jan 1 – Mar 31)';
+        break;
+      case 'IEP':
+        enrollmentGated = false;
+        enrollmentPeriodLabel = 'IEP — Initial Enrollment Period';
+        break;
+      case 'ICEP':
+        enrollmentGated = false;
+        enrollmentPeriodLabel = 'ICEP — Initial Coverage Election Period';
+        break;
+      case 'SEP':
+        enrollmentGated = !input.sepReasonCode;
+        enrollmentPeriodLabel = input.sepReasonCode
+          ? `SEP — Special Enrollment (${input.sepReasonCode})`
+          : 'SEP — Special Enrollment (no qualifying reason)';
+        break;
+    }
+  }
+
   // Med-derived condition detection — informational only (utilization
   // + UI copy). User's self-reported csnpConditions are the sole input
   // to SNP-pool eligibility; no auto-promotion.
@@ -526,6 +565,8 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       archetype: 'general',
       medicationPatterns: [],
       csnpNote: null,
+      enrollmentGated,
+      enrollmentPeriodLabel,
     };
   }
 
@@ -980,5 +1021,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     archetype: 'general',
     medicationPatterns: [],
     csnpNote,
+    enrollmentGated,
+    enrollmentPeriodLabel,
   };
 }

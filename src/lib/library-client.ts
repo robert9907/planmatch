@@ -293,6 +293,15 @@ export interface LibraryRankInput {
    *  for the standard recommendation flow. Maps to UserProfile
    *  .dsnpEligible on the server side. */
   dsnp_eligible?: boolean;
+  /** CMS enrollment period the beneficiary is using. Forwarded to the
+   *  library brain so it can compute enrollmentGated (window-shopping
+   *  vs enroll-eligible) and attach the compliance label. Undefined
+   *  means the front-end hasn't captured it — brain runs unwarned. */
+  enrollment_period?: 'IEP' | 'ICEP' | 'SEP' | 'OEP' | 'AEP';
+  /** CMS SEP reason code, auto-derived from the plain-English life
+   *  event upstream. Only meaningful when enrollment_period === 'SEP'.
+   *  Never populated from a raw CMS-code dropdown (SEP fraud gate). */
+  sep_reason_code?: string;
 }
 
 export async function rankPlans(

@@ -27,7 +27,13 @@
 //     weightOverride prop for the quote-time preset buttons.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Client, Medication, Provider } from '@/types/session';
+import type {
+  Client,
+  EnrollmentPeriod,
+  Medication,
+  Provider,
+  SepReasonCode,
+} from '@/types/session';
 import {
   rankPlans,
   type CsnpConditionKey,
@@ -56,6 +62,15 @@ export interface UseRankedPlansArgs {
    *  visible on the bench — bench is sourced from the full county
    *  catalog upstream). */
   dsnpEligible?: boolean;
+  /** CMS enrollment period the client is using. Forwarded to the
+   *  library brain so it can compute enrollmentGated + attach the
+   *  compliance label. Undefined means Intake didn't capture one yet
+   *  (brain runs, no gating decision made). */
+  enrollmentPeriod?: EnrollmentPeriod;
+  /** CMS SEP reason code, auto-derived from sepLifeEvent upstream.
+   *  Only meaningful when enrollmentPeriod === 'SEP'. Never comes from
+   *  a raw CMS-code dropdown. */
+  sepReasonCode?: SepReasonCode;
 }
 
 export interface UseRankedPlansState {
@@ -101,6 +116,8 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     csnpConditions,
     currentPlanId,
     dsnpEligible,
+    enrollmentPeriod,
+    sepReasonCode,
   } = args;
 
   const [state, setState] = useState<UseRankedPlansState>(EMPTY_STATE);
@@ -201,6 +218,8 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
         csnpConditions: csnpList,
         current_plan_id: currentPlanId ?? null,
         dsnp_eligible: dsnpEligible === true ? true : undefined,
+        enrollment_period: enrollmentPeriod,
+        sep_reason_code: sepReasonCode,
       },
       ctrl.signal,
     )
@@ -233,7 +252,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     // medsKey / provsKey / extrasKey deliberately gate on serialized
     // content, not array identity — see notes above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [county, zip, state_, medsKey, provsKey, extrasKey, csnpKey, currentPlanId, dsnpEligible]);
+  }, [county, zip, state_, medsKey, provsKey, extrasKey, csnpKey, currentPlanId, dsnpEligible, enrollmentPeriod, sepReasonCode]);
 
   return state;
 }

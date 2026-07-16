@@ -606,29 +606,44 @@ function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
 
   // ── userProfile ───────────────────────────────────────────────────
   const conditionCsnp = conditionToCsnp(args.conditionProfile);
+  const sepCode = client.sepReasonCode;
+
+  // SEP auto-set cascade — non-destructive: explicit values win, sepCode
+  // only fills in when the client hasn't already answered upstream.
+  // LTC (leaving nursing home / rehab) → institutional_or_hcbs, which
+  // flips LIS tier to full_institutional for FBDE beneficiaries.
+  const derivedLivingSetting =
+    client.livingSetting ?? (sepCode === 'LTC' ? 'institutional_or_hcbs' : 'community');
+
+  // MCD (just qualified for Medicaid / Extra Help) → dsnpEligible.
+  // Cascades alongside the existing explicit flag / medicaidLevel /
+  // legacy medicaidConfirmed checks.
+  const dsnpFromSep = sepCode === 'MCD';
+
   const userProfile: UserProfile = {
     drugs: medications.map((m) => ({ rxcui: m.rxcui, name: m.name, isBrand: m.isBrand ?? false })),
     providers: providers.map((p) => ({ npi: p.npi, name: p.name })),
     priorities: new Set(args.userPriorities ?? []),
     // dsnpEligible: prefer the explicit client.dsnpEligible flag (set
     // by the Intake pill), else fall back to medicaidLevel (any non-
-    // 'none' category means dual), else the legacy medicaidConfirmed
-    // checkbox from the older Step2Intake path.
+    // 'none' category means dual), else the MCD SEP auto-set, else the
+    // legacy medicaidConfirmed checkbox from the older Step2Intake path.
     dsnpEligible:
       client.dsnpEligible === true ||
       (client.medicaidLevel != null && client.medicaidLevel !== 'none') ||
+      dsnpFromSep ||
       client.medicaidConfirmed === true
         ? true
         : null,
     csnpConditions: conditionCsnp ? [conditionCsnp] : [],
     age: ageFromDob(client.dob),
-    hasVaDrugCoverage: false,
+    hasVaDrugCoverage: client.hasVaDrugCoverage === true,
     // Dual-eligible / LIS wiring — activates the brain's
     // applyDualEligibleCostAdjustment. Defaults keep the adjustment
     // a no-op for older sessions that haven't captured these fields.
     medicaidLevel: client.medicaidLevel ?? 'none',
     lisTier: client.lisTier ?? 'none',
-    livingSetting: client.livingSetting ?? 'community',
+    livingSetting: derivedLivingSetting,
   };
 
   return {
@@ -642,6 +657,8 @@ function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
     providerNetworkByPlanKey,
     mapdContractPlanIds,
     weightsOverride: args.weightsOverride ?? undefined,
+    enrollmentPeriod: client.enrollmentPeriod,
+    sepReasonCode: client.sepReasonCode,
   };
 }
 

@@ -1,7 +1,13 @@
 import { useRef } from 'react';
 import { useSession } from '@/hooks/useSession';
 import { StepHeader } from './StepHeader';
-import type { PlanType, StateCode } from '@/types/session';
+import type {
+  EnrollmentPeriod,
+  PlanType,
+  SepLifeEvent,
+  StateCode,
+} from '@/types/session';
+import { SEP_LIFE_EVENT_LABELS, SEP_LIFE_EVENT_TO_CMS } from '@/types/session';
 
 interface Step2Props {
   onAdvance: () => void;
@@ -13,6 +19,26 @@ const PLAN_TYPES: { value: PlanType; label: string; body: string }[] = [
   { value: 'MA', label: 'MA', body: 'Medicare Advantage, no drug coverage' },
   { value: 'PDP', label: 'PDP', body: 'Standalone Part D' },
   { value: 'MEDSUPP', label: 'Medigap', body: 'Supplement on top of Original Medicare' },
+];
+
+const ENROLLMENT_PERIODS: { value: EnrollmentPeriod; label: string; body: string }[] = [
+  { value: 'IEP', label: 'IEP',  body: 'Turning 65, first time enrolling' },
+  { value: 'ICEP', label: 'ICEP', body: 'New to Medicare, choosing first plan' },
+  { value: 'AEP', label: 'AEP',  body: 'Annual enrollment, switching plans' },
+  { value: 'OEP', label: 'OEP',  body: 'Open enrollment, Jan–Mar switch' },
+  { value: 'SEP', label: 'SEP',  body: 'Life event (lost coverage, moved, etc.)' },
+];
+
+// Display order for the six plain-English SEP life events. Same set the
+// consumer flow surfaces — the intake screen deliberately shows the
+// beneficiary-facing copy so agent and consumer see identical language.
+const SEP_LIFE_EVENT_ORDER: SepLifeEvent[] = [
+  'moved',
+  'lost_employer',
+  'lost_aca',
+  'left_facility',
+  'new_medicaid',
+  'doctor_left',
 ];
 
 export function Step2Intake({ onAdvance }: Step2Props) {
@@ -28,6 +54,31 @@ export function Step2Intake({ onAdvance }: Step2Props) {
 
   function patch<K extends keyof typeof client>(key: K, value: (typeof client)[K]) {
     updateClient({ [key]: value });
+  }
+
+  // Picking a non-SEP period wipes the SEP fields so a re-selection can't
+  // leave a stale life-event / CMS code attached to (say) an AEP session.
+  function onEnrollmentPeriodChange(period: EnrollmentPeriod) {
+    if (period === 'SEP') {
+      updateClient({ enrollmentPeriod: 'SEP' });
+    } else {
+      updateClient({
+        enrollmentPeriod: period,
+        sepLifeEvent: undefined,
+        sepReasonCode: undefined,
+      });
+    }
+  }
+
+  // Consumer + agent both pick from the same six plain-English cards.
+  // The CMS reason code is DERIVED here — no UI anywhere accepts a raw
+  // CMS code, which is the fraud gate the ticket requires.
+  function onSepLifeEventChange(event: SepLifeEvent) {
+    updateClient({
+      enrollmentPeriod: 'SEP',
+      sepLifeEvent: event,
+      sepReasonCode: SEP_LIFE_EVENT_TO_CMS[event],
+    });
   }
 
   async function resolveZip(zip: string): Promise<{ county: string | null; state: StateCode | null }> {
@@ -85,7 +136,9 @@ export function Step2Intake({ onAdvance }: Step2Props) {
   }
 
   const requiredReady =
-    !!client.name && !!client.phone && !!client.zip && !!client.state && !!client.planType;
+    !!client.name && !!client.phone && !!client.zip && !!client.state &&
+    !!client.planType && !!client.enrollmentPeriod &&
+    (client.enrollmentPeriod !== 'SEP' || !!client.sepLifeEvent);
 
   const age = ageFromDob(client.dob);
 
@@ -212,6 +265,76 @@ export function Step2Intake({ onAdvance }: Step2Props) {
           </div>
         </div>
 
+        <div style={{ marginTop: 14 }}>
+          <FieldLabel label="Enrollment period" required />
+          <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', marginTop: 6 }}>
+            {ENROLLMENT_PERIODS.map((ep) => {
+              const active = client.enrollmentPeriod === ep.value;
+              return (
+                <button
+                  key={ep.value}
+                  type="button"
+                  onClick={() => onEnrollmentPeriodChange(ep.value)}
+                  className="text-left"
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 10,
+                    border: `1px solid ${active ? 'var(--sage)' : 'var(--w2)'}`,
+                    background: active ? 'var(--sl)' : 'var(--wh)',
+                    cursor: 'pointer',
+                    color: 'var(--ink)',
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 700, color: active ? 'var(--sage)' : 'var(--ink)' }}>
+                    {ep.label}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--i2)', marginTop: 2, lineHeight: 1.3 }}>
+                    {ep.body}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {client.enrollmentPeriod === 'SEP' && (
+          <div style={{ marginTop: 14 }}>
+            <FieldLabel label="What qualifies this SEP?" required />
+            <div style={{ fontSize: 11, color: 'var(--i2)', marginTop: 4, marginBottom: 8 }}>
+              Pick the life event. The CMS reason code is derived automatically.
+            </div>
+            <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+              {SEP_LIFE_EVENT_ORDER.map((key) => {
+                const label = SEP_LIFE_EVENT_LABELS[key];
+                const active = client.sepLifeEvent === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => onSepLifeEventChange(key)}
+                    className="text-left"
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      border: `1px solid ${active ? 'var(--sage)' : 'var(--w2)'}`,
+                      background: active ? 'var(--sl)' : 'var(--wh)',
+                      cursor: 'pointer',
+                      color: 'var(--ink)',
+                    }}
+                  >
+                    <div style={{ fontSize: 13, fontWeight: 600, color: active ? 'var(--sage)' : 'var(--ink)' }}>
+                      {label.title}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--i2)', marginTop: 2, lineHeight: 1.3 }}>
+                      {label.subtitle}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <label
           style={{
             display: 'flex',
@@ -238,11 +361,47 @@ export function Step2Intake({ onAdvance }: Step2Props) {
             </div>
           </div>
         </label>
+
+        <div style={{ marginTop: 14 }}>
+          <FieldLabel label="Veteran with VA or TRICARE drug coverage?" />
+          <div style={{ fontSize: 11, color: 'var(--i2)', marginTop: 4, marginBottom: 8 }}>
+            Tick yes only if prescriptions are filled through VA or Express Scripts (TRICARE). Includes MA-only plans with better extras but no built-in drug coverage.
+          </div>
+          <div className="flex gap-2">
+            {[
+              { value: false, label: 'No' },
+              { value: true,  label: 'Yes — VA or TRICARE' },
+            ].map((opt) => {
+              const active = client.hasVaDrugCoverage === opt.value;
+              return (
+                <button
+                  key={String(opt.value)}
+                  type="button"
+                  onClick={() => patch('hasVaDrugCoverage', opt.value)}
+                  className="pm-btn"
+                  style={{
+                    flex: 1,
+                    height: 36,
+                    background: active ? 'var(--sage)' : 'var(--wh)',
+                    color: active ? '#fff' : 'var(--ink)',
+                    borderColor: active ? 'var(--sage)' : 'var(--w2)',
+                  }}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       <div className="flex items-center justify-between">
         <div style={{ color: 'var(--i3)', fontSize: 12 }}>
-          {requiredReady ? '✓ Intake complete' : '* Required: name, phone, ZIP, state, plan type'}
+          {requiredReady
+            ? '✓ Intake complete'
+            : client.enrollmentPeriod === 'SEP' && !client.sepLifeEvent
+              ? '* Pick a SEP life event'
+              : '* Required: name, phone, ZIP, state, plan type, enrollment period'}
         </div>
         <button
           type="button"

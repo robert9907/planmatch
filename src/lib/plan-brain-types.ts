@@ -515,6 +515,13 @@ export interface BrainInputs {
   mapdContractPlanIds?: ReadonlySet<string>;
   // Weight overrides — agent dashboard will eventually wire sliders.
   weightsOverride?: BrainWeights;
+  /** Enrollment period the beneficiary is using. When provided, the brain
+   *  attaches it to the output for compliance documentation and sets the
+   *  enrollmentGated flag when enrollment is not currently permitted. */
+  enrollmentPeriod?: 'IEP' | 'ICEP' | 'SEP' | 'OEP' | 'AEP';
+  /** CMS SEP reason code (auto-derived from life event selection upstream).
+   *  Only meaningful when enrollmentPeriod === 'SEP'. */
+  sepReasonCode?: string;
 }
 
 export interface BrainOutput {
@@ -570,4 +577,11 @@ export interface BrainOutput {
   //              county, so the Top 4 contains zero C-SNPs. Surfaced
   //              on the UI as a context note.
   csnpNote: string | null;
+  /** True when the beneficiary's enrollment period does NOT permit
+   *  enrollment right now. The UI should block enrollment CTAs and
+   *  show "window shopping" messaging. False or undefined means
+   *  enrollment is permitted (or enrollment period wasn't provided). */
+  enrollmentGated?: boolean;
+  /** Human-readable enrollment period context for compliance display. */
+  enrollmentPeriodLabel?: string;
 }
