@@ -16,6 +16,7 @@
 
 import {
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type DragEvent,
@@ -657,6 +658,20 @@ export function CompareScreen({
     return [baseline, ...others];
   }, [baseline, scoredPlans, benchPlans]);
 
+  // ── Stable pool + rankedPlans latch ────────────────────────────────
+  // Every re-run of useRankedPlans() briefly nulls ranked.result (Gate 3
+  // dropping to 0 survivors on a re-run wipes it entirely). AgentV3App
+  // derives scoredPlans + benchPlans from that result, so pool collapses
+  // to [] mid-session — which cascades through poolIds → reconciledSlots
+  // and wipes the board too. Latch both signals to their last-non-empty
+  // value so transient upstream wipes don't clear the broker's workspace.
+  const stablePoolRef = useRef<Plan[]>([]);
+  if (pool.length > 0) stablePoolRef.current = pool;
+  const stablePool = pool.length > 0 ? pool : stablePoolRef.current;
+
+  const stableRankedRef = useRef<LibraryRankPlan[]>([]);
+  if (rankedPlans && rankedPlans.length > 0) stableRankedRef.current = rankedPlans;
+
   const [mode, setMode] = useState<'grid' | 'h2h'>('grid');
   const [challenger, setChallenger] = useState<Plan | null>(null);
 
@@ -721,7 +736,7 @@ export function CompareScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const filters = useBenchFilters(pool, {
+  const filters = useBenchFilters(stablePool, {
     annualDrugByPlanId,
     selectedProviderCount: providers.length,
     providers,
@@ -754,7 +769,10 @@ export function CompareScreen({
 
   // Reconcile: any slot whose plan is no longer in the pool becomes
   // null. Bench = pool minus slot occupants.
-  const poolIds = useMemo(() => new Set(pool.map((p) => p.id)), [pool]);
+  // Reconciliation reads stablePool so a transient pool wipe doesn't
+  // null every slot occupant (that cascade is what makes visibleSlotPlans
+  // collapse in tandem with pool, defeating the whole latch).
+  const poolIds = useMemo(() => new Set(stablePool.map((p) => p.id)), [stablePool]);
   const reconciledSlots = useMemo<(Plan | null)[]>(
     () => slots.map((s) => (s && poolIds.has(s.id) ? s : null)),
     [slots, poolIds],
@@ -793,13 +811,15 @@ export function CompareScreen({
   // fall through to a slot-based fallback.
   console.log('[QuotePanel-debug]', {
     poolLen: pool.length,
+    stablePoolLen: stablePool.length,
     visibleSlotPlansLen: visibleSlotPlans.length,
     rankedPlansLen: rankedPlans?.length ?? 'undefined',
+    stableRankedLen: stableRankedRef.current.length,
     scoredPlansLen: scoredPlans.length,
     benchPlansLen: benchPlans?.length ?? 'undefined',
     slotsNonNull: slots.filter(Boolean).length,
   });
-  if (pool.length === 0 && visibleSlotPlans.length === 0) {
+  if (stablePool.length === 0 && visibleSlotPlans.length === 0) {
     return (
       <Container wide>
         <Header
@@ -833,7 +853,7 @@ export function CompareScreen({
         baseline={baseline}
         baselineIsCurrent={baselineIsCurrent}
         challenger={challenger}
-        pool={pool.filter((p) => p.id !== baseline.id)}
+        pool={stablePool.filter((p) => p.id !== baseline.id)}
         metrics={metrics}
         annualDrugByPlanId={annualDrugByPlanId}
         unresolvedMedCount={unresolvedMedCount}
@@ -856,7 +876,7 @@ export function CompareScreen({
       const draggedPlan =
         fromSlotIdx >= 0
           ? next[fromSlotIdx]
-          : pool.find((p) => p.id === draggedPlanId) ?? null;
+          : stablePool.find((p) => p.id === draggedPlanId) ?? null;
       if (!draggedPlan) return s;
 
       const occupant = next[targetSlotIdx];
@@ -1023,22 +1043,26 @@ export function CompareScreen({
       />
 
       {(() => {
-        // Triple fallback so the quote picker never disappears while
+        // Quadruple fallback so the quote picker never disappears while
         // plans are on screen:
         //   1. rankedPlans — brain's ordering, preferred.
-        //   2. pool        — baseline + Top-4 + bench (deduped),
-        //                    used when rank-plans is loading/errored.
-        //   3. visibleSlotPlans — persisted board slots, used when a
-        //                    brain re-run has transiently wiped pool
-        //                    (Gate 3 dropping to 0 survivors clears
-        //                    scoredPlans+benchPlans) but slot state
-        //                    still holds the broker's picks.
+        //   2. latched rankedPlans — last non-empty library result,
+        //                    used when the current re-run has cleared
+        //                    ranked.result but a prior run had it.
+        //   3. stablePool  — baseline + Top-4 + bench (deduped), also
+        //                    latched so a transient scoredPlans/benchPlans
+        //                    wipe doesn't collapse the fallback.
+        //   4. visibleSlotPlans — board slots the broker manually placed,
+        //                    used when nothing else has ever populated.
         const brainReady = !!rankedPlans && rankedPlans.length > 0;
+        const latched = stableRankedRef.current;
         const quotePlans: LibraryRankPlan[] = brainReady
           ? (rankedPlans as LibraryRankPlan[])
-          : pool.length > 0
-            ? pool.map(planToLibraryRankPlan)
-            : visibleSlotPlans.map(planToLibraryRankPlan);
+          : latched.length > 0
+            ? latched
+            : stablePool.length > 0
+              ? stablePool.map(planToLibraryRankPlan)
+              : visibleSlotPlans.map(planToLibraryRankPlan);
         if (quotePlans.length === 0) return null;
         return (
           <QuotePanel
