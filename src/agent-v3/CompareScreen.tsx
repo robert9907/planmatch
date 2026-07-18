@@ -736,10 +736,47 @@ export function CompareScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Fingerprint of provider→plan 'in' assignments. useSession.providers
+  // returns a fresh array reference on every updateProvider call (no
+  // shallow selector, and updateProvider maps to a new array even on
+  // single-provider patches). Passing that array as a memo dep would
+  // re-normalize the bench on every unrelated provider write and
+  // cascade through matchedPlanIds / reconciledSlots — defeating the
+  // pool ref-latch (see 2039a9e). The fingerprint is a stable primitive
+  // that only changes when an actual (provider, plan)='in' pairing
+  // gets added or removed, so the count map identity below stays
+  // stable across brain re-runs.
+  const networkFingerprint = useMemo(() => {
+    const entries: string[] = [];
+    for (const p of providers) {
+      if (!p.networkStatus) continue;
+      for (const [planId, status] of Object.entries(p.networkStatus)) {
+        if (status === 'in') entries.push(planId);
+      }
+    }
+    entries.sort();
+    return entries.join(',');
+  }, [providers]);
+
+  const inNetworkCountByPlanId = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const plan of stablePool) {
+      let count = 0;
+      for (const p of providers) {
+        if (p.networkStatus?.[plan.id] === 'in') count += 1;
+      }
+      m.set(plan.id, count);
+    }
+    return m;
+    // providers is intentionally omitted — networkFingerprint captures
+    // every provider change that could affect the counts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [networkFingerprint, stablePool]);
+
   const filters = useBenchFilters(stablePool, {
     annualDrugByPlanId,
     selectedProviderCount: providers.length,
-    providers,
+    inNetworkCountByPlanId,
     initialState: initialFilterState,
   });
 
