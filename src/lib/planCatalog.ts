@@ -173,8 +173,10 @@ function toPlan(p: ApiPlan): Plan {
     // leave it empty so any direct lookup misses and the code falls
     // through to the proper formularyLookup path.
     formulary: {},
-    // Network status flows through networkCheck.ts now. Leave empty
-    // so the in-memory hash fallback stays unreachable.
+    // Vestigial. Per-plan network status lives in
+    // useSession.providers[*].networkStatus[planId], written by the
+    // hydration effect in AgentV3App via checkNetworkBatch. BenchCard
+    // and useBenchFilters read from that store directly.
     in_network_npis: [],
   };
 }
