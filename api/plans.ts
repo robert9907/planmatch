@@ -1364,6 +1364,17 @@ function buildPbpFallback(rows: PbpBenefitRow[]): PbpFallbackMap {
       if (v != null && v > 0) {
         const mo = Math.round(v * foodCardMonthlyMultiplier(r.description));
         if (mo > 0) foodCardMonthlyByPlan.set(key, mo);
+      } else if (r.description && r.description.trim() !== '' && !foodCardMonthlyByPlan.has(key)) {
+        // Presence rescue: medicare.gov files many D-SNP food cards as
+        // copay=0 with a real description ("Food card benefit included
+        // (no Medicare.gov-published ceiling — see plan documentation)").
+        // Without this, ~298 pbp_benefits rows silently drop out of the
+        // API response, and the compare UI renders "None" for plans that
+        // actually offer the benefit. Mirror the pm_plan_benefits
+        // "allowance rescue" at ~line 522: use 1 as the presence marker
+        // (>0 so the filter's Any tier passes; specific dollar tiers
+        // won't). Skip if we already have a real dollar amount.
+        foodCardMonthlyByPlan.set(key, 1);
       }
       if (r.description) foodCardDescByPlan.set(key, r.description);
     }

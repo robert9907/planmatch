@@ -112,6 +112,14 @@ export interface BrainScore {
    *  LiveTop3PickPlan.drugCoverageUnknown so the UI can display
    *  "drug coverage estimated — confirm with your pharmacist". */
   drugCoverageUnknown: boolean;
+  /** Count of user drugs that had zero coverage evidence (no
+   *  formulary row, no cache hit) on EVERY plan in the pool — i.e.,
+   *  almost certainly OTC / vitamin / discontinued. Gate 2 excludes
+   *  these from the coverage check so a "Vitamin D3" entry alongside
+   *  real Rx doesn't wipe out the pool. Same value for every plan in
+   *  a single brain run. 0 when the user has no drugs, no drugs are
+   *  pool-wide-unknown, or the pool itself is empty. */
+  poolWideUncoveredDrugCount: number;
   // Provider integration — soft adjuster, not an axis
   allProvidersInNetwork: boolean;
   /** Count of user-listed providers confirmed in-network on this plan

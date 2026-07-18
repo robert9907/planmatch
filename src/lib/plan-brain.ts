@@ -186,54 +186,53 @@ function totalAnnualCost(s: BrainScoredPlan): number {
   return s.score.realAnnualCost.netAnnual;
 }
 
-// ─── Cost-tie tiebreaker chain ──────────────────────────────────────
+// ─── Providers-first ranking chain ─────────────────────────────────
 //
-// Durham 27713 has 30+ plans tied at $0/yr net cost (zero-premium MAPDs
-// + giveback offsetting drug copays). Without a tiebreaker the Top 4
-// was determined by database row order — non-deterministic across
-// runs. The chain is broker-judgment-driven, not arbitrary:
+// Rewritten from cost-first to providers-first per Phase 1 mission:
+// "A plan with your doctor in-network beats a plan that saves $30/
+// month." So the primary ordering is providersInNetworkCount desc;
+// cost only breaks ties among plans with the same network reach.
 //
-//   1. More providers in-network — closes the same network reach gap
-//      Gate 1 catches in extreme cases (definitively-OON eliminations)
-//      but not in the partial-match middle ground.
-//   2. All meds covered, then cheapest drug subtotal — between two
-//      otherwise-equal plans, "all your prescriptions on formulary at
-//      lower cost" wins.
-//   3. Lower MOOP — caps catastrophic exposure; a $4k MOOP plan beats
-//      an $8k one when everything else is identical.
-//   4. Higher star rating — CMS quality signal.
-//   5. Carrier name alphabetical — pure stability, last resort, so
-//      runs are reproducible across DB row-order shuffles.
+//   1. Confirmed in-network provider count (desc). Zero for personas
+//      with no providers ⇒ everyone tied on step 1, falls through to
+//      drug cost.
+//   2. Drug cost (asc). Rewards formulary strength directly.
+//   3. MOOP (asc). Caps catastrophic exposure.
+//   4. Star rating (desc). CMS quality signal.
+//   5. Carrier name (alpha, stable). Last-resort determinism.
+//
+// The old cost-tier bucket + "all meds covered" bucket are gone:
+//   • Total annual cost is intentionally dropped from the tiebreaker;
+//     Gate 4's top-4 fill now really is providers-first.
+//   • "All non-OTC meds covered" is a Gate 2 elimination criterion,
+//     so every plan reaching this comparator already passes it. The
+//     helper `allNonOtcCovered` is retained for the budget-option
+//     filter and downstream callers.
+//
+// Shared "all non-OTC drugs covered" helper — the pool-wide OTC pre-
+// pass in runPlanBrain subtracts non-Rx items from the denominator
+// so a Vitamin D3 entry doesn't drop every plan out of coverage.
+function allNonOtcCovered(s: BrainScore): boolean {
+  const eff = s.totalCount - s.poolWideUncoveredDrugCount;
+  return eff <= 0 || s.coveredCount === eff;
+}
+
 function compareByCostThenTiebreakers(a: BrainScoredPlan, b: BrainScoredPlan): number {
-  // PROVIDER CONFIDENCE TIER — fully-confirmed-in-net plans rank
-  // above any plan with an unverified provider, regardless of cost.
-  // Surfaced in the Compare screen so brokers don't pick a cheaper
-  // plan whose network status is "?" — those carry the 'unknown'
-  // badge and sit behind any confirmed match.
-  const aConfirmed = a.score.allProvidersInNetwork ? 1 : 0;
-  const bConfirmed = b.score.allProvidersInNetwork ? 1 : 0;
-  if (aConfirmed !== bConfirmed) return bConfirmed - aConfirmed;
-  const costDiff = totalAnnualCost(a) - totalAnnualCost(b);
-  if (costDiff !== 0) return costDiff;
-  // 1. More providers in-network first.
+  // 1. In-network provider count — providers ALWAYS rank above cost.
   const inNetDiff = b.score.providersInNetworkCount - a.score.providersInNetworkCount;
   if (inNetDiff !== 0) return inNetDiff;
-  // 2. All meds covered first (true ranks before false), then lowest
-  //    drug subtotal among same-coverage plans.
-  const aAllMeds = a.score.totalCount === 0 || a.score.coveredCount === a.score.totalCount;
-  const bAllMeds = b.score.totalCount === 0 || b.score.coveredCount === b.score.totalCount;
-  if (aAllMeds !== bAllMeds) return aAllMeds ? -1 : 1;
+  // 2. Drug cost (ascending).
   const drugDiff = a.score.totalAnnualDrugCost - b.score.totalAnnualDrugCost;
   if (drugDiff !== 0) return drugDiff;
-  // 3. Lower MOOP.
+  // 3. MOOP (ascending). Null MOOP sorts last.
   const aMoop = a.row.moop ?? Number.POSITIVE_INFINITY;
   const bMoop = b.row.moop ?? Number.POSITIVE_INFINITY;
   if (aMoop !== bMoop) return aMoop - bMoop;
-  // 4. Higher star rating.
+  // 4. Star rating (descending). Null treated as 0.
   const aStars = a.row.star_rating ?? 0;
   const bStars = b.row.star_rating ?? 0;
   if (aStars !== bStars) return bStars - aStars;
-  // 5. Carrier name alphabetical (stable).
+  // 5. Carrier name (alphabetical, stable last resort).
   const aCarrier = a.row.carrier ?? '';
   const bCarrier = b.row.carrier ?? '';
   return aCarrier.localeCompare(bCarrier);
@@ -322,14 +321,25 @@ function applyProviderGate(
 function applyMedicationGate(
   pool: ReadonlyArray<BrainScoredPlan>,
   userHasDrugs: boolean,
+  otcIndices: ReadonlySet<number>,
 ): BrainScoredPlan[] {
   if (!userHasDrugs) return [...pool];
-  return pool.filter(
-    (s) =>
-      s.score.totalCount > 0 &&
-      s.score.coveredCount === s.score.totalCount &&
-      !s.score.drugCoverageUnknown,
-  );
+  return pool.filter((s) => {
+    // Effective coverage: every non-OTC user drug must be covered on
+    // this plan. Drugs in otcIndices had covered=false on EVERY plan
+    // in the pool (see the pre-pass in runPlanBrain) so they're
+    // treated as non-Rx and skipped here — otherwise a single
+    // Vitamin D3 entry would empty the pool for every persona.
+    let need = 0;
+    let got = 0;
+    for (let i = 0; i < s.score.drugBreakdown.length; i += 1) {
+      if (otcIndices.has(i)) continue;
+      need += 1;
+      if (s.score.drugBreakdown[i].covered) got += 1;
+    }
+    // need===0 ⇒ user entered only OTC items ⇒ nothing to gate on.
+    return need === 0 || got === need;
+  });
 }
 
 // ─── Gate 3 — extras "must offer" elimination ────────────────────────
@@ -781,6 +791,10 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       totalCount,
       lowTierCount,
       drugCoverageUnknown,
+      // Pool-wide OTC count filled in after the map completes (needs
+      // to see every plan's per-drug coverage to decide which meds
+      // are truly non-Rx). See the pre-pass right after this map.
+      poolWideUncoveredDrugCount: 0,
       drugBreakdown,
       allProvidersInNetwork: allInNet,
       providersInNetworkCount: inNetCount,
@@ -817,6 +831,39 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     };
     return { row, benefits, formulary, score };
   });
+
+  // ── Pool-wide OTC / non-Rx pre-pass ────────────────────────────────
+  // Any user drug that shows covered=false on EVERY plan in the pool
+  // is almost certainly not a Part D drug (OTC vitamin, supplement,
+  // discontinued brand). Without this, Gate 2 would eliminate the
+  // entire pool for anyone who lists "Vitamin D3" alongside real
+  // prescriptions. The Set of indices flows into applyMedicationGate
+  // (and into the tiebreaker / budget-option coverage checks below)
+  // so those meds are skipped for elimination purposes but stay in
+  // the UI drug list. Count is stamped on every score for downstream
+  // consumers (UI badges, brain-snapshot).
+  const userDrugCount = input.userProfile.drugs.length;
+  const poolWideUncoveredIndices = new Set<number>();
+  if (rawScored.length > 0 && userDrugCount > 0) {
+    for (let i = 0; i < userDrugCount; i += 1) {
+      let allUncovered = true;
+      for (const s of rawScored) {
+        const b = s.score.drugBreakdown[i];
+        if (!b || b.covered === true) { allUncovered = false; break; }
+      }
+      if (allUncovered) poolWideUncoveredIndices.add(i);
+    }
+  }
+  const poolWideUncoveredDrugCount = poolWideUncoveredIndices.size;
+  for (const s of rawScored) s.score.poolWideUncoveredDrugCount = poolWideUncoveredDrugCount;
+  if (poolWideUncoveredDrugCount > 0 && typeof console !== 'undefined' && console.info) {
+    const names = [...poolWideUncoveredIndices]
+      .map((i) => input.userProfile.drugs[i]?.name ?? `#${i}`)
+      .join(', ');
+    console.info(
+      `[brain-funnel] pool-wide-uncovered drugs (bypass Gate 2 as non-Rx): ${names}`,
+    );
+  }
 
   // ── Dual-eligible / LIS cost adjustment ────────────────────────────
   // Runs after every raw BrainScore is computed and BEFORE any cost-
@@ -876,7 +923,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   console.log('Gate 1:', gate1.length, 'survived of', rawScored.length);
 
   // ── Gate 2 — medications ──────────────────────────────────────────
-  const gate2Survivors = applyMedicationGate(gate1, userHasDrugs);
+  const gate2Survivors = applyMedicationGate(gate1, userHasDrugs, poolWideUncoveredIndices);
   for (const s of gate2Survivors) s.score.gate2Passed = true;
   const gate2Sorted = [...gate2Survivors].sort(
     (a, b) => a.score.totalAnnualDrugCost - b.score.totalAnnualDrugCost,
@@ -994,9 +1041,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   // ── Budget option — cheapest plan covering every drug ─────────────
   let budgetOption: BrainScoredPlan | null = null;
   if (rankedByCost.length > 0) {
-    const fullyCovered = rankedByCost.filter(
-      (s) => s.score.totalCount === 0 || s.score.coveredCount === s.score.totalCount,
-    );
+    const fullyCovered = rankedByCost.filter((s) => allNonOtcCovered(s.score));
     const pool = fullyCovered.length > 0 ? fullyCovered : rankedByCost;
     budgetOption = [...pool].sort(
       (a, b) => a.score.realAnnualCost.netAnnual - b.score.realAnnualCost.netAnnual,
