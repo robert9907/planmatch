@@ -724,6 +724,7 @@ export function CompareScreen({
   const filters = useBenchFilters(pool, {
     annualDrugByPlanId,
     selectedProviderCount: providers.length,
+    providers,
     initialState: initialFilterState,
   });
 
