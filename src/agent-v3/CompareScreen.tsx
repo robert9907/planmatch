@@ -1006,7 +1006,25 @@ export function CompareScreen({
         onEnroll={recommendAndAdvance(topChallenger)}
       />
 
-      {rankedPlans && rankedPlans.length > 0 && <QuotePanel rankedPlans={rankedPlans} />}
+      {(() => {
+        // Prefer the raw library rank result — it carries the brain's
+        // ordering. Fall back to the plans the grid + bench are actually
+        // rendering (post-filter) so the quote picker stays reachable
+        // when rank-plans is loading, errored, or empty. Empty-state at
+        // pool.length===0 already short-circuited above, so if we're
+        // here the broker can see plans; the panel must reflect that.
+        const brainReady = !!rankedPlans && rankedPlans.length > 0;
+        const effective: LibraryRankPlan[] = brainReady
+          ? (rankedPlans as LibraryRankPlan[])
+          : filters.filtered.map((np) => planToLibraryRankPlan(np._raw));
+        if (effective.length === 0) return null;
+        return (
+          <QuotePanel
+            rankedPlans={effective}
+            sourceIsFallback={!brainReady}
+          />
+        );
+      })()}
 
       <Nav onBack={onBack} onNext={onNext} nextLabel="CMS Compliance →" />
     </Container>
@@ -1019,7 +1037,49 @@ export function CompareScreen({
 // here (not in QuoteBuilder.tsx) so the open/close UI matches the rest
 // of the Compare workspace; the actual form is QuoteBuilder.
 
-function QuotePanel({ rankedPlans }: { rankedPlans: LibraryRankPlan[] }) {
+// Plan → LibraryRankPlan bridge for fallback mode. QuoteBuilder only
+// reads plan_id / plan_name / carrier / plan_type / premium / star_rating
+// off each row (payload med + provider lists come from useSession, not
+// from the plan objects), so the other library-only fields get benign
+// empties. Keeps the quote flow unblocked when useRankedPlans hasn't
+// returned yet — see gate at CompareScreen render site.
+function planToLibraryRankPlan(p: Plan): LibraryRankPlan {
+  return {
+    plan_id: p.id,
+    plan_name: p.plan_name,
+    carrier: p.carrier,
+    plan_type: p.plan_type,
+    premium: p.premium,
+    moop: p.moop_in_network,
+    star_rating: p.star_rating,
+    medications: [],
+    total_annual_drug_cost: 0,
+    meds_covered: 0,
+    meds_total: 0,
+    providers: [],
+    docs_in_network: 0,
+    docs_total: 0,
+    benefits: {
+      dental: null, vision: null, hearing: null, otc: null, fitness: null,
+      transportation: null, meals: null, telehealth: null,
+      part_b_giveback: null, pcp_copay: null, specialist: null,
+      part_d_deductible: null, urgent_care: null, emergency: null,
+      inpatient: null, inpatient_mental: null, skilled_nursing: null,
+    },
+    total_annual_cost: 0,
+    slot: null,
+    ribbon: null,
+    gate_results: { gate1_passed: true, gate2_passed: true, gate3_passed: true },
+  };
+}
+
+function QuotePanel({
+  rankedPlans,
+  sourceIsFallback,
+}: {
+  rankedPlans: LibraryRankPlan[];
+  sourceIsFallback: boolean;
+}) {
   const [open, setOpen] = useState(false);
   if (!open) {
     return (
@@ -1041,6 +1101,18 @@ function QuotePanel({ rankedPlans }: { rankedPlans: LibraryRankPlan[] }) {
           <div style={{ marginTop: 2, fontSize: 11, color: MUTED }}>
             Text the prospect a frozen comparison of up to 5 plans they can keep.
           </div>
+          {sourceIsFallback && (
+            <div
+              style={{
+                marginTop: 4,
+                fontSize: 11,
+                fontStyle: 'italic',
+                color: MUTED,
+              }}
+            >
+              Brain ranking still loading — using current on-screen plans.
+            </div>
+          )}
         </div>
         <button
           type="button"
