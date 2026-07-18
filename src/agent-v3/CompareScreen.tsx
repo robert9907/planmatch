@@ -790,6 +790,14 @@ export function CompareScreen({
   // re-renders. Keep rendering the workspace so the broker still sees
   // the plans they were working with, and let the QuotePanel below
   // fall through to a slot-based fallback.
+  console.log('[QuotePanel-debug]', {
+    poolLen: pool.length,
+    visibleSlotPlansLen: visibleSlotPlans.length,
+    rankedPlansLen: rankedPlans?.length ?? 'undefined',
+    scoredPlansLen: scoredPlans.length,
+    benchPlansLen: benchPlans?.length ?? 'undefined',
+    slotsNonNull: slots.filter(Boolean).length,
+  });
   if (pool.length === 0 && visibleSlotPlans.length === 0) {
     return (
       <Container wide>
