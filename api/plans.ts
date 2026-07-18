@@ -86,7 +86,12 @@ interface Plan {
   sbf_url: string;
   benefits: PlanBenefits;
   formulary: Record<string, never>; // populated lazily via /api/formulary
-  in_network_npis: string[]; // empty — networkCheck.ts stamps its own
+  // Vestigial — always empty. Per-plan network status lives in
+  // useSession.providers[*].networkStatus[planId], written by the
+  // hydration effect in AgentV3App via checkNetworkBatch and consumed
+  // by BenchCard + useBenchFilters directly. Kept on the shape for
+  // wire compatibility.
+  in_network_npis: string[];
 }
 
 interface CostShare {
