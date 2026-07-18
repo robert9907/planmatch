@@ -1008,15 +1008,16 @@ export function CompareScreen({
 
       {(() => {
         // Prefer the raw library rank result — it carries the brain's
-        // ordering. Fall back to the plans the grid + bench are actually
-        // rendering (post-filter) so the quote picker stays reachable
-        // when rank-plans is loading, errored, or empty. Empty-state at
-        // pool.length===0 already short-circuited above, so if we're
-        // here the broker can see plans; the panel must reflect that.
+        // ordering. Fall back to the full pool (baseline + Top-4 +
+        // bench, deduped) so the quote picker stays reachable when
+        // rank-plans is loading/errored AND when active filters have
+        // collapsed the bench. pool is guaranteed non-empty here
+        // (empty-state at line 786 already short-circuited above), so
+        // the panel is always reachable when plans are on screen.
         const brainReady = !!rankedPlans && rankedPlans.length > 0;
         const effective: LibraryRankPlan[] = brainReady
           ? (rankedPlans as LibraryRankPlan[])
-          : filters.filtered.map((np) => planToLibraryRankPlan(np._raw));
+          : pool.map(planToLibraryRankPlan);
         if (effective.length === 0) return null;
         return (
           <QuotePanel
