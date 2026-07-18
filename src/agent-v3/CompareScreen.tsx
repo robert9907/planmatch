@@ -783,7 +783,14 @@ export function CompareScreen({
   }, [metrics, visibleSlotPlans]);
 
   // ── Empty state ────────────────────────────────────────────
-  if (pool.length === 0) {
+  // Only bail when there's genuinely nothing on screen. During brain
+  // re-runs the library can transiently clear scoredPlans/benchPlans
+  // (Gate 3 dropping to 0 survivors on a re-run wipes ranked.result),
+  // which empties pool — but the board's slot state persists across
+  // re-renders. Keep rendering the workspace so the broker still sees
+  // the plans they were working with, and let the QuotePanel below
+  // fall through to a slot-based fallback.
+  if (pool.length === 0 && visibleSlotPlans.length === 0) {
     return (
       <Container wide>
         <Header
@@ -1007,21 +1014,26 @@ export function CompareScreen({
       />
 
       {(() => {
-        // Prefer the raw library rank result — it carries the brain's
-        // ordering. Fall back to the full pool (baseline + Top-4 +
-        // bench, deduped) so the quote picker stays reachable when
-        // rank-plans is loading/errored AND when active filters have
-        // collapsed the bench. pool is guaranteed non-empty here
-        // (empty-state at line 786 already short-circuited above), so
-        // the panel is always reachable when plans are on screen.
+        // Triple fallback so the quote picker never disappears while
+        // plans are on screen:
+        //   1. rankedPlans — brain's ordering, preferred.
+        //   2. pool        — baseline + Top-4 + bench (deduped),
+        //                    used when rank-plans is loading/errored.
+        //   3. visibleSlotPlans — persisted board slots, used when a
+        //                    brain re-run has transiently wiped pool
+        //                    (Gate 3 dropping to 0 survivors clears
+        //                    scoredPlans+benchPlans) but slot state
+        //                    still holds the broker's picks.
         const brainReady = !!rankedPlans && rankedPlans.length > 0;
-        const effective: LibraryRankPlan[] = brainReady
+        const quotePlans: LibraryRankPlan[] = brainReady
           ? (rankedPlans as LibraryRankPlan[])
-          : pool.map(planToLibraryRankPlan);
-        if (effective.length === 0) return null;
+          : pool.length > 0
+            ? pool.map(planToLibraryRankPlan)
+            : visibleSlotPlans.map(planToLibraryRankPlan);
+        if (quotePlans.length === 0) return null;
         return (
           <QuotePanel
-            rankedPlans={effective}
+            rankedPlans={quotePlans}
             sourceIsFallback={!brainReady}
           />
         );
