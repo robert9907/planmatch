@@ -277,21 +277,11 @@ function normalizeAnnualDrugMap(
 function normalizePlan(
   plan: Plan,
   annualDrug: Map<string, number | null>,
-  providers: BenchFilterProvider[],
 ): NormalizedPlan {
   const consumerPremium = plan.consumer_premium ?? plan.premium ?? 0;
   const drugCost = annualDrug.get(plan.id);
   const annualCostEstimate =
     drugCost != null ? consumerPremium * 12 + drugCost : null;
-
-  // Count providers marked 'in' for this plan. Source: hydration effect
-  // in AgentV3App that writes `checkNetworkBatch` results to
-  // `session.providers[*].networkStatus[planId]`. Mirrors the same
-  // shape BenchCard uses for its per-card "X/Y in-network" cell.
-  let inNetworkNpiCount = 0;
-  for (const pr of providers) {
-    if (pr.networkStatus?.[plan.id] === 'in') inNetworkNpiCount += 1;
-  }
 
   return {
     id: plan.id,
@@ -318,7 +308,7 @@ function normalizePlan(
     hasDrugCoverage: plan.has_drug_coverage === true,
     foodCardMonthly: plan.benefits?.food_card?.allowance_per_month ?? 0,
     dentalComprehensive: plan.benefits?.dental?.comprehensive === true,
-    inNetworkNpiCount,
+    inNetworkNpiCount: plan.in_network_npis?.length ?? 0,
     annualCostEstimate,
     _raw: plan,
   };
@@ -334,8 +324,6 @@ export interface BenchFilterState {
   search: string;
   sort: SortKey;
 }
-
-const EMPTY_PROVIDERS: BenchFilterProvider[] = [];
 
 const EMPTY_STATE: BenchFilterState = {
   planType: [],
@@ -395,28 +383,11 @@ export interface AuditResult {
   report: string;
 }
 
-/** Minimal provider shape read by the network-status derivation.
- *  Matches ProviderRow in CompareScreen but kept narrow here so the
- *  hook doesn't take a dependency on the CompareScreen module. */
-export interface BenchFilterProvider {
-  networkStatus?: Record<string, string> | undefined;
-}
-
 export interface UseBenchFiltersOptions {
   annualDrugByPlanId:
     | Map<string, number | null>
     | Record<string, number | null>;
   selectedProviderCount: number;
-  /** Broker-entered providers whose per-plan networkStatus map is the
-   *  source of truth for `inNetworkNpiCount`. `checkNetworkBatch` writes
-   *  results into `useSession.providers[*].networkStatus[planId]`; the
-   *  bench filter reads from the same store instead of the stubbed
-   *  `plan.in_network_npis` (which is always empty — the "networkCheck
-   *  stamps its own" contract was never implemented). Optional so tests
-   *  and non-provider paths keep working; when omitted every plan's
-   *  count is 0 and the `has_docs_in_net` predicate is hidden by
-   *  `selectedProviderCount === 0`. */
-  providers?: BenchFilterProvider[];
   /** Optional partial seed for the filter state on first render. The
    *  CompareScreen shell derives this from intake data (dsnpEligible →
    *  ['D-SNP'] on snp; providers.length > 0 → ['has_docs_in_net']; etc.)
@@ -509,16 +480,7 @@ export function useBenchFilters(
   benchPlans: Plan[],
   opts: UseBenchFiltersOptions,
 ): UseBenchFiltersResult {
-  const {
-    annualDrugByPlanId,
-    selectedProviderCount,
-    providers,
-    initialState,
-  } = opts;
-  // Stable reference for the loop inside normalizePlan so downstream
-  // memos don't have to compensate for `providers ?? []` allocating a
-  // fresh array every render.
-  const providersRef = providers ?? EMPTY_PROVIDERS;
+  const { annualDrugByPlanId, selectedProviderCount, initialState } = opts;
 
   // initialState is applied once on mount only. Subsequent renders
   // that pass a different initialState do NOT reset — a re-render
@@ -539,8 +501,8 @@ export function useBenchFilters(
   // filter / sort / option-derivation reads off these objects so the
   // raw Plan shape only crosses one boundary.
   const normalized = useMemo<NormalizedPlan[]>(
-    () => benchPlans.map((p) => normalizePlan(p, annualDrugMap, providersRef)),
-    [benchPlans, annualDrugMap, providersRef],
+    () => benchPlans.map((p) => normalizePlan(p, annualDrugMap)),
+    [benchPlans, annualDrugMap],
   );
 
   const costQualityDefs = useMemo(
