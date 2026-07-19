@@ -101,12 +101,24 @@ function inNetCopay(entry: any): number | null {
   if (cs.min_coinsurance != null) return cs.min_coinsurance;
   return null;
 }
+// Vision + hearing + dental commonly file the annual cap as
+// BENEFIT_LIMIT_TYPE_COMBINED_COVERAGE (shared cap across multiple
+// services like frames/lenses/exams) instead of BENEFIT_LIMIT_TYPE_
+// COVERAGE. Both encode the same annual dollar amount. Fix 4 from the
+// vision audit: accept both. Prior version only accepted COVERAGE and
+// silently returned null for 79% of MA plans that file vision under
+// COMBINED_COVERAGE — the audit then classified them as "both silent"
+// and falsely reported vision at 100%.
+const COVERAGE_LIMIT_TYPES = new Set([
+  'BENEFIT_LIMIT_TYPE_COVERAGE',
+  'BENEFIT_LIMIT_TYPE_COMBINED_COVERAGE',
+]);
 function annualCoverageMax(entries: any[]): number | null {
   let max = 0;
   let seen = false;
   for (const e of entries) {
     for (const d of (e.plan_limits_details ?? [])) {
-      if (d.limit_type === 'BENEFIT_LIMIT_TYPE_COVERAGE' &&
+      if (COVERAGE_LIMIT_TYPES.has(d.limit_type) &&
           d.limit_period === 'BENEFIT_LIMIT_PERIOD_EVERY_YEAR' &&
           typeof d.limit_value === 'number') {
         seen = true;
@@ -236,6 +248,8 @@ function extractPm(pm: any[], pbp: any[]): PmBenefits {
 
   // pbp fallbacks (mirrors buildPbpFallback)
   let pbpDentalMax: number | null = null;
+  let pbpVisionAllowance: number | null = null;
+  let pbpHearingAllowance: number | null = null;
   let pbpOtcQuarterly: number | null = null;
   let pbpFoodCardMonthly: number | null = null;
   let pbpFoodCardDesc: string | null = null;
@@ -246,6 +260,15 @@ function extractPm(pm: any[], pbp: any[]): PmBenefits {
     if (r.benefit_type === 'dental_annual_max') {
       const v = toNum(r.copay);
       if (v != null && v > 0) pbpDentalMax = v;
+    } else if (r.benefit_type === 'vision_allowance') {
+      // Mirrors api/plans.ts transformPbpRow line 507-513 + the
+      // ALLOWANCE_CATEGORIES merge branch: pbp vision_allowance.copay
+      // becomes the eyewear cap when landscape has none.
+      const v = toNum(r.copay);
+      if (v != null && v > 0) pbpVisionAllowance = v;
+    } else if (r.benefit_type === 'hearing_aid_allowance') {
+      const v = toNum(r.copay);
+      if (v != null && v > 0) pbpHearingAllowance = v;
     } else if (r.benefit_type === 'otc_allowance') {
       const v = toNum(r.copay);
       if (v != null && v > 0) {
@@ -271,8 +294,13 @@ function extractPm(pm: any[], pbp: any[]): PmBenefits {
 
   const dentalMaxPm = toNum(dent?.max_coverage) ?? toNum(dent?.coverage_amount);
   const dentalMax = (dentalMaxPm != null && dentalMaxPm > 0) ? dentalMaxPm : pbpDentalMax;
-  const visionAllow = toNum(vis?.max_coverage) ?? toNum(vis?.coverage_amount);
-  const hearingAllow = toNum(hear?.max_coverage) ?? toNum(hear?.coverage_amount);
+  // Vision + hearing follow the same merge as dental: landscape wins if
+  // it has a value; otherwise pbp allowance surfaces through the API.
+  // Mirrors api/plans.ts:1101-1111 ALLOWANCE_CATEGORIES branch.
+  const visionAllowPm = toNum(vis?.max_coverage) ?? toNum(vis?.coverage_amount);
+  const visionAllow = (visionAllowPm != null && visionAllowPm > 0) ? visionAllowPm : pbpVisionAllowance;
+  const hearingAllowPm = toNum(hear?.max_coverage) ?? toNum(hear?.coverage_amount);
+  const hearingAllow = (hearingAllowPm != null && hearingAllowPm > 0) ? hearingAllowPm : pbpHearingAllowance;
   const pmOtcQ = toNum(otc?.coverage_amount);
   const otcQ = (pmOtcQ != null && pmOtcQ > 0) ? pmOtcQ : pbpOtcQuarterly;
   const pmFoodCardMo = toNum(foodPm?.coverage_amount);
