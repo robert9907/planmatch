@@ -1,11 +1,12 @@
 // EnrollScreen — agent-v3 screen 8.
 //
 // Final summary of the recommended plan plus the HealthSherpa Medicare
-// intake CTA. Opens the Rob-Simm-branded HealthSherpa intake URL with
-// cms_plan_id, county, and zip_code preloaded so the consumer doesn't
-// re-key their basics. The link is built by buildMedicareEnrollLink;
-// when Partner API access lands, swap the base URL inside the helper
-// — every Enroll surface in agent-v3 routes through it.
+// enrollment CTA. On click we POST the client to the Partner API
+// (/api/healthsherpa/sync); on success the returned redirect_url opens
+// in a new tab pre-filled with the contact. On failure NO tab opens —
+// the error surfaces inline with a Retry button. No login fallback:
+// the bare intake URL redirects to /sessions/new (agent login), which
+// the repo rules explicitly forbid.
 
 import { useState } from 'react';
 import type { Plan } from '@/types/plans';
@@ -218,9 +219,10 @@ export function EnrollScreen({
               return;
             }
             // AgentBase save landed — now sync to HealthSherpa Partner
-            // API. The hook opens the redirect_url itself on success and
-            // falls back to the generic intake URL on error, so the
-            // broker always lands in a HealthSherpa tab.
+            // API. On success the hook opens the pre-filled redirect_url
+            // in a new tab. On failure NO tab opens; we surface the
+            // error so the broker can retry rather than land on the
+            // agent login page.
             setSaveStatus('syncing');
             const result = await enroll.openEnrollment({
               client,
@@ -229,11 +231,8 @@ export function EnrollScreen({
             if (result.ok) {
               setSaveStatus('saved');
             } else {
-              // Tab was still opened (fallback URL), but we surface the
-              // Partner-API error so the broker knows the contact
-              // pre-fill didn't land.
               setSaveStatus('error');
-              setSaveError(enroll.error ?? 'HealthSherpa Partner API sync failed');
+              setSaveError(result.error ?? 'HealthSherpa Partner API sync failed');
             }
           }}
           style={{
@@ -293,13 +292,36 @@ export function EnrollScreen({
               border: '1px solid #fecaca',
               borderRadius: 8,
               color: '#7f1d1d',
-              padding: '8px 14px',
+              padding: '10px 14px',
               fontSize: 12,
               fontWeight: 700,
+              textAlign: 'left',
+              maxWidth: 460,
             }}
           >
-            ⚠ {saveError ?? 'unknown error'}. HealthSherpa opened with the
-            generic intake URL — re-enter client basics or retry.
+            <div style={{ marginBottom: 6 }}>
+              ⚠ HealthSherpa did not open — {saveError ?? 'unknown error'}.
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setSaveStatus('idle');
+                setSaveError(null);
+                enroll.reset();
+              }}
+              style={{
+                background: '#7f1d1d',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                padding: '6px 14px',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Retry
+            </button>
           </div>
         )}
       </div>

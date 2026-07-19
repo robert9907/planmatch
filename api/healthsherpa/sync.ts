@@ -7,8 +7,9 @@
 //   3. If a match exists, PATCH that contact with any new fields and
 //      return its redirect_url.
 //   4. Otherwise create a new contact.
-//   5. On any upstream error, return a county/zip-preloaded fallback
-//      URL so the broker is never stranded.
+//   5. On any upstream error, return an error to the client. NO login
+//      fallback URL — see repo rules: brokers must never be handed a
+//      link that lands on /sessions/new (agent login).
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from '../_lib/http.js';
@@ -19,20 +20,6 @@ import {
   updateContact,
   type HSContactInput,
 } from './client.js';
-
-const HEALTHSHERPA_INTAKE_BASE = 'https://medicare.healthsherpa.com/intake/robert-simm';
-
-function buildIntakeFallbackUrl(params: {
-  cms_plan_id?: string;
-  county?: string;
-  zip_code?: string;
-}): string {
-  const url = new URL(HEALTHSHERPA_INTAKE_BASE);
-  if (params.cms_plan_id) url.searchParams.set('cms_plan_id', params.cms_plan_id);
-  if (params.county) url.searchParams.set('county', params.county);
-  if (params.zip_code) url.searchParams.set('zip_code', params.zip_code);
-  return url.toString();
-}
 
 interface SyncBody {
   external_id?: string | number;
@@ -152,12 +139,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   res.setHeader('Cache-Control', 'no-store');
 
-  const fallback_url = buildIntakeFallbackUrl({
-    cms_plan_id: body.cms_plan_id,
-    county: body.county,
-    zip_code: body.zip,
-  });
-
   // ── Search-first dedup ──────────────────────────────────────────
   // Order: MBI > name+dob > skip. Email/phone alone aren't enough
   // per HealthSherpa search rules.
@@ -210,12 +191,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       result = await createContact(contact);
     }
 
-    const redirect_url = result.redirect_url || fallback_url;
+    const redirect_url = result.redirect_url;
     const contact_id = result.contact.id ?? null;
-    const usedFallback = redirect_url === fallback_url;
+
+    if (!redirect_url) {
+      // Partner API returned success but no redirect_url — treat as an
+      // upstream failure. NO fallback URL: opening the bare intake URL
+      // sends the broker to /sessions/new (agent login) which the repo
+      // rules explicitly forbid.
+      console.error(
+        `[healthsherpa-sync] partner api returned empty redirect_url contact_id=${contact_id ?? 'null'}`,
+      );
+      return sendJson(res, 502, {
+        error: 'HealthSherpa returned no redirect_url',
+        contact_id,
+      });
+    }
 
     console.log(
-      `[healthsherpa-sync] redirect_url=${usedFallback ? 'FALLBACK' : 'partner-api'} contact_id=${contact_id ?? 'null'}`,
+      `[healthsherpa-sync] redirect_url=partner-api contact_id=${contact_id ?? 'null'}`,
     );
 
     return sendJson(res, 200, {
@@ -233,13 +227,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return sendJson(res, 502, {
         error: err.message,
         upstream: err.upstream,
-        fallback_url,
       });
     }
     console.error('[healthsherpa-sync] fetch failed:', err);
     return serverError(res, {
       message: err instanceof Error ? err.message : 'HealthSherpa sync failed',
-      fallback_url,
     });
   }
 }

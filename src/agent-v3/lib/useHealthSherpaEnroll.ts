@@ -5,17 +5,16 @@
 // Flow:
 //   click  →  status='syncing'  →  POST /api/healthsherpa/sync
 //          →  on 2xx: window.open(redirect_url)         status='opened'
-//          →  on error: window.open(fallback_url)       status='error'
+//          →  on error: DO NOT open any tab              status='error'
 //
-// The fallback_url comes back from the route itself — even when the
-// Partner API rejects the contact, the route hands back the
-// county/zip-preloaded generic intake URL so the broker is never
-// stranded.
+// No login fallback. On upstream failure the hook surfaces the error to
+// the caller — the previous behavior of opening the bare intake URL
+// silently landed brokers on /sessions/new (agent login), which the
+// repo rules explicitly forbid. Callers must render their own error UI.
 
 import { useState } from 'react';
 import type { Client } from '@/types/session';
 import type { Plan } from '@/types/plans';
-import { buildMedicareEnrollLink } from './healthsherpa-medicare-link';
 
 export type EnrollStatus = 'idle' | 'syncing' | 'opened' | 'error';
 
@@ -23,7 +22,6 @@ interface SyncResponse {
   redirect_url?: string;
   contact_id?: string | number | null;
   error?: string;
-  fallback_url?: string;
 }
 
 interface EnrollOptions {
@@ -73,21 +71,16 @@ function buildSyncBody(opts: EnrollOptions): Record<string, unknown> {
   };
 }
 
-/** Local fallback when the route itself is unreachable (network down).
- *  The route's response includes its own fallback_url; this is the
- *  last-resort when fetch() throws. */
-function localFallbackUrl(opts: EnrollOptions): string {
-  return buildMedicareEnrollLink({
-    cms_plan_id: opts.plan?.id,
-    county: opts.client.county || undefined,
-    zip_code: opts.client.zip || undefined,
-  });
+export interface EnrollResult {
+  ok: boolean;
+  url?: string;
+  error?: string;
 }
 
 export interface UseHealthSherpaEnrollResult {
   status: EnrollStatus;
   error: string | null;
-  openEnrollment: (opts: EnrollOptions) => Promise<{ url: string; ok: boolean }>;
+  openEnrollment: (opts: EnrollOptions) => Promise<EnrollResult>;
   reset: () => void;
 }
 
@@ -95,7 +88,7 @@ export function useHealthSherpaEnroll(): UseHealthSherpaEnrollResult {
   const [status, setStatus] = useState<EnrollStatus>('idle');
   const [error, setError] = useState<string | null>(null);
 
-  async function openEnrollment(opts: EnrollOptions) {
+  async function openEnrollment(opts: EnrollOptions): Promise<EnrollResult> {
     setStatus('syncing');
     setError(null);
 
@@ -112,20 +105,18 @@ export function useHealthSherpaEnroll(): UseHealthSherpaEnrollResult {
       if (r.ok && json.redirect_url) {
         window.open(json.redirect_url, '_blank', 'noopener,noreferrer');
         setStatus('opened');
-        return { url: json.redirect_url, ok: true };
+        return { ok: true, url: json.redirect_url };
       }
 
-      const url = json.fallback_url ?? localFallbackUrl(opts);
-      window.open(url, '_blank', 'noopener,noreferrer');
+      const errMsg = json.error ?? `HealthSherpa sync ${r.status}`;
       setStatus('error');
-      setError(json.error ?? `HealthSherpa sync ${r.status}`);
-      return { url, ok: false };
+      setError(errMsg);
+      return { ok: false, error: errMsg };
     } catch (err) {
-      const url = localFallbackUrl(opts);
-      window.open(url, '_blank', 'noopener,noreferrer');
+      const errMsg = err instanceof Error ? err.message : 'Network error';
       setStatus('error');
-      setError(err instanceof Error ? err.message : 'Network error');
-      return { url, ok: false };
+      setError(errMsg);
+      return { ok: false, error: errMsg };
     }
   }
 
