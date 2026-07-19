@@ -109,6 +109,11 @@ function inNetCopay(entry: any): number | null {
 // silently returned null for 79% of MA plans that file vision under
 // COMBINED_COVERAGE — the audit then classified them as "both silent"
 // and falsely reported vision at 100%.
+//
+// UHC + Kaiser file vision as biennial (EVERY_TWO_YEARS). api/plans.ts
+// transformPbpRow line 507-513 halves biennial to annual before
+// storing coverage_amount. Mirror the halving so pm vs cms comparison
+// stays apples-to-apples.
 const COVERAGE_LIMIT_TYPES = new Set([
   'BENEFIT_LIMIT_TYPE_COVERAGE',
   'BENEFIT_LIMIT_TYPE_COMBINED_COVERAGE',
@@ -118,12 +123,14 @@ function annualCoverageMax(entries: any[]): number | null {
   let seen = false;
   for (const e of entries) {
     for (const d of (e.plan_limits_details ?? [])) {
-      if (COVERAGE_LIMIT_TYPES.has(d.limit_type) &&
-          d.limit_period === 'BENEFIT_LIMIT_PERIOD_EVERY_YEAR' &&
-          typeof d.limit_value === 'number') {
-        seen = true;
-        if (d.limit_value > max) max = d.limit_value;
-      }
+      if (!COVERAGE_LIMIT_TYPES.has(d.limit_type)) continue;
+      if (typeof d.limit_value !== 'number') continue;
+      let annual: number | null = null;
+      if (d.limit_period === 'BENEFIT_LIMIT_PERIOD_EVERY_YEAR') annual = d.limit_value;
+      else if (d.limit_period === 'BENEFIT_LIMIT_PERIOD_EVERY_TWO_YEARS') annual = Math.round(d.limit_value / 2);
+      if (annual == null) continue;
+      seen = true;
+      if (annual > max) max = annual;
     }
   }
   return seen ? max : null;
@@ -263,12 +270,22 @@ function extractPm(pm: any[], pbp: any[]): PmBenefits {
     } else if (r.benefit_type === 'vision_allowance') {
       // Mirrors api/plans.ts transformPbpRow line 507-513 + the
       // ALLOWANCE_CATEGORIES merge branch: pbp vision_allowance.copay
-      // becomes the eyewear cap when landscape has none.
+      // becomes the eyewear cap when landscape has none. api halves
+      // biennial-flagged rows ($300 every 2 years → $150 annual); do
+      // the same here so pm vs cms comparison is apples-to-apples.
       const v = toNum(r.copay);
-      if (v != null && v > 0) pbpVisionAllowance = v;
+      if (v != null && v > 0) {
+        const desc = String(r.description ?? '').toLowerCase();
+        const biennial = /every 2 years|every 24 months|every two years|biennial/.test(desc);
+        pbpVisionAllowance = biennial ? Math.round(v / 2) : v;
+      }
     } else if (r.benefit_type === 'hearing_aid_allowance') {
       const v = toNum(r.copay);
-      if (v != null && v > 0) pbpHearingAllowance = v;
+      if (v != null && v > 0) {
+        const desc = String(r.description ?? '').toLowerCase();
+        const biennial = /every 2 years|every 24 months|every two years|biennial/.test(desc);
+        pbpHearingAllowance = biennial ? Math.round(v / 2) : v;
+      }
     } else if (r.benefit_type === 'otc_allowance') {
       const v = toNum(r.copay);
       if (v != null && v > 0) {

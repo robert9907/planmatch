@@ -39,18 +39,23 @@ const sb = createClient(
 );
 const WRITE = process.argv.includes('--write');
 
-// ─── CMS extractor: accept both COVERAGE and COMBINED_COVERAGE ─
+// ─── CMS extractor: accept both COVERAGE and COMBINED_COVERAGE,
+// and both EVERY_YEAR and EVERY_TWO_YEARS (biennial). Halve biennial
+// to annual. Mirrors api/plans.ts:507-513 transformPbpRow biennial
+// halving so post-insert values flow through the merge correctly.
 const COVERAGE_TYPES = new Set(['BENEFIT_LIMIT_TYPE_COVERAGE', 'BENEFIT_LIMIT_TYPE_COMBINED_COVERAGE']);
 function cmsVisionMax(card: any): number | null {
   const hits = (card.ma_benefits ?? []).filter((b: any) => b.category === 'BENEFIT_VISION');
   let max: number | null = null;
   for (const b of hits) {
     for (const d of (b.plan_limits_details ?? [])) {
-      if (COVERAGE_TYPES.has(d.limit_type) &&
-          d.limit_period === 'BENEFIT_LIMIT_PERIOD_EVERY_YEAR' &&
-          typeof d.limit_value === 'number') {
-        if (max == null || d.limit_value > max) max = d.limit_value;
-      }
+      if (!COVERAGE_TYPES.has(d.limit_type)) continue;
+      if (typeof d.limit_value !== 'number') continue;
+      let annual: number | null = null;
+      if (d.limit_period === 'BENEFIT_LIMIT_PERIOD_EVERY_YEAR') annual = d.limit_value;
+      else if (d.limit_period === 'BENEFIT_LIMIT_PERIOD_EVERY_TWO_YEARS') annual = Math.round(d.limit_value / 2);
+      if (annual == null) continue;
+      if (max == null || annual > max) max = annual;
     }
   }
   return max;

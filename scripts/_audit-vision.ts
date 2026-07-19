@@ -69,16 +69,21 @@ function extractCmsVision(card: any): CmsVision | null {
     // Annual allowance from plan_limits_details. Vision uses BOTH
     // BENEFIT_LIMIT_TYPE_COVERAGE (per-service cap) and BENEFIT_LIMIT_
     // TYPE_COMBINED_COVERAGE (shared cap across frames/lenses/exams).
-    // Take the max across all annual-limit rows.
+    // UHC + Kaiser file biennial ("every 2 years"); api/plans.ts
+    // transformPbpRow line 507-513 halves biennial to annual before
+    // storing coverage_amount, so the audit extractor must mirror the
+    // halving to compare apples-to-apples.
     const COVERAGE_TYPES = new Set(['BENEFIT_LIMIT_TYPE_COVERAGE', 'BENEFIT_LIMIT_TYPE_COMBINED_COVERAGE']);
     let svcAllowance: number | null = null;
     for (const d of (b.plan_limits_details ?? [])) {
-      if (COVERAGE_TYPES.has(d.limit_type) &&
-          d.limit_period === 'BENEFIT_LIMIT_PERIOD_EVERY_YEAR' &&
-          typeof d.limit_value === 'number') {
-        svcAllowance = svcAllowance == null ? d.limit_value : Math.max(svcAllowance, d.limit_value);
-        if (maxAllowance == null || d.limit_value > maxAllowance) maxAllowance = d.limit_value;
-      }
+      if (!COVERAGE_TYPES.has(d.limit_type)) continue;
+      if (typeof d.limit_value !== 'number') continue;
+      let annual: number | null = null;
+      if (d.limit_period === 'BENEFIT_LIMIT_PERIOD_EVERY_YEAR') annual = d.limit_value;
+      else if (d.limit_period === 'BENEFIT_LIMIT_PERIOD_EVERY_TWO_YEARS') annual = Math.round(d.limit_value / 2);
+      if (annual == null) continue;
+      svcAllowance = svcAllowance == null ? annual : Math.max(svcAllowance, annual);
+      if (maxAllowance == null || annual > maxAllowance) maxAllowance = annual;
     }
     // Track the exam copay from SERVICE_ROUTINE_EYE_EXAMS specifically
     if (b.service === 'SERVICE_ROUTINE_EYE_EXAMS' || b.service === 'SERVICE_ROUTINE_VISION_EYE_EXAMS' || b.service?.toLowerCase().includes('exam')) {
