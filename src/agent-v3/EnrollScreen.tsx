@@ -1,12 +1,13 @@
 // EnrollScreen — agent-v3 screen 8.
 //
 // Final summary of the recommended plan plus the HealthSherpa Medicare
-// enrollment CTA. On click we POST the client to the Partner API
-// (/api/healthsherpa/sync); on success the returned redirect_url opens
-// in a new tab pre-filled with the contact. On failure NO tab opens —
-// the error surfaces inline with a Retry button. No login fallback:
-// the bare intake URL redirects to /sessions/new (agent login), which
-// the repo rules explicitly forbid.
+// enrollment CTA. On click we POST the client to /api/healthsherpa/sync,
+// which always returns a public consumer intake URL (Rob's branded
+// medicare.healthsherpa.com/intake/robert-simm page). That URL opens in
+// a new tab. Contact creation in Rob's HealthSherpa CRM happens as a
+// best-effort side-effect server-side; failure logs to console but does
+// not block the tab. The error UI here only fires on a real network /
+// server-error failure (rare) — with a Retry button that resets state.
 
 import { useState } from 'react';
 import type { Plan } from '@/types/plans';

@@ -1,18 +1,29 @@
 // POST /api/healthsherpa/sync
 //
-// Pre-fills a HealthSherpa Medicare intake from the agent-v3 session.
-// Search-first dedup:
-//   1. If the payload carries an MBI, search by medicare_number.
-//   2. Else if first+last+dob are present, search by name+dob.
-//   3. If a match exists, PATCH that contact with any new fields and
-//      return its redirect_url.
-//   4. Otherwise create a new contact.
-//   5. On any upstream error, return an error to the client. NO login
-//      fallback URL — see repo rules: brokers must never be handed a
-//      link that lands on /sessions/new (agent login).
+// Two independent effects:
+//
+//   (1) Consumer intake URL (ALWAYS returned):
+//       medicare.healthsherpa.com/intake/robert-simm?first_name=&...
+//       Public page — no broker login required, so brokers can hand this
+//       URL to a client (or open it themselves) without landing on
+//       /sessions/new when their HealthSherpa session is expired.
+//
+//   (2) Partner API contact sync (best-effort side-effect):
+//       Creates or updates the contact in Rob's HealthSherpa CRM so it
+//       shows up in his agent dashboard with external_id linkage back to
+//       AgentBase. This uses the search-first dedup path (MBI or
+//       name+dob). Failure here does NOT block (1) — the intake URL is
+//       independent of the Partner API and always works.
+//
+// Why not use the Partner API's returned `redirect_url`? Because that
+// URL is `/agents/robert-simm/plans/{contact_hash}` — an agent-facing
+// plan browser that requires broker login. When the broker's session
+// has expired (common), HealthSherpa bounces to /sessions/new, which
+// looks like a broken button from planmatch. The v1/v2 API does not
+// expose a consumer-facing redirect option (verified in docs).
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { badRequest, cors, sendJson, serverError } from '../_lib/http.js';
+import { badRequest, cors, sendJson } from '../_lib/http.js';
 import {
   createContact,
   HealthSherpaError,
@@ -20,6 +31,23 @@ import {
   updateContact,
   type HSContactInput,
 } from './client.js';
+
+const HEALTHSHERPA_INTAKE_BASE = 'https://medicare.healthsherpa.com/intake/robert-simm';
+
+// Build Rob's public consumer intake URL with every pre-fill query param
+// we have. HealthSherpa's intake page reads a subset — unknown params
+// are ignored, so best-effort inclusion is safe. Empty/undefined values
+// are dropped so the URL stays tidy.
+function buildConsumerIntakeUrl(params: Record<string, string | undefined | null>): string {
+  const url = new URL(HEALTHSHERPA_INTAKE_BASE);
+  for (const [k, v] of Object.entries(params)) {
+    if (v == null) continue;
+    const trimmed = String(v).trim();
+    if (!trimmed) continue;
+    url.searchParams.set(k, trimmed);
+  }
+  return url.toString();
+}
 
 interface SyncBody {
   external_id?: string | number;
@@ -139,12 +167,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   res.setHeader('Cache-Control', 'no-store');
 
-  // ── Search-first dedup ──────────────────────────────────────────
-  // Order: MBI > name+dob > skip. Email/phone alone aren't enough
-  // per HealthSherpa search rules.
+  // Consumer intake URL — always returned regardless of Partner API
+  // outcome. This is the URL the caller opens; it works whether or not
+  // the broker is logged into HealthSherpa.
+  const redirect_url = buildConsumerIntakeUrl({
+    first_name: firstName || undefined,
+    last_name: lastName || undefined,
+    birth_date: contact.birth_date,
+    phone: contact.phone,
+    email: contact.email,
+    zip_code: contact.zip,
+    state: contact.state,
+    county: body.county,
+    city: contact.city,
+    sex: contact.sex,
+    medicare_number: contact.medicare_number,
+    cms_plan_id: body.cms_plan_id,
+    external_id: externalId,
+  });
+
+  // ── Partner API sync (best-effort side-effect) ──────────────────
+  // Search-first dedup: MBI > name+dob > skip. Any failure here logs
+  // and continues — the consumer intake URL above is independent and
+  // does not require the Partner API to succeed.
   const searchable =
     !!normalizedMbi ||
     (!!firstName && !!lastName && !!body.birth_date);
+
+  let contact_id: string | null = null;
+  let matched_existing = false;
+  let partner_sync_ok = false;
+  let partner_sync_error: string | null = null;
 
   try {
     let existing = null;
@@ -162,8 +215,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch (err) {
         // Search failure shouldn't block the create path. Log and
         // fall through to create — if the contact already exists,
-        // HealthSherpa will reject the create with a uniqueness
-        // error and we'll surface that to the broker.
+        // HealthSherpa will reject the create with a uniqueness error
+        // which we'll catch below.
         console.warn(
           '[healthsherpa-sync] search failed, falling through to create:',
           err instanceof HealthSherpaError ? `${err.status} ${err.message}` : err,
@@ -173,65 +226,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.log('[healthsherpa-sync] not enough fields to search; going straight to create');
     }
 
-    let result: { contact: { id?: string }; redirect_url: string };
-
     if (existing && existing.contact.id) {
       console.log(
         `[healthsherpa-sync] existing contact found id=${existing.contact.id} → updating`,
       );
       const updated = await updateContact(existing.contact.id, contact);
-      // 204 No Content path returns an empty redirect_url — fall back
-      // to the redirect_url from the search hit, which is still valid.
-      result = {
-        contact: updated.contact,
-        redirect_url: updated.redirect_url || existing.redirect_url,
-      };
+      contact_id = updated.contact.id ?? existing.contact.id;
+      matched_existing = true;
     } else {
       console.log('[healthsherpa-sync] no existing contact → creating');
-      result = await createContact(contact);
+      const created = await createContact(contact);
+      contact_id = created.contact.id ?? null;
     }
-
-    const redirect_url = result.redirect_url;
-    const contact_id = result.contact.id ?? null;
-
-    if (!redirect_url) {
-      // Partner API returned success but no redirect_url — treat as an
-      // upstream failure. NO fallback URL: opening the bare intake URL
-      // sends the broker to /sessions/new (agent login) which the repo
-      // rules explicitly forbid.
-      console.error(
-        `[healthsherpa-sync] partner api returned empty redirect_url contact_id=${contact_id ?? 'null'}`,
-      );
-      return sendJson(res, 502, {
-        error: 'HealthSherpa returned no redirect_url',
-        contact_id,
-      });
-    }
-
+    partner_sync_ok = true;
     console.log(
-      `[healthsherpa-sync] redirect_url=partner-api contact_id=${contact_id ?? 'null'}`,
+      `[healthsherpa-sync] partner sync ok contact_id=${contact_id ?? 'null'} matched=${matched_existing}`,
     );
-
-    return sendJson(res, 200, {
-      redirect_url,
-      contact_id,
-      external_id: externalId,
-      matched_existing: !!existing,
-    });
   } catch (err) {
     if (err instanceof HealthSherpaError) {
+      partner_sync_error = `${err.status}: ${err.message}`;
       console.error(
-        `[healthsherpa-sync] partner api ${err.status}: ${err.message}`,
+        `[healthsherpa-sync] partner sync failed ${err.status}: ${err.message}`,
         err.upstream,
       );
-      return sendJson(res, 502, {
-        error: err.message,
-        upstream: err.upstream,
-      });
+    } else {
+      partner_sync_error = err instanceof Error ? err.message : 'unknown';
+      console.error('[healthsherpa-sync] partner sync threw:', err);
     }
-    console.error('[healthsherpa-sync] fetch failed:', err);
-    return serverError(res, {
-      message: err instanceof Error ? err.message : 'HealthSherpa sync failed',
-    });
   }
+
+  return sendJson(res, 200, {
+    redirect_url,
+    contact_id,
+    external_id: externalId,
+    matched_existing,
+    partner_sync_ok,
+    partner_sync_error,
+  });
 }

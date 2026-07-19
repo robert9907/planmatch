@@ -870,10 +870,9 @@ export function CompareScreen({
 
   // Wrap onNext with the AgentBase write-back. Fire-and-forget — the
   // hook handles state, the screen advances immediately. The HealthSherpa
-  // Partner API sync runs in parallel: on success the hook opens the
-  // pre-filled redirect_url in a new tab. On failure NO tab opens (no
-  // login fallback) — the broker sees the definitive error surface on
-  // EnrollScreen when they hit the final CTA.
+  // sync runs in parallel and always opens the consumer intake URL in a
+  // new tab; Partner API contact creation is a best-effort side-effect
+  // handled server-side (see api/healthsherpa/sync.ts).
   const recommendAndAdvance = (plan: Plan | null) => () => {
     if (plan) {
       onRecommend?.(plan);

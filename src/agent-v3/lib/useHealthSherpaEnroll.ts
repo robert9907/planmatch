@@ -4,13 +4,16 @@
 //
 // Flow:
 //   click  →  status='syncing'  →  POST /api/healthsherpa/sync
-//          →  on 2xx: window.open(redirect_url)         status='opened'
-//          →  on error: DO NOT open any tab              status='error'
+//          →  server returns 200 with redirect_url (public consumer
+//             intake URL) plus best-effort partner_sync_ok flag
+//          →  window.open(redirect_url)                status='opened'
+//          →  network / server 5xx failure             status='error'
 //
-// No login fallback. On upstream failure the hook surfaces the error to
-// the caller — the previous behavior of opening the bare intake URL
-// silently landed brokers on /sessions/new (agent login), which the
-// repo rules explicitly forbid. Callers must render their own error UI.
+// The redirect_url is always the public consumer intake page
+// (medicare.healthsherpa.com/intake/robert-simm?...), which does not
+// require broker login. Partner API contact creation runs server-side
+// as a best-effort side-effect for CRM linkage; its failure is logged
+// to the console but does not block the tab from opening.
 
 import { useState } from 'react';
 import type { Client } from '@/types/session';
@@ -21,6 +24,10 @@ export type EnrollStatus = 'idle' | 'syncing' | 'opened' | 'error';
 interface SyncResponse {
   redirect_url?: string;
   contact_id?: string | number | null;
+  external_id?: string;
+  matched_existing?: boolean;
+  partner_sync_ok?: boolean;
+  partner_sync_error?: string | null;
   error?: string;
 }
 
@@ -75,6 +82,11 @@ export interface EnrollResult {
   ok: boolean;
   url?: string;
   error?: string;
+  /** True when the tab opened AND the Partner API contact sync also
+   *  succeeded. False (with ok=true) means the tab opened but the
+   *  contact did not land in Rob's HealthSherpa CRM. */
+  partner_sync_ok?: boolean;
+  partner_sync_error?: string | null;
 }
 
 export interface UseHealthSherpaEnrollResult {
@@ -105,7 +117,21 @@ export function useHealthSherpaEnroll(): UseHealthSherpaEnrollResult {
       if (r.ok && json.redirect_url) {
         window.open(json.redirect_url, '_blank', 'noopener,noreferrer');
         setStatus('opened');
-        return { ok: true, url: json.redirect_url };
+        if (json.partner_sync_error) {
+          // Contact didn't land in HealthSherpa CRM — surface via
+          // console for the broker's dev-tools view without blocking
+          // the enrollment tab that just opened.
+          console.warn(
+            '[healthsherpa-enroll] tab opened, but partner API contact sync failed:',
+            json.partner_sync_error,
+          );
+        }
+        return {
+          ok: true,
+          url: json.redirect_url,
+          partner_sync_ok: json.partner_sync_ok ?? false,
+          partner_sync_error: json.partner_sync_error ?? null,
+        };
       }
 
       const errMsg = json.error ?? `HealthSherpa sync ${r.status}`;
