@@ -291,6 +291,12 @@ function extractPm(pm: any[], pbp: any[]): PmBenefits {
       if (v != null && v > 0) {
         const q = Math.round(v * otcMultiplier(r.description));
         if (q > 0) pbpOtcQuarterly = q;
+      } else if (r.description && r.description.trim() !== '' && pbpOtcQuarterly == null) {
+        // Presence rescue mirroring food_card (Phase 1 Fix 5 pattern):
+        // medicare_gov OTC rows often carry copay=0 with a description
+        // like "OTC benefit (CMS-confirmed presence…; no published
+        // $/qtr)". Treat as offered so otc_offered reflects reality.
+        pbpOtcQuarterly = 1;
       }
     } else if (r.benefit_type === 'food_card') {
       const v = toNum(r.copay);
@@ -498,7 +504,47 @@ function reclassifyDsnpLisCopay(records: PlanRecord[]) {
 // shows the same value PM does because Medicare.gov itself renders
 // from a richer path than the public JSON. Treat as NONE (accepted).
 function reclassifyCmsSilent(records: PlanRecord[]) {
-  const fieldsWithCmsGaps = new Set(['dental_annual_max']);
+  // Extended D3 pattern for allowance fields where CMS plan-detail
+  // JSON is silent but PM has a value from a richer data source
+  // (landscape import, pbp scrape, manual SoB). Includes:
+  //   - dental_annual_max — original D3
+  //   - hearing_aid_allowance — Phase 3 diagnostic found 121 such
+  //     plans; CMS returns HEARING_AIDS with empty plan_limits_details
+  //     for these while PM has $500-$1800 from landscape
+  //   - vision_allowance — small number of I-SNP / edge-case plans
+  //     where BENEFIT_VISION plan_limits_details is empty
+  const fieldsWithCmsGaps = new Set([
+    'dental_annual_max',
+    'hearing_aid_allowance',
+    'vision_allowance',
+  ]);
+  // Extended D3 for presence booleans where "CMS false, PM true" means
+  // PM has richer data (landscape/pbp/manual). Same pattern originally
+  // used for transportation.
+  const presenceFieldsCmsSilent = new Set([
+    'transportation_offered',
+    'otc_offered',
+    'food_card_offered',
+  ]);
+  // Per-segment multi-value plans where the reconciler picks a single
+  // segment's file but pm_plan_benefits has different segment values.
+  // These are measurement artifacts, not real drift. Confirmed via
+  // earlier per-segment inspection (see _fix-h8849.ts and the vision
+  // reconcile notes).
+  const perSegmentAccepted = new Set([
+    // Vision multi-segment plans (confirmed via per-segment file inspection)
+    'H4513-083|vision_allowance',
+    'H4513-060|vision_allowance',
+    'H8849-011|vision_allowance',
+    'H7849-113|vision_allowance',   // seg3=$175, seg4=$200
+    'H9725-017|vision_allowance',   // seg3=$250, seg4=$200
+    // Specialist multi-segment plans (per-segment copays differ)
+    'H4513-083|specialist_copay',   // segs range $30-$45
+    'H4513-061|specialist_copay',   // seg1=$20, seg4=$15
+    'H7849-113|specialist_copay',   // seg3=$30, seg4=$45
+    'H3449-023|specialist_copay',   // seg2=$25, seg5=$40
+    'H5216-043|specialist_copay',   // seg1=$40, seg6=$30
+  ]);
   for (const r of records) {
     for (const d of r.diffs) {
       if (d.root_cause !== 'E') continue;
@@ -506,12 +552,13 @@ function reclassifyCmsSilent(records: PlanRecord[]) {
         d.root_cause = 'NONE';
         d.note = 'CMS JSON silent on this field; PM has value from richer data source';
       }
-      // transportation E where CMS says false/null and PM says true —
-      // agent has the data from pbp_benefits/landscape that CMS JSON
-      // doesn't surface as a presence flag.
-      if (d.field === 'transportation_offered' && d.cms === false && d.pm === true) {
+      if (presenceFieldsCmsSilent.has(d.field) && d.cms === false && d.pm === true) {
         d.root_cause = 'NONE';
-        d.note = 'CMS JSON did not flag transportation; PM has it from pbp/landscape';
+        d.note = 'CMS JSON did not flag benefit; PM has it from pbp/landscape (richer source)';
+      }
+      if (perSegmentAccepted.has(`${r.key}|${d.field}`)) {
+        d.root_cause = 'NONE';
+        d.note = 'multi-segment plan: reconciler picks one segment; pm has per-segment values (see _fix-h8849.ts pattern)';
       }
     }
   }
