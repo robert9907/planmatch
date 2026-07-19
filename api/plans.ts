@@ -1434,15 +1434,20 @@ function buildBenefits(
   // as comprehensive. When pm_plan_benefits has no annual cap (the
   // structured importer doesn't populate it), fall back to the
   // medicare.gov scraper's dental_annual_max value in pbp_benefits.
+  // Math.max (not ??) is a self-heal for column drift: dental/vision/
+  // hearing are annual-allowance benefits where higher = better for
+  // the consumer, so if a future Landscape import writes only one
+  // column and leaves the other stale, we surface the better value
+  // instead of silently shadowing it.
   const dental = rows.find((r) => r.benefit_category === 'dental');
-  const pmDentalMax = toNum(dental?.max_coverage ?? dental?.coverage_amount) ?? 0;
+  const pmDentalMax = Math.max(toNum(dental?.max_coverage) ?? 0, toNum(dental?.coverage_amount) ?? 0);
   const dentalMax = pmDentalMax > 0 ? pmDentalMax : (pbpFallback?.dentalAnnualMax ?? 0);
 
   const vision = rows.find((r) => r.benefit_category === 'vision');
-  const visionEyewear = toNum(vision?.max_coverage ?? vision?.coverage_amount) ?? 0;
+  const visionEyewear = Math.max(toNum(vision?.max_coverage) ?? 0, toNum(vision?.coverage_amount) ?? 0);
 
   const hearing = rows.find((r) => r.benefit_category === 'hearing');
-  const hearingAllowance = toNum(hearing?.max_coverage ?? hearing?.coverage_amount) ?? 0;
+  const hearingAllowance = Math.max(toNum(hearing?.max_coverage) ?? 0, toNum(hearing?.coverage_amount) ?? 0);
 
   // b13b → otc. Importer writes coverage_amount as the QUARTERLY
   // equivalent ($/qtr), max_coverage as the ANNUAL max. Benefit
