@@ -46,7 +46,6 @@ import {
 import type { LibraryRankPlan } from '@/lib/library-client';
 import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
 import { QuoteBuilder } from './QuoteBuilder';
-import { useHealthSherpaEnroll } from './lib/useHealthSherpaEnroll';
 import { formatOtc } from '@/lib/extractBenefitValue';
 
 // Per the current product rule: rows stay visible, but unfiled values
@@ -586,7 +585,6 @@ export function CompareScreen({
   const providers = useSession((s) => s.providers);
   const medications = useSession((s) => s.medications);
   const client = useSession((s) => s.client);
-  const enroll = useHealthSherpaEnroll();
 
   const rxcuis = useMemo(
     () => medications.map((m) => m.rxcui).filter((s): s is string => !!s),
@@ -869,17 +867,12 @@ export function CompareScreen({
   }
 
   // Wrap onNext with the AgentBase write-back. Fire-and-forget — the
-  // hook handles state, the screen advances immediately. The HealthSherpa
-  // sync runs in parallel and always opens the consumer intake URL in a
-  // new tab; Partner API contact creation is a best-effort side-effect
-  // handled server-side (see api/healthsherpa/sync.ts).
+  // hook handles state, the screen advances immediately. HealthSherpa
+  // is NOT opened here; that lives on EnrollScreen after the broker
+  // has walked compliance + disclaimers, so we don't strand a live
+  // consumer intake tab in the browser mid-call.
   const recommendAndAdvance = (plan: Plan | null) => () => {
-    if (plan) {
-      onRecommend?.(plan);
-      // Fire-and-forget — we don't gate screen advancement on the
-      // HealthSherpa round-trip; the broker is still mid-compliance.
-      void enroll.openEnrollment({ client, plan });
-    }
+    if (plan) onRecommend?.(plan);
     onNext();
   };
 
