@@ -18,6 +18,13 @@ import type { ComplianceSnapshot, AgentV3SessionSummary } from './agentbaseSync'
 import { SECTIONS, DISCLAIMERS } from '@/lib/compliance';
 import { useHealthSherpaEnroll } from './lib/useHealthSherpaEnroll';
 
+// Broker-facing HealthSherpa intake page. Used as the fallback destination
+// when the pre-populated Partner API sync fails at button-click time — the
+// broker lands on an empty intake instead of a dead error toast and can
+// key demographics manually to complete the enrollment mid-call.
+const HS_FALLBACK_URL =
+  'https://www.healthsherpa.com/marketplace/me/?agent_id=hst-t4qptg';
+
 interface Props {
   current: Plan | null;
   /** Full brain-ranked plan list, descending by composite score. */
@@ -53,10 +60,13 @@ export function EnrollScreen({
   // Toast state for the save-then-open HealthSherpa flow. status: idle
   // while the button sits, saving while AgentBase POST is in flight,
   // syncing while the HealthSherpa /v1/contacts round-trip is in
-  // flight, saved on success (then HealthSherpa opens), error if either
-  // leg failed (HealthSherpa stays closed; broker retries).
+  // flight, saved on success (then HealthSherpa opens). On sync failure
+  // we open the fallback broker intake URL so the broker isn't stranded
+  // — state advances to 'fallback' to surface the "pre-populated sync
+  // did not land; you'll need to key demographics" toast, with a Retry
+  // that re-attempts the pre-populated sync path.
   const [saveStatus, setSaveStatus] = useState<
-    'idle' | 'saving' | 'syncing' | 'saved' | 'error'
+    'idle' | 'saving' | 'syncing' | 'saved' | 'fallback' | 'error'
   >('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
   const enroll = useHealthSherpaEnroll();
@@ -221,9 +231,10 @@ export function EnrollScreen({
             }
             // AgentBase save landed — now sync to HealthSherpa Partner
             // API. On success the hook opens the pre-filled redirect_url
-            // in a new tab. On failure NO tab opens; we surface the
-            // error so the broker can retry rather than land on the
-            // agent login page.
+            // in a new tab. On failure we open the fallback broker
+            // intake URL so the broker can still complete the enrollment
+            // by keying demographics manually — better than stranding
+            // them on an error toast mid-call.
             setSaveStatus('syncing');
             const result = await enroll.openEnrollment({
               client,
@@ -232,7 +243,8 @@ export function EnrollScreen({
             if (result.ok) {
               setSaveStatus('saved');
             } else {
-              setSaveStatus('error');
+              window.open(HS_FALLBACK_URL, '_blank', 'noopener,noreferrer');
+              setSaveStatus('fallback');
               setSaveError(result.error ?? 'HealthSherpa Partner API sync failed');
             }
           }}
@@ -281,6 +293,51 @@ export function EnrollScreen({
             }}
           >
             ✓ Saved to AgentBase — HealthSherpa opening in a new tab.
+          </div>
+        )}
+        {saveStatus === 'fallback' && (
+          <div
+            role="status"
+            style={{
+              marginTop: 12,
+              display: 'inline-block',
+              background: '#fffbeb',
+              border: '1px solid #fcd34d',
+              borderLeft: '4px solid #f59e0b',
+              borderRadius: 8,
+              color: '#78350f',
+              padding: '10px 14px',
+              fontSize: 12,
+              fontWeight: 700,
+              textAlign: 'left',
+              maxWidth: 460,
+            }}
+          >
+            <div style={{ marginBottom: 6 }}>
+              ✓ Saved to AgentBase — pre-populated HealthSherpa sync failed
+              ({saveError ?? 'unknown error'}). Opened fallback intake page;
+              key demographics manually.
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setSaveStatus('idle');
+                setSaveError(null);
+                enroll.reset();
+              }}
+              style={{
+                background: '#78350f',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                padding: '6px 14px',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Retry pre-populated sync
+            </button>
           </div>
         )}
         {saveStatus === 'error' && (
