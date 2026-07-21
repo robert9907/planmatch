@@ -423,8 +423,10 @@ export function EnrollScreen({
  *                                 only after the broker has worked
  *                                 through every checklist row)
  *  Timestamps are passed as null here; Fix 3 wires the session store to
- *  capture per-disclaimer ISO timestamps that flow through this helper. */
-function buildComplianceSnapshot({
+ *  capture per-disclaimer ISO timestamps that flow through this helper.
+ *  Exported so ComplianceScreen's save-to-AgentBase gate can build the
+ *  same snapshot shape without duplicating the mapping logic. */
+export function buildComplianceSnapshot({
   complianceChecked,
   disclaimersConfirmed,
   complianceTimestamps,

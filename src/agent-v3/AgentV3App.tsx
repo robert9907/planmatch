@@ -1184,6 +1184,10 @@ export function AgentV3App() {
         )}
         {screen === 'compliance' && (
           <ComplianceScreen
+            current={currentPlan}
+            scoredPlans={scoredPlans}
+            annualDrugByPlanId={annualDrugByPlanId}
+            onRecommend={onRecommend}
             onBack={() => setScreen('compare')}
             onNext={() => setScreen('enroll')}
           />

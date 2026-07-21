@@ -10,13 +10,16 @@
 //     "NEW 2026" per CMS marketing rules (LIS/MSP eligibility,
 //     Medigap GI rights).
 //
-// HealthSherpa Enrollment Gate is locked until ALL 16 items are
-// confirmed. The gate's "Open HealthSherpa" CTA shares intent with
-// EnrollScreen's final CTA — it advances the screen and opens the
-// HealthSherpa Medicare intake in a new tab so the broker can co-pilot
-// the application while the audit trail finishes saving.
+// Enrollment Gate is locked until ALL 16 items are confirmed. Once
+// unlocked, the gate button POSTs the recommendation to AgentBase via
+// /api/agentbase-recommend (same onRecommend handler EnrollScreen
+// uses; endpoint is idempotent). Plan Match does NOT touch HealthSherpa
+// directly — the broker jumps to the AgentBase client card and submits
+// to HealthSherpa from there.
 
+import { useState } from 'react';
 import type { CSSProperties } from 'react';
+import type { Plan } from '@/types/plans';
 import { useSession } from '@/hooks/useSession';
 import {
   DISCLAIMERS,
@@ -24,25 +27,87 @@ import {
   totalComplianceItems,
 } from '@/lib/compliance';
 import { Container, Nav } from './atoms';
-import { useHealthSherpaEnroll } from './lib/useHealthSherpaEnroll';
+import { annualEstimate } from './planDisplay';
+import type { ComplianceSnapshot, AgentV3SessionSummary } from './agentbaseSync';
+import { buildComplianceSnapshot } from './EnrollScreen';
+
+// Mirrors EnrollScreen.tsx:24 — kept as a duplicated constant rather
+// than a shared import to keep this screen's gate self-contained.
+const AGENTBASE_CRM_BASE = 'https://agentbase-crm.vercel.app';
+
+function readClientIdFromUrl(): string | null {
+  if (typeof window === 'undefined') return null;
+  const v = new URLSearchParams(window.location.search).get('clientId');
+  return v && v.trim() ? v.trim() : null;
+}
 
 interface Props {
   onBack: () => void;
   onNext: () => void;
+  /** Client's current plan (used to skip the incumbent when picking
+   *  the top-ranked recommendation to save). */
+  current: Plan | null;
+  /** Brain-ranked plans, descending by composite score. */
+  scoredPlans: Plan[];
+  annualDrugByPlanId: Record<string, number | null>;
+  /** Same onRecommend the EnrollScreen uses. Save is idempotent — a
+   *  broker who saves here and again on EnrollScreen upserts the same
+   *  row (api/agentbase-recommend.ts key = phone + dob). */
+  onRecommend?: (
+    plan: Plan,
+    snapshot: { compliance: ComplianceSnapshot; sessionSummary: AgentV3SessionSummary },
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
 }
 
-export function ComplianceScreen({ onBack, onNext }: Props) {
+export function ComplianceScreen({
+  onBack,
+  onNext,
+  current,
+  scoredPlans,
+  annualDrugByPlanId,
+  onRecommend,
+}: Props) {
   const checked = useSession((s) => s.complianceChecked);
   const confirmed = useSession((s) => s.disclaimersConfirmed);
   const toggleItem = useSession((s) => s.toggleComplianceItem);
   const client = useSession((s) => s.client);
-  const enroll = useHealthSherpaEnroll();
+  const complianceTimestamps = useSession((s) => s.complianceTimestamps);
+  const disclaimerTimestamps = useSession((s) => s.disclaimerTimestamps);
+  const resetSession = useSession((s) => s.resetSession);
+
+  const [saveStatus, setSaveStatus] = useState<
+    'idle' | 'saving' | 'saved' | 'error'
+  >('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const total = totalComplianceItems();
   const done = new Set(checked).size + new Set(confirmed).size;
   const allDone = done >= total;
   const disclaimersDone = DISCLAIMERS.filter((d) => confirmed.includes(d.id)).length;
   const disclaimersAllDone = disclaimersDone >= DISCLAIMERS.length;
+
+  // Top brain-ranked plan that isn't the client's current — mirrors
+  // EnrollScreen's selection so both screens save the same plan.
+  const recommendedPlan: Plan | null =
+    scoredPlans.find((p) => p.id !== current?.id) ?? scoredPlans[0] ?? null;
+
+  const candAnnual = recommendedPlan
+    ? annualEstimate(recommendedPlan, annualDrugByPlanId[recommendedPlan.id] ?? null).total
+    : null;
+
+  const clientId = readClientIdFromUrl();
+  const clientCardUrl = clientId
+    ? `${AGENTBASE_CRM_BASE}/clients/${clientId}`
+    : AGENTBASE_CRM_BASE;
+
+  function startNewSession() {
+    resetSession();
+    if (typeof window !== 'undefined') {
+      window.location.href = window.location.pathname;
+    }
+  }
+
+  const gateReady = allDone && recommendedPlan != null && saveStatus !== 'saving';
 
   return (
     <Container>
@@ -252,70 +317,248 @@ export function ComplianceScreen({ onBack, onNext }: Props) {
           borderRadius: 11,
           padding: '16px 20px',
           marginTop: 6,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
         }}
       >
-        <div>
-          <div
-            style={{
-              fontSize: 9,
-              fontWeight: 700,
-              color: allDone ? '#059669' : '#d97706',
-              letterSpacing: 1,
-              textTransform: 'uppercase',
-            }}
-          >
-            HealthSherpa Enrollment Gate
-          </div>
-          <div
-            style={{
-              fontWeight: 700,
-              fontSize: 14,
-              color: '#0d2f5e',
-              marginTop: 3,
-            }}
-          >
-            {allDone
-              ? 'All items confirmed — ready to enroll.'
-              : `${total - done} items left before Enroll Now unlocks.`}
-          </div>
-          <div style={{ fontSize: 10, color: '#64748b', marginTop: 1 }}>
-            Rob Simm · NC #10447418 · NPN 10447418
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={
-            allDone && enroll.status !== 'syncing'
-              ? () => {
-                  void enroll.openEnrollment({ client });
-                  onNext();
-                }
-              : undefined
-          }
-          disabled={!allDone || enroll.status === 'syncing'}
+        <div
           style={{
-            background: allDone
-              ? 'linear-gradient(135deg, #059669, #047857)'
-              : '#e2e8f0',
-            color: allDone ? 'white' : '#94a3b8',
-            border: 'none',
-            borderRadius: 8,
-            padding: '11px 22px',
-            fontSize: 13,
-            fontWeight: 700,
-            cursor:
-              allDone && enroll.status !== 'syncing' ? 'pointer' : 'default',
-            transition: 'all 0.3s',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            flexWrap: 'wrap',
           }}
         >
-          {enroll.status === 'syncing'
-            ? 'Connecting to HealthSherpa…'
-            : 'Open HealthSherpa →'}
-        </button>
+          <div>
+            <div
+              style={{
+                fontSize: 9,
+                fontWeight: 700,
+                color: allDone ? '#059669' : '#d97706',
+                letterSpacing: 1,
+                textTransform: 'uppercase',
+              }}
+            >
+              Enrollment Gate
+            </div>
+            <div
+              style={{
+                fontWeight: 700,
+                fontSize: 14,
+                color: '#0d2f5e',
+                marginTop: 3,
+              }}
+            >
+              {saveStatus === 'saved'
+                ? 'Recommendation saved to AgentBase.'
+                : allDone
+                  ? recommendedPlan
+                    ? `Ready to save — ${recommendedPlan.carrier} · ${recommendedPlan.plan_name}`
+                    : 'Pick a plan on Compare before saving.'
+                  : `${total - done} items left before Save unlocks.`}
+            </div>
+            <div style={{ fontSize: 10, color: '#64748b', marginTop: 1 }}>
+              Rob Simm · NC #10447418 · NPN 10447418
+            </div>
+          </div>
+          {saveStatus !== 'saved' && (
+            <button
+              type="button"
+              onClick={
+                gateReady && recommendedPlan
+                  ? async () => {
+                      setSaveStatus('saving');
+                      setSaveError(null);
+                      const compliance = buildComplianceSnapshot({
+                        complianceChecked: checked,
+                        disclaimersConfirmed: confirmed,
+                        complianceTimestamps,
+                        disclaimerTimestamps,
+                      });
+                      const sessionSummary: AgentV3SessionSummary = {
+                        zip: client.zip,
+                        county: client.county,
+                        planYear: 2026,
+                        estimatedAnnualCost: candAnnual ?? undefined,
+                      };
+                      const r = await (onRecommend?.(recommendedPlan, {
+                        compliance,
+                        sessionSummary,
+                      }) ??
+                        Promise.resolve<{ ok: true } | { ok: false; error: string }>(
+                          { ok: true },
+                        ));
+                      if (r.ok) {
+                        setSaveStatus('saved');
+                      } else {
+                        setSaveStatus('error');
+                        setSaveError(r.error);
+                      }
+                    }
+                  : undefined
+              }
+              disabled={!gateReady}
+              style={{
+                background: gateReady
+                  ? 'linear-gradient(135deg, #059669, #047857)'
+                  : '#e2e8f0',
+                color: gateReady ? 'white' : '#94a3b8',
+                border: 'none',
+                borderRadius: 8,
+                padding: '11px 22px',
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: gateReady ? 'pointer' : 'default',
+                transition: 'all 0.3s',
+              }}
+            >
+              {saveStatus === 'saving' ? 'Saving to AgentBase…' : 'Save to AgentBase ✓'}
+            </button>
+          )}
+        </div>
+
+        {saveStatus === 'saved' && (
+          <div
+            role="status"
+            style={{
+              marginTop: 14,
+              background: 'rgba(5,150,105,0.08)',
+              border: '1px solid rgba(5,150,105,0.35)',
+              borderRadius: 10,
+              padding: '14px 16px',
+              textAlign: 'center',
+            }}
+          >
+            <div style={{ fontSize: 22, lineHeight: 1, marginBottom: 4 }}>✓</div>
+            <div
+              style={{
+                fontFamily: "'Fraunces', Georgia, serif",
+                fontSize: 15,
+                fontWeight: 800,
+                color: '#065f46',
+                marginBottom: 2,
+              }}
+            >
+              Saved to AgentBase
+            </div>
+            <div
+              style={{
+                fontSize: 11,
+                color: '#047857',
+                fontWeight: 600,
+                marginBottom: 10,
+              }}
+            >
+              {client.name || 'Client'} · {recommendedPlan?.carrier} ·{' '}
+              {recommendedPlan?.plan_name}
+            </div>
+            <div style={{ fontSize: 10, color: '#065f46', marginBottom: 12 }}>
+              Open the client card in AgentBase to review and submit to HealthSherpa.
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                justifyContent: 'center',
+                flexWrap: 'wrap',
+              }}
+            >
+              <a
+                href={clientCardUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: 'inline-block',
+                  background: 'linear-gradient(135deg, #059669, #047857)',
+                  color: 'white',
+                  padding: '9px 18px',
+                  borderRadius: 8,
+                  fontSize: 12,
+                  fontWeight: 800,
+                  textDecoration: 'none',
+                  letterSpacing: 0.3,
+                }}
+              >
+                Open Client Card →
+              </a>
+              <button
+                type="button"
+                onClick={onNext}
+                style={{
+                  background: 'white',
+                  color: '#065f46',
+                  border: '1px solid #047857',
+                  borderRadius: 8,
+                  padding: '9px 18px',
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  letterSpacing: 0.3,
+                }}
+              >
+                Review on Enroll →
+              </button>
+              <button
+                type="button"
+                onClick={startNewSession}
+                style={{
+                  background: 'white',
+                  color: '#065f46',
+                  border: '1px solid #047857',
+                  borderRadius: 8,
+                  padding: '9px 18px',
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  letterSpacing: 0.3,
+                }}
+              >
+                Start New Session
+              </button>
+            </div>
+          </div>
+        )}
+
+        {saveStatus === 'error' && (
+          <div
+            role="alert"
+            style={{
+              marginTop: 12,
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: 8,
+              color: '#7f1d1d',
+              padding: '10px 14px',
+              fontSize: 12,
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              flexWrap: 'wrap',
+            }}
+          >
+            <span>⚠ Save to AgentBase failed — {saveError ?? 'unknown error'}.</span>
+            <button
+              type="button"
+              onClick={() => {
+                setSaveStatus('idle');
+                setSaveError(null);
+              }}
+              style={{
+                background: '#7f1d1d',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                padding: '6px 14px',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
       </div>
 
       <Nav onBack={onBack} />
