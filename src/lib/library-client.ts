@@ -279,7 +279,21 @@ export interface LibraryRankInput {
   state: string;
   medications: { rxcui: string; name: string; strength?: string }[];
   providers: { npi: string; name: string }[];
-  extras: { type: string; enabled: boolean; threshold?: number }[];
+  /** Extras input — up to 3 entries in rank order (P1/P2/P3). P1 hard-
+   *  eliminates plans that don't offer it; P2 and P3 contribute to the
+   *  brain's gate3Score, which breaks cost ties within $500/yr. Legacy
+   *  `{ type, enabled }` shape still accepted by the server, but the
+   *  agent app now sends the priority-shaped payload. */
+  extras: {
+    type: string;
+    /** New priority-shaped payload (post-2026-07 gate 3). */
+    priority?: 1 | 2 | 3;
+    /** Legacy on/off flag — server maps first 3 enabled entries in
+     *  insertion order to P1/P2/P3. Kept optional to preserve backward
+     *  compat while the agent app finishes migrating. */
+    enabled?: boolean;
+    threshold?: number;
+  }[];
   /** Self-reported chronic conditions the broker captured. Routes the
    *  brain's C-SNP eligibility + reserved-slot path so users with no
    *  qualifying meds still surface chronic-condition plans (the May 23

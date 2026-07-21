@@ -1,13 +1,27 @@
 // PrioritiesScreen — agent-v3 screen 4.
 //
-// Toggle buttons that capture what the client cares about. The
-// selected keys are passed up to the shell as `userPriorities` (a
-// string[] forwarded to /api/library/rank-plans). The consumer-repo
-// brain (Gate 3) uses these as hard eliminators — pick order drives
-// the relax-from-bottom fallback when no county plans satisfy every
-// pick. See ~/Code/plan-match/packages/brain/src/plan-brain.ts.
+// Ranked pick-3 for extras. The selected keys ride to the consumer
+// brain's Gate 3 (see ~/Code/plan-match/packages/brain/src/plan-brain.ts
+// — post-2026-07 semantics): P1 hard-eliminates, P2 and P3 contribute
+// to gate3Score. Insertion order determines slot: first tap = P1.
+// Reorder buttons on the priority-order panel let the broker adjust
+// after the fact.
 
+import { useEffect, useRef, useState } from 'react';
 import { Container, Header, Nav } from './atoms';
+
+const MAX_PICKS = 3;
+const PRIORITY_LABELS: Record<1 | 2 | 3, { badge: string; long: string }> = {
+  1: { badge: '1st', long: 'Most Important' },
+  2: { badge: '2nd', long: 'Important' },
+  3: { badge: '3rd', long: 'Nice to Have' },
+};
+// Solid / medium / light seafoam per priority slot.
+const PRIORITY_BG: Record<number, string> = {
+  0: '#83f0f9',
+  1: '#a8f4fb',
+  2: '#d1faff',
+};
 
 export interface PriorityToggle {
   key: PriorityKey;
@@ -47,13 +61,44 @@ interface Props {
 }
 
 export function PrioritiesScreen({ selected, onToggle, onMove, onNext, onBack }: Props) {
-  const set = new Set(selected);
+  const atCap = selected.length >= MAX_PICKS;
+
+  // Inline cap hint — appears when broker taps a 4th option. Auto-
+  // clears after 3.5s or when a selection is removed. Not a modal.
+  const [showCapHint, setShowCapHint] = useState(false);
+  const hintTimerRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (hintTimerRef.current != null) window.clearTimeout(hintTimerRef.current);
+    },
+    [],
+  );
+  useEffect(() => {
+    if (!atCap && showCapHint) setShowCapHint(false);
+  }, [atCap, showCapHint]);
+  function flashHint() {
+    setShowCapHint(true);
+    if (hintTimerRef.current != null) window.clearTimeout(hintTimerRef.current);
+    hintTimerRef.current = window.setTimeout(() => setShowCapHint(false), 3500);
+  }
+  function attemptToggle(key: PriorityKey) {
+    const isAdding = selected.indexOf(key) < 0;
+    if (isAdding && atCap) {
+      flashHint();
+      return;
+    }
+    onToggle(key);
+  }
+
   return (
     <Container>
       <Header
-        title="What matters most to you?"
-        sub="We'll weight your results based on your priorities."
+        title="What benefits matter most to you?"
+        sub={`Pick your top ${MAX_PICKS} in order of importance. We'll prioritize plans that match.`}
       />
+      <div style={{ fontSize: 12, color: 'rgba(13,47,94,0.6)', marginBottom: 8, textAlign: 'right' }}>
+        {selected.length} of {MAX_PICKS} selected
+      </div>
       <div
         style={{
           display: 'grid',
@@ -62,12 +107,16 @@ export function PrioritiesScreen({ selected, onToggle, onMove, onNext, onBack }:
         }}
       >
         {PRIORITY_OPTIONS.map((opt) => {
-          const on = set.has(opt.key);
+          const priorityIdx = selected.indexOf(opt.key);
+          const on = priorityIdx >= 0;
+          const dim = !on && atCap;
+          const meta = on && priorityIdx < 3 ? PRIORITY_LABELS[(priorityIdx + 1) as 1 | 2 | 3] : null;
+          const badgeBg = PRIORITY_BG[priorityIdx] ?? '#83f0f9';
           return (
             <button
               key={opt.key}
               type="button"
-              onClick={() => onToggle(opt.key)}
+              onClick={() => attemptToggle(opt.key)}
               style={{
                 background: on
                   ? 'linear-gradient(135deg, #0d2f5e, #1a4a8a)'
@@ -79,44 +128,103 @@ export function PrioritiesScreen({ selected, onToggle, onMove, onNext, onBack }:
                 padding: '14px 12px',
                 cursor: 'pointer',
                 display: 'flex',
-                alignItems: 'center',
-                gap: 10,
+                flexDirection: 'column',
+                gap: 6,
                 transition: 'all 0.2s',
+                opacity: dim ? 0.45 : 1,
               }}
             >
-              <span style={{ fontSize: 20 }}>{opt.icon}</span>
-              <span
-                style={{
-                  fontWeight: 600,
-                  fontSize: 13,
-                  color: on ? '#83f0f9' : '#0d2f5e',
-                }}
-              >
-                {opt.label}
-              </span>
-              {on && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%' }}>
+                <span style={{ fontSize: 20 }}>{opt.icon}</span>
                 <span
                   style={{
-                    marginLeft: 'auto',
-                    width: 18,
-                    height: 18,
-                    borderRadius: '50%',
-                    background: '#83f0f9',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#0d2f5e',
-                    fontSize: 11,
-                    fontWeight: 700,
+                    fontWeight: 600,
+                    fontSize: 13,
+                    color: on ? '#83f0f9' : '#0d2f5e',
                   }}
                 >
-                  ✓
+                  {opt.label}
+                </span>
+                {meta ? (
+                  <span
+                    aria-label={`Priority ${meta.badge}`}
+                    style={{
+                      marginLeft: 'auto',
+                      minWidth: 28,
+                      height: 20,
+                      padding: '0 6px',
+                      borderRadius: 999,
+                      background: badgeBg,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#0d2f5e',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      letterSpacing: '0.02em',
+                    }}
+                  >
+                    {meta.badge}
+                  </span>
+                ) : on ? (
+                  <span
+                    style={{
+                      marginLeft: 'auto',
+                      width: 18,
+                      height: 18,
+                      borderRadius: '50%',
+                      background: '#83f0f9',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#0d2f5e',
+                      fontSize: 11,
+                      fontWeight: 700,
+                    }}
+                  >
+                    ✓
+                  </span>
+                ) : null}
+              </div>
+              {meta && (
+                <span
+                  style={{
+                    alignSelf: 'flex-start',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                    background: badgeBg,
+                    color: '#0d2f5e',
+                  }}
+                >
+                  {meta.long}
                 </span>
               )}
             </button>
           );
         })}
       </div>
+
+      {showCapHint && (
+        <div
+          role="status"
+          style={{
+            marginTop: 10,
+            padding: '8px 12px',
+            borderRadius: 8,
+            background: '#fff7ed',
+            border: '1px solid #fdba74',
+            color: '#7c2d12',
+            fontSize: 12,
+            fontStyle: 'italic',
+          }}
+        >
+          You can only pick {MAX_PICKS} — tap one to remove it first.
+        </div>
+      )}
 
       {selected.length > 0 && onMove && (
         <div
@@ -141,7 +249,7 @@ export function PrioritiesScreen({ selected, onToggle, onMove, onNext, onBack }:
             Priority order
           </div>
           <div style={{ fontSize: 12, color: 'rgba(13,47,94,0.6)', marginBottom: 8 }}>
-            Brain relaxes the bottom pick first if no county plans match every selected priority.
+            1st is the hard gate — a plan must offer it. 2nd and 3rd break ties between similar-cost plans.
           </div>
           <ol style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
             {selected.map((key, idx) => {

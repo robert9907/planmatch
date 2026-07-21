@@ -157,11 +157,18 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     return { resolvedProviders: withNpi, unresolvedProviderNames: unresolved };
   }, [providers]);
 
+  // Extras payload — new priority-shaped format for consumer-repo Gate 3
+  // (P1 hard-eliminates, P2/P3 contribute to gate3Score, cap at 3).
+  // userPriorities is already a ranked list (first-picked = P1); the
+  // agent-side reorder buttons let the broker adjust it. We slice(0, 3)
+  // to enforce the cap on the wire even if the UI passes more — the
+  // consumer API drops picks beyond 3 anyway, so this just makes the
+  // wire payload match what actually gets used.
   const extras = useMemo(
     () =>
-      (userPriorities ?? []).map((type) => ({
+      (userPriorities ?? []).slice(0, 3).map((type, i) => ({
         type,
-        enabled: true,
+        priority: (i + 1) as 1 | 2 | 3,
         threshold: TIERED_EXTRAS.has(type) ? 1 : undefined,
       })),
     [userPriorities],
