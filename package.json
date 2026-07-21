@@ -16,6 +16,7 @@
     "formulary:test": "tsx --test scripts/cms-spuf/parser.test.ts",
     "pbp:import": "tsx scripts/import-cms-pbp.ts",
     "pbp:test": "tsx --test scripts/cms-pbp/parser.test.ts",
+    "api:test": "tsx --test scripts/tests/plans-range-collapse.test.ts",
     "provider:fhir-lookup": "tsx scripts/fhir-provider-lookup.ts",
     "test:persona-audit": "tsx scripts/cms-secret-shopper.ts"
   },

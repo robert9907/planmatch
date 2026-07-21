@@ -94,7 +94,7 @@ interface Plan {
   in_network_npis: string[];
 }
 
-interface CostShare {
+export interface CostShare {
   copay: number | null;
   coinsurance: number | null;
   description: string | null;
@@ -184,7 +184,7 @@ interface PlanRow {
   sanctioned: boolean;
 }
 
-interface BenefitRow {
+export interface BenefitRow {
   contract_id: string;
   plan_id: string;
   segment_id: string;
@@ -451,7 +451,17 @@ function transformPbpRow(
 
   const isAllowance = PBP_ALLOWANCE_TYPES.has(row.benefit_type);
   let coverage_amount = isAllowance ? row.copay : null;
-  const copay = isAllowance ? null : row.copay;
+  // Range collapse — cms_pbp files (copay=$0, copay_max=$X) for
+  // benefits that vary by service (specialist $0–$35, urgent_care
+  // $0–$65, outpatient_surgery $0–$455). copay_max is the consumer-
+  // facing headline; leaving copay=$0 through means synth carries $0
+  // and the stale-zero override below can't tell there's a real
+  // number to lift. Mirrors consumer plan-benefits.ts's collapsedCopay.
+  const collapsedCopay =
+    row.copay === 0 && row.copay_max != null && row.copay_max > 0
+      ? row.copay_max
+      : row.copay;
+  const copay = isAllowance ? null : collapsedCopay;
   let max_coverage = row.copay_max;
 
   // OTC normalization: pbp_benefits.copay arrives in mixed units
@@ -1106,6 +1116,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return land.coverage_amount == null;
       }
       // Landscape has a real segment-tagged cost-share — keep it.
+      // Stale-zero override: for range benefits (specialist $0–$35,
+      // urgent_care $0–$65, etc.) landscape files copay=$0 from the
+      // importer's floor-collapse, but transformPbpRow now surfaces
+      // the copay_max headline on synth. Treat landscape copay=0 (with
+      // no coinsurance) as "no real cost-share filed" when synth has
+      // a real value so the override reaches the wire.
+      const landHasReal =
+        (land.copay != null && land.copay > 0) ||
+        (land.coinsurance != null && land.coinsurance > 0);
+      const synthHasReal =
+        (b.copay != null && b.copay > 0) ||
+        (b.coinsurance != null && b.coinsurance > 0);
+      if (landHasReal) return false;
+      if (synthHasReal) return true;
+      // Neither side carries a real cost-share — fall back to legacy
+      // behavior (keep landscape when it filed anything, even $0).
       if (land.copay != null || land.coinsurance != null) return false;
       return true;
     });
@@ -1279,7 +1305,16 @@ const CATEGORY_ALIAS: Record<string, string> = {
   mental_health_group: 'mental_health_outpatient_group',
 };
 
-function costShareFor(
+// ALLOWANCE_CATEGORIES for costShareFor's range-collapse guard —
+// max_coverage means annual $ cap on these, not the top of a copay
+// range, so we must NOT promote it into `copay` for dental / vision /
+// hearing / OTC / etc. Keep in sync with the merge-time list above.
+const COPAY_RANGE_SKIP_CATEGORIES: ReadonlySet<string> = new Set([
+  'vision', 'hearing', 'dental', 'otc', 'food_card', 'meals',
+  'transportation', 'rx_deductible', 'partb_giveback',
+]);
+
+export function costShareFor(
   rows: BenefitRow[],
   category: string,
   pbpFallback?: PbpFallback,
@@ -1289,8 +1324,21 @@ function costShareFor(
     rows.find((r) => r.benefit_category === aliasedCategory) ??
     rows.find((r) => r.benefit_category === category);
   if (hit) {
+    // Range-collapse guard: cms_pbp files ranges as (copay=$0,
+    // copay_max=$X) for medical copay categories like specialist,
+    // urgent_care, outpatient_surgery. max_coverage (from copay_max)
+    // is the consumer-facing headline. Promote when copay is 0/null
+    // and max_coverage is a real dollar. Skip allowance categories
+    // where max_coverage means an annual $ cap, not a copay ceiling.
+    const rawCopay = toNum(hit.copay);
+    const maxCoverage = toNum(hit.max_coverage);
+    const useMaxAsCopay =
+      !COPAY_RANGE_SKIP_CATEGORIES.has(hit.benefit_category) &&
+      (rawCopay == null || rawCopay === 0) &&
+      maxCoverage != null &&
+      maxCoverage > 0;
     return {
-      copay: toNum(hit.copay),
+      copay: useMaxAsCopay ? maxCoverage : rawCopay,
       coinsurance: toNum(hit.coinsurance),
       description: hit.benefit_description ?? null,
     };
