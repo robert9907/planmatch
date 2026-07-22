@@ -47,6 +47,13 @@ export async function promote(opts: {
     //
     // Cost-share defaults come from beneficiary_cost at coverage_level=1
     // (initial), days_supply=1 (30-day), pharmacy_type=pref (preferred retail).
+    //
+    // drug_type is derived inline: specialty when bc.tier_specialty_yn='Y'
+    // (per-plan per-tier flag from CMS), else generic/brand from
+    // pm_rxcui_meta.tty (RxNorm term type, populated by the independent
+    // RxNav enrichment). Rxcuis not yet enriched land as NULL — the
+    // backfill script re-runs after every enrichment pass. imported_at
+    // gets DEFAULT now() per row.
 
     await c.query(`DELETE FROM pm_formulary_v2 WHERE plan_year = $1`, [planYear]);
     const fr = await c.query(
@@ -78,7 +85,8 @@ export async function promote(opts: {
         tier, prior_auth, step_therapy, quantity_limit,
         quantity_limit_amount, quantity_limit_days,
         copay_default, coinsurance_default,
-        excluded_drug_supplemental, indication_restricted, release_id
+        excluded_drug_supplemental, indication_restricted,
+        drug_type, release_id
       )
       SELECT
         p.contract_id, p.plan_id, p.segment_id, $1::smallint, p.formulary_id, d.rxcui,
@@ -96,6 +104,11 @@ export async function promote(opts: {
           WHERE i.release_id = $2 AND i.contract_id = p.contract_id
             AND i.plan_id = p.plan_id AND i.rxcui = d.rxcui
         ) AS indication_restricted,
+        CASE
+          WHEN bc.tier_specialty_yn = 'Y' THEN 'specialty'
+          WHEN m.tty IN ('SCD','SCDC','SCDG','SCDF','GPCK') THEN 'generic'
+          WHEN m.tty IN ('SBD','SBDC','SBDG','SBDF','BPCK','BN') THEN 'brand'
+        END AS drug_type,
         $2::bigint
       FROM plans p
       JOIN drug_agg d ON d.formulary_id = p.formulary_id
@@ -107,6 +120,7 @@ export async function promote(opts: {
        AND bc.tier = d.tier
        AND bc.coverage_level = 1
        AND bc.days_supply = 1
+      LEFT JOIN pm_rxcui_meta m ON m.rxcui = d.rxcui
       `,
       [planYear, releaseId],
     );
