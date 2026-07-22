@@ -13,6 +13,8 @@
 // project. Defaults to the consumer's custom domain so dev / preview
 // builds work without env-var setup.
 
+import type { LisTier, MedicaidLevel, LivingSetting } from './dual-eligible';
+
 const LIBRARY_URL: string =
   ((import.meta.env as { VITE_PLANMATCH_LIBRARY_URL?: string })
     .VITE_PLANMATCH_LIBRARY_URL ??
@@ -316,6 +318,19 @@ export interface LibraryRankInput {
    *  event upstream. Only meaningful when enrollment_period === 'SEP'.
    *  Never populated from a raw CMS-code dropdown (SEP fraud gate). */
   sep_reason_code?: string;
+  /** Beneficiary Low-Income Subsidy (Extra Help) tier. Currently
+   *  passed through for forward compatibility — the library rank-plans
+   *  server ignores it until the consumer repo lands LIS cap application
+   *  server-side. The agent applies LIS caps client-side over the
+   *  returned rank result (see src/lib/lis-cap-agent-v3.ts). */
+  lis_tier?: LisTier;
+  /** Medicaid category (drives QMB medical-cost zeroing + FBDE
+   *  LIS auto-deeming when lis_tier is undefined). Same
+   *  forward-compat status as lis_tier. */
+  medicaid_level?: MedicaidLevel;
+  /** Community vs institutional/HCBS. Only affects auto-deeming for
+   *  FBDE beneficiaries. Same forward-compat status as lis_tier. */
+  living_setting?: LivingSetting;
 }
 
 export async function rankPlans(

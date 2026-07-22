@@ -11,6 +11,27 @@
 // tuple; the server caches 24h so toggling retail↔mail within a session
 // only hits upstream twice.
 
+import type { LisTier } from './dual-eligible';
+
+// Medicare.gov plan-compare API accepts these LIS enum values.
+// Confirmed via scripts/_lis-probe-pdp.mjs 2026-07-22 against Humana
+// Basic Rx S5884-133-0: partd premium $6.80 → calculated_monthly_premium
+// $0 for LIS_LEVEL_1A/2/3/4_100 (subsidy recognized), $6.80 for
+// LIS_NO_HELP. The tier→level mapping follows CMS convention:
+//   Level 1(A) → institutional FBDE ($0/$0 copay tier)
+//   Level 2    → full LIS community, ≤100% FPL ($1.60/$4.90)
+//   Level 3    → full LIS community, higher FPL / MSP recipient
+//                ($5.10/$12.65)
+// LIS_LEVEL_4_100 is the pre-IRA partial-subsidy tier — post-IRA §11404
+// (2024) all partials migrated to full LIS, so this repo's LisTier has
+// no entry that maps to it.
+const LIS_ENUM_MAP: Record<LisTier, string> = {
+  none: 'LIS_NO_HELP',
+  full_institutional: 'LIS_LEVEL_1A',
+  full_low: 'LIS_LEVEL_2',
+  full_high: 'LIS_LEVEL_3',
+};
+
 // CMS-typical retail prices per Part D tier, used to convert
 // coinsurance-only formulary rows (no flat copay filed — e.g. Ozempic at
 // Tier 3 with 25% coinsurance on most NC plans) into an estimated
@@ -109,8 +130,12 @@ export async function fetchDrugCosts(params: {
   plans: DrugCostPlanInput[];
   ndcs: string[];               // one representative NDC per prescription
   mode: PharmacyMode;
+  /** Client's LIS tier. Omitted / undefined is treated as 'none' — the
+   *  API receives LIS_NO_HELP and cache buckets remain separate from
+   *  subsidized-client requests (api/drug-costs.ts:201 keys on lis). */
+  lisTier?: LisTier;
 }): Promise<DrugCostResponse> {
-  const { plans, ndcs, mode } = params;
+  const { plans, ndcs, mode, lisTier } = params;
   if (plans.length === 0 || ndcs.length === 0) {
     return { source: 'skipped', costs: [] };
   }
@@ -124,7 +149,7 @@ export async function fetchDrugCosts(params: {
       plans,
       prescriptions,
       retail_only: mode === 'retail',
-      lis: 'LIS_NO_HELP',
+      lis: LIS_ENUM_MAP[lisTier ?? 'none'],
       npis: [],
     }),
   });

@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Plan } from '@/types/plans';
 import type { Medication } from '@/types/session';
+import type { LisTier } from '@/lib/dual-eligible';
 import {
   fetchDrugCosts,
   resolveRxcuisToNdcs,
@@ -43,12 +44,13 @@ export function useDrugCosts(
   finalists: Plan[],
   medications: Medication[],
   mode: PharmacyMode,
+  lisTier?: LisTier,
 ): DrugCostMap {
   const [state, setState] = useState<DrugCostMap>(INITIAL);
 
   // Stable signature — only refetch when the set of plans, set of
-  // rxcuis, or pharmacy mode actually changes. Column re-ordering in
-  // the v4 table shouldn't cost a network round trip.
+  // rxcuis, pharmacy mode, or LIS tier actually changes. Column
+  // re-ordering in the v4 table shouldn't cost a network round trip.
   const nonce = useMemo(() => {
     const plansSig = finalists
       .map((p) => `${p.contract_id}-${p.plan_number}-${segmentIdForPlan(p)}`)
@@ -59,8 +61,8 @@ export function useDrugCosts(
       .filter((s) => s.length > 0)
       .sort()
       .join(',');
-    return `${plansSig}::${rxSig}::${mode}`;
-  }, [finalists, medications, mode]);
+    return `${plansSig}::${rxSig}::${mode}::lis=${lisTier ?? 'none'}`;
+  }, [finalists, medications, mode, lisTier]);
 
   const lastNonceRef = useRef<string>('');
 
@@ -104,6 +106,7 @@ export function useDrugCosts(
           plans: planInputs,
           ndcs: repNdcs,
           mode,
+          lisTier,
         });
         if (cancelled) return;
         const byPlanId: Record<string, PlanDrugCost> = {};
@@ -131,7 +134,7 @@ export function useDrugCosts(
     return () => {
       cancelled = true;
     };
-  }, [nonce, finalists, medications, mode]);
+  }, [nonce, finalists, medications, mode, lisTier]);
 
   return state;
 }

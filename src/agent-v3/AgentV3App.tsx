@@ -46,7 +46,7 @@ import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
 import { useScreenShareStore } from '@/hooks/useScreenShare';
 import { fetchClientSession } from '@/lib/agentbase';
-import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
+import { buildAgentV3LisMaps } from '@/lib/lis-cap-agent-v3';
 import { resolveAgentBaseDrugs } from '@/lib/resolveAgentBaseDrugs';
 import { bulkLookupFormulary } from '@/lib/formularyLookup';
 import { fetchPlansForClient } from '@/lib/planCatalog';
@@ -774,19 +774,33 @@ export function AgentV3App() {
   // `annualDrugByPlanId[plan.id]` where plan came from fetchPlansForClient.
   // Routing each library row through planById first guarantees the
   // keys line up with what the consumer reads.
-  const annualDrugByPlanId = useMemo<Record<string, number | null>>(() => {
-    if (!ranked.result) return {};
-    const out: Record<string, number | null> = {};
-    for (const lp of ranked.result.top_plans) {
-      const p = planById.get(normalizePlanId(lp.plan_id));
-      if (p) out[p.id] = lp.total_annual_drug_cost;
-    }
-    for (const lp of ranked.result.bench_plans) {
-      const p = planById.get(normalizePlanId(lp.plan_id));
-      if (p) out[p.id] = lp.total_annual_drug_cost;
-    }
-    return out;
-  }, [ranked.result, planById]);
+  //
+  // annualDrugByPlanId + dualEligibleByPlanId now co-computed: when the
+  // client has LIS/Medicaid on file, the library's plan-copay drug totals
+  // are re-capped client-side (see src/lib/lis-cap-agent-v3.ts) so the
+  // Compare surface shows what the beneficiary actually pays. Server-side
+  // LIS lands in a follow-on phase in the consumer repo; until then the
+  // maps below are the source of truth for LIS-adjusted display.
+  const { annualDrugByPlanId, dualEligibleByPlanId } = useMemo(
+    () =>
+      buildAgentV3LisMaps({
+        ranked: ranked.result,
+        planById,
+        normalizePlanId,
+        client: {
+          lisTier: client.lisTier,
+          medicaidLevel: client.medicaidLevel,
+          livingSetting: client.livingSetting,
+        },
+      }),
+    [
+      ranked.result,
+      planById,
+      client.lisTier,
+      client.medicaidLevel,
+      client.livingSetting,
+    ],
+  );
 
   const benchGateResultsByPlanId = useMemo<
     Record<string, { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }>
@@ -895,27 +909,14 @@ export function AgentV3App() {
   // by plan_id keeps the two surfaces phrasing-identical without waiting
   // on a library-server change. Walks both scored + bench so every county
   // plan in CompareScreen's grid + bench has a "Why this plan" expander.
-  // Per-plan dual-eligible cost adjustment. Populated from
-  // brain.result.scored + bench, keyed by agent Plan.id so the
-  // CompareScreen board slots + bench cards can render badges +
-  // strikethroughs when the client has Medicaid or LIS on file.
-  // Falls back to an empty record when the local brain hasn't run
-  // (library-only render path).
-  const dualEligibleByPlanId = useMemo<
-    Record<string, DualEligibleAdjustment | undefined>
-  >(() => {
-    if (!brain.result) return {};
-    const out: Record<string, DualEligibleAdjustment | undefined> = {};
-    for (const sp of brain.result.scored) {
-      if (sp.dualEligibleAdjustment) out[sp.plan.id] = sp.dualEligibleAdjustment;
-    }
-    for (const sp of brain.result.bench) {
-      if (sp.dualEligibleAdjustment) out[sp.plan.id] = sp.dualEligibleAdjustment;
-    }
-    return out;
-  }, [brain.result]);
+  // dualEligibleByPlanId is destructured above alongside annualDrugByPlanId
+  // — both come from buildAgentV3LisMaps() which reads library rank output
+  // and applies LIS caps client-side. The legacy usePlanBrain-fed
+  // dualEligibleByPlanId path was removed here: usePlanBrain doesn't run
+  // in the agent-v3 rank/compare flow, so the previous implementation
+  // was inert (empty object) whenever Compare rendered.
 
-  const explanationsByPlanId = useMemo<
+const explanationsByPlanId = useMemo<
     Record<
       string,
       {

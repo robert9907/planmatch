@@ -204,7 +204,7 @@ export function MedsScreen({ onNext, onBack, clientView, capture }: Props) {
 
   // Live pm_drug_cost_cache totals per plan. Used in the footer
   // AgentInsight to surface the absolute-best annual drug spend.
-  const drugCosts = useDrugCosts(eligiblePlans, medications, 'retail');
+  const drugCosts = useDrugCosts(eligiblePlans, medications, 'retail', client.lisTier);
 
   const bestAnnualTotal = useMemo(() => {
     const totals = Object.values(drugCosts.byPlanId)

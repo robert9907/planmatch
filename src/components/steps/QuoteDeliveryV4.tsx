@@ -360,6 +360,7 @@ export function QuoteDeliveryV4({
 }: Props) {
   const currentPlanId = useSession((s) => s.currentPlanId);
   const isAnnualReview = useSession((s) => s.isAnnualReview);
+  const clientLisTier = useSession((s) => s.client.lisTier);
   const [pharmacyFill, setPharmacyFill] = useState<PharmacyFill>('retail_30');
   const [pickerOpen, setPickerOpen] = useState(false);
   // Weight preset — drives weightOverride for usePlanBrain. null lets
@@ -508,6 +509,7 @@ export function QuoteDeliveryV4({
     plansForBrain,
     medications,
     pharmacyFill === 'mail_90' ? 'mail' : 'retail',
+    clientLisTier,
   );
 
   // Manufacturer assistance — drives the help section under the table.

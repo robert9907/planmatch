@@ -227,6 +227,9 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
         dsnp_eligible: dsnpEligible === true ? true : undefined,
         enrollment_period: enrollmentPeriod,
         sep_reason_code: sepReasonCode,
+        lis_tier: client.lisTier,
+        medicaid_level: client.medicaidLevel,
+        living_setting: client.livingSetting,
       },
       ctrl.signal,
     )
@@ -259,7 +262,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     // medsKey / provsKey / extrasKey deliberately gate on serialized
     // content, not array identity — see notes above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [county, zip, state_, medsKey, provsKey, extrasKey, csnpKey, currentPlanId, dsnpEligible, enrollmentPeriod, sepReasonCode]);
+  }, [county, zip, state_, medsKey, provsKey, extrasKey, csnpKey, currentPlanId, dsnpEligible, enrollmentPeriod, sepReasonCode, client.lisTier, client.medicaidLevel, client.livingSetting]);
 
   return state;
 }

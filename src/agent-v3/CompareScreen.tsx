@@ -267,11 +267,20 @@ function buildMetrics(args: {
   annualDrugByPlanId: Record<string, number | null>;
   drugsCoveredByPlanId: Record<string, number>;
   drugsTotalByPlanId: Record<string, number>;
+  dualEligibleByPlanId?: Record<string, DualEligibleAdjustment | undefined>;
 }): Metric[] {
-  const { rxcuis, providers, annualDrugByPlanId, drugsCoveredByPlanId, drugsTotalByPlanId } = args;
+  const {
+    rxcuis,
+    providers,
+    annualDrugByPlanId,
+    drugsCoveredByPlanId,
+    drugsTotalByPlanId,
+    dualEligibleByPlanId,
+  } = args;
   const drug = (p: Plan) => annualDrugByPlanId[p.id] ?? null;
   const drugsCovered = (p: Plan) => drugsCoveredByPlanId[p.id];
   const drugsTotal = (p: Plan) => drugsTotalByPlanId[p.id];
+  const dualEligible = (p: Plan) => dualEligibleByPlanId?.[p.id];
 
   return [
     {
@@ -293,7 +302,20 @@ function buildMetrics(args: {
       label: 'Drug cost / yr',
       format: (p) => {
         const v = drug(p);
-        return v == null ? '—' : `${fmt(v)}/yr`;
+        if (v == null) return '—';
+        const adj = dualEligible(p);
+        // When LIS caps are applied the row shows the adjusted total on
+        // the first line and the pre-adjustment plan cost on the second
+        // ("was $X — LIS capped"). Phase 5 rebuilds this with proper
+        // strikethrough + green styling; multi-line text ships correct
+        // numbers without a widening of the Metric.format signature.
+        if (adj?.lisCopaysApplied) {
+          const orig = adj.original.totalAnnualDrugCost;
+          return orig > v
+            ? `${fmt(v)}/yr\nwas ${fmt(orig)} — LIS capped`
+            : `${fmt(v)}/yr`;
+        }
+        return `${fmt(v)}/yr`;
       },
       numeric: drug,
       higherIsBetter: false,
@@ -600,8 +622,9 @@ export function CompareScreen({
         annualDrugByPlanId,
         drugsCoveredByPlanId: drugsCoveredByPlanId ?? {},
         drugsTotalByPlanId: drugsTotalByPlanId ?? {},
+        dualEligibleByPlanId,
       }),
-    [rxcuis, providers, annualDrugByPlanId, drugsCoveredByPlanId, drugsTotalByPlanId],
+    [rxcuis, providers, annualDrugByPlanId, drugsCoveredByPlanId, drugsTotalByPlanId, dualEligibleByPlanId],
   );
 
   // Data-quality counts driving the warning banner. When the broker
