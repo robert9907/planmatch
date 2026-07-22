@@ -44,11 +44,13 @@ function readClientIdFromUrl(): string | null {
 interface Props {
   onBack: () => void;
   onNext: () => void;
-  /** Client's current plan (used to skip the incumbent when picking
-   *  the top-ranked recommendation to save). */
-  current: Plan | null;
-  /** Brain-ranked plans, descending by composite score. */
-  scoredPlans: Plan[];
+  /** Brain-ranked plans (scored ∪ bench) in ranking order. This is the
+   *  ONLY valid source of a recommendation — the brain excludes the
+   *  incumbent + non-shoppable plans, and /api/agentbase-recommend
+   *  requires the picked plan to have a matching ScoredPlan for the
+   *  CMS audit payload. Never fall back to a library-ranked list or
+   *  the incumbent slot to satisfy the gate. */
+  brainRankedPlans: Plan[];
   annualDrugByPlanId: Record<string, number | null>;
   /** Same onRecommend the EnrollScreen uses. Save is idempotent — a
    *  broker who saves here and again on EnrollScreen upserts the same
@@ -62,8 +64,7 @@ interface Props {
 export function ComplianceScreen({
   onBack,
   onNext,
-  current,
-  scoredPlans,
+  brainRankedPlans,
   annualDrugByPlanId,
   onRecommend,
 }: Props) {
@@ -87,18 +88,38 @@ export function ComplianceScreen({
   const disclaimersDone = DISCLAIMERS.filter((d) => confirmed.includes(d.id)).length;
   const disclaimersAllDone = disclaimersDone >= DISCLAIMERS.length;
 
-  // Prefer the plan the broker explicitly picked on Compare (persisted
-  // in session.recommendation) — that's the whole point of Compare's
-  // "Enroll" click. Fall back to the top brain-ranked non-incumbent
-  // only when there's no explicit pick (broker jumped straight past
-  // Compare, or session was hydrated without a prior pick).
+  // Resolution order — strictly against the brain-ranked set:
+  //   1. session.recommendation, if it's a brain-ranked plan (broker's
+  //      explicit Compare pick — validated so a stale/bogus id can't
+  //      leak the incumbent back in).
+  //   2. brainRankedPlans[0] — brain's top pick. Excludes the incumbent
+  //      and any non-shoppable plans by construction.
+  //   3. null → button disables + copy tells the broker to pick a plan.
+  //
+  // Deliberately does NOT consider `current` / `currentPlanId` here.
+  // The incumbent is never a valid recommendation.
   const recommendedPlan: Plan | null =
     (recommendationId
-      ? scoredPlans.find((p) => p.id === recommendationId)
+      ? brainRankedPlans.find((p) => p.id === recommendationId)
       : null) ??
-    scoredPlans.find((p) => p.id !== current?.id) ??
-    scoredPlans[0] ??
+    brainRankedPlans[0] ??
     null;
+
+  // One-shot resolution trace — surfaces the chosen id + why so a broker
+  // report ("gate said Liberty again") is diagnosable from the console
+  // without a code-dive.
+  console.log('[Compliance] recommendedPlan resolution:', {
+    sessionRecommendationId: recommendationId,
+    brainRankedIds: brainRankedPlans.map((p) => p.id),
+    resolved: recommendedPlan
+      ? { id: recommendedPlan.id, carrier: recommendedPlan.carrier, name: recommendedPlan.plan_name }
+      : null,
+    source: recommendationId && brainRankedPlans.some((p) => p.id === recommendationId)
+      ? 'session.recommendation'
+      : brainRankedPlans[0]
+        ? 'brainRankedPlans[0]'
+        : 'none',
+  });
 
   const candAnnual = recommendedPlan
     ? annualEstimate(recommendedPlan, annualDrugByPlanId[recommendedPlan.id] ?? null).total
@@ -359,11 +380,13 @@ export function ComplianceScreen({
             >
               {saveStatus === 'saved'
                 ? 'Recommendation saved to AgentBase.'
-                : allDone
-                  ? recommendedPlan
+                : !allDone
+                  ? `${total - done} items left before Save unlocks.`
+                  : recommendedPlan
                     ? `Ready to save — ${recommendedPlan.carrier} · ${recommendedPlan.plan_name}`
-                    : 'Pick a plan on Compare before saving.'
-                  : `${total - done} items left before Save unlocks.`}
+                    : brainRankedPlans.length === 0
+                      ? 'Brain ranking not ready — go back to Compare.'
+                      : 'Pick a plan on Compare first.'}
             </div>
             <div style={{ fontSize: 10, color: '#64748b', marginTop: 1 }}>
               Rob Simm · NC #10447418 · NPN 10447418

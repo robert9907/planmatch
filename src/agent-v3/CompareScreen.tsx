@@ -875,10 +875,16 @@ export function CompareScreen({
   //
   // Also pins the broker's picked plan into session.recommendation so
   // ComplianceScreen and EnrollScreen save the same plan the broker
-  // clicked here — not the top-of-list default those screens fall back
-  // to when no explicit pick exists.
+  // clicked here.
+  //
+  // ⚠ Never pin the incumbent (current) into session.recommendation —
+  // slot 0 of the grid is the baseline column (equal to current when
+  // one is on file); an Enroll click there would otherwise cascade
+  // through Compliance/Enroll as a "save the plan you already have,"
+  // which the brain excludes from ranking. Skip the recommend + let
+  // the screen advance so the broker can pick a real candidate.
   const recommendAndAdvance = (plan: Plan | null) => () => {
-    if (plan) {
+    if (plan && plan.id !== current?.id) {
       setRecommendation(plan.id);
       onRecommend?.(plan);
     }

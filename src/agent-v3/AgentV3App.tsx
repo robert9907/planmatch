@@ -947,6 +947,21 @@ export function AgentV3App() {
     return eligiblePlans.find((p) => p.id === currentPlanId) ?? null;
   }, [currentPlanId, eligiblePlans]);
 
+  // ── Brain-ranked plans (scored ∪ bench) in ranking order ─────────
+  // Source of truth for what the Compliance / Enroll gate is allowed to
+  // save. Anything not in this set is not a valid recommendation — the
+  // brain excludes the incumbent (and other non-shoppable plans), and
+  // /api/agentbase-recommend expects the picked plan to have a matching
+  // ScoredPlan entry in brainResult so the CMS audit payload
+  // (ribbon, applied rules, red flags, real annual cost) can be built.
+  // Fed to ComplianceScreen + EnrollScreen so their resolution can't
+  // silently fall back to the library's ranked list (which used to
+  // surface the incumbent as slot 0) or the current-plan slot.
+  const brainRankedPlans = useMemo<Plan[]>(() => {
+    if (!brain.result) return [];
+    return [...brain.result.scored, ...brain.result.bench].map((s) => s.plan);
+  }, [brain.result]);
+
   // ── Compliance progress (real, against canonical 16) ─────────────
   const complianceTotal = totalComplianceItems();
   const complianceDone = new Set(checked).size + new Set(confirmed).size;
@@ -1194,8 +1209,7 @@ export function AgentV3App() {
         )}
         {screen === 'compliance' && (
           <ComplianceScreen
-            current={currentPlan}
-            scoredPlans={scoredPlans}
+            brainRankedPlans={brainRankedPlans}
             annualDrugByPlanId={annualDrugByPlanId}
             onRecommend={onRecommend}
             onBack={() => setScreen('compare')}
@@ -1205,8 +1219,8 @@ export function AgentV3App() {
         {screen === 'enroll' && (
           <EnrollScreen
             current={currentPlan}
+            brainRankedPlans={brainRankedPlans}
             onRecommend={onRecommend}
-            scoredPlans={scoredPlans}
             annualDrugByPlanId={annualDrugByPlanId}
             onBack={() => setScreen('compliance')}
           />

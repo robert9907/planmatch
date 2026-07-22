@@ -30,9 +30,13 @@ function readClientIdFromUrl(): string | null {
 }
 
 interface Props {
+  /** Incumbent (from URL current_plan_id) — used ONLY for the annual-
+   *  savings delta on the recap card. Never for recommendation resolution. */
   current: Plan | null;
-  /** Full brain-ranked plan list, descending by composite score. */
-  scoredPlans: Plan[];
+  /** Brain-ranked plans (scored ∪ bench) in ranking order. Only source
+   *  of a valid recommendation — see ComplianceScreen for the same
+   *  rationale. */
+  brainRankedPlans: Plan[];
   annualDrugByPlanId: Record<string, number | null>;
   /** Awaited AgentBase write-back. The button below blocks on the
    *  Promise so the broker can't jump to the client card until the
@@ -47,7 +51,7 @@ interface Props {
 
 export function EnrollScreen({
   current,
-  scoredPlans,
+  brainRankedPlans,
   annualDrugByPlanId,
   onRecommend,
   onBack,
@@ -72,23 +76,41 @@ export function EnrollScreen({
   >('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Prefer the broker's explicit Compare pick (session.recommendation);
-  // fall back to the top brain-ranked non-incumbent otherwise (e.g. an
-  // AEP shopper with no incumbent, or the broker jumped past Compare).
+  // Resolution — matches ComplianceScreen (same rules):
+  //   1. session.recommendation validated against brainRankedPlans
+  //   2. brainRankedPlans[0]
+  //   3. null (empty state below)
+  // Never falls back to incumbent / current / a library-ranked list.
   const recommendedPlan: Plan | null =
     (recommendationId
-      ? scoredPlans.find((p) => p.id === recommendationId)
+      ? brainRankedPlans.find((p) => p.id === recommendationId)
       : null) ??
-    scoredPlans.find((p) => p.id !== current?.id) ??
-    scoredPlans[0] ??
+    brainRankedPlans[0] ??
     null;
+
+  console.log('[Enroll] recommendedPlan resolution:', {
+    sessionRecommendationId: recommendationId,
+    brainRankedIds: brainRankedPlans.map((p) => p.id),
+    resolved: recommendedPlan
+      ? { id: recommendedPlan.id, carrier: recommendedPlan.carrier, name: recommendedPlan.plan_name }
+      : null,
+    source: recommendationId && brainRankedPlans.some((p) => p.id === recommendationId)
+      ? 'session.recommendation'
+      : brainRankedPlans[0]
+        ? 'brainRankedPlans[0]'
+        : 'none',
+  });
 
   if (!recommendedPlan) {
     return (
       <Container>
         <Header
           title="Pick a finalist first"
-          sub="Run the Compare screen to surface a recommendation."
+          sub={
+            brainRankedPlans.length === 0
+              ? 'Brain ranking not ready — go back to Compare.'
+              : 'Pick a plan on Compare first.'
+          }
         />
         <Nav onBack={onBack} />
       </Container>
