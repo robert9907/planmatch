@@ -60,6 +60,7 @@ export function EnrollScreen({
   const complianceTimestamps = useSession((s) => s.complianceTimestamps);
   const disclaimerTimestamps = useSession((s) => s.disclaimerTimestamps);
   const resetSession = useSession((s) => s.resetSession);
+  const recommendationId = useSession((s) => s.recommendation);
 
   // Save-to-AgentBase state machine.
   //   idle    — button ready
@@ -71,11 +72,16 @@ export function EnrollScreen({
   >('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Top brain-ranked plan that isn't the client's current — falls
-  // back to scoredPlans[0] when there's no current on file (e.g.
-  // an AEP shopper with no incumbent).
+  // Prefer the broker's explicit Compare pick (session.recommendation);
+  // fall back to the top brain-ranked non-incumbent otherwise (e.g. an
+  // AEP shopper with no incumbent, or the broker jumped past Compare).
   const recommendedPlan: Plan | null =
-    scoredPlans.find((p) => p.id !== current?.id) ?? scoredPlans[0] ?? null;
+    (recommendationId
+      ? scoredPlans.find((p) => p.id === recommendationId)
+      : null) ??
+    scoredPlans.find((p) => p.id !== current?.id) ??
+    scoredPlans[0] ??
+    null;
 
   if (!recommendedPlan) {
     return (

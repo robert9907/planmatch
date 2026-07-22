@@ -74,6 +74,7 @@ export function ComplianceScreen({
   const complianceTimestamps = useSession((s) => s.complianceTimestamps);
   const disclaimerTimestamps = useSession((s) => s.disclaimerTimestamps);
   const resetSession = useSession((s) => s.resetSession);
+  const recommendationId = useSession((s) => s.recommendation);
 
   const [saveStatus, setSaveStatus] = useState<
     'idle' | 'saving' | 'saved' | 'error'
@@ -86,10 +87,18 @@ export function ComplianceScreen({
   const disclaimersDone = DISCLAIMERS.filter((d) => confirmed.includes(d.id)).length;
   const disclaimersAllDone = disclaimersDone >= DISCLAIMERS.length;
 
-  // Top brain-ranked plan that isn't the client's current — mirrors
-  // EnrollScreen's selection so both screens save the same plan.
+  // Prefer the plan the broker explicitly picked on Compare (persisted
+  // in session.recommendation) — that's the whole point of Compare's
+  // "Enroll" click. Fall back to the top brain-ranked non-incumbent
+  // only when there's no explicit pick (broker jumped straight past
+  // Compare, or session was hydrated without a prior pick).
   const recommendedPlan: Plan | null =
-    scoredPlans.find((p) => p.id !== current?.id) ?? scoredPlans[0] ?? null;
+    (recommendationId
+      ? scoredPlans.find((p) => p.id === recommendationId)
+      : null) ??
+    scoredPlans.find((p) => p.id !== current?.id) ??
+    scoredPlans[0] ??
+    null;
 
   const candAnnual = recommendedPlan
     ? annualEstimate(recommendedPlan, annualDrugByPlanId[recommendedPlan.id] ?? null).total

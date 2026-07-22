@@ -80,7 +80,15 @@ export async function buildAgentV3SyncInput(args: BuildArgs): Promise<SyncInput 
     healthContext: providedHealthContext,
   } = args;
   if (!brainResult) return null;
-  const recommendedScored = brainResult.scored.find((s) => s.plan.id === plan.id);
+  // Search both scored (top ranked) and bench (runners-up) — a plan picked
+  // by the broker on Compare / Compliance / Enroll can be in either set,
+  // and the endpoint just needs the ScoredPlan shape for the CMS audit
+  // trail. Restricting to `.scored` was the false-positive source of
+  // "Brain ranking not ready — try again in a moment." when the picked
+  // plan lived in bench.
+  const recommendedScored =
+    brainResult.scored.find((s) => s.plan.id === plan.id) ??
+    brainResult.bench.find((s) => s.plan.id === plan.id);
   if (!recommendedScored) return null;
 
   // pa_required / st_required intentionally omitted. The agent-v3

@@ -1025,10 +1025,20 @@ export function AgentV3App() {
       sessionSummary: snapshot?.sessionSummary,
     });
     if (!input) {
-      console.warn(
-        '[agent-v3] recommend skipped — brain.result not ready or plan not in scored set',
-      );
-      return { ok: false, error: 'Brain ranking not ready — try again in a moment.' };
+      // Diagnostic: dump which side failed so a repro pastes the plan
+      // id + brain state directly. Prior version only logged the
+      // catch-all message which forced a code-dive to debug.
+      console.warn('[agent-v3] recommend skipped — buildAgentV3SyncInput returned null', {
+        planId: plan.id,
+        planCarrier: plan.carrier,
+        brainReady: brain.result != null,
+        scoredIds: brain.result?.scored.map((s) => s.plan.id) ?? null,
+        benchIds: brain.result?.bench.map((s) => s.plan.id) ?? null,
+      });
+      const reason = !brain.result
+        ? 'Brain ranking not ready — try again in a moment.'
+        : `Plan ${plan.carrier} ${plan.plan_name} isn't in the brain-ranked set — re-run Compare.`;
+      return { ok: false, error: reason };
     }
     const r = await agentbaseSync.sync(input);
     return r.ok ? { ok: true } : { ok: false, error: r.error };

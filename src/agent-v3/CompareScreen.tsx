@@ -585,6 +585,7 @@ export function CompareScreen({
   const providers = useSession((s) => s.providers);
   const medications = useSession((s) => s.medications);
   const client = useSession((s) => s.client);
+  const setRecommendation = useSession((s) => s.setRecommendation);
 
   const rxcuis = useMemo(
     () => medications.map((m) => m.rxcui).filter((s): s is string => !!s),
@@ -871,8 +872,16 @@ export function CompareScreen({
   // is NOT opened here; that lives on EnrollScreen after the broker
   // has walked compliance + disclaimers, so we don't strand a live
   // consumer intake tab in the browser mid-call.
+  //
+  // Also pins the broker's picked plan into session.recommendation so
+  // ComplianceScreen and EnrollScreen save the same plan the broker
+  // clicked here — not the top-of-list default those screens fall back
+  // to when no explicit pick exists.
   const recommendAndAdvance = (plan: Plan | null) => () => {
-    if (plan) onRecommend?.(plan);
+    if (plan) {
+      setRecommendation(plan.id);
+      onRecommend?.(plan);
+    }
     onNext();
   };
 
