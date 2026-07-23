@@ -40,10 +40,16 @@ const APPLY = process.argv.includes('--apply');
 const GENERIC_TTYS = ['SCD', 'SCDC', 'SCDG', 'SCDF', 'GPCK'] as const;
 const BRAND_TTYS = ['SBD', 'SBDC', 'SBDG', 'SBDF', 'BPCK', 'BN'] as const;
 
+const BATCH_SIZE = 20_000;
+
 async function main() {
   const c = await pool.connect();
   try {
-    await c.query('SET LOCAL statement_timeout = 0');
+    // Session-level (not LOCAL — no explicit transaction here, and
+    // LOCAL is silently dropped outside a txn on Supabase). Bumps the
+    // 8s pooler default so batched UPDATEs don't hit
+    // statement_timeout mid-flight.
+    await c.query(`SET statement_timeout = 0`);
 
     // ── Predict: distribution the backfill would produce ──────────────
     const predict = await c.query(
@@ -90,45 +96,92 @@ async function main() {
     }
 
     // ── Apply pass 1: specialty ───────────────────────────────────────
+    // Batched — 4M-row updates against Supabase blow past the 8s
+    // pooler statement_timeout even with SET statement_timeout = 0
+    // (Supabase enforces a hard ceiling on the pooler side). CTE
+    // picks a bounded slice, main UPDATE writes it, loop until zero.
     console.log('\nPass 1: UPDATE pm_formulary_v2 SET drug_type = specialty …');
     const t1 = Date.now();
-    const r1 = await c.query(
-      `
-      UPDATE pm_formulary_v2 f
-         SET drug_type = 'specialty'
-        FROM pm_beneficiary_cost_v2 bc
-       WHERE f.drug_type IS NULL
-         AND bc.contract_id       = f.contract_id
-         AND bc.plan_id           = f.plan_id
-         AND bc.segment_id        = f.segment_id
-         AND bc.plan_year         = f.plan_year
-         AND bc.tier              = f.tier
-         AND bc.coverage_level    = 1
-         AND bc.days_supply_code  = 1
-         AND bc.pharmacy_type     = 'pref'
-         AND bc.tier_specialty    = true
-      `,
+    let pass1Total = 0;
+    while (true) {
+      const r = await c.query(
+        `
+        WITH batch AS (
+          SELECT f.contract_id, f.plan_id, f.segment_id, f.plan_year, f.rxcui
+            FROM pm_formulary_v2 f
+            JOIN pm_beneficiary_cost_v2 bc
+              ON bc.contract_id       = f.contract_id
+             AND bc.plan_id           = f.plan_id
+             AND bc.segment_id        = f.segment_id
+             AND bc.plan_year         = f.plan_year
+             AND bc.tier              = f.tier
+             AND bc.coverage_level    = 1
+             AND bc.days_supply_code  = 1
+             AND bc.pharmacy_type     = 'pref'
+           WHERE f.drug_type IS NULL
+             AND bc.tier_specialty    = true
+           LIMIT ${BATCH_SIZE}
+        )
+        UPDATE pm_formulary_v2 f
+           SET drug_type = 'specialty'
+          FROM batch b
+         WHERE f.contract_id = b.contract_id
+           AND f.plan_id     = b.plan_id
+           AND f.segment_id  = b.segment_id
+           AND f.plan_year   = b.plan_year
+           AND f.rxcui       = b.rxcui
+        `,
+      );
+      const n = r.rowCount ?? 0;
+      pass1Total += n;
+      if (n === 0) break;
+      process.stdout.write(`  batch ${n.toLocaleString()} (total ${pass1Total.toLocaleString()})\r`);
+    }
+    console.log(
+      `\n  ${pass1Total.toLocaleString()} rows in ${((Date.now() - t1) / 1000).toFixed(1)}s`,
     );
-    console.log(`  ${(r1.rowCount ?? 0).toLocaleString()} rows in ${((Date.now() - t1) / 1000).toFixed(1)}s`);
 
     // ── Apply pass 2: generic / brand ─────────────────────────────────
+    // Same batching pattern for symmetry — no-op today (pm_rxcui_meta
+    // .tty is empty in prod, per dry-run) but ready to fire once
+    // RxNav enrichment lands.
     console.log('\nPass 2: UPDATE pm_formulary_v2 SET drug_type = generic|brand …');
     const t2 = Date.now();
-    const r2 = await c.query(
-      `
-      UPDATE pm_formulary_v2 f
-         SET drug_type = CASE
-           WHEN m.tty = ANY($1) THEN 'generic'
-           WHEN m.tty = ANY($2) THEN 'brand'
-         END
-        FROM pm_rxcui_meta m
-       WHERE f.drug_type IS NULL
-         AND m.rxcui = f.rxcui
-         AND (m.tty = ANY($1) OR m.tty = ANY($2))
-      `,
-      [GENERIC_TTYS, BRAND_TTYS],
+    let pass2Total = 0;
+    while (true) {
+      const r = await c.query(
+        `
+        WITH batch AS (
+          SELECT f.contract_id, f.plan_id, f.segment_id, f.plan_year, f.rxcui,
+                 CASE
+                   WHEN m.tty = ANY($1) THEN 'generic'
+                   WHEN m.tty = ANY($2) THEN 'brand'
+                 END AS new_type
+            FROM pm_formulary_v2 f
+            JOIN pm_rxcui_meta m ON m.rxcui = f.rxcui
+           WHERE f.drug_type IS NULL
+             AND (m.tty = ANY($1) OR m.tty = ANY($2))
+           LIMIT ${BATCH_SIZE}
+        )
+        UPDATE pm_formulary_v2 f
+           SET drug_type = b.new_type
+          FROM batch b
+         WHERE f.contract_id = b.contract_id
+           AND f.plan_id     = b.plan_id
+           AND f.segment_id  = b.segment_id
+           AND f.plan_year   = b.plan_year
+           AND f.rxcui       = b.rxcui
+        `,
+        [GENERIC_TTYS, BRAND_TTYS],
+      );
+      const n = r.rowCount ?? 0;
+      pass2Total += n;
+      if (n === 0) break;
+      process.stdout.write(`  batch ${n.toLocaleString()} (total ${pass2Total.toLocaleString()})\r`);
+    }
+    console.log(
+      `\n  ${pass2Total.toLocaleString()} rows in ${((Date.now() - t2) / 1000).toFixed(1)}s`,
     );
-    console.log(`  ${(r2.rowCount ?? 0).toLocaleString()} rows in ${((Date.now() - t2) / 1000).toFixed(1)}s`);
 
     // ── Post: actual distribution ─────────────────────────────────────
     const post = await c.query(
