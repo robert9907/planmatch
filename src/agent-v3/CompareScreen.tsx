@@ -45,6 +45,8 @@ import {
 } from '@/lib/classify-explanation';
 import type { LibraryRankPlan } from '@/lib/library-client';
 import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
+import { useDrugPhases, type DrugPhaseHit } from '@/hooks/useDrugPhases';
+import { DrugCostCard, type DrugCostCardComparisonPlan } from './DrugCostCard';
 import { QuoteBuilder } from './QuoteBuilder';
 import { formatOtc } from '@/lib/extractBenefitValue';
 
@@ -267,7 +269,6 @@ function buildMetrics(args: {
   annualDrugByPlanId: Record<string, number | null>;
   drugsCoveredByPlanId: Record<string, number>;
   drugsTotalByPlanId: Record<string, number>;
-  dualEligibleByPlanId?: Record<string, DualEligibleAdjustment | undefined>;
 }): Metric[] {
   const {
     rxcuis,
@@ -275,12 +276,10 @@ function buildMetrics(args: {
     annualDrugByPlanId,
     drugsCoveredByPlanId,
     drugsTotalByPlanId,
-    dualEligibleByPlanId,
   } = args;
   const drug = (p: Plan) => annualDrugByPlanId[p.id] ?? null;
   const drugsCovered = (p: Plan) => drugsCoveredByPlanId[p.id];
   const drugsTotal = (p: Plan) => drugsTotalByPlanId[p.id];
-  const dualEligible = (p: Plan) => dualEligibleByPlanId?.[p.id];
 
   return [
     {
@@ -300,22 +299,13 @@ function buildMetrics(args: {
     {
       key: 'drugs',
       label: 'Drug cost / yr',
+      // Compact summary. The LIS-adjusted breakdown + strike + savings
+      // badge + phase breakdown live in DrugCostCard (rendered below
+      // the metric grid inside SlotCell), keeping the metric row a
+      // single scannable line.
       format: (p) => {
         const v = drug(p);
-        if (v == null) return '—';
-        const adj = dualEligible(p);
-        // When LIS caps are applied the row shows the adjusted total on
-        // the first line and the pre-adjustment plan cost on the second
-        // ("was $X — LIS capped"). Phase 5 rebuilds this with proper
-        // strikethrough + green styling; multi-line text ships correct
-        // numbers without a widening of the Metric.format signature.
-        if (adj?.lisCopaysApplied) {
-          const orig = adj.original.totalAnnualDrugCost;
-          return orig > v
-            ? `${fmt(v)}/yr\nwas ${fmt(orig)} — LIS capped`
-            : `${fmt(v)}/yr`;
-        }
-        return `${fmt(v)}/yr`;
+        return v == null ? '—' : `${fmt(v)}/yr`;
       },
       numeric: drug,
       higherIsBetter: false,
@@ -622,10 +612,39 @@ export function CompareScreen({
         annualDrugByPlanId,
         drugsCoveredByPlanId: drugsCoveredByPlanId ?? {},
         drugsTotalByPlanId: drugsTotalByPlanId ?? {},
-        dualEligibleByPlanId,
       }),
-    [rxcuis, providers, annualDrugByPlanId, drugsCoveredByPlanId, drugsTotalByPlanId, dualEligibleByPlanId],
+    [rxcuis, providers, annualDrugByPlanId, drugsCoveredByPlanId, drugsTotalByPlanId],
   );
+
+  // Union of every plan currently on the Compare board (scored + bench)
+  // so a single /api/drug-phases call primes both the Top-4 slot cards
+  // and the bench cards. useDrugPhases dedupes on the sorted plan+rxcui
+  // signature — column re-orders don't refetch.
+  const drugPhasesPlans = useMemo(
+    () => [...scoredPlans, ...(benchPlans ?? [])],
+    [scoredPlans, benchPlans],
+  );
+  const drugPhases = useDrugPhases(drugPhasesPlans, medications, 'pref', 1);
+  // Pre-shape the cross-plan comparison list once; DrugCostCard reads
+  // this to render the "same molecule, different classification"
+  // callout without recomputing per-plan.
+  const drugCostComparisonPlans = useMemo<DrugCostCardComparisonPlan[]>(() => {
+    return drugPhasesPlans.map((p) => {
+      // Filter the phases map to just this plan's rxcuis (keys are
+      // `${planId}::${rxcui}` — cheap prefix scan).
+      const prefix = `${p.id}::`;
+      const own = new Map<string, DrugPhaseHit>();
+      for (const [k, v] of drugPhases.byPlanIdRxcui.entries()) {
+        if (k.startsWith(prefix)) own.set(k, v);
+      }
+      return {
+        planId: p.id,
+        planName: p.plan_name ?? p.plan_number ?? p.id,
+        drugBreakdown: drugBreakdownByPlanId?.[p.id] ?? [],
+        drugPhasesByRxcui: own,
+      };
+    });
+  }, [drugPhasesPlans, drugPhases.byPlanIdRxcui, drugBreakdownByPlanId]);
 
   // Data-quality counts driving the warning banner. When the broker
   // captured meds without RxNorm match (manual entry past autocomplete,
@@ -1095,6 +1114,10 @@ export function CompareScreen({
                 ? explanationsByPlanId[plan.id] ?? null
                 : null
             }
+            medications={medications}
+            lisTier={client.lisTier ?? 'none'}
+            drugPhasesByPlanIdRxcui={drugPhases.byPlanIdRxcui}
+            drugCostComparisonPlans={drugCostComparisonPlans}
             onDrop={handleDrop}
             onClear={() => clearSlot(i)}
             onFill={() => fillEmptySlot(i)}
@@ -2456,6 +2479,10 @@ function SlotCell({
   drugCoverageUnknown,
   dualEligible,
   explanations,
+  medications,
+  lisTier,
+  drugPhasesByPlanIdRxcui,
+  drugCostComparisonPlans,
   onDrop,
   onClear,
   onFill,
@@ -2492,6 +2519,17 @@ function SlotCell({
    *  parent didn't supply explanationsByPlanId for this plan id — the
    *  "Why this plan" expander is skipped entirely in that case. */
   explanations: ExplanationsForPlan | null;
+  /** Client's medications — DrugCostCard reads dose from these. */
+  medications: ReadonlyArray<import('@/types/session').Medication>;
+  /** Client's LIS tier. Drives the DrugCostCard banner + per-drug LIS
+   *  cap math + totals-row strikethrough. */
+  lisTier: import('@/lib/dual-eligible').LisTier;
+  /** Phase breakdown map from useDrugPhases (keyed on `${planId}::${rxcui}`). */
+  drugPhasesByPlanIdRxcui: ReadonlyMap<string, DrugPhaseHit>;
+  /** All plans currently on the Compare board — passed to DrugCostCard
+   *  so it can render the "same molecule, different classification"
+   *  cross-plan callout without recomputing. */
+  drugCostComparisonPlans: ReadonlyArray<DrugCostCardComparisonPlan>;
   onDrop: (slotIdx: number, draggedPlanId: string) => void;
   onClear: () => void;
   onFill: () => void;
@@ -2711,13 +2749,25 @@ function SlotCell({
           pill (green ✓ / red ✗ / amber ⚠). */}
       <ProviderList plan={plan} providers={providers} variant="full" />
 
-      {/* Per-medication cost breakdown — one row per user drug with
-          tier + monthly copay + annual cost, ending in the plan's
-          total. What the broker quotes at the pharmacy counter. */}
-      <DrugBreakdown
-        breakdown={drugBreakdown ?? []}
-        variant="full"
-      />
+      {/* Per-medication cost card (Phase 5) — LIS subsidy banner,
+          per-drug rows (classification badge + tier + phase strip +
+          LIS-adjusted cost with strike), totals with savings badge,
+          and an agent talking point. Replaces the older
+          DrugBreakdown 'full' variant. Compact bench cards still use
+          DrugBreakdown via variant='compact'. */}
+      {plan && drugBreakdown && drugBreakdown.length > 0 && (
+        <DrugCostCard
+          plan={plan}
+          medications={medications}
+          drugBreakdown={drugBreakdown}
+          drugPhasesByRxcui={drugPhasesByPlanIdRxcui as Map<string, DrugPhaseHit>}
+          lisTier={lisTier}
+          dualEligibleAdjustment={dualEligible}
+          comparisonPlans={drugCostComparisonPlans.filter(
+            (cp) => cp.planId !== plan.id,
+          )}
+        />
+      )}
 
       {/* Per-gate micro-explainer — collapsible "Why this plan" with
           one row per provider / drug / priority + cost-rank line.
