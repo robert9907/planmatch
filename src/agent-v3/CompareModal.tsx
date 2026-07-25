@@ -70,11 +70,25 @@ export function CompareModal({
       b: formatSpecialist(candidate),
     },
     {
-      l: 'MOOP',
+      l: 'MOOP (In-Network)',
       a: fmt(current.moop_in_network),
       b: fmt(candidate.moop_in_network),
       w: candidate.moop_in_network < current.moop_in_network,
     },
+    // Combined MOOP row — only when at least one of the two plans is PPO.
+    // Renders "—" per side when that plan's moop_out_of_network is null
+    // (HMO or not-yet-backfilled).
+    ...(/PPO/i.test(current.plan_type ?? '') || /PPO/i.test(candidate.plan_type ?? '')
+      ? [{
+          l: 'MOOP (In + Out-of-Network)',
+          a: current.moop_out_of_network != null ? fmt(current.moop_out_of_network) : '—',
+          b: candidate.moop_out_of_network != null ? fmt(candidate.moop_out_of_network) : '—',
+          w:
+            candidate.moop_out_of_network != null &&
+            current.moop_out_of_network != null &&
+            candidate.moop_out_of_network < current.moop_out_of_network,
+        }]
+      : []),
     {
       l: 'Part D Ded.',
       a: `$${current.drug_deductible ?? 0}`,

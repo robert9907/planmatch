@@ -61,7 +61,13 @@ export function PlanDetailModal({
       v: annualDrug != null ? `${fmt(annualDrug)}/yr` : '—',
     },
     { l: 'Est. Annual Total', v: ann != null ? fmt(ann) : '—' },
-    { l: 'MOOP', v: fmt(plan.moop_in_network) },
+    { l: 'MOOP (In-Network)', v: fmt(plan.moop_in_network) },
+    // Combined In+Out-of-Network MOOP — only for PPO plans (HMO plans
+    // have no OON benefits). Render "—" when the plan hasn't been
+    // backfilled yet (moop_out_of_network null), not $0.
+    ...(/PPO/i.test(plan.plan_type ?? '')
+      ? [{ l: 'MOOP (In + Out-of-Network)', v: plan.moop_out_of_network != null ? fmt(plan.moop_out_of_network) : '—' }]
+      : []),
     { l: 'Part D Ded.', v: `$${plan.drug_deductible ?? 0}` },
     { l: 'PCP', v: formatPcp(plan) },
     { l: 'Specialist', v: formatSpecialist(plan) },
