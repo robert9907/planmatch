@@ -148,8 +148,24 @@ async function main() {
   const plans = await loadPlans();
   console.log(`Loaded ${plans.size} MA/MAPD plan-segments`);
 
-  console.log('Loading pm_plan_benefits (3 categories)…');
+  console.log('Loading pm_plan_benefits (3 categories + specialist for chiro bundling)…');
   for (const cat of CATEGORIES) await loadPmRows(plans, cat);
+  // For chiropractic VALUE_MISMATCH reconciliation: when MPF doesn't
+  // file a distinct chiro benefit and pm.chi.copay == pm.specialist.
+  // copay, the plan bundles chiro at the specialist rate and pm is
+  // beneficiary-correct (regardless of pbp cms_pbp's value). See
+  // scripts/parity-audit/inspect-chiro-sb-pdfs.ts for the deep-dive
+  // that documented 69/76 mismatches as "specialist-bundled".
+  const specialistByKey = new Map<string, number | null>();
+  {
+    let from = 0;
+    while (true) {
+      const r = await sb.from('pm_plan_benefits').select('contract_id, plan_id, segment_id, copay').eq('benefit_category', 'specialist').range(from, from + 999);
+      const c = r.data ?? [];
+      for (const row of c as any[]) specialistByKey.set(`${row.contract_id}-${row.plan_id}-${row.segment_id}`, row.copay ?? null);
+      if (c.length < 1000) break; from += 1000;
+    }
+  }
 
   console.log('Loading pbp_benefits (3 categories + variants)…');
   await loadPbpRows(plans, 'diabetic_supplies', 'diabetic_supplies');
@@ -173,7 +189,23 @@ async function main() {
         const pmCopay = pm.copay;
         const pbpCopay = bp.copay === 0 && bp.copay_max != null && bp.copay_max > 0 ? bp.copay_max : bp.copay;
         if (pmCopay !== pbpCopay && !(pmCopay == null && pbpCopay == null)) {
-          issue = 'VALUE_MISMATCH';
+          // Chiropractic-specific reconciliation: on plans where MPF
+          // doesn't file a distinct chiro benefit and pm.chi copay
+          // equals the specialist copay, chiro is billed at the
+          // specialist rate — pm reflects the beneficiary experience,
+          // pbp's cms_pbp row is a filed-but-not-visible datum. Fold
+          // into OK_SPECIALIST_BUNDLED (still counted as OK for the
+          // headline rate; broken out for auditability).
+          if (cat === 'chiropractic') {
+            const specCopay = specialistByKey.get(`${p.contract_id}-${p.plan_id}-${p.segment_id}`) ?? null;
+            if (specCopay != null && pmCopay === specCopay) {
+              issue = 'OK_SPECIALIST_BUNDLED';
+            } else {
+              issue = 'VALUE_MISMATCH';
+            }
+          } else {
+            issue = 'VALUE_MISMATCH';
+          }
         }
       }
       rows.push({
