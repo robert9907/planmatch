@@ -1464,7 +1464,11 @@ export async function pmSnapshot(
       // for PPO/PFFS where it would be a real value. Diff engine can
       // treat null-vs-MPF-value as N/A per spec.
       medicalDeductibleOON: /HMO/i.test(String(planRow?.plan_type ?? '')) ? 0 : null,
-      partDDrugDeductible: toNum(planRow?.drug_deductible ?? null),
+      // MPF returns 0 for plans without a Part D deductible; PM's
+      // pm_plans.drug_deductible is null on the same set. Default to
+      // 0 so both sides agree (33 F2 fails on the 2026-07-25 audit
+      // resolved by this one default).
+      partDDrugDeductible: toNum(planRow?.drug_deductible ?? null) ?? 0,
       // Phase 1b: derive from pm_beneficiary_cost_v2.deductible_applies —
       // tiers exempt from the Part D deductible are those with
       // deductible_applies=false in the initial coverage phase.
