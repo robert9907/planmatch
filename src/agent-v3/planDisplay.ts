@@ -221,7 +221,15 @@ export function formatCostShareWithRange(
           Number.isFinite(low) &&
           Number.isFinite(high) &&
           high > low &&
-          low === cs.copay
+          // Match either endpoint. Two production shapes:
+          //  1) cs.copay is the min (pm_plan_benefits row stored copay=5,
+          //     max=$50; api/plans.ts returned copay=5 unpromoted).
+          //  2) cs.copay is the max (row stored copay=0, max=$190; api/
+          //     plans.ts's costShareFor promoted copay to $190 because
+          //     the raw value was 0). Without accepting high === cs.copay
+          //     the range collapses to "$190" flat even though the
+          //     description carries the full "$0–$190" text.
+          (low === cs.copay || high === cs.copay)
         ) {
           return `$${low}–$${high}`;
         }

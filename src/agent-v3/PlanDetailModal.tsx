@@ -16,6 +16,7 @@ import {
   annualEstimate,
   costShareNumeric,
   formatCostShare,
+  formatCostShareWithRange,
   formatPcp,
   formatPremium,
   formatSpecialist,
@@ -78,15 +79,19 @@ export function PlanDetailModal({
     { l: 'Urgent Care', v: formatCostShare(plan.benefits.medical.urgent_care) },
     { l: 'Emergency', v: formatCostShare(plan.benefits.medical.emergency) },
     { l: 'Inpatient (per stay)', v: formatCostShare(plan.benefits.medical.inpatient) },
-    { l: 'Outpatient surg. (hosp)', v: formatCostShare(plan.benefits.medical.outpatient_surgery_hospital) },
-    { l: 'Outpatient surg. (ASC)', v: formatCostShare(plan.benefits.medical.outpatient_surgery_asc) },
+    // Range-prone categories (CMS commonly files $X–$Y): use the range-
+    // aware formatter so the broker sees "$0–$190" instead of just
+    // "$190" (which loses the low end). CompareScreen already does this
+    // via csMetric; this modal was missed.
+    { l: 'Outpatient surg. (hosp)', v: formatCostShareWithRange(plan.benefits.medical.outpatient_surgery_hospital) },
+    { l: 'Outpatient surg. (ASC)', v: formatCostShareWithRange(plan.benefits.medical.outpatient_surgery_asc) },
     { l: 'Outpatient observation', v: formatCostShare(plan.benefits.medical.outpatient_observation) },
-    { l: 'Lab services', v: formatCostShare(plan.benefits.medical.lab_services) },
-    { l: 'Diagnostic procedures', v: formatCostShare(plan.benefits.medical.diagnostic_procedures) },
-    { l: 'X-ray', v: formatCostShare(plan.benefits.medical.xray) },
+    { l: 'Lab services', v: formatCostShareWithRange(plan.benefits.medical.lab_services) },
+    { l: 'Diagnostic procedures', v: formatCostShareWithRange(plan.benefits.medical.diagnostic_procedures) },
+    { l: 'X-ray', v: formatCostShareWithRange(plan.benefits.medical.xray) },
     // Old diagnostic_radiology + therapeutic_radiology merged into the
     // single PBP-aligned advanced_imaging category.
-    { l: 'Advanced imaging', v: formatCostShare(plan.benefits.medical.advanced_imaging) },
+    { l: 'Advanced imaging', v: formatCostShareWithRange(plan.benefits.medical.advanced_imaging) },
     { l: 'Mental health (indiv.)', v: formatCostShare(plan.benefits.medical.mental_health_individual) },
     { l: 'Mental health (group)', v: formatCostShare(plan.benefits.medical.mental_health_group) },
     { l: 'Physical / speech therapy', v: formatCostShare(plan.benefits.medical.physical_speech_therapy) },
