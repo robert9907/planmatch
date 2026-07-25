@@ -48,12 +48,26 @@ import type { Plan } from '@/types/plans';
 import type { Medication } from '@/types/session';
 import type { DualEligibleAdjustment, LisTier } from '@/lib/dual-eligible';
 import { getLisCopays } from '@/lib/dual-eligible';
-import { PART_D_OOP_CAP_2026 } from '@/lib/plan-brain-utils';
 import type { DrugPhaseHit } from '@/hooks/useDrugPhases';
+import {
+  partDTimeline,
+  type DrugFill,
+  type PlanInput as PartDPlanInput,
+  type TierCostShares,
+} from '../../api/library/partDTimeline';
+import { getPlanYearParams } from '../../api/library/planYearParams';
 
 // ─── Constants ────────────────────────────────────────────────────────
-
-const PART_D_MAX_DEDUCTIBLE_2026 = 590;
+//
+// Card-level plan year — Rob's spec keeps the Compare surface anchored
+// to the current year (agent quotes for effective-date within the year).
+// Cross-year projections would need this threaded from the client's
+// intended effective date; that's a follow-up when mid-year enrollment
+// quoting lands.
+const CARD_PLAN_YEAR = 2026;
+const PART_D_PARAMS = getPlanYearParams(CARD_PLAN_YEAR);
+const PART_D_MAX_DEDUCTIBLE_2026 = PART_D_PARAMS.partDDeductibleMax;
+const PART_D_OOP_CAP_2026 = PART_D_PARAMS.troopCap;
 
 /** Notional retail per fill by tier — used when a phase costs
  *  coinsurance and we don't have a live pm_drug_cost_cache hit. Same
@@ -276,44 +290,49 @@ function LisSubsidyBanner({ lisTier }: { lisTier: LisTier }) {
 
 // ─── Timeline compute ─────────────────────────────────────────────────
 
-/** Per-fill user pay in the given phase. Reads phaseHit when the
- *  library returned a filed cost-share; falls back to tier notionals
- *  when the phase row is missing or of type 0 (n/a). */
-function fillCostInPhase(
-  drug: DrugCostCardDrugRow,
-  phaseHit: DrugPhaseHit | undefined,
-  phase: PhaseKey,
-): number {
-  if (!drug.covered || drug.tier == null) return 0;
-  const notionalRetail =
-    NOTIONAL_RETAIL_MONTHLY[drug.tier] ?? NOTIONAL_RETAIL_MONTHLY[3];
-  if (phase === 'catastrophic') return 0;
-  if (phase === 'gap') {
-    // IRA §11201 eliminated the gap for 2025+; keep $0 so the UI can
-    // still label a row without misleading dollar amounts.
-    return 0;
-  }
-  if (phase === 'deductible') {
-    // In deductible the beneficiary pays retail (up to remaining
-    // deductible). We approximate at notional retail — the exact
-    // "up to remaining" clamp happens in the timeline builder.
-    return notionalRetail;
-  }
-  // initial — prefer the library-filed row; else use monthlyCopay from
-  // the rank result; else fall back to tier notional × 0 (unknown).
-  const cell = phaseHit?.phases.initial;
-  if (cell && cell.cost_amount != null) {
-    if (cell.cost_type === 1) return cell.cost_amount;
-    if (cell.cost_type === 2) return Math.round(notionalRetail * cell.cost_amount);
-  }
-  if (typeof drug.monthlyCopay === 'number') return drug.monthlyCopay;
-  return Math.round(drug.annualCost / 12);
-}
-
 function isFillMonth(month: number, fillsPerYear: 12 | 4): boolean {
   if (fillsPerYear === 12) return true;
   // 4 fills → months 1, 4, 7, 10 (start-of-quarter refills)
   return month === 1 || month === 4 || month === 7 || month === 10;
+}
+
+/** Translate a per-drug DrugPhaseHit + the plan's filed drug deductible
+ *  into the library's PlanInput shape for a basket of exactly one drug.
+ *  Used by buildDrugTimeline so the per-row calendar respects the same
+ *  math as the basket-level projector, just isolated to this drug. */
+function planInputForSingleDrug(
+  drug: DrugCostCardDrugRow,
+  phaseHit: DrugPhaseHit | undefined,
+  planDrugDeductible: number | null,
+): PartDPlanInput {
+  const tier = drug.tier ?? 0;
+  const tierShares: TierCostShares = {};
+  // pm_beneficiary_cost_v2 cost_type: 1 = flat copay, 2 = coinsurance
+  // (fraction 0..1). Map to the library's discriminated union.
+  const dedAmount = phaseHit?.phases.deductible?.cost_amount;
+  if (dedAmount != null) {
+    tierShares.deductible = phaseHit!.phases.deductible!.cost_type === 1
+      ? { type: 'copay', amount: dedAmount }
+      : { type: 'coinsurance', amount: dedAmount };
+  }
+  const initAmount = phaseHit?.phases.initial?.cost_amount;
+  if (initAmount != null) {
+    tierShares.initial = phaseHit!.phases.initial!.cost_type === 1
+      ? { type: 'copay', amount: initAmount }
+      : { type: 'coinsurance', amount: initAmount };
+  } else if (typeof drug.monthlyCopay === 'number') {
+    // Fallback to rank-result copay when the SPUF row is missing an
+    // initial cost share — same fallback the pre-refactor code used.
+    tierShares.initial = { type: 'copay', amount: drug.monthlyCopay };
+  }
+  return {
+    // Plans that don't file drug_deductible fall back to the year's
+    // max — matches the pre-refactor behavior of assuming full ceiling
+    // when data is missing (conservative for the beneficiary).
+    deductible: planDrugDeductible ?? PART_D_MAX_DEDUCTIBLE_2026,
+    deductibleAppliesToTiers: phaseHit?.deductible_applies ? [tier] : [],
+    tierCostShares: { [tier]: tierShares },
+  };
 }
 
 function buildDrugTimeline(
@@ -321,32 +340,71 @@ function buildDrugTimeline(
   phaseHit: DrugPhaseHit | undefined,
   lisTier: LisTier,
   fillsPerYear: 12 | 4,
+  planDrugDeductible: number | null,
 ): DrugTimeline {
   const lisCaps = getLisCopays(lisTier);
-  const deductibleApplies = phaseHit?.deductible_applies === true;
   const isBrand = drug.tier != null && drug.tier >= 3;
   const lisPerFillCap = lisCaps ? (isBrand ? lisCaps.brand : lisCaps.generic) : null;
 
+  // Off-formulary / uncovered → skip library, emit empty cells so the
+  // calendar can render "not covered" instead of dollar amounts.
+  if (!drug.covered || drug.tier == null) {
+    return {
+      cells: Array.from({ length: 12 }, (_, i) => ({
+        month: i + 1,
+        isFillMonth: false,
+        phase: null,
+        standardCost: 0,
+        liscappedCost: 0,
+      })),
+      totalStandard: 0,
+      totalLisCapped: 0,
+      deductibleFillCount: 0,
+      initialFillCount: 0,
+      catastrophicFillCount: 0,
+      deductibleTotalCost: 0,
+      initialTotalCost: 0,
+      catastrophicTotalCost: 0,
+      everInDeductible: false,
+      everInInitial: false,
+      everInCatastrophic: false,
+    };
+  }
+
+  const notionalRetail =
+    NOTIONAL_RETAIL_MONTHLY[drug.tier] ?? NOTIONAL_RETAIL_MONTHLY[3];
+  const singleDrugFill: DrugFill = {
+    rxcui: drug.rxcui,
+    name: drug.name,
+    tier: drug.tier,
+    monthlyGrossCost: notionalRetail,
+    fillsPerYear,
+  };
+  const rows = partDTimeline({
+    planYear: CARD_PLAN_YEAR,
+    plan: planInputForSingleDrug(drug, phaseHit, planDrugDeductible),
+    drugs: [singleDrugFill],
+    planYearParams: PART_D_PARAMS,
+  });
+
   const cells: CalendarCell[] = [];
-  let cumulativeStandard = 0;    // pre-LIS user-OOP running total
-  let currentPhase: PhaseKey = deductibleApplies ? 'deductible' : 'initial';
+  let totalStandard = 0;
+  let totalLisCapped = 0;
   let deductibleFillCount = 0;
   let initialFillCount = 0;
   let catastrophicFillCount = 0;
   let deductibleTotalCost = 0;
   let initialTotalCost = 0;
   let catastrophicTotalCost = 0;
-  let totalStandard = 0;
-  let totalLisCapped = 0;
-  let everInDeductible = deductibleApplies;
-  let everInInitial = !deductibleApplies;
+  let everInDeductible = false;
+  let everInInitial = false;
   let everInCatastrophic = false;
 
-  for (let m = 1; m <= 12; m += 1) {
-    const fill = isFillMonth(m, fillsPerYear);
+  for (const r of rows) {
+    const fill = isFillMonth(r.month, fillsPerYear);
     if (!fill) {
       cells.push({
-        month: m,
+        month: r.month,
         isFillMonth: false,
         phase: null,
         standardCost: 0,
@@ -354,56 +412,42 @@ function buildDrugTimeline(
       });
       continue;
     }
-
-    let cellPhase = currentPhase;
-    let standardCost = fillCostInPhase(drug, phaseHit, cellPhase);
-
-    // Clamp the deductible fill so cumulative never overshoots the
-    // deductible amount — the real Part D rule is proportional.
-    if (cellPhase === 'deductible') {
-      const remaining = PART_D_MAX_DEDUCTIBLE_2026 - cumulativeStandard;
-      if (standardCost > remaining) standardCost = Math.max(remaining, 0);
-    }
-
+    const standardCost = r.memberCost;
+    // LIS caps override plan cost sharing whenever the member has any
+    // LIS tier; the cap doesn't apply once catastrophic is reached
+    // (member cost is already $0 there).
     const liscappedCost =
-      lisPerFillCap != null && drug.covered && cellPhase !== 'catastrophic'
+      lisPerFillCap != null && r.phase !== 'catastrophic'
         ? Math.min(standardCost, lisPerFillCap)
         : standardCost;
+
+    // Map the library's basket-level phase back onto the per-drug cell.
+    // For per-drug isolation, the library's phase is exactly this
+    // drug's phase in the current month.
+    const cellPhase: PhaseKey = r.phase;
 
     if (cellPhase === 'deductible') {
       deductibleFillCount += 1;
       deductibleTotalCost += liscappedCost;
+      everInDeductible = true;
     } else if (cellPhase === 'initial') {
       initialFillCount += 1;
       initialTotalCost += liscappedCost;
+      everInInitial = true;
     } else if (cellPhase === 'catastrophic') {
       catastrophicFillCount += 1;
       catastrophicTotalCost += liscappedCost;
+      everInCatastrophic = true;
     }
     totalStandard += standardCost;
     totalLisCapped += liscappedCost;
-    cumulativeStandard += standardCost;
-
     cells.push({
-      month: m,
+      month: r.month,
       isFillMonth: true,
       phase: cellPhase,
       standardCost,
       liscappedCost,
     });
-
-    // Phase transitions — apply AFTER this fill is booked, so the
-    // month whose fill first crosses the threshold shows the phase
-    // that led INTO the transition, and the next fill picks up the
-    // new phase.
-    if (currentPhase === 'deductible' && cumulativeStandard >= PART_D_MAX_DEDUCTIBLE_2026) {
-      currentPhase = 'initial';
-      everInInitial = true;
-    }
-    if (cumulativeStandard >= PART_D_OOP_CAP_2026 && currentPhase !== 'catastrophic') {
-      currentPhase = 'catastrophic';
-      everInCatastrophic = true;
-    }
   }
 
   return {
@@ -640,6 +684,7 @@ function DrugRowDropdown({
   lisTier,
   mismatch,
   fillsPerYear,
+  planDrugDeductible,
   autoExpand,
   onExpand,
 }: {
@@ -649,6 +694,7 @@ function DrugRowDropdown({
   lisTier: LisTier;
   mismatch: string | null;
   fillsPerYear: 12 | 4;
+  planDrugDeductible: number | null;
   autoExpand: boolean;
   onExpand?: (rxcui: string, timeline: DrugTimeline) => void;
 }) {
@@ -657,7 +703,7 @@ function DrugRowDropdown({
   const uncovered = !drug.covered;
   const dose = meta?.dose ?? null;
   const caps = getLisCopays(lisTier);
-  const timeline = buildDrugTimeline(drug, phaseHit, lisTier, fillsPerYear);
+  const timeline = buildDrugTimeline(drug, phaseHit, lisTier, fillsPerYear, planDrugDeductible);
   const showStrike = caps != null && timeline.totalLisCapped < timeline.totalStandard;
   // A drug is "trivial-cost" when every fill's LIS-adjusted cost is 0
   // (e.g. Tier 1 generic with LIS institutional, or a plan that files
@@ -1051,6 +1097,7 @@ export function DrugCostCard(props: DrugCostCardProps): ReactNode {
           drugPhasesByRxcui?.get(`${plan.id}::${expandedDrug.rxcui}`),
           lisTier,
           fillsPerYear,
+          plan.drug_deductible,
         )
       : null);
   const talkingPoint = buildTalkingPoint({
@@ -1116,6 +1163,7 @@ export function DrugCostCard(props: DrugCostCardProps): ReactNode {
             lisTier={lisTier}
             mismatch={mismatch}
             fillsPerYear={fillsPerYear}
+            planDrugDeductible={plan.drug_deductible}
             autoExpand={autoExpand}
             onExpand={(_rxcui, timeline) => {
               setExpandedRxcui(_rxcui);

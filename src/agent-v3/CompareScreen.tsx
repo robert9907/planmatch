@@ -47,6 +47,10 @@ import type { LibraryRankPlan } from '@/lib/library-client';
 import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
 import { useDrugPhases, type DrugPhaseHit } from '@/hooks/useDrugPhases';
 import { DrugCostCard, type DrugCostCardComparisonPlan } from './DrugCostCard';
+import {
+  PartDTimelineOverlay,
+  type PartDTimelineOverlayPlan,
+} from './PartDTimelineOverlay';
 import { QuoteBuilder } from './QuoteBuilder';
 import { formatOtc } from '@/lib/extractBenefitValue';
 
@@ -1074,6 +1078,33 @@ export function CompareScreen({
         onAddToBoard={addToBoard}
         onOpenH2H={openH2H}
       />
+
+      {/* Basket-level Part D 12-month timeline overlay for the top-3
+          filled slots. Renders above the individual slot cards so the
+          broker can compare month-by-month spend at a glance before
+          drilling into a single plan's DrugCostCard. Component
+          suppresses itself when no slots hold a plan or when no
+          medications have been captured (drugBreakdown is empty). */}
+      {(() => {
+        const overlayPlans: PartDTimelineOverlayPlan[] = filteredSlots
+          .filter((p): p is Plan => p != null)
+          .slice(0, 3)
+          .map((p) => ({
+            plan: p,
+            drugBreakdown: drugBreakdownByPlanId?.[p.id] ?? [],
+            drugPhasesByRxcui: drugPhases.byPlanIdRxcui,
+            dualEligible: dualEligibleByPlanId?.[p.id],
+          }))
+          .filter((entry) => entry.drugBreakdown.length > 0);
+        if (overlayPlans.length === 0) return null;
+        return (
+          <PartDTimelineOverlay
+            plans={overlayPlans}
+            lisTier={client.lisTier ?? 'none'}
+            medications={medications}
+          />
+        );
+      })()}
 
       <div
         style={{
