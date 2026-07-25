@@ -81,10 +81,11 @@ async function main() {
     let from = 0;
     const nullPlans: Array<{ id: string; contract_id: string; plan_id: string; segment_id: string }> = [];
     while (true) {
+      // Include PDPs — CMS files star ratings on PDP contracts too
+      // (S-prefixed), and MPF returns them via overall_star_rating.
       const r = await sb.from('pm_plans')
         .select('id, contract_id, plan_id, segment_id, star_rating')
         .eq('state', st)
-        .not('plan_type', 'ilike', '%pdp%')
         .is('star_rating', null)
         .range(from, from + 999);
       const c = r.data ?? [];
