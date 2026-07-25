@@ -97,7 +97,7 @@ export interface Client {
    *  by IntakeScreen via deemLisTier(); broker can override for
    *  LIS-only clients who applied directly (no Medicaid). Optional
    *  for the same session-decode reason as medicaidLevel. */
-  lisTier?: 'none' | 'full_institutional' | 'full_low' | 'full_high';
+  lisTier?: 'none' | 'full_institutional' | 'qmb_uniform' | 'full_low' | 'full_high';
   /** Living setting — only affects LIS tier for FBDE (community →
    *  full_low, institutional/HCBS → full_institutional). Defaults
    *  to 'community' when omitted. */

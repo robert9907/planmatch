@@ -34,14 +34,19 @@ import type { AnnualCostEstimate } from './utilization-model';
 export type MedicaidLevel = 'none' | 'qi' | 'slmb' | 'qmb' | 'fbde';
 
 /** LIS (Extra Help) copay tier. Post-IRA §11404 all LIS-eligible
- *  beneficiaries fall into one of three full-subsidy tiers.
+ *  beneficiaries fall into one of four full-subsidy tiers.
  *
  *   none                — no LIS subsidy; plan copays apply as filed
  *   full_institutional  — FBDE in institution or HCBS waiver ($0/$0)
- *   full_low            — FBDE, community, ≤100% FPL ($1.60/$4.90)
- *   full_high           — all other LIS (FBDE 100-150% FPL, MSP
- *                         applicants, LIS-only) ($5.10/$12.65) */
-export type LisTier = 'none' | 'full_institutional' | 'full_low' | 'full_high';
+ *   qmb_uniform         — QMB + full Medicaid: flat $4.90 per fill,
+ *                         generic AND brand (CY2026 CMS LIS memo Table 2,
+ *                         "QMB + Full Medicaid" row). Covers FBDE-community
+ *                         and standalone-QMB.
+ *   full_low            — LIS-only or SSA-application-qualified LIS at
+ *                         ≤100% FPL, non-QMB ($1.60/$4.90)
+ *   full_high           — SLMB, QI, or LIS-only >100-150% FPL, non-QMB
+ *                         ($5.10/$12.65) */
+export type LisTier = 'none' | 'full_institutional' | 'qmb_uniform' | 'full_low' | 'full_high';
 
 /** Beneficiary living setting. Only affects LIS tier for FBDE. */
 export type LivingSetting = 'community' | 'institutional_or_hcbs';
@@ -54,6 +59,7 @@ export const LIS_COPAYS_2026: Readonly<
   Record<Exclude<LisTier, 'none'>, { generic: number; brand: number }>
 > = {
   full_institutional: { generic: 0, brand: 0 },
+  qmb_uniform: { generic: 4.90, brand: 4.90 },
   full_low: { generic: 1.60, brand: 4.90 },
   full_high: { generic: 5.10, brand: 12.65 },
 };
@@ -65,21 +71,21 @@ export const LIS_COPAYS_2026: Readonly<
  *  the same LIS tier regardless of setting because CMS' $0/$0
  *  institutional row applies only to Full-Benefit Dual Eligibles.
  *
- *  Known simplification: FBDE + community defaults to `full_low`
- *  (≤100% FPL). FBDE at 100-150% FPL should be `full_high` — agents
- *  can override on the intake side. Covers >95% of FBDE cases in
- *  practice (state Medicaid income caps for aged/disabled are
- *  usually ≤100% FPL). */
+ *  QMB + full Medicaid (FBDE community) and standalone QMB both deem
+ *  to `qmb_uniform` — flat $4.90 per fill regardless of generic/brand,
+ *  per the CY2026 LIS memo's QMB row. Prior to the v2 spec fix
+ *  (2026-07-23) FBDE community defaulted to `full_low` ($1.60/$4.90)
+ *  and QMB defaulted to `full_high` ($5.10/$12.65); both were wrong. */
 export const AUTO_DEEM_LIS_TIER: Readonly<
   Record<MedicaidLevel, Readonly<Record<LivingSetting, LisTier>>>
 > = {
   fbde: {
     institutional_or_hcbs: 'full_institutional',
-    community: 'full_low',
+    community: 'qmb_uniform',
   },
   qmb: {
-    institutional_or_hcbs: 'full_high',
-    community: 'full_high',
+    institutional_or_hcbs: 'qmb_uniform',
+    community: 'qmb_uniform',
   },
   slmb: {
     institutional_or_hcbs: 'full_high',

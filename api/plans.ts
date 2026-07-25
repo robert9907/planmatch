@@ -167,6 +167,10 @@ interface PlanRow {
   monthly_premium: number | null;
   annual_deductible: number | null;
   moop: number | null;
+  // In+Out-of-Network MOOP for PPO plans. Populated for a subset by
+  // scripts/parity-audit/backfill-ppo-moop-combined.ts. Null for HMOs
+  // (no OON benefits) and PPOs that haven't been backfilled yet.
+  moop_combined: number | null;
   drug_deductible: number | null;
   star_rating: number | null;
   snp: boolean;
@@ -692,7 +696,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let plansQuery = sb
       .from('pm_plans')
       .select(
-        'contract_id, plan_id, segment_id, plan_name, carrier, parent_organization, plan_type, state, county_name, monthly_premium, annual_deductible, moop, drug_deductible, star_rating, snp, snp_type, dsnp_integration_status, zero_cost_sharing, csnp_condition_type, dsnp_accepted_populations, dsnp_only_contract, sbf_url, sanctioned',
+        'contract_id, plan_id, segment_id, plan_name, carrier, parent_organization, plan_type, state, county_name, monthly_premium, annual_deductible, moop, moop_combined, drug_deductible, star_rating, snp, snp_type, dsnp_integration_status, zero_cost_sharing, csnp_condition_type, dsnp_accepted_populations, dsnp_only_contract, sbf_url, sanctioned',
       )
       .eq('sanctioned', false)
       .limit(limit);
@@ -1223,10 +1227,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return pbp ?? row.annual_deductible ?? 0;
         })(),
         moop_in_network: row.moop ?? 0,
-        // pm_plans only carries in-network MOOP; OON isn't in the
-        // landscape extract, so we leave it null and let the UI render
-        // "—" rather than fake a value.
-        moop_out_of_network: null,
+        // Combined In+Out-of-Network MOOP. Populated for PPO plans via
+        // the medicare.gov backfill (scripts/parity-audit/backfill-
+        // ppo-moop-combined.ts). Null when the plan hasn't been
+        // backfilled yet or is HMO (no OON benefits) — UI should render
+        // "—" for null, never fake a value or show $0.
+        moop_out_of_network: row.moop_combined ?? null,
         drug_deductible: row.drug_deductible,
         part_b_giveback: partBGiveback ?? 0,
         star_rating: row.star_rating ?? 0,

@@ -28,6 +28,10 @@ import type { LisTier } from './dual-eligible';
 const LIS_ENUM_MAP: Record<LisTier, string> = {
   none: 'LIS_NO_HELP',
   full_institutional: 'LIS_LEVEL_1A',
+  // QMB + full Medicaid maps to Level 2 for MPF filter purposes — CMS/Plan
+  // Finder don't file a distinct QMB-uniform enum; the $4.90 flat cap is a
+  // client-side override applied AFTER the plan set is fetched.
+  qmb_uniform: 'LIS_LEVEL_2',
   full_low: 'LIS_LEVEL_2',
   full_high: 'LIS_LEVEL_3',
 };
