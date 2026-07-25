@@ -336,7 +336,14 @@ function pickBestRow(rows: BenefitRow[], category: string): BenefitRow | null {
   const scored = matches.map((r) => {
     const copay = toNum(r.copay);
     const coins = toNum(r.coinsurance);
-    const hasReal = (copay ?? 0) > 0 || (coins ?? 0) > 0;
+    // Treat copay === 0 as a real filed value (not null-equivalent).
+    // Prior logic only counted copay > 0, which caused medicare_gov
+    // rows filed with the correct $0 preventive copay to lose to
+    // cms_pbp rows filed with stale $45 — because the $45 row
+    // scored higher on hasReal despite being from a lower-ranked
+    // source. Dental preventive is almost always $0; the score must
+    // not penalize that.
+    const hasReal = copay != null || (coins ?? 0) > 0;
     const hasDesc = !!r.benefit_description && r.benefit_description.trim().length > 0;
     const sourceRankVal = useSourceRank
       ? (r.source ? (SOURCE_PRIORITY[r.source] ?? 0) : 2)
@@ -347,7 +354,13 @@ function pickBestRow(rows: BenefitRow[], category: string): BenefitRow | null {
       sourceRank: sourceRankVal,
     };
   });
+  // For source-rank categories (dental/vision/hearing), source rank
+  // wins first — a medicare_gov row with the MPF-authoritative value
+  // beats a cms_pbp row with a stale higher copay. Score is the
+  // tiebreaker within the same source rank. For non-source-rank
+  // categories, keep the original score-first ordering.
   scored.sort((a, b) => {
+    if (useSourceRank && b.sourceRank !== a.sourceRank) return b.sourceRank - a.sourceRank;
     if (b.score !== a.score) return b.score - a.score;
     return b.sourceRank - a.sourceRank;
   });
