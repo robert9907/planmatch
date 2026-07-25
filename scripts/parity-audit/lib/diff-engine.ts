@@ -277,11 +277,17 @@ function compareField(
 // type is compatible with either MA or MAPD (MA-family), and only PDP is
 // unambiguous. Downstream: MA-family on PM side + MA or MAPD on MPF side →
 // CONDITIONAL. PDP on both → CONDITIONAL. Mismatched category → FAIL.
-type PlanTypeCanon = 'MA' | 'MAPD' | 'MA_FAMILY' | 'PDP' | 'OTHER';
+type PlanTypeCanon = 'MA' | 'MAPD' | 'MA_FAMILY' | 'SNP_MAPD' | 'PDP' | 'OTHER';
 
 function canonicalPlanType(raw: string): PlanTypeCanon {
   const s = (raw ?? '').toUpperCase();
   if (s.includes('PDP')) return 'PDP';
+  // SNP subtypes (D-SNP / I-SNP / C-SNP) are all Medicare Advantage
+  // Prescription Drug plans by CMS definition (42 CFR § 422.4(a)(1)(iv))
+  // — they always include Part D. When PM stores the subtype and MPF
+  // returns the umbrella PLAN_TYPE_MAPD, that's the same plan filed at
+  // different granularities, not a category mismatch.
+  if (/\b[DICR]-?SNP\b|\bSNP\b/.test(s)) return 'SNP_MAPD';
   if (s.includes('MAPD')) return 'MAPD';
   if (s.includes('PLAN_TYPE_MA') && !s.includes('MAPD')) return 'MA';
   // PM stores network type without Part D indicator. PPO/HMO/HMO-POS/PFFS/
@@ -296,6 +302,11 @@ function planTypesCompatible(mpf: PlanTypeCanon, pm: PlanTypeCanon): boolean {
   // MA-family on PM side matches either MA or MAPD on MPF side.
   if (pm === 'MA_FAMILY' && (mpf === 'MA' || mpf === 'MAPD')) return true;
   if (mpf === 'MA_FAMILY' && (pm === 'MA' || pm === 'MAPD')) return true;
+  // SNP subtypes on either side match MAPD or MA_FAMILY on the other —
+  // PM's D-SNP / I-SNP / C-SNP is strictly more specific than MPF's
+  // umbrella PLAN_TYPE_MAPD. Not a fail.
+  if (pm === 'SNP_MAPD' && (mpf === 'MAPD' || mpf === 'MA' || mpf === 'MA_FAMILY')) return true;
+  if (mpf === 'SNP_MAPD' && (pm === 'MAPD' || pm === 'MA' || pm === 'MA_FAMILY')) return true;
   return false;
 }
 
