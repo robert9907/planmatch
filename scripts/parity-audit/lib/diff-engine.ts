@@ -420,7 +420,6 @@ function walkPremium(mpf: PlanSnapshot, pm: PlanSnapshot): FieldComparison[] {
   const keys: Array<keyof PlanSnapshot['premium']> = [
     'monthlyPremium',
     'partBPremiumReduction',
-    'partDPremium',
     'medicalDeductibleIN',
     'medicalDeductibleOON',
     'partDDrugDeductible',
@@ -436,6 +435,32 @@ function walkPremium(mpf: PlanSnapshot, pm: PlanSnapshot): FieldComparison[] {
         pm.premium[k],
       ),
     );
+  }
+  // partDPremium: MPF splits monthly premium into Part A/B + Part D
+  // portions and returns partd_premium separately (e.g. $25.40 on
+  // some MAPD plans, $3.60 on some PDPs). PM's pm_plans schema stores
+  // only total monthly_premium — no partD split. Rather than fabricate
+  // a per-plan split, treat as CONDITIONAL when PM's monthlyPremium >=
+  // MPF's partDPremium (the total covers at least the Part D portion)
+  // OR both sides are 0. Fail only when PM's total is strictly less
+  // than MPF's partD portion — that would indicate a real premium
+  // undercount.
+  const mpfPartD = Number(mpf.premium.partDPremium ?? 0);
+  const pmMonthly = Number(pm.premium.monthlyPremium ?? 0);
+  const pmPartD = Number(pm.premium.partDPremium ?? 0);
+  const conditional = (mpfPartD === 0 && pmPartD === 0) || pmMonthly >= mpfPartD;
+  if (conditional) {
+    out.push({
+      category: CATEGORY.premium,
+      fieldPath: 'premium.partDPremium',
+      status: 'CONDITIONAL',
+      mpfValue: mpf.premium.partDPremium,
+      pmValue: pm.premium.partDPremium,
+      severity: 'minor',
+      note: mpfPartD === 0 ? 'MPF partD=0 and PM partD=0' : `PM monthlyPremium (${pmMonthly}) covers MPF partD (${mpfPartD})`,
+    });
+  } else {
+    out.push(compareField('premium.partDPremium', CATEGORY.premium, mpf.premium.partDPremium, pm.premium.partDPremium));
   }
   return out;
 }
