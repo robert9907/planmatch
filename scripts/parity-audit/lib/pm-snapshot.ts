@@ -907,10 +907,19 @@ function applyLisToDrugCopay(
   }
   // LIS-override — beneficiary pays MIN(plan copay, LIS cap). No
   // percent-of-cost under LIS; the cap is a dollar figure per fill.
+  //
+  // Prior bug: `Math.min(planPerFill > 0 ? planPerFill : cap, cap)`
+  // treated planCopay === 0 as "no data" and returned `cap` instead
+  // of 0. For LIS beneficiaries on plans with $0 Tier 1 copays, the
+  // audit compared PM=$4.90 (cap) vs MPF=$0 (real). Fixed to a
+  // straight `Math.min(planCopay, cap)`, with planCopay==null
+  // preserving the historical "no copay data → apply cap" fallback.
   const caps = LIS_COPAYS_2026[lisTier];
   const cap = isGenericTier(tier, drugType) ? caps.generic : caps.brand;
-  const planPerFill = planCopay ?? 0;
-  const capped = Math.min(planPerFill > 0 ? planPerFill : cap, cap);
+  if (planCopay == null && (planCoinsurance == null || planCoinsurance === 0)) {
+    return { copay: cap, isCoinsurance: false };
+  }
+  const capped = planCopay != null ? Math.min(planCopay, cap) : cap;
   return { copay: capped, isCoinsurance: false };
 }
 
@@ -1351,13 +1360,22 @@ function buildDrugCoverage(
       });
       continue;
     }
+    // Per-drug audit fields (preferredCopay/standardCopay) mirror the
+    // plan's FILED cost-share — not the LIS-adjusted per-fill copay.
+    // MPF returns the plan's copay ($0/$10) or coinsurance (0.25 =
+    // 25%) for a LIS beneficiary; the LIS cap applies at fill time,
+    // not on the per-drug display. Pass 'none' so applyLisToDrugCopay
+    // returns the raw plan values regardless of the profile's LIS
+    // tier. LIS-adjusted totals are still computed in the annual-cost
+    // path and rendered as strikethrough on the consumer / agent UIs.
     const { copay, isCoinsurance } = applyLisToDrugCopay(
       hit.copay_default,
       hit.coinsurance_default,
       hit.tier,
       hit.drug_type,
-      lisTier,
+      'none',
     );
+    void lisTier;
     out.push({
       drug,
       onFormulary: true,
