@@ -68,6 +68,11 @@ export interface CaptureSessionRow {
   // "Send Snap Link" button. Lets the broker reconcile snapped items
   // back to the quoting session that asked for them.
   agent_session_id: string | null;
+  // Set when the capture session was launched from AgentBase CRM's
+  // "Send Snap Link" button on a client card. capture-submit routes
+  // extracted meds and providers back into that AgentBase client via
+  // api/_lib/agentbaseDedup with verified_at=null.
+  agentbase_client_id: number | null;
   payload: CaptureItem[];
   item_count: number;
   last_item_at: string | null;
