@@ -31,6 +31,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
 import { upsertMedicationsForClient, upsertProvidersForClient } from './_lib/agentbaseDedup.js';
+import { requireBrokerAuth } from './_lib/require-broker-auth.js';
 
 // AgentBase CRM URL pattern. /clients/{id} matches the existing
 // AgentBase routing convention; if it changes, override via env.
@@ -199,14 +200,8 @@ function splitName(full: string): { first_name: string; last_name: string } {
 // ─── Handler ──────────────────────────────────────────────────────
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Locked down 2026-07-25 — 410 Gone until Phase 3 restores this behind auth.
-  // No CORS on the 410 response (early return, before cors()).
-  if (true as boolean) {
-    res.status(410).json({ error: 'gone' });
-    return;
-  }
-
   if (cors(req, res)) return;
+  if (requireBrokerAuth(req, res)) return;
   if (req.method !== 'POST') return badRequest(res, 'POST required');
 
   const body = (req.body ?? {}) as Partial<RecommendBody>;

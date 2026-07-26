@@ -16,6 +16,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
+import { requireBrokerAuth } from './_lib/require-broker-auth.js';
 
 interface CreateBody {
   firstName: string;
@@ -37,14 +38,8 @@ function digitsOnly(phone: string | undefined): string {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Locked down 2026-07-25 — 410 Gone until Phase 3 restores this behind auth.
-  // No CORS on the 410 response (early return, before cors()).
-  if (true as boolean) {
-    res.status(410).json({ error: 'gone' });
-    return;
-  }
-
   if (cors(req, res)) return;
+  if (requireBrokerAuth(req, res)) return;
   if (req.method !== 'POST') return badRequest(res, 'POST required');
 
   const body = (req.body ?? {}) as Partial<CreateBody>;
