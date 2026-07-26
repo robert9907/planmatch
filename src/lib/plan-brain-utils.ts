@@ -5,6 +5,12 @@ import type { PlanBenefitRow } from './brain-foreign-types';
 import type { FormularyCoverage } from './brain-foreign-types';
 import type { Utilization, UtilizationProfile, UserProfile, DrugCostCacheEntry } from './plan-brain-types';
 import { dominantConditionProfile, type ConditionProfile, type ConditionSupply } from './condition-profiles';
+import {
+  partDTimeline,
+  type DrugFill,
+  type PlanInput as PartDPlanInput,
+  type TierCostShares,
+} from '../../api/library/partDTimeline';
 
 // ─── Utilization profiles (CMS-typical visit counts) ──────────────────
 
@@ -299,7 +305,28 @@ interface DrugInfo {
   cacheOverride: number | null;
 }
 
+// Plan year used when constructing partDTimeline inputs. Kept as a
+// constant here so a 2027 rollover is a single-line change (paired
+// with adding a 2027 row to api/library/planYearParams.ts).
+const BUNDLE_PLAN_YEAR = 2026;
+
+// Bundle timeline planYear default. Deductible eligibility mirrors
+// the incumbent's implicit `tier >= 3` filter — the 2026 CMS default,
+// though many plans waive further. Callers can't override yet; when
+// per-plan `deductibleAppliesToTiers` starts flowing (from
+// pm_beneficiary_cost_v2 rows) this becomes an arg.
+const DEFAULT_DEDUCTIBLE_TIERS: ReadonlyArray<number> = [3, 4, 5];
+
 export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyEstimate[] {
+  // ── 1. Per-drug metadata — unchanged from the pre-timeline body ──
+  //
+  // This resolves each input drug into { tier, retailMonthly,
+  // covered, isInsulin, cacheOverride } using the same cache-first,
+  // formulary-fallback logic that shipped before. The phase/deductible
+  // math that used to follow has moved to partDTimeline; this block
+  // stays because its output is the substrate the timeline call, the
+  // cache-override short-circuit, and the uncovered-drug penalty all
+  // consume.
   const infos: DrugInfo[] = args.drugs.map((d) => {
     const cov = d.rxcui ? args.formulary.get(d.rxcui) : undefined;
     const tier = cov?.tier ?? null;
@@ -381,26 +408,103 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
     };
   });
 
-  const drugDeductible = Math.max(0, args.drugDeductible ?? 0);
-  const tier3plus = infos.filter(
-    (i) =>
-      i.cacheOverride == null &&
-      i.tier != null &&
-      i.tier >= 3 &&
-      !i.isInsulin &&
-      i.covered,
-  );
-  const tier3plusRetailMonthly = tier3plus.reduce((s, i) => s + i.retailMonthly, 0);
-  let monthsToDeductible = 0;
-  let deductiblePaid = 0;
-  if (drugDeductible > 0 && tier3plusRetailMonthly > 0) {
-    monthsToDeductible = Math.min(12, Math.ceil(drugDeductible / tier3plusRetailMonthly));
-    deductiblePaid = Math.min(drugDeductible, tier3plusRetailMonthly * 12);
+  // ── 2. Build the PlanInput for partDTimeline ────────────────────
+  //
+  // tierCostShares needs one entry per tier that appears in the
+  // basket. We read from args.benefits directly (rather than reusing
+  // per-drug postDeductibleMonthly) because the timeline function
+  // applies coinsurance to per-drug retail internally — feeding it
+  // the pre-multiplied dollar amount would double-count. Copay tiers
+  // pass through verbatim.
+  const tierCostShares: Record<number, TierCostShares> = {};
+  const encounteredTiers = new Set<number>();
+  for (const info of infos) {
+    if (info.tier != null && info.cacheOverride == null && info.covered) {
+      encounteredTiers.add(info.tier);
+    }
   }
-  const remainingMonths = 12 - monthsToDeductible;
+  for (const tier of encounteredTiers) {
+    const tierBenefit = benefitByCategory(args.benefits, `rx_tier_${tier}`);
+    if (tierBenefit?.copay != null) {
+      tierCostShares[tier] = { initial: { type: 'copay', amount: tierBenefit.copay } };
+    } else if (tierBenefit?.coinsurance != null) {
+      tierCostShares[tier] = {
+        initial: { type: 'coinsurance', amount: tierBenefit.coinsurance / 100 },
+      };
+    } else {
+      // No filed cost share — fall back to CMS-typical monthly copay
+      // for the tier, matching the pre-timeline behavior. Insulin
+      // drugs at this tier still get the $35 cap floor via
+      // isInsulin, so this fallback is safe there too.
+      const typical = CMS_TYPICAL_MONTHLY_BY_TIER[tier];
+      if (typical != null) {
+        tierCostShares[tier] = { initial: { type: 'copay', amount: typical } };
+      }
+    }
+  }
+  const plan: PartDPlanInput = {
+    deductible: Math.max(0, args.drugDeductible ?? 0),
+    deductibleAppliesToTiers: [...DEFAULT_DEDUCTIBLE_TIERS],
+    tierCostShares,
+  };
 
-  return infos.map((info): DrugYearlyEstimate => {
+  // ── 3. Basket run + per-drug solo runs for allocation ───────────
+  //
+  // The timeline is basket-level; consumers of this function still
+  // need per-drug attribution (DrugCostCard renders per-row totals,
+  // Gate 2 counts covered drugs, etc.). Attribution strategy:
+  //   1. Compute basket month-12 cumulative (the authoritative total).
+  //   2. Compute each drug's "solo" cost as if it were alone in the
+  //      basket.
+  //   3. Allocate: yearly[i] = basketTotal × solo[i] / sum(solo).
+  // When drugs compete for the same deductible pot the solo sum
+  // exceeds the basket total; the proportional rescale hands each
+  // drug its share. When only one drug is timeline-eligible, solo
+  // total = basket total, allocation is a no-op.
+  const timelineDrugs: DrugFill[] = [];
+  const timelineDrugIndex = new Map<number, number>(); // infos index → timelineDrugs index
+  infos.forEach((info, i) => {
+    if (info.cacheOverride != null) return;
+    if (!info.covered) return;
+    if (info.tier == null) return;
+    timelineDrugIndex.set(i, timelineDrugs.length);
+    timelineDrugs.push({
+      rxcui: info.input.rxcui ?? '',
+      name: info.input.name,
+      tier: info.tier,
+      monthlyGrossCost: info.retailMonthly,
+      fillsPerYear: 12,
+      isInsulin: info.isInsulin,
+    });
+  });
+
+  let basketTotal = 0;
+  const soloYearlies: number[] = [];
+  if (timelineDrugs.length > 0) {
+    const basketRows = partDTimeline({
+      planYear: BUNDLE_PLAN_YEAR,
+      plan,
+      drugs: timelineDrugs,
+    });
+    basketTotal = basketRows[basketRows.length - 1].cumulativeMemberCost;
+    for (const drug of timelineDrugs) {
+      const soloRows = partDTimeline({
+        planYear: BUNDLE_PLAN_YEAR,
+        plan,
+        drugs: [drug],
+      });
+      soloYearlies.push(soloRows[soloRows.length - 1].cumulativeMemberCost);
+    }
+  }
+  const soloSum = soloYearlies.reduce((s, x) => s + x, 0);
+
+  // ── 4. Assemble the DrugYearlyEstimate[] in input order ─────────
+  return infos.map((info, i): DrugYearlyEstimate => {
     const isBrand = info.input.isBrand ?? false;
+
+    // Cache override wins over everything — the pm_drug_cost_cache
+    // row was computed against live plan cost sharing at import time
+    // and is the most accurate number we have.
     if (info.cacheOverride != null) {
       return {
         rxcui: info.input.rxcui,
@@ -412,6 +516,11 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
         isBrand,
       };
     }
+
+    // Uncovered drugs still get charged full retail (or the insulin
+    // cap, per IRA §11406 which applies regardless of plan coverage).
+    // The retail does NOT flow through partDTimeline — off-formulary
+    // spend doesn't accumulate toward the plan's deductible or TrOOP.
     if (!info.covered) {
       const yearly = info.isInsulin
         ? INSULIN_MONTHLY_CAP_2026 * 12
@@ -426,36 +535,17 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
         isBrand,
       };
     }
-    if (info.isInsulin) {
-      const yearly = Math.min(info.postDeductibleMonthly * 12, INSULIN_MONTHLY_CAP_2026 * 12);
-      return {
-        rxcui: info.input.rxcui,
-        name: info.input.name,
-        tier: info.tier,
-        yearlyCost: Math.max(0, Math.round(yearly)),
-        covered: true,
-        confirmedUncovered: false,
-        isBrand,
-      };
-    }
-    if (info.tier != null && info.tier <= 2) {
-      return {
-        rxcui: info.input.rxcui,
-        name: info.input.name,
-        tier: info.tier,
-        yearlyCost: Math.max(0, Math.round(info.postDeductibleMonthly * 12)),
-        covered: true,
-        confirmedUncovered: false,
-        isBrand,
-      };
-    }
-    let yearly: number;
-    if (tier3plusRetailMonthly > 0 && deductiblePaid > 0) {
-      const share = (info.retailMonthly / tier3plusRetailMonthly) * deductiblePaid;
-      const postDeductible = info.postDeductibleMonthly * remainingMonths;
-      yearly = share + postDeductible;
-    } else {
-      yearly = info.postDeductibleMonthly * 12;
+
+    // Timeline-eligible: allocate a share of the basket total.
+    const tIdx = timelineDrugIndex.get(i);
+    let yearly = 0;
+    if (tIdx != null) {
+      if (soloSum > 0) {
+        yearly = basketTotal * (soloYearlies[tIdx] / soloSum);
+      } else {
+        // Every drug is $0 — nothing to allocate.
+        yearly = 0;
+      }
     }
     return {
       rxcui: info.input.rxcui,

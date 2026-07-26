@@ -1,14 +1,18 @@
-// Reconciliation between api/library/partDTimeline (new, per-fill
-// straddle-aware) and src/lib/plan-brain-utils::estimateBundleYearlyCost
-// (incumbent, integer-month deductible approximation, no catastrophic
-// gating).
+// Reconciliation between api/library/partDTimeline and the incumbent
+// src/lib/plan-brain-utils::estimateBundleYearlyCost.
 //
-// The two are NOT expected to match everywhere — the timeline function
-// is documented as more accurate. This suite pins down exactly WHERE
-// they diverge and by how much, so any future edit to either that
-// changes the delta gets caught. The user-facing annual number in the
-// Compare screen still comes from the incumbent for now, so silent
-// numeric drift between them is a regression.
+// As of the "retire the incumbent" commit, estimateBundleYearlyCost's
+// body IS a partDTimeline call — the two functions must return the
+// same basket total (within $1 rounding drift from the incumbent
+// coercing per-drug yearlyCost to integer dollars, which loses
+// fractional cents when summed across drugs). Any delta >$1 on the
+// pinned scenarios means the wrapper is failing to translate a call
+// site's inputs — STOP and diagnose before shipping.
+//
+// The four scenario shapes below are preserved verbatim from when
+// the two functions DID diverge (integer-month deductible
+// approximation + missing TrOOP cap). If a future edit accidentally
+// re-introduces either, the delta shows up here first.
 //
 //   tsx --test scripts/tests/partDTimeline-incumbent.test.ts
 
@@ -170,7 +174,7 @@ test('single tier-3 drug @ notional $200/mo, ded $600 — clears in 3 months, no
 
 // ─── C. Mid-month straddle — divergence expected and REPORTED ────────
 
-test('mid-month straddle: incumbent under-charges by ~1 initial-copay share', () => {
+test('mid-month straddle: incumbent now delegates → convergence within $1 rounding drift', () => {
   const s: Scenario = {
     drugDeductible: 615,
     deductibleAppliesToTiers: [3, 4, 5],
@@ -180,38 +184,37 @@ test('mid-month straddle: incumbent under-charges by ~1 initial-copay share', ()
   };
   const incumbent = runIncumbent(s);
   const { total: timeline, month12Cumulative } = runTimeline(s);
-  // Incumbent: monthsToDeductible=ceil(615/200)=4, deductiblePaid=615,
-  //            remainingMonths=8, yearly = 615 + 47*8 = 991
-  // Timeline:  3 * 200 (Jan-Mar full ded) + (15 + 47*185/200) April
-  //            straddle + 47*8 May-Dec = 600 + 58.475 + 376 = 1034.475
+  // Both compute the same underlying $1034.475: 3 * 200 (Jan-Mar full
+  // ded) + (15 + 47*185/200) April straddle + 47*8 May-Dec = 600 +
+  // 58.475 + 376. Incumbent rounds per-drug yearlyCost to integer
+  // dollars; timeline sums per-month 2dp memberCost. Drift up to $1
+  // from those two rounding boundaries is expected.
   const delta = timeline - incumbent;
   console.log(
     `  [straddle]  incumbent=$${incumbent.toFixed(2)} ` +
-    `timeline=$${timeline.toFixed(2)} delta=+$${delta.toFixed(2)} ` +
-    `(timeline higher — captures initial-phase piece of the crossing fill)`,
+    `timeline=$${timeline.toFixed(2)} delta=+$${delta.toFixed(2)}`,
   );
   assert.ok(
     Math.abs(month12Cumulative - timeline) < 0.02,
     `cumulative vs sum drift: ${month12Cumulative} vs ${timeline}`,
   );
-  // Pin the delta so a future edit that changes either function is noticed.
-  //   43.475 = 47 * (185/200) — the initial-copay share applied to the
-  //   post-deductible portion of the April fill.
   assert.ok(
-    Math.abs(delta - 43.475) < 0.01,
-    `expected straddle delta ≈ +$43.475 (incumbent under by 1 proportional copay), got +$${delta.toFixed(2)}`,
+    Math.abs(delta) < 1,
+    `expected convergence within $1 (incumbent now delegates to timeline), got |$${delta.toFixed(2)}|`,
   );
 });
 
 // ─── D. Catastrophic-in-Q1 — divergence expected and REPORTED ────────
 
-test('specialty tier-3 hits catastrophic — incumbent keeps charging, timeline caps at TrOOP', () => {
+test('specialty tier-3 hits catastrophic — incumbent respects TrOOP cap via timeline', () => {
   const s: Scenario = {
     drugDeductible: 615,
     deductibleAppliesToTiers: [3, 4, 5],
     drugs: [
-      // Tier 3 (so estimateBundleYearlyCost includes it in tier3plus
-      // deductible burn), high monthly retail so TrOOP crosses fast.
+      // Tier 3 with high monthly retail so TrOOP crosses fast. Under
+      // the pre-retirement incumbent this basket returned ~$4,615/yr
+      // (no cap). Now the incumbent delegates to partDTimeline, both
+      // clamp at $2,100.
       { rxcui: 'x1', name: 'CatDrug', tier: 3, monthlyRetail: 900, monthlyCopay: 500 },
     ],
   };
@@ -220,52 +223,54 @@ test('specialty tier-3 hits catastrophic — incumbent keeps charging, timeline 
   const delta = incumbent - timeline;
   console.log(
     `  [catastrophic]  incumbent=$${incumbent.toFixed(2)} ` +
-    `timeline=$${timeline.toFixed(2)} delta=-$${delta.toFixed(2)} ` +
-    `(timeline lower — capped at TrOOP $2,100 per IRA §11201)`,
+    `timeline=$${timeline.toFixed(2)} delta=$${delta.toFixed(2)}`,
   );
   assert.ok(
     Math.abs(month12Cumulative - timeline) < 0.02,
     `cumulative vs sum drift: ${month12Cumulative} vs ${timeline}`,
   );
-  // Timeline must NEVER exceed the RxMOOP cap of $2,100 for a member's
-  // out-of-pocket in a given plan year.
+  // Both sides must respect the RxMOOP cap of $2,100 (IRA §11201).
   assert.ok(
     timeline <= 2100 + 0.01,
     `timeline ${timeline} exceeds TrOOP cap $2,100`,
   );
-  // Incumbent is expected to blow through the cap since it doesn't
-  // model catastrophic — pin that it's meaningfully higher.
   assert.ok(
-    incumbent > timeline,
-    `incumbent ${incumbent} should exceed timeline ${timeline} in catastrophic case`,
+    incumbent <= 2100 + 0.01,
+    `incumbent ${incumbent} exceeds TrOOP cap $2,100 — retirement didn't take effect for this call site?`,
+  );
+  assert.ok(
+    Math.abs(delta) < 1,
+    `expected convergence within $1 (incumbent now delegates), got |$${delta.toFixed(2)}|`,
   );
 });
 
-// ─── Summary of the incumbent's known gaps ──────────────────────────
+// ─── Summary of the closed gaps ─────────────────────────────────────
 
-test('SUMMARY — the two divergences the incumbent has vs the timeline', () => {
+test('SUMMARY — historical divergences now closed by the retirement', () => {
   // No assertion — this test exists to keep the summary visible in the
   // test output. Console.log lines are consumed by `tsx --test` and
   // printed alongside pass/fail markers.
   console.log(`
-  INCUMBENT (estimateBundleYearlyCost) known gaps vs TIMELINE (partDTimeline):
+  HISTORY — before the retirement commit, estimateBundleYearlyCost had
+  two known gaps vs partDTimeline:
 
     1. Integer-month deductible approximation:
-       Bundles the whole crossing fill into deductible, then switches
-       to copay for the remaining months. Misses the initial-phase
-       copay piece of the crossing fill → under-charges by up to 1×
+       Bundled the whole crossing fill into deductible, then switched
+       to copay for the remaining months. Missed the initial-phase
+       copay piece of the crossing fill → under-charged by up to 1×
        proportional copay per drug with a straddle (~$43 for a $200/
        mo tier-3 drug with $47 copay).
 
     2. No catastrophic gating:
-       Keeps applying deductible + copay for the full year regardless
-       of TrOOP. Over-charges for high-cost specialty baskets once
-       TrOOP crosses $2,100 (IRA §11201 caps member cost at $0
-       thereafter).
+       Kept applying deductible + copay for the full year regardless
+       of TrOOP. Over-charged for high-cost specialty baskets once
+       TrOOP crossed $2,100 (IRA §11201 caps member cost at $0
+       thereafter — was over by $2,500+ on a $900/mo tier-3 basket).
 
-  Neither divergence is a bug in the timeline. The user-facing Compare
-  screen still uses the incumbent for the annual number; when it's
-  cut over to the timeline library (a separate follow-up), both
-  numbers converge on the more-accurate timeline output.
+  Both are closed as of the retirement commit — estimateBundleYearlyCost
+  now delegates its basket math to partDTimeline and returns the
+  month-12 cumulative. Per-drug attribution is proportional-solo.
+  Assertions above tolerate up to $1 of drift from integer rounding
+  in the wrapper.
   `);
 });
