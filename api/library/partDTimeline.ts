@@ -5,17 +5,15 @@
 // Zero I/O. No DB, no network, no side-effects — call it from an agent
 // screen, a consumer screen, a batch job, a test.
 //
-// Reconciliation note: this is more accurate than the existing bundle-
-// level estimator at src/lib/plan-brain-utils.ts::estimateBundleYearlyCost.
-// The bundle estimator uses an integer-month deductible approximation
-// (whole months in deductible, then whole months in initial) and does
-// not gate against the RxMOOP catastrophic threshold. This function
-// splits the crossing fill across phases (deductible remainder at
-// retail + rest at the initial-phase rate) and honors the $2,100 TrOOP
-// cap. For baskets that never straddle and never hit catastrophic, the
-// two totals agree within ~$1; when a fill straddles a phase boundary
-// this function returns a slightly higher (correct) figure by the size
-// of the initial-phase piece of that fill.
+// ⚠ CROSS-REPO SYNC — this file exists at two locations:
+//   robert9907/planmatch:  api/library/partDTimeline.ts     (agent)
+//   robert9907/plan-match: packages/shared/src/partDTimeline.ts (consumer)
+// Any change must be mirrored to the other until we publish this
+// module as a standalone npm package that both repos depend on. Only
+// the import path for planYearParams differs (agent uses `.js`
+// suffix; consumer omits it to match its tsconfig). CI job
+// partd-drift.yml runs scripts/check-partd-drift.mjs which enforces
+// byte-identity after normalizing that suffix.
 
 import { getPlanYearParams, type PlanYearParams } from './planYearParams.js';
 

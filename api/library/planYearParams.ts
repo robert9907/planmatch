@@ -10,8 +10,14 @@
 //   • Insulin monthly cap   $35     (IRA §11406)
 //   • Vaccine member cost   $0      (IRA §11401 — ACIP-recommended)
 //
-// The 2025 baseline is included too so a caller can back-test agent-v3
+// The 2025 baseline is included too so a caller can back-test
 // against last year's benefit filings.
+//
+// ⚠ CROSS-REPO SYNC — this file exists at two locations:
+//   robert9907/planmatch:  api/library/planYearParams.ts       (agent)
+//   robert9907/plan-match: packages/shared/src/planYearParams.ts (consumer)
+// Any change must be mirrored to the other. CI job partd-drift.yml
+// runs scripts/check-partd-drift.mjs which enforces byte-identity.
 
 export interface PlanYearParams {
   /** Maximum Part D deductible the plan may charge. Plans may file
