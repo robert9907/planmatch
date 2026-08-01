@@ -94,7 +94,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       plan_name: body.currentPlanName?.trim() || null,
       plan_id: body.currentPlanId?.trim() || null,
       year: 2026,
-      source: 'plan-match-agent',
       // Triggers AgentBase's "🚨 New Leads" popup (filter in
       // agentbase-crm/components/AgentBaseCRM.jsx:2291 is
       //   clients.status === "New Lead" && !c.newLeadAlertDismissedAt
