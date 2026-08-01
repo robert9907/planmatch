@@ -25,8 +25,8 @@ export interface UseDrugSearch {
   error: string | null;
 }
 
-const MIN_CHARS = 2;
-const DEBOUNCE_MS = 180;
+const MIN_CHARS = 3;
+const DEBOUNCE_MS = 250;
 const FETCH_LIMIT = 25;
 const DISPLAY_LIMIT = 6;
 
