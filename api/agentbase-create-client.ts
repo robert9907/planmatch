@@ -16,7 +16,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
-import { requireBrokerAuth } from './_lib/require-broker-auth.js';
+import { requireSession } from './_lib/require-session.js';
 
 interface CreateBody {
   firstName: string;
@@ -39,7 +39,7 @@ function digitsOnly(phone: string | undefined): string {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
-  if (requireBrokerAuth(req, res)) return;
+  if (await requireSession(req, res)) return;
   if (req.method !== 'POST') return badRequest(res, 'POST required');
 
   const body = (req.body ?? {}) as Partial<CreateBody>;

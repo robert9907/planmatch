@@ -18,11 +18,11 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, serverError } from './_lib/http.js';
-import { requireBrokerAuth } from './_lib/require-broker-auth.js';
+import { requireSession } from './_lib/require-session.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
-  if (requireBrokerAuth(req, res)) return;
+  if (await requireSession(req, res)) return;
   if (req.method !== 'POST') return badRequest(res, 'POST required');
 
   try {
