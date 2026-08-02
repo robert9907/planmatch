@@ -33,7 +33,7 @@ import { buildComplianceSnapshot } from './EnrollScreen';
 
 // Mirrors EnrollScreen.tsx:24 — kept as a duplicated constant rather
 // than a shared import to keep this screen's gate self-contained.
-const AGENTBASE_CRM_BASE = 'https://agentbase-crm.vercel.app';
+const AGENTBASE_CRM_BASE = 'https://crm.generationhealth.me';
 
 function readClientIdFromUrl(): string | null {
   if (typeof window === 'undefined') return null;

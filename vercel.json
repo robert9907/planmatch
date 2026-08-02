@@ -9,6 +9,12 @@
     }
   },
   "redirects": [
+    {
+      "source": "/(.*)",
+      "has": [{ "type": "host", "value": "planmatch.vercel.app" }],
+      "destination": "https://agent.generationhealth.me/$1",
+      "statusCode": 308
+    },
     { "source": "/test", "destination": "/compare", "statusCode": 301 },
     { "source": "/", "destination": "/agent-v3", "statusCode": 302 }
   ],

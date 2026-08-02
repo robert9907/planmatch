@@ -35,7 +35,7 @@ import { requireBrokerAuth } from './_lib/require-broker-auth.js';
 
 // AgentBase CRM URL pattern. /clients/{id} matches the existing
 // AgentBase routing convention; if it changes, override via env.
-const AGENTBASE_CRM_BASE = process.env.AGENTBASE_CRM_URL || 'https://agentbase-crm.vercel.app';
+const AGENTBASE_CRM_BASE = process.env.AGENTBASE_CRM_URL || 'https://crm.generationhealth.me';
 
 // ─── Request shape ────────────────────────────────────────────────
 

@@ -21,7 +21,7 @@ import { SECTIONS, DISCLAIMERS } from '@/lib/compliance';
 // <base>/clients/<id>; if the AgentBase clientId isn't pinned in the URL
 // (broker landed via seed / hand-key path), we fall back to the CRM
 // home so the broker still has a one-click jump.
-const AGENTBASE_CRM_BASE = 'https://agentbase-crm.vercel.app';
+const AGENTBASE_CRM_BASE = 'https://crm.generationhealth.me';
 
 function readClientIdFromUrl(): string | null {
   if (typeof window === 'undefined') return null;

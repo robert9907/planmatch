@@ -62,7 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? `https://${req.headers['x-forwarded-host']}`
         : typeof req.headers.host === 'string'
           ? `https://${req.headers.host}`
-          : 'https://planmatch.vercel.app';
+          : 'https://agent.generationhealth.me';
     const link = `${origin}/watch/${roomId}`;
     const greeting = clientFirstName ? `Hi ${clientFirstName}! ` : 'Hi! ';
     const smsBody =

@@ -105,7 +105,7 @@ export function AgentBar({
   shareLink,
   onCycleShare,
   complianceProgress,
-  agentBaseHref = 'https://agentbase-crm.vercel.app/',
+  agentBaseHref = 'https://crm.generationhealth.me/',
 }: Props) {
   const [linkCopied, setLinkCopied] = useState(false);
 
