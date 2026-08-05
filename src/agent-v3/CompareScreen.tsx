@@ -20,6 +20,7 @@ import {
   useState,
   type CSSProperties,
   type DragEvent,
+  type ReactElement,
 } from 'react';
 import type { CostShare, Plan } from '@/types/plans';
 import { useSession } from '@/hooks/useSession';
@@ -182,12 +183,51 @@ export interface ExplanationsForPlan {
   gate4: string;
 }
 
+// H2H sections — used to bucket the 50+ rows into scannable groups.
+// Only consumed by H2HView; Grid mode reads metrics flat.
+type MetricGroup =
+  | 'overview'
+  | 'primary_specialty'
+  | 'hospital_facility'
+  | 'diagnostics_therapy'
+  | 'ambulance_other'
+  | 'drug_coverage'
+  | 'rx_tiers'
+  | 'extra_benefits'
+  | 'provider_network';
+
+const METRIC_GROUP_ORDER: MetricGroup[] = [
+  'overview',
+  'primary_specialty',
+  'hospital_facility',
+  'diagnostics_therapy',
+  'ambulance_other',
+  'drug_coverage',
+  'rx_tiers',
+  'extra_benefits',
+  'provider_network',
+];
+
+const METRIC_GROUP_LABEL: Record<MetricGroup, string> = {
+  overview: 'Overview',
+  primary_specialty: 'Primary & Specialty Care',
+  hospital_facility: 'Hospital & Facility',
+  diagnostics_therapy: 'Diagnostics & Therapy',
+  ambulance_other: 'Ambulance & Other',
+  drug_coverage: 'Drug Coverage',
+  rx_tiers: 'Rx Tiers',
+  extra_benefits: 'Extra Benefits',
+  provider_network: 'Provider Network',
+};
+
 interface Metric {
   key: string;
   label: string;
   format: (p: Plan) => string;
   numeric: (p: Plan) => number | null;
   higherIsBetter: boolean;
+  /** H2H section this row belongs to. Grid mode ignores this. */
+  group: MetricGroup;
 }
 
 interface ProviderRow {
@@ -231,7 +271,12 @@ function providersInNetwork(plan: Plan, providers: ProviderRow[]): number {
 // instead of just "$0". CMS files the minimum in the structured copay
 // column with the high end only in the description text; flattening
 // to "$0" misleads the broker about real exposure.
-function csMetric(key: string, label: string, get: (p: Plan) => CostShare): Metric {
+function csMetric(
+  key: string,
+  label: string,
+  get: (p: Plan) => CostShare,
+  group: MetricGroup,
+): Metric {
   return {
     key,
     label,
@@ -240,6 +285,7 @@ function csMetric(key: string, label: string, get: (p: Plan) => CostShare): Metr
     ),
     numeric: (p) => costShareNumeric(get(p)),
     higherIsBetter: false,
+    group,
   };
 }
 
@@ -250,7 +296,12 @@ function csMetric(key: string, label: string, get: (p: Plan) => CostShare): Metr
 // Cells using this metric must allow multi-line text (whiteSpace:
 // pre-line); other csMetric rows return single-line strings and are
 // unaffected.
-function ladderMetric(key: string, label: string, get: (p: Plan) => CostShare): Metric {
+function ladderMetric(
+  key: string,
+  label: string,
+  get: (p: Plan) => CostShare,
+  group: MetricGroup,
+): Metric {
   return {
     key,
     label,
@@ -264,6 +315,7 @@ function ladderMetric(key: string, label: string, get: (p: Plan) => CostShare): 
       return firstTierCopay(cs.description, cs.copay);
     },
     higherIsBetter: false,
+    group,
   };
 }
 
@@ -292,6 +344,7 @@ function buildMetrics(args: {
       format: (p) => `${formatPremium(p)}/mo`,
       numeric: (p) => p.premium,
       higherIsBetter: false,
+      group: 'overview',
     },
     {
       key: 'moop',
@@ -299,6 +352,7 @@ function buildMetrics(args: {
       format: (p) => fmt(p.moop_in_network),
       numeric: (p) => p.moop_in_network,
       higherIsBetter: false,
+      group: 'overview',
     },
     {
       key: 'drugs',
@@ -313,6 +367,7 @@ function buildMetrics(args: {
       },
       numeric: drug,
       higherIsBetter: false,
+      group: 'drug_coverage',
     },
     {
       key: 'meds',
@@ -326,6 +381,7 @@ function buildMetrics(args: {
       },
       numeric: (p) => (rxcuis.length === 0 ? null : (drugsCovered(p) ?? null)),
       higherIsBetter: true,
+      group: 'drug_coverage',
     },
     {
       key: 'providers',
@@ -337,6 +393,7 @@ function buildMetrics(args: {
       numeric: (p) =>
         providers.length === 0 ? null : providersInNetwork(p, providers),
       higherIsBetter: true,
+      group: 'provider_network',
     },
     {
       key: 'dental',
@@ -344,6 +401,7 @@ function buildMetrics(args: {
       format: (p) => planDisplay(p).dentalMax,
       numeric: (p) => p.benefits.dental.annual_max,
       higherIsBetter: true,
+      group: 'extra_benefits',
     },
     {
       key: 'vision',
@@ -351,6 +409,7 @@ function buildMetrics(args: {
       format: (p) => planDisplay(p).visionAllowance,
       numeric: (p) => p.benefits.vision.eyewear_allowance_year,
       higherIsBetter: true,
+      group: 'extra_benefits',
     },
     {
       key: 'otc',
@@ -359,6 +418,7 @@ function buildMetrics(args: {
         formatOtc(p.benefits.otc.allowance_per_quarter, p.benefits.otc.description),
       numeric: (p) => p.benefits.otc.allowance_per_quarter,
       higherIsBetter: true,
+      group: 'extra_benefits',
     },
     {
       key: 'fitness',
@@ -366,6 +426,7 @@ function buildMetrics(args: {
       format: (p) => planDisplay(p).fitness,
       numeric: (p) => (p.benefits.fitness.enabled ? 1 : 0),
       higherIsBetter: true,
+      group: 'extra_benefits',
     },
     {
       key: 'giveback',
@@ -374,6 +435,7 @@ function buildMetrics(args: {
         p.part_b_giveback > 0 ? `$${p.part_b_giveback}/mo` : '—',
       numeric: (p) => p.part_b_giveback,
       higherIsBetter: true,
+      group: 'overview',
     },
     {
       key: 'stars',
@@ -384,6 +446,7 @@ function buildMetrics(args: {
       format: (p) => (p.star_rating > 0 ? `${p.star_rating} ★` : 'Not yet rated'),
       numeric: (p) => p.star_rating,
       higherIsBetter: true,
+      group: 'overview',
     },
     // ── Medical copays + Part D deductible ───────────────────────
     {
@@ -392,6 +455,7 @@ function buildMetrics(args: {
       format: (p) => safeCostShare(formatPcp(p)),
       numeric: (p) => costShareNumeric(p.benefits.medical.primary_care),
       higherIsBetter: false,
+      group: 'primary_specialty',
     },
     {
       key: 'specialist',
@@ -399,6 +463,7 @@ function buildMetrics(args: {
       format: (p) => safeCostShare(formatSpecialist(p)),
       numeric: (p) => costShareNumeric(p.benefits.medical.specialist),
       higherIsBetter: false,
+      group: 'primary_specialty',
     },
     {
       key: 'partd_ded',
@@ -407,82 +472,92 @@ function buildMetrics(args: {
         p.drug_deductible == null ? '—' : `$${p.drug_deductible}`,
       numeric: (p) => p.drug_deductible,
       higherIsBetter: false,
+      group: 'drug_coverage',
     },
-    csMetric('urgent_care', 'Urgent care', (p) => p.benefits.medical.urgent_care),
-    csMetric('emergency', 'Emergency', (p) => p.benefits.medical.emergency),
-    ladderMetric('inpatient', 'Inpatient hospital', (p) => p.benefits.medical.inpatient),
+    csMetric('urgent_care', 'Urgent care', (p) => p.benefits.medical.urgent_care, 'primary_specialty'),
+    csMetric('emergency', 'Emergency', (p) => p.benefits.medical.emergency, 'primary_specialty'),
+    ladderMetric('inpatient', 'Inpatient hospital', (p) => p.benefits.medical.inpatient, 'hospital_facility'),
     ladderMetric(
       'mh_inpatient',
       'Inpatient mental',
       (p) => p.benefits.medical.mental_health_inpatient,
+      'hospital_facility',
     ),
-    ladderMetric('snf', 'Skilled nursing', (p) => p.benefits.medical.snf),
+    ladderMetric('snf', 'Skilled nursing', (p) => p.benefits.medical.snf, 'hospital_facility'),
     csMetric(
       'out_surg_hosp',
       'Outpatient surg. (hosp)',
       (p) => p.benefits.medical.outpatient_surgery_hospital,
+      'hospital_facility',
     ),
     csMetric(
       'out_surg_asc',
       'Outpatient surg. (ASC)',
       (p) => p.benefits.medical.outpatient_surgery_asc,
+      'hospital_facility',
     ),
     csMetric(
       'out_obs',
       'Outpatient observation',
       (p) => p.benefits.medical.outpatient_observation,
+      'hospital_facility',
     ),
-    csMetric('lab', 'Lab services', (p) => p.benefits.medical.lab_services),
+    csMetric('lab', 'Lab services', (p) => p.benefits.medical.lab_services, 'diagnostics_therapy'),
     csMetric(
       'diag_proc',
       'Diagnostic procedures',
       (p) => p.benefits.medical.diagnostic_procedures,
+      'diagnostics_therapy',
     ),
-    csMetric('xray', 'X-ray', (p) => p.benefits.medical.xray),
-    csMetric('imaging', 'Advanced imaging', (p) => p.benefits.medical.advanced_imaging),
+    csMetric('xray', 'X-ray', (p) => p.benefits.medical.xray, 'diagnostics_therapy'),
+    csMetric('imaging', 'Advanced imaging', (p) => p.benefits.medical.advanced_imaging, 'diagnostics_therapy'),
     csMetric(
       'mh_indiv',
       'Mental health (indiv.)',
       (p) => p.benefits.medical.mental_health_individual,
+      'diagnostics_therapy',
     ),
     csMetric(
       'mh_group',
       'Mental health (group)',
       (p) => p.benefits.medical.mental_health_group,
+      'diagnostics_therapy',
     ),
     csMetric(
       'pst',
       'Physical / speech therapy',
       (p) => p.benefits.medical.physical_speech_therapy,
+      'diagnostics_therapy',
     ),
-    csMetric('ot', 'Occupational therapy', (p) => p.benefits.medical.occupational_therapy),
-    csMetric('telehealth', 'Telehealth', (p) => p.benefits.medical.telehealth),
+    csMetric('ot', 'Occupational therapy', (p) => p.benefits.medical.occupational_therapy, 'diagnostics_therapy'),
+    csMetric('telehealth', 'Telehealth', (p) => p.benefits.medical.telehealth, 'diagnostics_therapy'),
     // ── Transport ────────────────────────────────────────────────
-    csMetric('ambulance', 'Ambulance (ground)', (p) => p.benefits.medical.ambulance),
-    csMetric('air_amb', 'Air ambulance', (p) => p.benefits.medical.air_transportation),
+    csMetric('ambulance', 'Ambulance (ground)', (p) => p.benefits.medical.ambulance, 'ambulance_other'),
+    csMetric('air_amb', 'Air ambulance', (p) => p.benefits.medical.air_transportation, 'ambulance_other'),
     // ── Specialty visit copays ───────────────────────────────────
-    csMetric('chiro', 'Chiropractic', (p) => p.benefits.medical.chiropractic),
-    csMetric('acu', 'Acupuncture', (p) => p.benefits.medical.acupuncture),
-    csMetric('pod', 'Podiatry', (p) => p.benefits.medical.podiatry),
-    csMetric('sa', 'Substance abuse', (p) => p.benefits.medical.substance_abuse),
+    csMetric('chiro', 'Chiropractic', (p) => p.benefits.medical.chiropractic, 'ambulance_other'),
+    csMetric('acu', 'Acupuncture', (p) => p.benefits.medical.acupuncture, 'ambulance_other'),
+    csMetric('pod', 'Podiatry', (p) => p.benefits.medical.podiatry, 'ambulance_other'),
+    csMetric('sa', 'Substance abuse', (p) => p.benefits.medical.substance_abuse, 'ambulance_other'),
     // ── Equipment / Part B drugs / diabetic ──────────────────────
-    csMetric('dme', 'DME / prosthetics', (p) => p.benefits.medical.dme_prosthetics),
-    csMetric('partb_rx', 'Part B drugs', (p) => p.benefits.medical.partb_drugs),
+    csMetric('dme', 'DME / prosthetics', (p) => p.benefits.medical.dme_prosthetics, 'ambulance_other'),
+    csMetric('partb_rx', 'Part B drugs', (p) => p.benefits.medical.partb_drugs, 'ambulance_other'),
     csMetric(
       'diab_sup',
       'Diabetic supplies',
       (p) => p.benefits.medical.diabetic_supplies,
+      'ambulance_other',
     ),
-    csMetric('insulin', 'Part B insulin', (p) => p.benefits.medical.insulin),
+    csMetric('insulin', 'Part B insulin', (p) => p.benefits.medical.insulin, 'ambulance_other'),
     // ── Long-term / home ─────────────────────────────────────────
-    csMetric('hh', 'Home health', (p) => p.benefits.medical.home_health),
-    csMetric('dialysis', 'Renal dialysis', (p) => p.benefits.medical.renal_dialysis),
+    csMetric('hh', 'Home health', (p) => p.benefits.medical.home_health, 'ambulance_other'),
+    csMetric('dialysis', 'Renal dialysis', (p) => p.benefits.medical.renal_dialysis, 'ambulance_other'),
     // ── Rx tiers ─────────────────────────────────────────────────
-    csMetric('rx_t1', 'Rx Tier 1', (p) => p.benefits.rx_tiers.tier_1),
-    csMetric('rx_t2', 'Rx Tier 2', (p) => p.benefits.rx_tiers.tier_2),
-    csMetric('rx_t3', 'Rx Tier 3', (p) => p.benefits.rx_tiers.tier_3),
-    csMetric('rx_t4', 'Rx Tier 4', (p) => p.benefits.rx_tiers.tier_4),
-    csMetric('rx_t5', 'Rx Tier 5', (p) => p.benefits.rx_tiers.tier_5),
+    csMetric('rx_t1', 'Rx Tier 1', (p) => p.benefits.rx_tiers.tier_1, 'rx_tiers'),
+    csMetric('rx_t2', 'Rx Tier 2', (p) => p.benefits.rx_tiers.tier_2, 'rx_tiers'),
+    csMetric('rx_t3', 'Rx Tier 3', (p) => p.benefits.rx_tiers.tier_3, 'rx_tiers'),
+    csMetric('rx_t4', 'Rx Tier 4', (p) => p.benefits.rx_tiers.tier_4, 'rx_tiers'),
+    csMetric('rx_t5', 'Rx Tier 5', (p) => p.benefits.rx_tiers.tier_5, 'rx_tiers'),
     // Tier 6 is carrier-specific (Wellcare "Select Care" $0 generics,
     // CSNP buckets). Optional on RxTierCopays; skip the row when the
     // plan didn't file it.
@@ -490,6 +565,7 @@ function buildMetrics(args: {
       'rx_t6',
       'Rx Tier 6',
       (p) => p.benefits.rx_tiers.tier_6 ?? { copay: null, coinsurance: null, description: null },
+      'rx_tiers',
     ),
     // ── Supplemental (string output, no winner highlighting) ─────
     {
@@ -498,6 +574,7 @@ function buildMetrics(args: {
       format: (p) => planDisplay(p).transport,
       numeric: () => null,
       higherIsBetter: true,
+      group: 'extra_benefits',
     },
     {
       key: 'food',
@@ -505,6 +582,7 @@ function buildMetrics(args: {
       format: (p) => planDisplay(p).meals,
       numeric: () => null,
       higherIsBetter: true,
+      group: 'extra_benefits',
     },
     {
       key: 'hearing',
@@ -512,6 +590,7 @@ function buildMetrics(args: {
       format: (p) => planDisplay(p).hearing,
       numeric: () => null,
       higherIsBetter: true,
+      group: 'extra_benefits',
     },
   ];
 }
@@ -1832,6 +1911,9 @@ function BenchCard({
           display: 'flex',
           flexDirection: 'column',
           gap: 4,
+          // Stable header so bench cards line up on the metric grid
+          // regardless of plan name length + variable badge presence.
+          minHeight: 140,
         }}
       >
         <div style={{ display: 'flex', gap: 4, alignSelf: 'flex-start', flexWrap: 'wrap' }}>
@@ -1866,6 +1948,10 @@ function BenchCard({
                 padding: '2px 6px',
                 borderRadius: 3,
                 textTransform: 'uppercase',
+                // Fixed pill width so 'Outside Top 4' and 'Missing selected
+                // extra' don't render at different widths across the row.
+                minWidth: 96,
+                textAlign: 'center',
               }}
               title={
                 elimSurvived
@@ -1896,10 +1982,13 @@ function BenchCard({
             fontWeight: 700,
             color: 'white',
             lineHeight: 1.2,
-            whiteSpace: 'nowrap',
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
             overflow: 'hidden',
-            textOverflow: 'ellipsis',
+            wordBreak: 'break-word',
           }}
+          title={plan.plan_name ?? ''}
         >
           {plan.plan_name}
         </div>
@@ -2653,6 +2742,12 @@ function SlotCell({
           justifyContent: 'space-between',
           alignItems: 'flex-start',
           gap: 8,
+          // Stable header height so the four slot cards in the 4-Up grid
+          // align on the metric row below regardless of plan name length,
+          // DSNP badge presence, or dual-eligible callout. Empirically
+          // covers ribbon + carrier + up-to-2-line plan name + short id
+          // + 2 badge rows + SBF link.
+          minHeight: 168,
         }}
       >
         <div style={{ minWidth: 0, flex: 1 }}>
@@ -2694,7 +2789,12 @@ function SlotCell({
               wordBreak: 'break-word',
               lineHeight: 1.2,
               marginTop: 2,
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
             }}
+            title={plan.plan_name ?? ''}
           >
             {plan.plan_name}
           </div>
@@ -3494,87 +3594,142 @@ function H2HView({
           </div>
         </div>
 
-        {metrics.map((m, i) => {
-          const dir = deltaVs(m, challenger, baseline);
-          const deltaLabel = deltaText(m, challenger, baseline);
-          const arrow = dir === 'better' ? '▲' : dir === 'worse' ? '▼' : null;
-          const winBg =
-            dir === 'better'
-              ? 'rgba(34,197,94,0.08)'
-              : dir === 'worse'
-                ? 'rgba(239,68,68,0.06)'
-                : 'transparent';
-          return (
-            <div
-              key={m.key}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr 110px 1fr',
-                background: i % 2 === 0 ? 'white' : '#fcfcfd',
-                borderTop: `1px solid ${BORDER}`,
-              }}
-            >
+        {(() => {
+          // Bucket metrics by their group so a single header row precedes
+          // each section. Group order is fixed by METRIC_GROUP_ORDER;
+          // within a group, metric order is preserved from buildMetrics().
+          const byGroup = new Map<MetricGroup, Metric[]>();
+          for (const m of metrics) {
+            const arr = byGroup.get(m.group) ?? [];
+            arr.push(m);
+            byGroup.set(m.group, arr);
+          }
+          let zebra = 0;
+          const chunks: ReactElement[] = [];
+          for (const g of METRIC_GROUP_ORDER) {
+            const groupMetrics = byGroup.get(g);
+            if (!groupMetrics || groupMetrics.length === 0) continue;
+            chunks.push(
               <div
+                key={`group-${g}`}
                 style={{
-                  padding: '12px 18px',
-                  textAlign: 'right',
-                  fontFamily: FONT_NUM,
-                  fontSize: 14,
-                  fontWeight: 600,
-                  color: TEXT,
-                  whiteSpace: 'pre-line',
-                }}
-              >
-                {m.format(baseline)}
-              </div>
-              <div
-                style={{
-                  padding: '12px 8px',
-                  textAlign: 'center',
-                  background: '#fafafa',
+                  padding: '10px 18px 6px',
+                  background: '#f1f5f9',
+                  borderTop: `1px solid ${BORDER}`,
                   fontFamily: FONT_LABEL,
                   fontSize: 10,
-                  fontWeight: 700,
-                  color: MUTED,
+                  fontWeight: 800,
+                  color: NAVY,
                   textTransform: 'uppercase',
-                  letterSpacing: 0.6,
-                  borderLeft: `1px solid ${BORDER}`,
-                  borderRight: `1px solid ${BORDER}`,
+                  letterSpacing: 0.8,
                 }}
               >
-                {m.label}
-              </div>
-              <div
-                style={{
-                  padding: '12px 18px',
-                  textAlign: 'left',
-                  fontFamily: FONT_NUM,
-                  fontSize: 14,
-                  fontWeight: 600,
-                  color: TEXT,
-                  background: winBg,
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 8,
-                }}
-              >
-                <span style={{ whiteSpace: 'pre-line' }}>{m.format(challenger)}</span>
-                {arrow && deltaLabel && (
-                  <span
+                {METRIC_GROUP_LABEL[g]}
+              </div>,
+            );
+            for (const m of groupMetrics) {
+              const dir = deltaVs(m, challenger, baseline);
+              const deltaLabel = deltaText(m, challenger, baseline);
+              const arrow = dir === 'better' ? '▲' : dir === 'worse' ? '▼' : null;
+              const winBg =
+                dir === 'better'
+                  ? 'rgba(34,197,94,0.08)'
+                  : dir === 'worse'
+                    ? 'rgba(239,68,68,0.06)'
+                    : 'transparent';
+              const rowIdx = zebra++;
+              chunks.push(
+                <div
+                  key={m.key}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 110px 1fr',
+                    background: rowIdx % 2 === 0 ? 'white' : '#fcfcfd',
+                    borderTop: `1px solid ${BORDER}`,
+                  }}
+                >
+                  <div
                     style={{
+                      padding: '12px 18px',
+                      textAlign: 'right',
                       fontFamily: FONT_NUM,
-                      fontSize: 11,
-                      fontWeight: 700,
-                      color: dir === 'better' ? GREEN : CORAL,
+                      fontSize: 14,
+                      fontWeight: 600,
+                      color: TEXT,
+                      whiteSpace: 'pre-line',
                     }}
                   >
-                    {arrow} {deltaLabel}
-                  </span>
-                )}
-              </div>
-            </div>
-          );
-        })}
+                    {m.format(baseline)}
+                  </div>
+                  <div
+                    style={{
+                      padding: '12px 8px',
+                      textAlign: 'center',
+                      background: '#fafafa',
+                      fontFamily: FONT_LABEL,
+                      fontSize: 10,
+                      fontWeight: 700,
+                      color: MUTED,
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.6,
+                      borderLeft: `1px solid ${BORDER}`,
+                      borderRight: `1px solid ${BORDER}`,
+                    }}
+                  >
+                    {m.label}
+                  </div>
+                  <div
+                    style={{
+                      padding: '12px 18px',
+                      textAlign: 'left',
+                      fontFamily: FONT_NUM,
+                      fontSize: 14,
+                      fontWeight: 600,
+                      color: TEXT,
+                      background: winBg,
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: 8,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <span style={{ whiteSpace: 'pre-line' }}>{m.format(challenger)}</span>
+                    {arrow && deltaLabel && (
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 3,
+                          fontFamily: FONT_NUM,
+                          fontSize: 10,
+                          fontWeight: 800,
+                          color: dir === 'better' ? '#0a5c3a' : '#991b1b',
+                          background:
+                            dir === 'better'
+                              ? 'rgba(34,197,94,0.18)'
+                              : 'rgba(239,68,68,0.15)',
+                          border: `1px solid ${
+                            dir === 'better'
+                              ? 'rgba(34,197,94,0.45)'
+                              : 'rgba(239,68,68,0.35)'
+                          }`,
+                          padding: '2px 8px',
+                          borderRadius: 999,
+                          letterSpacing: 0.3,
+                          whiteSpace: 'nowrap',
+                          alignSelf: 'flex-start',
+                        }}
+                      >
+                        {arrow} {deltaLabel}
+                      </span>
+                    )}
+                  </div>
+                </div>,
+              );
+            }
+          }
+          return chunks;
+        })()}
       </div>
 
       <div

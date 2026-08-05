@@ -266,12 +266,6 @@ export function PartDTimelineOverlay(
     buildPlanTimeline(p, lisTier, fillsPerYear),
   );
 
-  // Peak month cost across all plans, for a shared cell-height reference.
-  const maxMonthly = Math.max(
-    1,
-    ...timelines.flatMap((t) => t.rows.map((r) => r.memberCost)),
-  );
-
   return (
     <div
       data-testid="part-d-timeline-overlay"
@@ -310,11 +304,7 @@ export function PartDTimelineOverlay(
       <MonthAxis />
 
       {timelines.map((t) => (
-        <PlanRow
-          key={t.plan.id}
-          timeline={t}
-          maxMonthly={maxMonthly}
-        />
+        <PlanRow key={t.plan.id} timeline={t} />
       ))}
 
       <div
@@ -388,16 +378,32 @@ function MonthAxis(): ReactNode {
   );
 }
 
+// Segment label — shown at the first month of each phase run so the
+// broker can eyeball the phase without reading the legend.
+const PHASE_SHORT_LABEL: Record<MonthlyRow['phase'], string> = {
+  deductible: 'DED',
+  initial: 'INIT',
+  catastrophic: '$0',
+};
+
 function PlanRow({
   timeline,
-  maxMonthly,
 }: {
   timeline: PlanTimeline;
-  maxMonthly: number;
 }): ReactNode {
   const catCall = timeline.catastrophicMonth != null
     ? `Enters catastrophic in ${MONTH_LABELS[timeline.catastrophicMonth - 1]} — $0 after.`
     : null;
+
+  // Precompute whether each month is the first cell of a new phase run.
+  // Used both for the phase-label overlay and for rounded corners so the
+  // 12 cells read as one continuous segmented bar.
+  const isFirstOfRun: boolean[] = timeline.rows.map(
+    (r, i) => i === 0 || r.phase !== timeline.rows[i - 1].phase,
+  );
+  const isLastOfRun: boolean[] = timeline.rows.map(
+    (r, i) => i === timeline.rows.length - 1 || r.phase !== timeline.rows[i + 1].phase,
+  );
 
   return (
     <div style={{ marginTop: 6 }}>
@@ -405,7 +411,7 @@ function PlanRow({
         style={{
           display: 'grid',
           gridTemplateColumns: '160px repeat(12, minmax(0, 1fr))',
-          gap: 2,
+          gap: 0,
           alignItems: 'stretch',
         }}
       >
@@ -443,11 +449,10 @@ function PlanRow({
             {fmtDollars(timeline.totalMemberCost)}/yr
           </span>
         </div>
-        {timeline.rows.map((r) => {
-          const heightPct = maxMonthly > 0
-            ? Math.max(4, Math.round((r.memberCost / maxMonthly) * 100))
-            : 4;
+        {timeline.rows.map((r, i) => {
           const color = PHASE_COLOR[r.phase];
+          const first = isFirstOfRun[i];
+          const last = isLastOfRun[i];
           return (
             <div
               key={r.month}
@@ -456,43 +461,52 @@ function PlanRow({
               }`}
               style={{
                 position: 'relative',
-                minHeight: 36,
-                background: 'rgba(15,23,42,0.03)',
-                borderRadius: 3,
-                overflow: 'hidden',
+                minHeight: 28,
+                background: color.bg,
+                borderTop: `1px solid ${color.fg}`,
+                borderBottom: `1px solid ${color.fg}`,
+                borderLeft: first ? `1px solid ${color.fg}` : undefined,
+                borderRight: last ? `1px solid ${color.fg}` : undefined,
+                borderTopLeftRadius: first ? 4 : 0,
+                borderBottomLeftRadius: first ? 4 : 0,
+                borderTopRightRadius: last ? 4 : 0,
+                borderBottomRightRadius: last ? 4 : 0,
                 display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'flex-end',
                 alignItems: 'center',
-                padding: '2px 1px',
+                justifyContent: 'center',
+                overflow: 'hidden',
               }}
             >
-              <div
-                style={{
-                  width: '100%',
-                  height: `${heightPct}%`,
-                  background: color.bg,
-                  borderTop: r.phaseChangedMidMonth
-                    ? `2px dashed ${color.fg}`
-                    : `1px solid ${color.fg}`,
-                }}
-              />
-              <div
-                style={{
-                  position: 'absolute',
-                  bottom: 1,
-                  left: 0,
-                  right: 0,
-                  textAlign: 'center',
-                  fontSize: 8,
-                  fontFamily: FONT_NUM,
-                  fontWeight: 700,
-                  color: color.fg,
-                  lineHeight: 1,
-                }}
-              >
-                {r.memberCost > 0 ? fmtDollars(r.memberCost) : ''}
-              </div>
+              {r.phaseChangedMidMonth && (
+                <div
+                  aria-hidden
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    bottom: 0,
+                    left: 0,
+                    width: 2,
+                    background: color.fg,
+                    opacity: 0.55,
+                  }}
+                />
+              )}
+              {first && (
+                <span
+                  style={{
+                    fontFamily: FONT_LABEL,
+                    fontSize: 8,
+                    fontWeight: 800,
+                    letterSpacing: 0.4,
+                    color: color.fg,
+                    lineHeight: 1,
+                    padding: '0 2px',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {PHASE_SHORT_LABEL[r.phase]}
+                </span>
+              )}
             </div>
           );
         })}
