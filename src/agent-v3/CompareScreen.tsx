@@ -55,6 +55,8 @@ import { useDrugPhases, type DrugPhaseHit } from '@/hooks/useDrugPhases';
 import type { DrugCostCardComparisonPlan } from './DrugCostCard';
 import { QuoteBuilder } from './QuoteBuilder';
 import { TOKENS as T, FONT as F } from './compare-v2/tokens';
+import { QuickPreviewDrawer } from './compare-v2/QuickPreviewDrawer';
+import { SummaryOfBenefitsDrawer } from './compare-v2/SummaryOfBenefitsDrawer';
 import { formatOtc } from '@/lib/extractBenefitValue';
 
 // Per the current product rule: rows stay visible, but unfiled values
@@ -807,6 +809,21 @@ export function CompareScreen({
   const [mode, setMode] = useState<'grid' | 'h2h'>('grid');
   const [challenger, setChallenger] = useState<Plan | null>(null);
 
+  // Two mutually-exclusive detail drawers (bench Quick Preview vs
+  // board Summary of Benefits). Only one open at a time — opening
+  // either clears the other. Both are presentation-only overlays;
+  // slot/bench state underneath is untouched when they close.
+  const [previewPlan, setPreviewPlan] = useState<Plan | null>(null);
+  const [summaryPlan, setSummaryPlan] = useState<Plan | null>(null);
+  const openPreview = (p: Plan) => {
+    setSummaryPlan(null);
+    setPreviewPlan(p);
+  };
+  const openSummary = (p: Plan) => {
+    setPreviewPlan(null);
+    setSummaryPlan(p);
+  };
+
   // ── Bench filter engine (shared between slots + bench) ─────────────
   // Historically the filter engine lived inside Bench and only touched
   // bench cards. That made the board (Top Pick + slots 1-3) ignore
@@ -1164,6 +1181,7 @@ export function CompareScreen({
         providers={providers}
         onAddToBoard={addToBoard}
         onOpenH2H={openH2H}
+        onOpenPreview={openPreview}
       />
 
       {/* Compare v2 reskin (2026-08-05): Part D timeline overlay hidden
@@ -1248,12 +1266,40 @@ export function CompareScreen({
                 onClear={() => clearSlot(i)}
                 onFill={() => fillEmptySlot(i)}
                 onOpenH2H={openH2H}
+                onOpenSummary={openSummary}
                 onEnroll={recommendAndAdvance(plan)}
               />
             ))}
           </div>
         );
       })()}
+
+      {/* Detail drawers — mutually exclusive, both dark-navy panels
+          that "open in place" between the board and the SummaryBar so
+          slot state stays visible above and the bench stays reachable
+          via scroll. Suppress on empty state / when nothing selected. */}
+      {previewPlan && (
+        <QuickPreviewDrawer
+          plan={previewPlan}
+          onClose={() => setPreviewPlan(null)}
+          onAddToBoard={(p) => {
+            addToBoard(p);
+            setPreviewPlan(null);
+          }}
+          isOnBoard={slotIds.has(previewPlan.id)}
+        />
+      )}
+      {summaryPlan && (
+        <SummaryOfBenefitsDrawer
+          plan={summaryPlan}
+          onClose={() => setSummaryPlan(null)}
+          drugBreakdown={
+            drugBreakdownByPlanId
+              ? drugBreakdownByPlanId[summaryPlan.id] ?? null
+              : null
+          }
+        />
+      )}
 
       <SummaryBar
         headline={topChallenger}
@@ -1726,6 +1772,7 @@ function Bench({
   providers,
   onAddToBoard,
   onOpenH2H,
+  onOpenPreview,
 }: {
   /** Lifted from CompareScreen so board slots and bench cards apply
    *  the same predicate chain. Bench renders filters.filtered minus
@@ -1748,6 +1795,7 @@ function Bench({
   providers: ProviderRow[];
   onAddToBoard: (plan: Plan) => void;
   onOpenH2H: (plan: Plan) => void;
+  onOpenPreview: (plan: Plan) => void;
 }) {
   // Bench items = filter-matched pool minus whatever's on the board.
   // Bench filter counts still cover the FULL pool (both slot + bench
@@ -1820,6 +1868,7 @@ function Bench({
               providers={providers}
               onAddToBoard={onAddToBoard}
               onOpenH2H={onOpenH2H}
+              onOpenPreview={onOpenPreview}
             />
           ))
         )}
@@ -1839,6 +1888,7 @@ function BenchCard({
   providers,
   onAddToBoard,
   onOpenH2H,
+  onOpenPreview,
 }: {
   plan: Plan;
   baseline: Plan | null;
@@ -1850,6 +1900,7 @@ function BenchCard({
   providers: ProviderRow[];
   onAddToBoard: (plan: Plan) => void;
   onOpenH2H: (plan: Plan) => void;
+  onOpenPreview: (plan: Plan) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [hover, setHover] = useState(false);
@@ -2097,9 +2148,11 @@ function BenchCard({
       <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
         <button
           type="button"
-          onClick={(e) => e.stopPropagation()}
-          disabled
-          title="Quick preview drawer ships in the next reskin slice"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenPreview(plan);
+          }}
+          title="Open a side-by-side benefit preview without adding this plan to the board"
           style={{
             flex: 1,
             textAlign: 'center',
@@ -2110,8 +2163,7 @@ function BenchCard({
             border: `1px solid ${T.mint100}`,
             background: T.mint100,
             color: T.mint700,
-            cursor: 'not-allowed',
-            opacity: 0.7,
+            cursor: 'pointer',
             fontFamily: F.label,
           }}
         >
@@ -2621,6 +2673,7 @@ function SlotCell({
   onClear,
   onFill,
   onOpenH2H,
+  onOpenSummary,
   onEnroll,
 }: {
   slotIdx: number;
@@ -2677,6 +2730,9 @@ function SlotCell({
   onClear: () => void;
   onFill: () => void;
   onOpenH2H: (p: Plan) => void;
+  /** Opens the Summary of Benefits drawer at the CompareScreen level.
+   *  Only wired for filled slots; empty-slot placeholder ignores it. */
+  onOpenSummary: (p: Plan) => void;
   onEnroll: () => void;
 }) {
   const [dragOver, setDragOver] = useState(false);
@@ -3012,6 +3068,7 @@ function SlotCell({
             lineHeight: 1.4,
             background: whyText.tone === 'good' ? T.mint100 : T.amber100,
             color: whyText.tone === 'good' ? T.mint700 : T.amber700,
+            cursor: 'default',
           }}
         >
           {whyText.text}
@@ -3072,9 +3129,11 @@ function SlotCell({
       <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
         <button
           type="button"
-          onClick={(e) => e.stopPropagation()}
-          disabled
-          title="Quick preview drawer ships in the next reskin slice"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenSummary(plan);
+          }}
+          title="Open the full Summary of Benefits drawer for this plan, including per-drug cost breakdown"
           style={{
             flex: 1,
             textAlign: 'center',
@@ -3085,12 +3144,11 @@ function SlotCell({
             border: `1px solid ${T.lineStrong}`,
             color: T.ink,
             background: T.card,
-            cursor: 'not-allowed',
-            opacity: 0.55,
+            cursor: 'pointer',
             fontFamily: F.label,
           }}
         >
-          Quick preview
+          Summary of benefits
         </button>
         <button
           type="button"
