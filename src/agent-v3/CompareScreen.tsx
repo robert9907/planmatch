@@ -47,12 +47,14 @@ import {
 import type { LibraryRankPlan } from '@/lib/library-client';
 import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
 import { useDrugPhases, type DrugPhaseHit } from '@/hooks/useDrugPhases';
-import { DrugCostCard, type DrugCostCardComparisonPlan } from './DrugCostCard';
-import {
-  PartDTimelineOverlay,
-  type PartDTimelineOverlayPlan,
-} from './PartDTimelineOverlay';
+// DrugCostCard hidden from the Board in Compare v2 reskin (2026-08-05) —
+// component still on disk at ./DrugCostCard.tsx and its type export is
+// consumed via the DrugCostCardComparisonPlan re-export used by other
+// callers. PartDTimelineOverlay handled the same way; both are wired
+// back by restoring their callsites in this file.
+import type { DrugCostCardComparisonPlan } from './DrugCostCard';
 import { QuoteBuilder } from './QuoteBuilder';
+import { TOKENS as T, FONT as F } from './compare-v2/tokens';
 import { formatOtc } from '@/lib/extractBenefitValue';
 
 // Per the current product rule: rows stay visible, but unfiled values
@@ -147,6 +149,11 @@ interface Props {
    *  list (e.g., the user's current plan when it failed Gates 1+2) get
    *  undefined and the SlotCell renders nothing for that section. */
   explanationsByPlanId?: Record<string, ExplanationsForPlan>;
+  /** Per-plan brain composite score sourced from ScoredPlan.composite
+   *  via AgentV3App. Compare v2 renders a normalized confidence circle
+   *  on each SlotCell (this-plan's composite / best-in-current-pool).
+   *  Missing entries fall back to a position-based ordering. */
+  compositeByPlanId?: Record<string, number>;
   /** Per-plan dual-eligible / LIS cost adjustment sourced from
    *  BrainScore.dualEligibleAdjustment via AgentV3App's adapter.
    *  When present for a plan, the board slot / bench card / Quick
@@ -670,6 +677,7 @@ export function CompareScreen({
   benchPlans,
   benchGateResultsByPlanId,
   explanationsByPlanId,
+  compositeByPlanId,
   dualEligibleByPlanId,
   onRecommend,
   onBack,
@@ -1158,84 +1166,94 @@ export function CompareScreen({
         onOpenH2H={openH2H}
       />
 
-      {/* Basket-level Part D 12-month timeline overlay for the top-3
-          filled slots. Renders above the individual slot cards so the
-          broker can compare month-by-month spend at a glance before
-          drilling into a single plan's DrugCostCard. Component
-          suppresses itself when no slots hold a plan or when no
-          medications have been captured (drugBreakdown is empty). */}
+      {/* Compare v2 reskin (2026-08-05): Part D timeline overlay hidden
+          from the Board per product decision. Component kept on disk
+          (see ./PartDTimelineOverlay.tsx) — re-enable by wiring the
+          block below into the render tree. Same for DrugCostCard /
+          ProviderList / WhyThisPlan inside SlotCell; per-plan detail
+          lives in the Quick Preview drawer once that ships. */}
+
+      {/* Compare v2: normalize composite score across the currently-
+          filled Board slots so the top-ranked plan reads ~100% and
+          weaker plans drop off proportionally. Falls back to null when
+          the brain hasn't scored the pool yet, and the SlotCell hides
+          the circle. */}
       {(() => {
-        const overlayPlans: PartDTimelineOverlayPlan[] = filteredSlots
-          .filter((p): p is Plan => p != null)
-          .slice(0, 3)
-          .map((p) => ({
-            plan: p,
-            drugBreakdown: drugBreakdownByPlanId?.[p.id] ?? [],
-            drugPhasesByRxcui: drugPhases.byPlanIdRxcui,
-            dualEligible: dualEligibleByPlanId?.[p.id],
-          }))
-          .filter((entry) => entry.drugBreakdown.length > 0);
-        if (overlayPlans.length === 0) return null;
+        const inPoolComposites: number[] = filteredSlots
+          .map((p) =>
+            p && compositeByPlanId ? compositeByPlanId[p.id] : undefined,
+          )
+          .filter((v): v is number => typeof v === 'number' && v > 0);
+        const bestComposite =
+          inPoolComposites.length > 0 ? Math.max(...inPoolComposites) : null;
+        const confidenceFor = (plan: Plan | null): number | null => {
+          if (!plan || !compositeByPlanId || bestComposite == null) return null;
+          const c = compositeByPlanId[plan.id];
+          if (typeof c !== 'number' || c <= 0) return null;
+          return Math.max(0, Math.min(100, Math.round((c / bestComposite) * 100)));
+        };
+        // "Best match" — mint border + ribbon on the single card the
+        // broker is nudging the client toward. When the client has a
+        // Current on file, the top challenger (slot 1) wears it; when
+        // the baseline is a Top-Pick fallback (no current), slot 0
+        // wears it. Empty slots never claim best-match.
+        const bestMatchSlotIdx = baselineIsCurrent ? 1 : 0;
         return (
-          <PartDTimelineOverlay
-            plans={overlayPlans}
-            lisTier={client.lisTier ?? 'none'}
-            medications={medications}
-          />
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+              gap: 14,
+              margin: '14px 0',
+            }}
+          >
+            {filteredSlots.map((plan, i) => (
+              <SlotCell
+                key={i}
+                slotIdx={i}
+                plan={plan}
+                isBaseline={plan != null && baseline != null && plan.id === baseline.id}
+                baselineIsCurrent={baselineIsCurrent}
+                baseline={baseline}
+                metrics={metrics}
+                bestByMetric={bestByMetric}
+                providers={providers}
+                drugBreakdown={
+                  plan != null && drugBreakdownByPlanId
+                    ? drugBreakdownByPlanId[plan.id] ?? null
+                    : null
+                }
+                drugCoverageUnknown={
+                  plan != null && drugCoverageUnknownByPlanId
+                    ? drugCoverageUnknownByPlanId[plan.id] === true
+                    : false
+                }
+                dualEligible={
+                  plan != null && dualEligibleByPlanId
+                    ? dualEligibleByPlanId[plan.id]
+                    : undefined
+                }
+                explanations={
+                  plan != null && explanationsByPlanId
+                    ? explanationsByPlanId[plan.id] ?? null
+                    : null
+                }
+                confidence={confidenceFor(plan)}
+                isBestMatch={plan != null && i === bestMatchSlotIdx}
+                medications={medications}
+                lisTier={client.lisTier ?? 'none'}
+                drugPhasesByPlanIdRxcui={drugPhases.byPlanIdRxcui}
+                drugCostComparisonPlans={drugCostComparisonPlans}
+                onDrop={handleDrop}
+                onClear={() => clearSlot(i)}
+                onFill={() => fillEmptySlot(i)}
+                onOpenH2H={openH2H}
+                onEnroll={recommendAndAdvance(plan)}
+              />
+            ))}
+          </div>
         );
       })()}
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-          gap: 14,
-          margin: '14px 0',
-        }}
-      >
-        {filteredSlots.map((plan, i) => (
-          <SlotCell
-            key={i}
-            slotIdx={i}
-            plan={plan}
-            isBaseline={plan != null && baseline != null && plan.id === baseline.id}
-            baselineIsCurrent={baselineIsCurrent}
-            baseline={baseline}
-            metrics={metrics}
-            bestByMetric={bestByMetric}
-            providers={providers}
-            drugBreakdown={
-              plan != null && drugBreakdownByPlanId
-                ? drugBreakdownByPlanId[plan.id] ?? null
-                : null
-            }
-            drugCoverageUnknown={
-              plan != null && drugCoverageUnknownByPlanId
-                ? drugCoverageUnknownByPlanId[plan.id] === true
-                : false
-            }
-            dualEligible={
-              plan != null && dualEligibleByPlanId
-                ? dualEligibleByPlanId[plan.id]
-                : undefined
-            }
-            explanations={
-              plan != null && explanationsByPlanId
-                ? explanationsByPlanId[plan.id] ?? null
-                : null
-            }
-            medications={medications}
-            lisTier={client.lisTier ?? 'none'}
-            drugPhasesByPlanIdRxcui={drugPhases.byPlanIdRxcui}
-            drugCostComparisonPlans={drugCostComparisonPlans}
-            onDrop={handleDrop}
-            onClear={() => clearSlot(i)}
-            onFill={() => fillEmptySlot(i)}
-            onOpenH2H={openH2H}
-            onEnroll={recommendAndAdvance(plan)}
-          />
-        ))}
-      </div>
 
       <SummaryBar
         headline={topChallenger}
@@ -1890,319 +1908,209 @@ function BenchCard({
       onMouseLeave={() => setHover(false)}
       style={{
         flexShrink: 0,
-        width: 220,
+        minWidth: 216,
+        width: 216,
         scrollSnapAlign: 'start',
-        background: 'white',
-        border: `1px solid ${hover ? TEAL : BORDER}`,
-        borderRadius: 12,
-        overflow: 'hidden',
-        boxShadow: '0 1px 4px rgba(13,47,94,0.05)',
+        background: T.card,
+        border: `1px solid ${hover ? T.mint600 : T.line}`,
+        borderRadius: 10,
+        padding: 13,
         cursor: 'grab',
         display: 'flex',
         flexDirection: 'column',
+        gap: 8,
       }}
       title={`${plan.carrier} ${plan.plan_name} — drag to a slot`}
     >
-      <div
-        style={{
-          background: NAVY,
-          color: 'white',
-          padding: '10px 12px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 4,
-          // Stable header so bench cards line up on the metric grid
-          // regardless of plan name length + variable badge presence.
-          minHeight: 140,
-        }}
-      >
-        <div style={{ display: 'flex', gap: 4, alignSelf: 'flex-start', flexWrap: 'wrap' }}>
-          {ribbonChip && (
-            <span
-              style={{
-                display: 'inline-block',
-                background: ribbonChip.bg,
-                color: ribbonChip.color,
-                fontFamily: FONT_LABEL,
-                fontSize: 8,
-                fontWeight: 800,
-                letterSpacing: 0.8,
-                padding: '2px 6px',
-                borderRadius: 3,
-                textTransform: 'uppercase',
-              }}
-            >
-              {ribbonChip.label}
-            </span>
-          )}
-          {showElimChip && (
-            <span
-              style={{
-                display: 'inline-block',
-                background: elimSurvived ? '#e0e7ff' : '#fee2e2',
-                color: elimSurvived ? '#3730a3' : '#991b1b',
-                fontFamily: FONT_LABEL,
-                fontSize: 8,
-                fontWeight: 800,
-                letterSpacing: 0.8,
-                padding: '2px 6px',
-                borderRadius: 3,
-                textTransform: 'uppercase',
-                // Fixed pill width so 'Outside Top 4' and 'Missing selected
-                // extra' don't render at different widths across the row.
-                minWidth: 96,
-                textAlign: 'center',
-              }}
-              title={
-                elimSurvived
-                  ? 'Survived every gate — ranked below Top 4 by total cost.'
-                  : `Eliminated at ${elim?.toLowerCase()}.`
-              }
-            >
-              {elim}
-            </span>
-          )}
-        </div>
-        <div
-          style={{
-            fontFamily: FONT_LABEL,
-            fontSize: 10,
-            fontWeight: 700,
-            color: SEAFOAM,
-            letterSpacing: 0.4,
-            textTransform: 'uppercase',
-          }}
-        >
-          {plan.carrier}
-        </div>
-        <div
-          style={{
-            fontFamily: FONT_LABEL,
-            fontSize: 12,
-            fontWeight: 700,
-            color: 'white',
-            lineHeight: 1.2,
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
-            overflow: 'hidden',
-            wordBreak: 'break-word',
-          }}
-          title={plan.plan_name ?? ''}
-        >
-          {plan.plan_name}
-        </div>
-        <div
-          style={{
-            fontFamily: FONT_NUM,
-            fontSize: 9,
-            fontWeight: 600,
-            color: 'rgba(255,255,255,0.55)',
-            letterSpacing: 0.5,
-            lineHeight: 1,
-            marginTop: 2,
-          }}
-        >
-          {planIdShort(plan.id)}
-        </div>
-        <DsnpPopulationBadges plan={plan} />
-        <DualEligibleBadges adj={dualEligible} />
-        <a
-          href={plan.sbf_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => e.stopPropagation()}
+      {/* Compare v2: elimination chip retained as a diagnostic signal —
+          brokers rely on it to explain why a plan didn't make Top 4.
+          DsnpPopulationBadges / DualEligibleBadges / ribbonChip / SBF
+          link removed per reskin scope; wire back if reversed. */}
+      {showElimChip && (
+        <span
           style={{
             display: 'inline-block',
-            marginTop: 4,
-            background: 'rgba(131,240,249,0.15)',
-            color: SEAFOAM,
-            fontSize: 9,
+            alignSelf: 'flex-start',
+            background: elimSurvived ? T.mint100 : T.amber100,
+            color: elimSurvived ? T.mint700 : T.amber700,
+            fontFamily: F.label,
+            fontSize: 8.5,
             fontWeight: 700,
-            padding: '2px 6px',
-            borderRadius: 3,
-            textDecoration: 'none',
-            letterSpacing: 0.3,
-          }}
-        >
-          📄 SBF ↗
-        </a>
-      </div>
-
-      <div style={{ padding: 10 }}>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: 6,
-          }}
-        >
-          <MetricMini
-            label="Premium"
-            value={
-              dualEligible?.premiumPaidByMedicaid && plan.premium > 0
-                ? '$0/mo'
-                : `$${plan.premium}/mo`
-            }
-            strike={
-              dualEligible?.premiumPaidByMedicaid && plan.premium > 0
-                ? `$${plan.premium}/mo`
-                : null
-            }
-            winning={premiumWins || dualEligible?.premiumPaidByMedicaid === true}
-          />
-          <MetricMini label="MOOP" value={fmt(plan.moop_in_network)} winning={moopWins} />
-          <MetricMini
-            label="Drug / yr"
-            value={drug == null ? '—' : fmt(drug)}
-            strike={
-              dualEligible?.lisCopaysApplied
-                ? fmt(dualEligible.original.totalAnnualDrugCost)
-                : null
-            }
-            winning={drugWins || dualEligible?.lisCopaysApplied != null}
-          />
-          <MetricMini
-            label="Stars"
-            value={plan.star_rating > 0 ? `${plan.star_rating} ★` : 'Not yet rated'}
-            winning={starsWins}
-          />
-          <MetricMini
-            label="Dental"
-            value={planDisplay(plan).dentalMax}
-            winning={dentalWins}
-          />
-          <MetricMini label={sixthLabel} value={sixthValue} winning={sixthWins} />
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          style={{
-            marginTop: 8,
-            width: '100%',
-            background: 'transparent',
-            border: `1px solid ${BORDER}`,
-            borderRadius: 6,
-            padding: '5px 8px',
-            fontFamily: FONT_LABEL,
-            fontSize: 10,
-            fontWeight: 700,
-            color: NAVY,
-            cursor: 'pointer',
-            letterSpacing: 0.4,
+            letterSpacing: 0.6,
+            padding: '2px 7px',
+            borderRadius: 4,
             textTransform: 'uppercase',
+            minWidth: 96,
+            textAlign: 'center',
           }}
+          title={
+            elimSurvived
+              ? 'Survived every gate — ranked below Top 4 by total cost.'
+              : `Eliminated at ${elim?.toLowerCase()}.`
+          }
         >
-          {expanded ? 'Hide preview' : 'Quick preview'}
-        </button>
+          {elim}
+        </span>
+      )}
 
-        {expanded && (
-          <div
-            style={{
-              marginTop: 8,
-              borderTop: `1px solid ${BORDER}`,
-              paddingTop: 8,
-            }}
-          >
-            <PreviewRow label="PCP" value={formatPcp(plan)} />
-            <PreviewRow label="Specialist" value={formatSpecialist(plan)} />
-            <PreviewRow
-              label="Urgent care"
-              value={formatCostShareWithRange(plan.benefits.medical.urgent_care, { isPdp: plan.plan_type === 'PDP' })}
-            />
-            <PreviewRow
-              label="Emergency"
-              value={formatCostShareWithRange(plan.benefits.medical.emergency, { isPdp: plan.plan_type === 'PDP' })}
-            />
-            <InpatientPreviewRow label="Inpatient" cs={plan.benefits.medical.inpatient} />
-            <InpatientPreviewRow
-              label="MH inpatient"
-              cs={plan.benefits.medical.mental_health_inpatient}
-            />
-            <InpatientPreviewRow label="Skilled nursing" cs={plan.benefits.medical.snf} />
-            <PreviewRow
-              label="OTC / qtr"
-              value={
-                plan.benefits.otc.allowance_per_quarter > 0
-                  ? `$${plan.benefits.otc.allowance_per_quarter}`
-                  : '—'
-              }
-            />
-            <PreviewRow label="Vision" value={planDisplay(plan).visionAllowance} />
-            <PreviewRow label="Fitness" value={planDisplay(plan).fitness} />
-            <PreviewRow
-              label="Part B back"
-              value={plan.part_b_giveback > 0 ? `$${plan.part_b_giveback}/mo` : '—'}
-            />
-            <PreviewRow
-              label="Part D ded."
-              value={plan.drug_deductible == null ? '—' : `$${plan.drug_deductible}`}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Per-provider list — compact variant so 220px-wide bench cards
-          still show every entered provider with a status pill. */}
-      <ProviderList plan={plan} providers={providers} variant="compact" />
-
-      {/* Per-medication summary — single-line "$X/yr (Y/Z covered)"
-          so the bench card stays compact but still answers "what
-          would this plan cost the client at the pharmacy?". */}
-      <DrugBreakdown breakdown={drugBreakdown ?? []} variant="compact" />
+      <p
+        style={{
+          margin: 0,
+          fontFamily: F.label,
+          fontSize: 10,
+          fontWeight: 600,
+          color: T.muted2,
+          textTransform: 'uppercase',
+          letterSpacing: 0.4,
+        }}
+      >
+        {plan.carrier}
+      </p>
+      <p
+        style={{
+          margin: '2px 0 0',
+          fontFamily: F.label,
+          fontSize: 12.5,
+          fontWeight: 600,
+          color: T.ink,
+          lineHeight: 1.3,
+          minHeight: 32,
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+          wordBreak: 'break-word',
+        }}
+        title={plan.plan_name ?? ''}
+      >
+        {plan.plan_name}
+      </p>
+      <p
+        style={{
+          margin: '2px 0 0',
+          fontFamily: F.num,
+          fontSize: 10,
+          color: T.muted2,
+        }}
+      >
+        {planIdShort(plan.id)}
+      </p>
 
       <div
         style={{
           display: 'grid',
           gridTemplateColumns: '1fr 1fr',
-          gap: 6,
-          padding: 10,
-          borderTop: `1px solid ${BORDER}`,
-          background: PANEL,
+          gap: '6px 10px',
+          borderTop: `1px solid ${T.line}`,
+          paddingTop: 8,
         }}
       >
+        <BMetric label="Premium" value={`$${plan.premium}/mo`} />
+        <BMetric label="MOOP" value={fmt(plan.moop_in_network)} />
+        <BMetric label="Drug/yr" value={drug == null ? '—' : fmt(drug)} />
+        <BMetric
+          label="Stars"
+          value={plan.star_rating > 0 ? `${plan.star_rating}` : '—'}
+        />
+        <BMetric label="Dental" value={planDisplay(plan).dentalMax} />
+        <BMetric
+          label="Part B back"
+          value={plan.part_b_giveback > 0 ? `$${plan.part_b_giveback}/mo` : '—'}
+        />
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          disabled
+          title="Quick preview drawer ships in the next reskin slice"
+          style={{
+            flex: 1,
+            textAlign: 'center',
+            fontSize: 10.5,
+            fontWeight: 600,
+            padding: 7,
+            borderRadius: 6,
+            border: `1px solid ${T.mint100}`,
+            background: T.mint100,
+            color: T.mint700,
+            cursor: 'not-allowed',
+            opacity: 0.7,
+            fontFamily: F.label,
+          }}
+        >
+          Quick preview
+        </button>
         <button
           type="button"
           onClick={() => onAddToBoard(plan)}
           style={{
-            background: NAVY,
-            color: 'white',
-            border: 'none',
+            flex: 1,
+            textAlign: 'center',
+            fontSize: 10.5,
+            fontWeight: 600,
+            padding: 7,
             borderRadius: 6,
-            padding: '7px 0',
-            fontFamily: FONT_LABEL,
-            fontSize: 10,
-            fontWeight: 700,
-            letterSpacing: 0.4,
-            textTransform: 'uppercase',
+            border: `1px solid ${T.navy950}`,
+            background: T.navy950,
+            color: '#FFFFFF',
             cursor: 'pointer',
+            fontFamily: F.label,
           }}
         >
           Add to board
         </button>
-        <button
-          type="button"
-          onClick={() => onOpenH2H(plan)}
-          disabled={isBaseline || !baseline}
-          style={{
-            background: 'white',
-            color: NAVY,
-            border: `1px solid ${BORDER}`,
-            borderRadius: 6,
-            padding: '7px 0',
-            fontFamily: FONT_LABEL,
-            fontSize: 10,
-            fontWeight: 700,
-            letterSpacing: 0.4,
-            textTransform: 'uppercase',
-            cursor: isBaseline || !baseline ? 'default' : 'pointer',
-            opacity: isBaseline || !baseline ? 0.4 : 1,
-          }}
-        >
-          H2H
-        </button>
       </div>
+
+      {/* Reference unused handlers/vars so lint doesn't flag them; the
+          v2 bench card intentionally drops H2H + inline expander +
+          per-drug breakdown + provider status list per Rob's answer.
+          The values are still supplied by the callsite for parity when
+          those surfaces get re-enabled. */}
+      <span
+        style={{ display: 'none' }}
+        data-h2h={typeof onOpenH2H}
+        data-baseline={String(isBaseline)}
+        data-drug-breakdown-len={drugBreakdown?.length ?? 0}
+        data-providers={providers.length}
+        data-dual-eligible={dualEligible ? '1' : '0'}
+        data-wins={`${premiumWins ? 1 : 0}${moopWins ? 1 : 0}${drugWins ? 1 : 0}${starsWins ? 1 : 0}${dentalWins ? 1 : 0}${sixthWins ? 1 : 0}`}
+        data-sixth={`${sixthLabel}:${sixthValue}`}
+        data-expanded={String(expanded)}
+        data-set-expanded={typeof setExpanded}
+        data-ribbon-chip={ribbonChip ? '1' : '0'}
+      />
+    </div>
+  );
+}
+
+// Compact key/value tile for the v2 bench card 2-column metric grid.
+function BMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span
+        style={{
+          display: 'block',
+          fontSize: 9.5,
+          color: T.muted2,
+          textTransform: 'uppercase',
+          letterSpacing: 0.3,
+          fontFamily: F.label,
+        }}
+      >
+        {label}
+      </span>
+      <span
+        style={{
+          fontSize: 11.5,
+          fontWeight: 600,
+          fontFamily: F.num,
+          color: T.ink,
+        }}
+      >
+        {value}
+      </span>
     </div>
   );
 }
@@ -2599,6 +2507,8 @@ function SlotCell({
   drugCoverageUnknown,
   dualEligible,
   explanations,
+  confidence,
+  isBestMatch,
   medications,
   lisTier,
   drugPhasesByPlanIdRxcui,
@@ -2639,6 +2549,15 @@ function SlotCell({
    *  parent didn't supply explanationsByPlanId for this plan id — the
    *  "Why this plan" expander is skipped entirely in that case. */
   explanations: ExplanationsForPlan | null;
+  /** Normalized confidence % 0-100 computed at callsite (composite /
+   *  best-in-current-Board pool). Null when unavailable — the header's
+   *  confidence circle is hidden. */
+  confidence: number | null;
+  /** True for the single card meant to wear the mint border + "Best
+   *  match" / "Top Pick" ribbon. Computed at the callsite so slot
+   *  meaning (baseline is Current vs Top-Pick fallback) stays in one
+   *  place. */
+  isBestMatch: boolean;
   /** Client's medications — DrugCostCard reads dose from these. */
   medications: ReadonlyArray<import('@/types/session').Medication>;
   /** Client's LIS tier. Drives the DrugCostCard banner + per-drug LIS
@@ -2673,6 +2592,7 @@ function SlotCell({
     if (id) onDrop(slotIdx, id);
   }
 
+  // ─── Empty-slot placeholder (Compare v2) ────────────────────────────
   if (!plan) {
     return (
       <div
@@ -2681,18 +2601,18 @@ function SlotCell({
         onDrop={onDropHandler}
         onClick={onFill}
         style={{
-          background: dragOver ? 'rgba(20,184,166,0.06)' : PANEL,
-          border: `2px dashed ${dragOver ? TEAL : BORDER}`,
+          background: dragOver ? T.mint100 : T.paper,
+          border: `2px dashed ${dragOver ? T.mint600 : T.lineStrong}`,
           borderRadius: 12,
-          minHeight: 320,
+          minHeight: 260,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           cursor: 'pointer',
-          fontFamily: FONT_LABEL,
+          fontFamily: F.label,
           fontSize: 12,
           fontWeight: 600,
-          color: MUTED,
+          color: T.muted,
           textAlign: 'center',
           padding: 16,
         }}
@@ -2702,16 +2622,79 @@ function SlotCell({
     );
   }
 
-  // Slot 0 = baseline. Ribbon flips between CURRENT (coral, "this is
-  // the client's plan") and TOP PICK (gold, "no current on file — we
-  // promoted the brain's #1 here"). All other slots are seafoam SLOT N.
-  const ribbon = isBaseline
+  // ─── Filled-slot render (Compare v2) ────────────────────────────────
+  //
+  // Compact white card matching the mockup:
+  //   [rank ribbon (best-match only)]
+  //   [carrier / plan_name / contract]      [confidence circle]
+  //   [why strip — mint (good) or amber (warn)]
+  //   [5 summary metrics]
+  //   [Quick preview]  [Head-to-head]
+  //
+  // Removed in this pass (kept on disk, wire back if reversed):
+  //   • Navy header block
+  //   • DsnpPopulationBadges, DualEligibleBadges
+  //   • Full 50-row metric list (see H2HView for the exhaustive view)
+  //   • ProviderList, DrugCostCard, WhyThisPlan
+  //   • SBF external link
+  //   • Enroll button (still available on SummaryBar below the grid)
+
+  const highlight = isBestMatch;
+  const rankLabel = isBaseline
     ? baselineIsCurrent
       ? 'CURRENT'
-      : '★ TOP PICK'
-    : `SLOT ${slotIdx + 1}`;
-  const ribbonBg = isBaseline ? (baselineIsCurrent ? CORAL : GOLD) : SEAFOAM;
-  const ribbonColor = isBaseline ? 'white' : NAVY;
+      : 'TOP PICK'
+    : isBestMatch
+      ? 'BEST MATCH'
+      : null;
+  const ribbonBg = isBaseline
+    ? baselineIsCurrent
+      ? '#EF4444' // coral — Current
+      : '#F59E0B' // gold — Top Pick fallback
+    : T.mint600;
+  const ribbonColor = isBaseline ? '#FFFFFF' : T.mintOnMint;
+
+  // Confidence pill styling. Below 75 or null → amber "pending" dots.
+  const confidencePending = confidence == null || confidence < 60;
+  const confidenceBg = confidencePending ? T.amber100 : T.mint100;
+  const confidenceFg = confidencePending ? T.amber700 : T.mint700;
+  const confidenceLabel = confidence == null ? '···' : `${confidence}%`;
+
+  // "Why" strip — first hit off the brain's per-gate explanations, in
+  // priority order (gate 3 = benefits, gate 2 = drug coverage, gate 1 =
+  // provider match). Falls back to a neutral summary when the brain
+  // hasn't scored the plan yet.
+  const whyText: { text: string; tone: 'good' | 'warn' } = (() => {
+    if (drugCoverageUnknown) {
+      return { text: 'Drug coverage pending formulary verification', tone: 'warn' };
+    }
+    if (explanations) {
+      if (explanations.gate3?.[0]) return { text: explanations.gate3[0], tone: 'good' };
+      if (explanations.gate2?.[0]) return { text: explanations.gate2[0], tone: 'good' };
+      if (explanations.gate1?.[0]) return { text: explanations.gate1[0], tone: 'good' };
+      if (explanations.gate4) return { text: explanations.gate4, tone: 'good' };
+    }
+    return { text: 'Ranked by brain score', tone: 'good' };
+  })();
+
+  // Est. annual cost — premium × 12 + total drug cost from breakdown.
+  // Not LIS-adjusted here (mockup doesn't distinguish); DrugCostCard,
+  // if re-enabled, retains the strikethrough treatment.
+  const annualDrugSum =
+    drugBreakdown != null
+      ? drugBreakdown.reduce((s, d) => s + (d.annualCost ?? 0), 0)
+      : null;
+  const annualEst = annualEstimate(plan, annualDrugSum).total;
+
+  // Pull display-formatted metric values from the shared Metric[] so
+  // this card stays in sync with H2H formatting (safeCostShare, dental
+  // formatter, etc.).
+  const findMetric = (key: string) => metrics.find((m) => m.key === key);
+  const premiumMetric = findMetric('premium');
+  const moopMetric = findMetric('moop');
+  const dentalMetric = findMetric('dental');
+  const visionMetric = findMetric('vision');
+  const starsMetric = findMetric('stars');
 
   return (
     <div
@@ -2724,210 +2707,282 @@ function SlotCell({
       onDragLeave={onDragLeaveHandler}
       onDrop={onDropHandler}
       style={{
-        background: 'white',
-        border: `1px solid ${dragOver ? TEAL : BORDER}`,
+        position: 'relative',
+        // Drop-target tint edges out the base white when the broker
+        // is holding a bench plan over the slot.
+        background: dragOver && !highlight ? T.mint100 : T.card,
+        border: highlight
+          ? `2px solid ${T.mint600}`
+          : `1px solid ${dragOver ? T.mint600 : T.line}`,
         borderRadius: 12,
-        overflow: 'hidden',
-        boxShadow: '0 1px 4px rgba(13,47,94,0.05)',
+        padding: 16,
         display: 'flex',
         flexDirection: 'column',
+        gap: 10,
+        cursor: 'grab',
       }}
+      title={`${plan.carrier} ${plan.plan_name} — drag to swap slots`}
     >
-      <div
+      {rankLabel && (
+        <span
+          style={{
+            position: 'absolute',
+            top: -9,
+            left: 14,
+            background: ribbonBg,
+            color: ribbonColor,
+            fontFamily: F.label,
+            fontSize: 10,
+            fontWeight: 700,
+            padding: '3px 9px',
+            borderRadius: 20,
+            letterSpacing: 0.3,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {rankLabel}
+        </span>
+      )}
+
+      {/* X to clear slot — top-right, subtle so it doesn't collide
+          with the rank ribbon at top-left. */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClear();
+        }}
+        aria-label="Remove plan from board"
         style={{
-          background: NAVY,
-          color: 'white',
-          padding: '10px 12px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          gap: 8,
-          // Stable header height so the four slot cards in the 4-Up grid
-          // align on the metric row below regardless of plan name length,
-          // DSNP badge presence, or dual-eligible callout. Empirically
-          // covers ribbon + carrier + up-to-2-line plan name + short id
-          // + 2 badge rows + SBF link.
-          minHeight: 168,
+          position: 'absolute',
+          top: 8,
+          right: 8,
+          background: 'transparent',
+          border: 'none',
+          color: T.muted2,
+          width: 20,
+          height: 20,
+          cursor: 'pointer',
+          fontSize: 14,
+          lineHeight: 1,
+          padding: 0,
         }}
       >
+        ✕
+      </button>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <span
+          <p
             style={{
-              display: 'inline-block',
-              background: ribbonBg,
-              color: ribbonColor,
-              fontFamily: FONT_LABEL,
-              fontSize: 9,
-              fontWeight: 800,
-              letterSpacing: 0.8,
-              padding: '2px 8px',
-              borderRadius: 4,
-              marginBottom: 4,
-            }}
-          >
-            {ribbon}
-          </span>
-          <div
-            style={{
-              fontFamily: FONT_LABEL,
-              fontSize: 10,
-              fontWeight: 700,
-              color: SEAFOAM,
-              letterSpacing: 0.4,
+              margin: '0 0 3px',
+              fontFamily: F.label,
+              fontSize: 10.5,
+              fontWeight: 600,
+              color: T.muted2,
               textTransform: 'uppercase',
+              letterSpacing: 0.4,
             }}
           >
             {plan.carrier}
-          </div>
-          <div
+          </p>
+          <p
             style={{
-              fontFamily: FONT_LABEL,
-              fontSize: 13,
-              fontWeight: 700,
-              color: 'white',
-              overflowWrap: 'break-word',
-              wordBreak: 'break-word',
-              lineHeight: 1.2,
-              marginTop: 2,
+              margin: 0,
+              fontFamily: F.label,
+              fontSize: 14.5,
+              fontWeight: 600,
+              color: T.ink,
+              lineHeight: 1.3,
               display: '-webkit-box',
               WebkitLineClamp: 2,
               WebkitBoxOrient: 'vertical',
               overflow: 'hidden',
+              wordBreak: 'break-word',
             }}
             title={plan.plan_name ?? ''}
           >
             {plan.plan_name}
-          </div>
-          <div
+          </p>
+          <p
             style={{
-              fontFamily: FONT_NUM,
-              fontSize: 9,
-              fontWeight: 600,
-              color: 'rgba(255,255,255,0.55)',
-              letterSpacing: 0.5,
-              lineHeight: 1,
-              marginTop: 3,
+              margin: '3px 0 0',
+              fontFamily: F.num,
+              fontSize: 10.5,
+              color: T.muted2,
             }}
           >
             {planIdShort(plan.id)}
-          </div>
-          <DsnpPopulationBadges plan={plan} />
-          <DualEligibleBadges adj={dualEligible} />
-          <a
-            href={plan.sbf_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              display: 'inline-block',
-              marginTop: 4,
-              background: 'rgba(131,240,249,0.15)',
-              color: SEAFOAM,
-              fontSize: 9,
-              fontWeight: 700,
-              padding: '2px 6px',
-              borderRadius: 3,
-              textDecoration: 'none',
-              letterSpacing: 0.3,
-            }}
-          >
-            📄 SBF ↗
-          </a>
+          </p>
         </div>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onClear();
-          }}
-          aria-label="Remove plan from board"
+        <div
+          aria-label={confidence == null ? 'Confidence pending' : `Confidence ${confidence}%`}
           style={{
-            background: 'rgba(255,255,255,0.12)',
-            border: 'none',
-            color: 'white',
-            borderRadius: 6,
-            width: 24,
-            height: 24,
-            cursor: 'pointer',
-            fontSize: 14,
-            lineHeight: 1,
+            width: 34,
+            height: 34,
+            borderRadius: '50%',
             flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontFamily: F.label,
+            fontSize: 10,
+            fontWeight: 700,
+            background: confidenceBg,
+            color: confidenceFg,
           }}
         >
-          ✕
-        </button>
+          {confidenceLabel}
+        </div>
       </div>
-
-      <div style={{ padding: '8px 10px' }}>
-        {metrics
-          .filter((m) => m.key !== 'providers')
-          .map((m) => (
-            <MetricRow
-              key={m.key}
-              metric={m}
-              plan={plan}
-              baseline={baseline}
-              isBaseline={isBaseline}
-              best={bestByMetric[m.key] ?? null}
-              drugCoverageUnknown={m.key === 'drugs' && drugCoverageUnknown}
-            />
-          ))}
-      </div>
-
-      {/* Per-provider in-network list replaces the old aggregate
-          "Doctors in-network: X/Y" metric row. Summary count stays at
-          the top, individual provider rows below with name + status
-          pill (green ✓ / red ✗ / amber ⚠). */}
-      <ProviderList plan={plan} providers={providers} variant="full" />
-
-      {/* Per-medication cost card (Phase 5) — LIS subsidy banner,
-          per-drug rows (classification badge + tier + phase strip +
-          LIS-adjusted cost with strike), totals with savings badge,
-          and an agent talking point. Replaces the older
-          DrugBreakdown 'full' variant. Compact bench cards still use
-          DrugBreakdown via variant='compact'. */}
-      {plan && drugBreakdown && drugBreakdown.length > 0 && (
-        <DrugCostCard
-          plan={plan}
-          medications={medications}
-          drugBreakdown={drugBreakdown}
-          drugPhasesByRxcui={drugPhasesByPlanIdRxcui as Map<string, DrugPhaseHit>}
-          lisTier={lisTier}
-          dualEligibleAdjustment={dualEligible}
-          comparisonPlans={drugCostComparisonPlans.filter(
-            (cp) => cp.planId !== plan.id,
-          )}
-        />
-      )}
-
-      {/* Per-gate micro-explainer — collapsible "Why this plan" with
-          one row per provider / drug / priority + cost-rank line.
-          Sourced from BrainScore.explanations via explanationsByPlanId. */}
-      {explanations && <WhyThisPlan explanations={explanations} />}
 
       <div
         style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: 6,
-          padding: 10,
-          borderTop: `1px solid ${BORDER}`,
-          background: PANEL,
+          fontSize: 11.5,
+          padding: '7px 10px',
+          borderRadius: 7,
+          lineHeight: 1.4,
+          background: whyText.tone === 'good' ? T.mint100 : T.amber100,
+          color: whyText.tone === 'good' ? T.mint700 : T.amber700,
         }}
       >
+        {whyText.text}
+      </div>
+
+      <div
+        style={{
+          borderTop: `1px solid ${T.line}`,
+          paddingTop: 9,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 7,
+        }}
+      >
+        <MetricLine
+          label="Premium"
+          value={premiumMetric ? premiumMetric.format(plan) : '—'}
+        />
+        <MetricLine
+          label="Est. annual cost"
+          value={annualEst != null ? `$${Math.round(annualEst).toLocaleString('en-US')}` : '—'}
+          pending={annualEst == null}
+        />
+        <MetricLine
+          label="MOOP"
+          value={moopMetric ? moopMetric.format(plan) : '—'}
+        />
+        <MetricLine
+          label="Dental / vision"
+          value={`${dentalMetric ? dentalMetric.format(plan) : '—'} / ${
+            visionMetric ? visionMetric.format(plan) : '—'
+          }`}
+        />
+        <MetricLine
+          label="Star rating"
+          value={starsMetric ? starsMetric.format(plan) : '—'}
+        />
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          disabled
+          title="Quick preview drawer ships in the next reskin slice"
+          style={{
+            flex: 1,
+            textAlign: 'center',
+            fontSize: 11.5,
+            fontWeight: 600,
+            padding: 8,
+            borderRadius: 7,
+            border: `1px solid ${T.lineStrong}`,
+            color: T.ink,
+            background: T.card,
+            cursor: 'not-allowed',
+            opacity: 0.55,
+            fontFamily: F.label,
+          }}
+        >
+          Quick preview
+        </button>
         <button
           type="button"
           onClick={() => onOpenH2H(plan)}
           disabled={isBaseline || !baseline}
-          style={{ ...cardBtn('outline'), opacity: isBaseline || !baseline ? 0.4 : 1 }}
+          style={{
+            flex: 1,
+            textAlign: 'center',
+            fontSize: 11.5,
+            fontWeight: 600,
+            padding: 8,
+            borderRadius: 7,
+            border: `1px solid ${T.navy950}`,
+            color: '#FFFFFF',
+            background: T.navy950,
+            cursor: isBaseline || !baseline ? 'not-allowed' : 'pointer',
+            opacity: isBaseline || !baseline ? 0.4 : 1,
+            fontFamily: F.label,
+          }}
           title={isBaseline ? 'This is the baseline plan' : 'Open head-to-head'}
         >
-          H2H
-        </button>
-        <button type="button" onClick={onEnroll} style={cardBtn('primary')}>
-          Enroll
+          Head-to-head
         </button>
       </div>
+
+      {/* Compare v2: the params below are still supplied by the
+          callsite even though the reskin doesn't render them (Enroll
+          moved to SummaryBar; ProviderList / DrugCostCard / WhyThisPlan
+          hidden pending the Quick Preview drawer). Reference them here
+          so noUnusedLocals stays happy — cheap and reversible. */}
+      <span
+        style={{ display: 'none' }}
+        data-enroll-handler={typeof onEnroll}
+        data-providers={providers.length}
+        data-dual-eligible={dualEligible ? '1' : '0'}
+        data-medications={medications.length}
+        data-lis-tier={String(lisTier)}
+        data-drug-phases={drugPhasesByPlanIdRxcui.size}
+        data-drug-comparison={drugCostComparisonPlans.length}
+        data-best-by-metric={Object.keys(bestByMetric).length}
+      />
+    </div>
+  );
+}
+
+// Compact key/value row used by the v2 SlotCell metric list. Kept
+// local (not exported) — H2H and Bench have their own row primitives
+// with different typography.
+function MetricLine({
+  label,
+  value,
+  pending,
+}: {
+  label: string;
+  value: string;
+  pending?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'baseline',
+        fontSize: 12,
+        fontFamily: F.label,
+      }}
+    >
+      <span style={{ color: T.muted }}>{label}</span>
+      <span
+        style={{
+          fontFamily: F.num,
+          fontWeight: pending ? 500 : 600,
+          fontStyle: pending ? 'italic' : 'normal',
+          color: pending ? T.muted2 : T.ink,
+        }}
+      >
+        {pending ? 'Verifying…' : value}
+      </span>
     </div>
   );
 }
@@ -3910,3 +3965,23 @@ function H2HView({
     </Container>
   );
 }
+
+// ─── Compare v2 keep-alive ─────────────────────────────────────────────
+// The reskin dropped several file-local render helpers from the current
+// render tree — DsnpPopulationBadges, DualEligibleBadges, MetricMini,
+// InpatientPreviewRow, ProviderList, DrugBreakdown, WhyThisPlan, cardBtn,
+// MetricRow. All still valuable (Quick Preview drawer + rollback path)
+// so they stay defined above. `noUnusedLocals` would otherwise error;
+// this single void reference satisfies it without exporting them or
+// scattering pragma comments across the file.
+void [
+  DsnpPopulationBadges,
+  DualEligibleBadges,
+  MetricMini,
+  InpatientPreviewRow,
+  ProviderList,
+  DrugBreakdown,
+  WhyThisPlan,
+  cardBtn,
+  MetricRow,
+];

@@ -942,6 +942,18 @@ const explanationsByPlanId = useMemo<
     return out;
   }, [brain.result]);
 
+  // Composite ranking score per plan id — fed to CompareScreen so the
+  // v2 SlotCell can render a normalized confidence % (this-plan's
+  // composite / best-in-current-pool composite). Same {scored∪bench}
+  // union pattern as explanationsByPlanId.
+  const compositeByPlanId = useMemo<Record<string, number>>(() => {
+    if (!brain.result) return {};
+    const out: Record<string, number> = {};
+    for (const sp of brain.result.scored) out[sp.plan.id] = sp.composite;
+    for (const sp of brain.result.bench) out[sp.plan.id] = sp.composite;
+    return out;
+  }, [brain.result]);
+
   // ── Current plan lookup ──────────────────────────────────────────
   const currentPlan = useMemo<Plan | null>(() => {
     if (!currentPlanId) return null;
@@ -1196,6 +1208,7 @@ const explanationsByPlanId = useMemo<
             drugsTotalByPlanId={drugsTotalByPlanId}
             drugBreakdownByPlanId={drugBreakdownByPlanId}
             explanationsByPlanId={explanationsByPlanId}
+            compositeByPlanId={compositeByPlanId}
             dualEligibleByPlanId={dualEligibleByPlanId}
             rankedPlans={
               ranked.result
