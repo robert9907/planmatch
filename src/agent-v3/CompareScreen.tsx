@@ -1899,6 +1899,16 @@ function BenchCard({
   const elimSurvived = elim === 'Outside Top 4';
   const showElimChip = elim != null && !isBaseline;
 
+  // Duplicate-carrier suppression for drag tooltip — same fix as
+  // SlotCell (Wellcare plan_name filed with carrier prefix would read
+  // "Wellcare Wellcare Simple (HMO-POS)" otherwise).
+  const carrierStr = plan.carrier ?? '';
+  const nameStr = plan.plan_name ?? '';
+  const dragDisplayName =
+    carrierStr && nameStr.toLowerCase().startsWith(carrierStr.toLowerCase())
+      ? nameStr
+      : `${carrierStr} ${nameStr}`.trim();
+
   return (
     <div
       draggable
@@ -1916,102 +1926,148 @@ function BenchCard({
         background: T.card,
         border: `1px solid ${hover ? T.mint600 : T.line}`,
         borderRadius: 10,
-        padding: 13,
         cursor: 'grab',
         display: 'flex',
         flexDirection: 'column',
-        gap: 8,
       }}
-      title={`${plan.carrier} ${plan.plan_name} — drag to a slot`}
+      title={`${dragDisplayName} — drag to a slot`}
     >
-      {/* Compare v2: elimination chip retained as a diagnostic signal —
-          brokers rely on it to explain why a plan didn't make Top 4.
-          DsnpPopulationBadges / DualEligibleBadges / ribbonChip / SBF
-          link removed per reskin scope; wire back if reversed. */}
-      {showElimChip && (
-        <span
+      {/* Pre-slice NAVY header band — restored 2026-08-05 (Rob diff'd
+          0250c7d and confirmed uniform navy on every carrier; no
+          per-carrier palette exists in this repo). Holds elim chip +
+          identity + SBF badge; DSNP badges, metric grid, and actions
+          continue on the white body below. */}
+      <div
+        style={{
+          background: T.navy950,
+          padding: 12,
+          borderTopLeftRadius: 9,
+          borderTopRightRadius: 9,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+        }}
+      >
+        {showElimChip && (
+          <span
+            style={{
+              display: 'inline-block',
+              alignSelf: 'flex-start',
+              background: elimSurvived ? T.mint100 : T.amber100,
+              color: elimSurvived ? T.mint700 : T.amber700,
+              fontFamily: F.label,
+              fontSize: 8.5,
+              fontWeight: 700,
+              letterSpacing: 0.6,
+              padding: '2px 7px',
+              borderRadius: 4,
+              textTransform: 'uppercase',
+              minWidth: 96,
+              textAlign: 'center',
+              marginBottom: 2,
+            }}
+            title={
+              elimSurvived
+                ? 'Survived every gate — ranked below Top 4 by total cost.'
+                : `Eliminated at ${elim?.toLowerCase()}.`
+            }
+          >
+            {elim}
+          </span>
+        )}
+
+        <p
           style={{
-            display: 'inline-block',
-            alignSelf: 'flex-start',
-            background: elimSurvived ? T.mint100 : T.amber100,
-            color: elimSurvived ? T.mint700 : T.amber700,
+            margin: 0,
             fontFamily: F.label,
-            fontSize: 8.5,
+            fontSize: 10,
             fontWeight: 700,
-            letterSpacing: 0.6,
-            padding: '2px 7px',
-            borderRadius: 4,
+            color: T.mintOnDark,
             textTransform: 'uppercase',
-            minWidth: 96,
-            textAlign: 'center',
+            letterSpacing: 0.4,
           }}
-          title={
-            elimSurvived
-              ? 'Survived every gate — ranked below Top 4 by total cost.'
-              : `Eliminated at ${elim?.toLowerCase()}.`
-          }
         >
-          {elim}
-        </span>
-      )}
-
-      <p
-        style={{
-          margin: 0,
-          fontFamily: F.label,
-          fontSize: 10,
-          fontWeight: 600,
-          color: T.muted2,
-          textTransform: 'uppercase',
-          letterSpacing: 0.4,
-        }}
-      >
-        {plan.carrier}
-      </p>
-      <p
-        style={{
-          margin: '2px 0 0',
-          fontFamily: F.label,
-          fontSize: 12.5,
-          fontWeight: 600,
-          color: T.ink,
-          lineHeight: 1.3,
-          minHeight: 32,
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-          overflow: 'hidden',
-          wordBreak: 'break-word',
-        }}
-        title={plan.plan_name ?? ''}
-      >
-        {plan.plan_name}
-      </p>
-      <p
-        style={{
-          margin: '2px 0 0',
-          fontFamily: F.num,
-          fontSize: 10,
-          color: T.muted2,
-        }}
-      >
-        {planIdShort(plan.id)}
-      </p>
-
-      {/* D-SNP accepted-population chips — same component as SlotCell,
-          restyled for the white v2 card. Renders null on non-D-SNP so
-          bench spacing collapses cleanly. Restored 2026-08-05. */}
-      <DsnpPopulationBadges plan={plan} />
+          {plan.carrier}
+        </p>
+        <p
+          style={{
+            margin: '2px 0 0',
+            fontFamily: F.label,
+            fontSize: 12,
+            fontWeight: 700,
+            color: '#FFFFFF',
+            lineHeight: 1.25,
+            minHeight: 30,
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+            wordBreak: 'break-word',
+          }}
+          title={plan.plan_name ?? ''}
+        >
+          {plan.plan_name}
+        </p>
+        <p
+          style={{
+            margin: '2px 0 0',
+            fontFamily: F.num,
+            fontSize: 9.5,
+            color: 'rgba(255,255,255,0.55)',
+            letterSpacing: 0.5,
+          }}
+        >
+          {planIdShort(plan.id)}
+        </p>
+        {plan.sbf_url && (
+          <a
+            href={plan.sbf_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              display: 'inline-block',
+              alignSelf: 'flex-start',
+              marginTop: 5,
+              background: 'rgba(127,224,196,0.18)',
+              color: T.mintOnDark,
+              fontFamily: F.label,
+              fontSize: 9,
+              fontWeight: 700,
+              padding: '2px 6px',
+              borderRadius: 3,
+              textDecoration: 'none',
+              letterSpacing: 0.3,
+            }}
+            title="Summary of Benefits (source PDF)"
+          >
+            📄 SBF ↗
+          </a>
+        )}
+      </div>
 
       <div
         style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: '6px 10px',
-          borderTop: `1px solid ${T.line}`,
-          paddingTop: 8,
+          padding: 13,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
         }}
       >
+        {/* D-SNP accepted-population chips — light-fill (mint / amber)
+            on the white body. Returns null on non-D-SNP so bench
+            spacing collapses cleanly. Restored 2026-08-05. */}
+        <DsnpPopulationBadges plan={plan} />
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: '6px 10px',
+            borderTop: `1px solid ${T.line}`,
+            paddingTop: 8,
+          }}
+        >
         <BMetric
           label="Premium"
           value={
@@ -2082,23 +2138,24 @@ function BenchCard({
         </button>
       </div>
 
-      {/* Reference unused handlers/vars so lint doesn't flag them; the
-          v2 bench card intentionally drops H2H + inline expander +
-          per-drug breakdown + provider status list per Rob's answer.
-          The values are still supplied by the callsite for parity when
-          those surfaces get re-enabled. */}
-      <span
-        style={{ display: 'none' }}
-        data-h2h={typeof onOpenH2H}
-        data-baseline={String(isBaseline)}
-        data-drug-breakdown-len={drugBreakdown?.length ?? 0}
-        data-providers={providers.length}
-        data-wins={`${premiumWins ? 1 : 0}${moopWins ? 1 : 0}${drugWins ? 1 : 0}${starsWins ? 1 : 0}${dentalWins ? 1 : 0}${sixthWins ? 1 : 0}`}
-        data-sixth={`${sixthLabel}:${sixthValue}`}
-        data-expanded={String(expanded)}
-        data-set-expanded={typeof setExpanded}
-        data-ribbon-chip={ribbonChip ? '1' : '0'}
-      />
+        {/* Reference unused handlers/vars so lint doesn't flag them; the
+            v2 bench card intentionally drops H2H + inline expander +
+            per-drug breakdown + provider status list per Rob's answer.
+            The values are still supplied by the callsite for parity when
+            those surfaces get re-enabled. */}
+        <span
+          style={{ display: 'none' }}
+          data-h2h={typeof onOpenH2H}
+          data-baseline={String(isBaseline)}
+          data-drug-breakdown-len={drugBreakdown?.length ?? 0}
+          data-providers={providers.length}
+          data-wins={`${premiumWins ? 1 : 0}${moopWins ? 1 : 0}${drugWins ? 1 : 0}${starsWins ? 1 : 0}${dentalWins ? 1 : 0}${sixthWins ? 1 : 0}`}
+          data-sixth={`${sixthLabel}:${sixthValue}`}
+          data-expanded={String(expanded)}
+          data-set-expanded={typeof setExpanded}
+          data-ribbon-chip={ribbonChip ? '1' : '0'}
+        />
+      </div>
     </div>
   );
 }
@@ -2743,6 +2800,18 @@ function SlotCell({
   const visionMetric = findMetric('vision');
   const starsMetric = findMetric('stars');
 
+  // Duplicate-carrier suppression for the drag tooltip — some CMS
+  // filings put the carrier at the start of plan_name (e.g. Wellcare
+  // plans file as "Wellcare Simple (HMO-POS)"), so `${carrier} ${name}`
+  // reads as "Wellcare Wellcare Simple". Drop the prefix when it's
+  // already there. Fixes the 2026-08-05 bug Rob flagged.
+  const carrierStr = plan.carrier ?? '';
+  const nameStr = plan.plan_name ?? '';
+  const dragDisplayName =
+    carrierStr && nameStr.toLowerCase().startsWith(carrierStr.toLowerCase())
+      ? nameStr
+      : `${carrierStr} ${nameStr}`.trim();
+
   return (
     <div
       draggable
@@ -2762,13 +2831,11 @@ function SlotCell({
           ? `2px solid ${T.mint600}`
           : `1px solid ${dragOver ? T.mint600 : T.line}`,
         borderRadius: 12,
-        padding: 16,
         display: 'flex',
         flexDirection: 'column',
-        gap: 10,
         cursor: 'grab',
       }}
-      title={`${plan.carrier} ${plan.plan_name} — drag to swap slots`}
+      title={`${dragDisplayName} — drag to swap slots`}
     >
       {rankLabel && (
         <span
@@ -2776,6 +2843,7 @@ function SlotCell({
             position: 'absolute',
             top: -9,
             left: 14,
+            zIndex: 2,
             background: ribbonBg,
             color: ribbonColor,
             fontFamily: F.label,
@@ -2791,42 +2859,61 @@ function SlotCell({
         </span>
       )}
 
-      {/* X to clear slot — top-right, subtle so it doesn't collide
-          with the rank ribbon at top-left. */}
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onClear();
-        }}
-        aria-label="Remove plan from board"
+      {/* Pre-slice NAVY header band — restored 2026-08-05 after Rob
+          diffed 0250c7d and confirmed the pre-slice card had a solid
+          navy strip at top (uniform across carriers — no per-carrier
+          palette exists in this repo). Holds identity + SBF badge +
+          confidence circle + X clear button. All slice-1+2 white-body
+          content (why-strip, DSNP, metric list, actions) continues
+          unchanged below. */}
+      <div
         style={{
-          position: 'absolute',
-          top: 8,
-          right: 8,
-          background: 'transparent',
-          border: 'none',
-          color: T.muted2,
-          width: 20,
-          height: 20,
-          cursor: 'pointer',
-          fontSize: 14,
-          lineHeight: 1,
-          padding: 0,
+          background: T.navy950,
+          padding: '12px 14px',
+          position: 'relative',
+          borderTopLeftRadius: 11,
+          borderTopRightRadius: 11,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          gap: 8,
         }}
       >
-        ✕
-      </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClear();
+          }}
+          aria-label="Remove plan from board"
+          style={{
+            position: 'absolute',
+            top: 6,
+            right: 6,
+            background: 'rgba(255,255,255,0.12)',
+            border: 'none',
+            color: '#FFFFFF',
+            borderRadius: 5,
+            width: 22,
+            height: 22,
+            cursor: 'pointer',
+            fontSize: 13,
+            lineHeight: 1,
+            padding: 0,
+            zIndex: 1,
+          }}
+        >
+          ✕
+        </button>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-        <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ minWidth: 0, flex: 1, paddingRight: 28 }}>
           <p
             style={{
               margin: '0 0 3px',
               fontFamily: F.label,
               fontSize: 10.5,
-              fontWeight: 600,
-              color: T.muted2,
+              fontWeight: 700,
+              color: T.mintOnDark,
               textTransform: 'uppercase',
               letterSpacing: 0.4,
             }}
@@ -2837,10 +2924,10 @@ function SlotCell({
             style={{
               margin: 0,
               fontFamily: F.label,
-              fontSize: 14.5,
-              fontWeight: 600,
-              color: T.ink,
-              lineHeight: 1.3,
+              fontSize: 13,
+              fontWeight: 700,
+              color: '#FFFFFF',
+              lineHeight: 1.25,
               display: '-webkit-box',
               WebkitLineClamp: 2,
               WebkitBoxOrient: 'vertical',
@@ -2855,12 +2942,37 @@ function SlotCell({
             style={{
               margin: '3px 0 0',
               fontFamily: F.num,
-              fontSize: 10.5,
-              color: T.muted2,
+              fontSize: 10,
+              color: 'rgba(255,255,255,0.55)',
+              letterSpacing: 0.5,
             }}
           >
             {planIdShort(plan.id)}
           </p>
+          {plan.sbf_url && (
+            <a
+              href={plan.sbf_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                display: 'inline-block',
+                marginTop: 6,
+                background: 'rgba(127,224,196,0.18)',
+                color: T.mintOnDark,
+                fontFamily: F.label,
+                fontSize: 9,
+                fontWeight: 700,
+                padding: '2px 6px',
+                borderRadius: 3,
+                textDecoration: 'none',
+                letterSpacing: 0.3,
+              }}
+              title="Summary of Benefits (source PDF)"
+            >
+              📄 SBF ↗
+            </a>
+          )}
         </div>
         <div
           aria-label={confidence == null ? 'Confidence pending' : `Confidence ${confidence}%`}
@@ -2877,6 +2989,7 @@ function SlotCell({
             fontWeight: 700,
             background: confidenceBg,
             color: confidenceFg,
+            marginTop: 2,
           }}
         >
           {confidenceLabel}
@@ -2885,33 +2998,41 @@ function SlotCell({
 
       <div
         style={{
-          fontSize: 11.5,
-          padding: '7px 10px',
-          borderRadius: 7,
-          lineHeight: 1.4,
-          background: whyText.tone === 'good' ? T.mint100 : T.amber100,
-          color: whyText.tone === 'good' ? T.mint700 : T.amber700,
-        }}
-      >
-        {whyText.text}
-      </div>
-
-      {/* D-SNP accepted-population badges — mint chips for full-benefit
-          codes (FBDE / QMB+ / SLMB+), amber for partial-benefit codes
-          (QMB / SLMB / QI / QDWI). Returns null on non-D-SNP so the
-          slot spacing collapses cleanly. Restored 2026-08-05 after the
-          v2 header rewrite dropped the render site. */}
-      <DsnpPopulationBadges plan={plan} />
-
-      <div
-        style={{
-          borderTop: `1px solid ${T.line}`,
-          paddingTop: 9,
+          padding: 16,
           display: 'flex',
           flexDirection: 'column',
-          gap: 7,
+          gap: 10,
         }}
       >
+        <div
+          style={{
+            fontSize: 11.5,
+            padding: '7px 10px',
+            borderRadius: 7,
+            lineHeight: 1.4,
+            background: whyText.tone === 'good' ? T.mint100 : T.amber100,
+            color: whyText.tone === 'good' ? T.mint700 : T.amber700,
+          }}
+        >
+          {whyText.text}
+        </div>
+
+        {/* D-SNP accepted-population badges — mint chips for full-benefit
+            codes (FBDE / QMB+ / SLMB+), amber for partial-benefit codes
+            (QMB / SLMB / QI / QDWI). Returns null on non-D-SNP so the
+            slot spacing collapses cleanly. Restored 2026-08-05 after the
+            v2 header rewrite dropped the render site. */}
+        <DsnpPopulationBadges plan={plan} />
+
+        <div
+          style={{
+            borderTop: `1px solid ${T.line}`,
+            paddingTop: 9,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 7,
+          }}
+        >
         <MetricLine
           label="Premium"
           value={
@@ -3000,16 +3121,17 @@ function SlotCell({
           moved to SummaryBar; ProviderList / DrugCostCard / WhyThisPlan
           hidden pending the Quick Preview drawer). Reference them here
           so noUnusedLocals stays happy — cheap and reversible. */}
-      <span
-        style={{ display: 'none' }}
-        data-enroll-handler={typeof onEnroll}
-        data-providers={providers.length}
-        data-medications={medications.length}
-        data-lis-tier={String(lisTier)}
-        data-drug-phases={drugPhasesByPlanIdRxcui.size}
-        data-drug-comparison={drugCostComparisonPlans.length}
-        data-best-by-metric={Object.keys(bestByMetric).length}
-      />
+        <span
+          style={{ display: 'none' }}
+          data-enroll-handler={typeof onEnroll}
+          data-providers={providers.length}
+          data-medications={medications.length}
+          data-lis-tier={String(lisTier)}
+          data-drug-phases={drugPhasesByPlanIdRxcui.size}
+          data-drug-comparison={drugCostComparisonPlans.length}
+          data-best-by-metric={Object.keys(bestByMetric).length}
+        />
+      </div>
     </div>
   );
 }
