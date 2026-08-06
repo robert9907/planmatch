@@ -1599,9 +1599,8 @@ function DsnpPopulationBadges({ plan }: { plan: Plan }) {
       title="Accepted Medicaid populations (CMS SNP Comprehensive Report)"
       style={{
         display: 'flex',
-        gap: 3,
+        gap: 4,
         flexWrap: 'wrap',
-        marginTop: 4,
       }}
     >
       {pops.map((pop) => {
@@ -1610,17 +1609,20 @@ function DsnpPopulationBadges({ plan }: { plan: Plan }) {
           <span
             key={pop}
             style={{
-              // Translucent-fill chip on the navy header. Full-benefit
-              // codes get GREEN (#22c55e), partial-benefit codes get
-              // GOLD (#f59e0b) — matches the palette used by
-              // MetricMini's winning-vs-baseline highlight.
-              background: full ? 'rgba(34,197,94,0.22)' : 'rgba(245,158,11,0.22)',
-              color: full ? '#a7f3d0' : '#fde68a',
-              fontFamily: FONT_LABEL,
-              fontSize: 8,
-              fontWeight: 800,
-              padding: '2px 5px',
-              borderRadius: 3,
+              // Compare v2: light-fill chip on the new white card.
+              // Full-benefit codes (FBDE / QMB+ / SLMB+) get the mint
+              // palette; partial-benefit codes (QMB / SLMB / QI / QDWI)
+              // get amber to signal "narrower coverage."
+              background: full ? T.mint100 : T.amber100,
+              color: full ? T.mint700 : T.amber700,
+              border: `1px solid ${
+                full ? 'rgba(15,158,119,0.35)' : 'rgba(154,91,10,0.30)'
+              }`,
+              fontFamily: F.label,
+              fontSize: 9,
+              fontWeight: 700,
+              padding: '2px 6px',
+              borderRadius: 4,
               letterSpacing: 0.4,
               whiteSpace: 'nowrap',
             }}
@@ -1996,6 +1998,11 @@ function BenchCard({
         {planIdShort(plan.id)}
       </p>
 
+      {/* D-SNP accepted-population chips — same component as SlotCell,
+          restyled for the white v2 card. Renders null on non-D-SNP so
+          bench spacing collapses cleanly. Restored 2026-08-05. */}
+      <DsnpPopulationBadges plan={plan} />
+
       <div
         style={{
           display: 'grid',
@@ -2005,7 +2012,19 @@ function BenchCard({
           paddingTop: 8,
         }}
       >
-        <BMetric label="Premium" value={`$${plan.premium}/mo`} />
+        <BMetric
+          label="Premium"
+          value={
+            dualEligible?.premiumPaidByMedicaid && plan.premium > 0
+              ? '$0/mo'
+              : `$${plan.premium}/mo`
+          }
+          strike={
+            dualEligible?.premiumPaidByMedicaid && plan.premium > 0
+              ? `$${plan.premium}/mo`
+              : null
+          }
+        />
         <BMetric label="MOOP" value={fmt(plan.moop_in_network)} />
         <BMetric label="Drug/yr" value={drug == null ? '—' : fmt(drug)} />
         <BMetric
@@ -2074,7 +2093,6 @@ function BenchCard({
         data-baseline={String(isBaseline)}
         data-drug-breakdown-len={drugBreakdown?.length ?? 0}
         data-providers={providers.length}
-        data-dual-eligible={dualEligible ? '1' : '0'}
         data-wins={`${premiumWins ? 1 : 0}${moopWins ? 1 : 0}${drugWins ? 1 : 0}${starsWins ? 1 : 0}${dentalWins ? 1 : 0}${sixthWins ? 1 : 0}`}
         data-sixth={`${sixthLabel}:${sixthValue}`}
         data-expanded={String(expanded)}
@@ -2086,7 +2104,19 @@ function BenchCard({
 }
 
 // Compact key/value tile for the v2 bench card 2-column metric grid.
-function BMetric({ label, value }: { label: string; value: string }) {
+function BMetric({
+  label,
+  value,
+  strike,
+}: {
+  label: string;
+  value: string;
+  /** Optional pre-adjustment value shown inline in parens with a
+   *  strikethrough. Same dual-eligible premium treatment as
+   *  MetricLine — kept parenthesized so it reads as an aside on a
+   *  216px-wide bench card. */
+  strike?: string | null;
+}) {
   return (
     <div>
       <span
@@ -2103,13 +2133,30 @@ function BMetric({ label, value }: { label: string; value: string }) {
       </span>
       <span
         style={{
+          display: 'inline-flex',
+          alignItems: 'baseline',
+          gap: 4,
           fontSize: 11.5,
           fontWeight: 600,
           fontFamily: F.num,
           color: T.ink,
         }}
       >
-        {value}
+        <span>{value}</span>
+        {strike && (
+          <span
+            aria-label={`Original ${label} ${strike} — paid by Medicaid`}
+            style={{
+              fontSize: 10,
+              fontWeight: 500,
+              color: T.muted2,
+              textDecoration: 'line-through',
+              textDecorationColor: T.muted2,
+            }}
+          >
+            ({strike})
+          </span>
+        )}
       </span>
     </div>
   );
@@ -2849,6 +2896,13 @@ function SlotCell({
         {whyText.text}
       </div>
 
+      {/* D-SNP accepted-population badges — mint chips for full-benefit
+          codes (FBDE / QMB+ / SLMB+), amber for partial-benefit codes
+          (QMB / SLMB / QI / QDWI). Returns null on non-D-SNP so the
+          slot spacing collapses cleanly. Restored 2026-08-05 after the
+          v2 header rewrite dropped the render site. */}
+      <DsnpPopulationBadges plan={plan} />
+
       <div
         style={{
           borderTop: `1px solid ${T.line}`,
@@ -2860,7 +2914,18 @@ function SlotCell({
       >
         <MetricLine
           label="Premium"
-          value={premiumMetric ? premiumMetric.format(plan) : '—'}
+          value={
+            dualEligible?.premiumPaidByMedicaid && plan.premium > 0
+              ? '$0/mo'
+              : premiumMetric
+                ? premiumMetric.format(plan)
+                : '—'
+          }
+          strike={
+            dualEligible?.premiumPaidByMedicaid && plan.premium > 0
+              ? `$${plan.premium}/mo`
+              : null
+          }
         />
         <MetricLine
           label="Est. annual cost"
@@ -2939,7 +3004,6 @@ function SlotCell({
         style={{ display: 'none' }}
         data-enroll-handler={typeof onEnroll}
         data-providers={providers.length}
-        data-dual-eligible={dualEligible ? '1' : '0'}
         data-medications={medications.length}
         data-lis-tier={String(lisTier)}
         data-drug-phases={drugPhasesByPlanIdRxcui.size}
@@ -2957,10 +3021,16 @@ function MetricLine({
   label,
   value,
   pending,
+  strike,
 }: {
   label: string;
   value: string;
   pending?: boolean;
+  /** Optional pre-adjustment value shown inline in parens with a
+   *  strikethrough. Used for dual-eligible premium ($0 vs original
+   *  $68) so brokers can point at "Medicaid pays this" during a
+   *  screen-share without hiding what CMS filed. */
+  strike?: string | null;
 }) {
   return (
     <div
@@ -2970,18 +3040,43 @@ function MetricLine({
         alignItems: 'baseline',
         fontSize: 12,
         fontFamily: F.label,
+        gap: 6,
       }}
     >
       <span style={{ color: T.muted }}>{label}</span>
       <span
         style={{
-          fontFamily: F.num,
-          fontWeight: pending ? 500 : 600,
-          fontStyle: pending ? 'italic' : 'normal',
-          color: pending ? T.muted2 : T.ink,
+          display: 'inline-flex',
+          alignItems: 'baseline',
+          gap: 5,
+          minWidth: 0,
         }}
       >
-        {pending ? 'Verifying…' : value}
+        {strike && (
+          <span
+            aria-label={`Original ${label} ${strike} — paid by Medicaid`}
+            style={{
+              fontFamily: F.num,
+              fontSize: 10.5,
+              fontWeight: 500,
+              color: T.muted2,
+              textDecoration: 'line-through',
+              textDecorationColor: T.muted2,
+            }}
+          >
+            ({strike})
+          </span>
+        )}
+        <span
+          style={{
+            fontFamily: F.num,
+            fontWeight: pending ? 500 : 600,
+            fontStyle: pending ? 'italic' : 'normal',
+            color: pending ? T.muted2 : T.ink,
+          }}
+        >
+          {pending ? 'Verifying…' : value}
+        </span>
       </span>
     </div>
   );
@@ -3968,14 +4063,14 @@ function H2HView({
 
 // ─── Compare v2 keep-alive ─────────────────────────────────────────────
 // The reskin dropped several file-local render helpers from the current
-// render tree — DsnpPopulationBadges, DualEligibleBadges, MetricMini,
-// InpatientPreviewRow, ProviderList, DrugBreakdown, WhyThisPlan, cardBtn,
-// MetricRow. All still valuable (Quick Preview drawer + rollback path)
-// so they stay defined above. `noUnusedLocals` would otherwise error;
-// this single void reference satisfies it without exporting them or
-// scattering pragma comments across the file.
+// render tree — DualEligibleBadges, MetricMini, InpatientPreviewRow,
+// ProviderList, DrugBreakdown, WhyThisPlan, cardBtn, MetricRow. All
+// still valuable (Quick Preview drawer + rollback path) so they stay
+// defined above. `noUnusedLocals` would otherwise error; this single
+// void reference satisfies it without exporting them or scattering
+// pragma comments across the file. DsnpPopulationBadges was restored
+// to SlotCell + BenchCard on 2026-08-05 and is not listed here.
 void [
-  DsnpPopulationBadges,
   DualEligibleBadges,
   MetricMini,
   InpatientPreviewRow,
