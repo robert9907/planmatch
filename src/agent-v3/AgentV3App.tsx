@@ -54,7 +54,7 @@ import { totalComplianceItems } from '@/lib/compliance';
 import type { Plan } from '@/types/plans';
 import type { StateCode } from '@/types/session';
 import { useAgentBaseRecommend } from '@/hooks/useAgentBaseRecommend';
-import { AgentBar, type ScreenId } from './AgentBar';
+import { AgentBar, SCREENS, type ScreenId } from './AgentBar';
 import { ComplianceScreen } from './ComplianceScreen';
 import { CompareScreen } from './CompareScreen';
 import { DisclaimersScreen } from './DisclaimersScreen';
@@ -180,8 +180,27 @@ const PRIORITY_TO_EXTRAS: Partial<Record<PriorityKey, string>> = {
 // the client cares about; empty = no Gate 3 filter at all.
 const DEFAULT_PRIORITIES: PriorityKey[] = [];
 
+// Read an optional ?tab= query param on first mount and, if it names
+// a real ScreenId from AgentBar's SCREENS list, open the app on that
+// screen instead of defaulting to Client (intake). Anything absent,
+// invalid, or misspelled falls through to intake — the URL is never
+// authoritative over the flow. Presentation-only: the underlying
+// AgentBase / client-data hydration is unchanged.
+//
+// Uses AgentBar's internal ScreenId keys directly — no aliases. Rob
+// asked callers to construct URLs like ?tab=compare, ?tab=meds, etc.
+// The two internal keys that don't match their UI label are `intake`
+// (Client tab) and `disclaimers` (Disclaimers tab); links from
+// AgentBase / bookmarks must use those exact strings.
+function initialScreen(): ScreenId {
+  if (typeof window === 'undefined') return 'intake';
+  const raw = new URLSearchParams(window.location.search).get('tab');
+  if (!raw) return 'intake';
+  return (SCREENS as readonly string[]).includes(raw) ? (raw as ScreenId) : 'intake';
+}
+
 export function AgentV3App() {
-  const [screen, setScreen] = useState<ScreenId>('intake');
+  const [screen, setScreen] = useState<ScreenId>(initialScreen);
   const [clientView, setClientView] = useState(false);
   const [priorities, setPriorities] = useState<PriorityKey[]>(DEFAULT_PRIORITIES);
 
