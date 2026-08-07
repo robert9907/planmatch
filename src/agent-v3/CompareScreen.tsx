@@ -55,7 +55,11 @@ import { useDrugPhases, type DrugPhaseHit } from '@/hooks/useDrugPhases';
 import type { DrugCostCardComparisonPlan } from './DrugCostCard';
 import { QuoteBuilder } from './QuoteBuilder';
 import { TOKENS as T, FONT as F } from './compare-v2/tokens';
-import { QuickPreviewDrawer } from './compare-v2/QuickPreviewDrawer';
+// QuickPreviewDrawer no longer rendered from CompareScreen — bench
+// "Quick preview" is the pre-slice inline expander on BenchCard
+// itself (restored 2026-08-07). The QuickPreviewDrawer.tsx file stays
+// on disk because SummaryOfBenefitsDrawer imports its shared
+// PreviewDrawerShell + PreviewGrid primitives.
 import { SummaryOfBenefitsDrawer } from './compare-v2/SummaryOfBenefitsDrawer';
 import { formatOtc } from '@/lib/extractBenefitValue';
 
@@ -809,24 +813,18 @@ export function CompareScreen({
   const [mode, setMode] = useState<'grid' | 'h2h'>('grid');
   const [challenger, setChallenger] = useState<Plan | null>(null);
 
-  // Two mutually-exclusive detail drawers:
-  //   • Quick Preview       — per-plan, extras-only, opened from
-  //     bench cards. Body is the 5-row extras summary (dental /
-  //     vision / OTC / healthy food card / fitness).
-  //   • Summary of Benefits — per-plan, opened from a specific
-  //     board-slot card. Shows THAT plan's full 4-col benefit grid
-  //     + per-drug medication cost breakdown for THAT plan.
-  // Only one open at a time; opening either clears the other. Both
-  // are presentation-only overlays; slot/bench state underneath is
-  // untouched when they close.
-  const [previewPlan, setPreviewPlan] = useState<Plan | null>(null);
+  // Summary of Benefits — per-plan drawer opened from a specific
+  // board-slot card. Shows that plan's full 4-col benefit grid + per-
+  // drug medication cost breakdown for THAT plan. Presentation-only;
+  // slot/bench state underneath is untouched when it closes.
+  //
+  // Bench "Quick preview" is NOT a drawer — it's an inline expander
+  // rendered on the bench card itself (restored 2026-08-07 to the
+  // pre-slice behavior; see BenchCard's `expanded` state below).
+  // Because there's no drawer state to manage for the bench flow,
+  // CompareScreen only tracks summaryPlan here.
   const [summaryPlan, setSummaryPlan] = useState<Plan | null>(null);
-  const openPreview = (p: Plan) => {
-    setSummaryPlan(null);
-    setPreviewPlan(p);
-  };
   const openSummary = (p: Plan) => {
-    setPreviewPlan(null);
     setSummaryPlan(p);
   };
 
@@ -1187,7 +1185,6 @@ export function CompareScreen({
         providers={providers}
         onAddToBoard={addToBoard}
         onOpenH2H={openH2H}
-        onOpenPreview={openPreview}
       />
 
       {/* Compare v2 reskin (2026-08-05): Part D timeline overlay hidden
@@ -1280,21 +1277,12 @@ export function CompareScreen({
         );
       })()}
 
-      {/* Detail drawers — mutually exclusive, both dark-navy panels
-          that "open in place" between the board and the SummaryBar so
-          slot state stays visible above and the bench stays reachable
-          via scroll. Suppress on empty state / when nothing selected. */}
-      {previewPlan && (
-        <QuickPreviewDrawer
-          plan={previewPlan}
-          onClose={() => setPreviewPlan(null)}
-          onAddToBoard={(p) => {
-            addToBoard(p);
-            setPreviewPlan(null);
-          }}
-          isOnBoard={slotIds.has(previewPlan.id)}
-        />
-      )}
+      {/* Summary of Benefits — per-plan drawer opened from a specific
+          board-slot card. Renders between the board and the SummaryBar
+          so slot state stays visible above and the bench stays
+          reachable via scroll. Suppress on empty state / when nothing
+          selected. Bench Quick Preview is an inline expander on the
+          bench card itself — no drawer for that flow. */}
       {summaryPlan && (
         <SummaryOfBenefitsDrawer
           plan={summaryPlan}
@@ -1778,7 +1766,6 @@ function Bench({
   providers,
   onAddToBoard,
   onOpenH2H,
-  onOpenPreview,
 }: {
   /** Lifted from CompareScreen so board slots and bench cards apply
    *  the same predicate chain. Bench renders filters.filtered minus
@@ -1801,7 +1788,6 @@ function Bench({
   providers: ProviderRow[];
   onAddToBoard: (plan: Plan) => void;
   onOpenH2H: (plan: Plan) => void;
-  onOpenPreview: (plan: Plan) => void;
 }) {
   // Bench items = filter-matched pool minus whatever's on the board.
   // Bench filter counts still cover the FULL pool (both slot + bench
@@ -1874,7 +1860,6 @@ function Bench({
               providers={providers}
               onAddToBoard={onAddToBoard}
               onOpenH2H={onOpenH2H}
-              onOpenPreview={onOpenPreview}
             />
           ))
         )}
@@ -1894,7 +1879,6 @@ function BenchCard({
   providers,
   onAddToBoard,
   onOpenH2H,
-  onOpenPreview,
 }: {
   plan: Plan;
   baseline: Plan | null;
@@ -1906,7 +1890,6 @@ function BenchCard({
   providers: ProviderRow[];
   onAddToBoard: (plan: Plan) => void;
   onOpenH2H: (plan: Plan) => void;
-  onOpenPreview: (plan: Plan) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [hover, setHover] = useState(false);
@@ -2152,13 +2135,19 @@ function BenchCard({
       </div>
 
       <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
+        {/* Restored 2026-08-07: original pre-slice Quick preview
+            behavior — inline expander on the bench card, NOT a
+            drawer. Same handler as the pre-a528de6 version at
+            CompareScreen.tsx:1989-2010 on commit 0250c7d:
+            `onClick={() => setExpanded((v) => !v)}` with the label
+            flipping between "Quick preview" and "Hide preview". */}
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            onOpenPreview(plan);
+            setExpanded((v) => !v);
           }}
-          title="Open a side-by-side benefit preview without adding this plan to the board"
+          title="Toggle the summary-of-benefits snapshot for this plan"
           style={{
             flex: 1,
             textAlign: 'center',
@@ -2173,7 +2162,7 @@ function BenchCard({
             fontFamily: F.label,
           }}
         >
-          Quick preview
+          {expanded ? 'Hide preview' : 'Quick preview'}
         </button>
         <button
           type="button"
@@ -2196,23 +2185,85 @@ function BenchCard({
         </button>
       </div>
 
-        {/* Reference unused handlers/vars so lint doesn't flag them; the
-            v2 bench card intentionally drops H2H + inline expander +
-            per-drug breakdown + provider status list per Rob's answer.
-            The values are still supplied by the callsite for parity when
-            those surfaces get re-enabled. */}
-        <span
-          style={{ display: 'none' }}
-          data-h2h={typeof onOpenH2H}
-          data-baseline={String(isBaseline)}
-          data-drug-breakdown-len={drugBreakdown?.length ?? 0}
-          data-providers={providers.length}
-          data-wins={`${premiumWins ? 1 : 0}${moopWins ? 1 : 0}${drugWins ? 1 : 0}${starsWins ? 1 : 0}${dentalWins ? 1 : 0}${sixthWins ? 1 : 0}`}
-          data-sixth={`${sixthLabel}:${sixthValue}`}
-          data-expanded={String(expanded)}
-          data-set-expanded={typeof setExpanded}
-          data-ribbon-chip={ribbonChip ? '1' : '0'}
-        />
+      {/* Original pre-slice inline expander body — verbatim 12-row
+          list from CompareScreen.tsx:2011-2054 on commit 0250c7d,
+          in the same visual order. PreviewRow + InpatientPreviewRow
+          were kept on disk in the slice-1+2 void keep-alive; both
+          now render inline again with v2 fonts. Inpatient / MH
+          inpatient / Skilled nursing use the FULL day-tier ladder
+          (per [[feedback_inpatient_full_ladder]] — never collapse).
+          Full metric list is intentionally omitted here; this is the
+          summary snapshot the pre-slice UI showed, not the H2H view. */}
+      {expanded && (
+        <div
+          style={{
+            marginTop: 8,
+            borderTop: `1px solid ${T.line}`,
+            paddingTop: 8,
+          }}
+        >
+          <PreviewRow label="PCP" value={formatPcp(plan)} />
+          <PreviewRow label="Specialist" value={formatSpecialist(plan)} />
+          <PreviewRow
+            label="Urgent care"
+            value={formatCostShareWithRange(plan.benefits.medical.urgent_care, {
+              isPdp: plan.plan_type === 'PDP',
+            })}
+          />
+          <PreviewRow
+            label="Emergency"
+            value={formatCostShareWithRange(plan.benefits.medical.emergency, {
+              isPdp: plan.plan_type === 'PDP',
+            })}
+          />
+          <InpatientPreviewRow
+            label="Inpatient"
+            cs={plan.benefits.medical.inpatient}
+          />
+          <InpatientPreviewRow
+            label="MH inpatient"
+            cs={plan.benefits.medical.mental_health_inpatient}
+          />
+          <InpatientPreviewRow
+            label="Skilled nursing"
+            cs={plan.benefits.medical.snf}
+          />
+          <PreviewRow
+            label="OTC / qtr"
+            value={
+              plan.benefits.otc.allowance_per_quarter > 0
+                ? `$${plan.benefits.otc.allowance_per_quarter}`
+                : '—'
+            }
+          />
+          <PreviewRow label="Vision" value={planDisplay(plan).visionAllowance} />
+          <PreviewRow label="Fitness" value={planDisplay(plan).fitness} />
+          <PreviewRow
+            label="Part B back"
+            value={plan.part_b_giveback > 0 ? `$${plan.part_b_giveback}/mo` : '—'}
+          />
+          <PreviewRow
+            label="Part D ded."
+            value={plan.drug_deductible == null ? '—' : `$${plan.drug_deductible}`}
+          />
+        </div>
+      )}
+
+      {/* Lint-only reference for props/vars supplied by the callsite
+          but not rendered on the card. Shrunk after restoring the
+          expander: expanded / setExpanded / drugBreakdown are now
+          used above; providers still isn't (bench card has no per-
+          provider list). */}
+      <span
+        style={{ display: 'none' }}
+        data-h2h={typeof onOpenH2H}
+        data-baseline={String(isBaseline)}
+        data-providers={providers.length}
+        data-drug-breakdown-len={drugBreakdown?.length ?? 0}
+        data-wins={`${premiumWins ? 1 : 0}${moopWins ? 1 : 0}${drugWins ? 1 : 0}${starsWins ? 1 : 0}${dentalWins ? 1 : 0}${sixthWins ? 1 : 0}`}
+        data-sixth={`${sixthLabel}:${sixthValue}`}
+        data-ribbon-chip={ribbonChip ? '1' : '0'}
+      />
       </div>
     </div>
   );
@@ -2347,6 +2398,11 @@ function MetricMini({
   );
 }
 
+// Restyled 2026-08-07 for v2 fonts (Inter + IBM Plex Mono via F.label
+// / F.num). Colors already matched between old and v2 palettes — MUTED
+// and TEXT map to T.muted and T.ink at the same hex values — so the
+// row visually integrates with the white v2 bench-card body once it
+// renders inline again via the restored Quick preview expander.
 function PreviewRow({ label, value }: { label: string; value: string }) {
   return (
     <div
@@ -2355,16 +2411,16 @@ function PreviewRow({ label, value }: { label: string; value: string }) {
         justifyContent: 'space-between',
         alignItems: 'flex-start',
         padding: '3px 0',
-        fontFamily: FONT_LABEL,
+        fontFamily: F.label,
         fontSize: 10,
       }}
     >
-      <span style={{ color: MUTED }}>{label}</span>
+      <span style={{ color: T.muted }}>{label}</span>
       <span
         style={{
-          fontFamily: FONT_NUM,
+          fontFamily: F.num,
           fontWeight: 600,
-          color: TEXT,
+          color: T.ink,
           textAlign: 'right',
           whiteSpace: 'pre-line',
         }}
@@ -4286,7 +4342,6 @@ function H2HView({
 void [
   DualEligibleBadges,
   MetricMini,
-  InpatientPreviewRow,
   ProviderList,
   DrugBreakdown,
   WhyThisPlan,
