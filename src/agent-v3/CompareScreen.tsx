@@ -2711,6 +2711,75 @@ function DrugBreakdown({
   );
 }
 
+// ── Gate 3 explanation filter (display-only guard) ─────────────
+//
+// Root cause of the "Dental not filed" chip appearing on plans that
+// clearly file dental (on 2026-08-07 prod every board card showed
+// the chip while 3 of 4 also showed a real $2,000/$4,000/$45/yr
+// dental value in the metric row):
+//
+//   1. Gate 3 explanations are built in plan-brain-explanations.ts
+//      by reading `extractCategoryAnnualValue(benefits, 'dental')`
+//      from a PlanBenefitRow[] (plan-brain-utils.ts:874).
+//   2. `extractCategoryAnnualValue` reads `row.coverage_amount ??
+//      row.max_coverage ?? null`.
+//   3. The adapter that assembles those PlanBenefitRow[] entries
+//      (usePlanBrain.ts:406 `benefitToBrain`) HARDCODES both fields
+//      to null (lines 428 + 431). So every extractCategoryAnnualValue
+//      call returns 0, and every gate 3 explanation for dental /
+//      vision / otc / hearing / fitness / transportation reads as
+//      "not filed" or "not offered" regardless of what CMS filed.
+//   4. The metric row on the card reads `planDisplay(plan).dentalMax`
+//      → `plan.benefits.dental.annual_max` — a DIFFERENT source that
+//      is correctly populated. So the two disagree.
+//
+// This helper suppresses gate 3 lines whose text says "X not filed"
+// or "X not offered" when the plan's own benefits object (the same
+// source the metric row uses) shows X in a form the card actually
+// displays. Result: chip only fires when the plan genuinely has no
+// filed benefit at all — matching what the metric row shows.
+//
+// Rob's fix scope is display-only. The underlying adapter bug
+// (benefitToBrain hardcoding coverage_amount + max_coverage to null)
+// also affects Gate 3 ELIMINATION and broker-rules dental logic —
+// flagged in the branch report as a separate, larger fix.
+function filterMisleadingGate3Extras(
+  gate3: ReadonlyArray<string> | undefined,
+  plan: Plan,
+): string[] {
+  if (!gate3 || gate3.length === 0) return [];
+  const display = planDisplay(plan);
+  return gate3.filter((line) => {
+    const lower = line.toLowerCase();
+    const isNegative =
+      lower.includes('not filed') || lower.includes('not offered');
+    if (!isNegative) return true;
+    // Suppress if the plan actually files this extra in a form the
+    // card's metric row would show. We test against the SAME planDisplay
+    // outputs the metric list already uses so chip <> metric can't
+    // disagree.
+    if (lower.startsWith('dental')) return display.dentalMax === 'None';
+    if (lower.startsWith('vision')) return display.visionAllowance === '$0';
+    if (lower.startsWith('otc')) return plan.benefits.otc.allowance_per_quarter <= 0;
+    if (lower.startsWith('hearing')) return display.hearing === 'None';
+    if (lower.startsWith('fitness')) return !plan.benefits.fitness.enabled;
+    if (lower.startsWith('transportation')) {
+      return plan.benefits.transportation.rides_per_year <= 0;
+    }
+    if (lower.startsWith('healthy foods')) {
+      return plan.benefits.food_card.allowance_per_month <= 0;
+    }
+    if (lower.startsWith('part b giveback')) return plan.part_b_giveback <= 0;
+    if (lower.startsWith('telehealth')) {
+      const t = plan.benefits.medical.telehealth;
+      return t.copay == null && t.coinsurance == null && !t.description;
+    }
+    // Unknown "not filed" category — let it pass (fail-open, no false
+    // suppression on future extras).
+    return true;
+  });
+}
+
 // ── Slot cell ──────────────────────────────────────────────────
 function SlotCell({
   slotIdx,
@@ -2887,12 +2956,21 @@ function SlotCell({
   // priority order (gate 3 = benefits, gate 2 = drug coverage, gate 1 =
   // provider match). Falls back to a neutral summary when the brain
   // hasn't scored the plan yet.
+  //
+  // Gate 3 explanations are filtered before selection to suppress
+  // strings like "Dental not filed" when the plan's own benefits
+  // object shows real dental data — the two data paths disagree
+  // because the brain adapter (usePlanBrain.benefitToBrain) hardcodes
+  // coverage_amount + max_coverage to null, so every downstream
+  // extractCategoryAnnualValue call returns 0 regardless of what CMS
+  // actually filed. See filterMisleadingGate3Extras below.
   const whyText: { text: string; tone: 'good' | 'warn' } = (() => {
     if (drugCoverageUnknown) {
       return { text: 'Drug coverage pending formulary verification', tone: 'warn' };
     }
     if (explanations) {
-      if (explanations.gate3?.[0]) return { text: explanations.gate3[0], tone: 'good' };
+      const gate3Clean = filterMisleadingGate3Extras(explanations.gate3, plan);
+      if (gate3Clean[0]) return { text: gate3Clean[0], tone: 'good' };
       if (explanations.gate2?.[0]) return { text: explanations.gate2[0], tone: 'good' };
       if (explanations.gate1?.[0]) return { text: explanations.gate1[0], tone: 'good' };
       if (explanations.gate4) return { text: explanations.gate4, tone: 'good' };
