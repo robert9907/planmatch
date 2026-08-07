@@ -4,6 +4,7 @@
 import type { PlanBenefitRow } from './brain-foreign-types';
 import type { FormularyCoverage } from './brain-foreign-types';
 import type { Utilization, UtilizationProfile, UserProfile, DrugCostCacheEntry } from './plan-brain-types';
+import type { PlanBenefits } from '../types/plans';
 import { dominantConditionProfile, type ConditionProfile, type ConditionSupply } from './condition-profiles';
 import {
   partDTimeline,
@@ -731,7 +732,78 @@ export function annualExtrasValue(
   benefits: PlanBenefitRow[],
   priorities: ReadonlySet<string>,
   conditionBoostCategories: ReadonlyArray<string> = [],
+  plan?: { benefits: PlanBenefits; snp_type: string | null; part_b_giveback: number } | null,
 ): number {
+  // Aggregated Plan path — real filed dollars for the extras categories
+  // /api/plans buildBenefits already normalizes. Falls through to the
+  // raw per-row path below when planByKey wasn't threaded (legacy call
+  // sites). Both paths respect the same priority-doubling /
+  // condition-boost multipliers.
+  if (plan) {
+    const pb = plan.benefits;
+    const doubledCategories = new Set<string>();
+    for (const pri of priorities) {
+      const cats = PRIORITY_TO_CATEGORIES[pri];
+      if (cats) for (const c of cats) doubledCategories.add(c);
+    }
+    const boostedCategories = new Set(conditionBoostCategories);
+    const applyMult = (cat: string, v: number): number => {
+      let out = v;
+      if (doubledCategories.has(cat)) out *= 2;
+      if (boostedCategories.has(cat)) out *= 1.5;
+      return out;
+    };
+    let total = 0;
+    const dentalAllow = pb.dental?.annual_max ?? 0;
+    if (dentalAllow > 0) {
+      total += applyMult('dental', dentalAllow);
+    } else if (pb.dental?.comprehensive || pb.dental?.description) {
+      total += applyMult('dental', EXTRAS_DEFAULT_VALUE.dental);
+    } else if (pb.dental?.preventive) {
+      total += applyMult('dental_preventive', EXTRAS_DEFAULT_VALUE.dental_preventive);
+    }
+    const visionAllow = pb.vision?.eyewear_allowance_year ?? 0;
+    if (visionAllow > 0) {
+      total += applyMult('vision', visionAllow);
+    } else if (pb.vision?.exam || pb.vision?.description) {
+      total += applyMult('vision', EXTRAS_DEFAULT_VALUE.vision);
+    }
+    const hearingAllow = pb.hearing?.aid_allowance_year ?? 0;
+    if (hearingAllow > 0) {
+      total += applyMult('hearing', hearingAllow);
+    } else if (pb.hearing?.exam || pb.hearing?.description) {
+      total += applyMult('hearing', EXTRAS_DEFAULT_VALUE.hearing);
+    }
+    const otcQ = pb.otc?.allowance_per_quarter ?? 0;
+    if (otcQ > 0) total += applyMult('otc', otcQ * 4);
+    const foodMonthly = pb.food_card?.allowance_per_month ?? 0;
+    // D-SNP / C-SNP only (same guard as raw path r7ExtrasAnnualValue).
+    const isSnpPlan = /D-?SNP|C-?SNP|I-?SNP/i.test(plan.snp_type ?? '');
+    if (isSnpPlan && foodMonthly > 0) {
+      total += applyMult('meals', foodMonthly * 12);
+    }
+    if (pb.fitness?.enabled) total += applyMult('fitness', EXTRAS_DEFAULT_VALUE.fitness);
+    const rides = pb.transportation?.rides_per_year ?? 0;
+    if (rides > 0 || (pb.transportation?.description ?? '').trim().length > 0) {
+      total += applyMult('transportation', EXTRAS_DEFAULT_VALUE.transportation);
+    }
+    const th = pb.medical?.telehealth;
+    if (th && (th.copay != null || th.coinsurance != null || (th.description ?? '').trim().length > 0)) {
+      total += applyMult('telehealth', EXTRAS_DEFAULT_VALUE.telehealth);
+    }
+    // Part B giveback — always monthly per CMS; DELIBERATE double-count
+    // with the OOP axis (spec-preserved).
+    const gbMonthly = plan.part_b_giveback ?? 0;
+    if (gbMonthly > 0) total += applyMult('partb_giveback', gbMonthly * 12);
+    // NB: raw path also scores meal_benefit + insulin from
+    // EXTRAS_DEFAULT_VALUE when a row exists. Aggregated Plan doesn't
+    // carry those as first-class fields — accepting minor per-plan
+    // parity drift on plans that file post-discharge meals or insulin
+    // supplies as first-class categories (both are conditionBoost
+    // candidates, not composite drivers, so drift is bounded to the
+    // extras axis's informational score / BEST_EXTRAS ribbon).
+    return Math.round(total);
+  }
   // Two multiplier layers:
   //   priorities → user explicitly checked the category → 2×
   //   condition-key extras → not user-picked but materially relevant
@@ -888,6 +960,80 @@ export function extractCategoryAnnualValue(
   return filed;
 }
 
+// ─── Aggregated-benefits reader (Option A — 2026-08-07) ──────────────
+//
+// The raw PlanBenefitRow[] path above is broken end-to-end for extras
+// value in production: api/plan-brain-data's pbp_benefits view doesn't
+// expose coverage_amount/max_coverage, and even if it did the
+// usePlanBrain adapter hardcodes both to null (benefitToBrain:428+431).
+// pbp_benefits_v2 base rows have coverage_amount populated in 0.1% of
+// rows.
+//
+// The Plan type carried through /api/plans → planCatalog.fetchPlansForClient
+// already has correctly-aggregated benefits (dental.annual_max,
+// vision.eyewear_allowance_year, etc.) because api/plans.ts:buildBenefits
+// aliases the CMS sub-categories via PBP_TYPE_TO_CATEGORY, promotes
+// row.copay → coverage_amount for allowance-type rows, and falls back
+// to the medicare_gov scraper. That's the source-of-truth the UI
+// already reads.
+//
+// This helper lets brain code read from that aggregated source when
+// available. Callers that also have the raw benefits array can pass
+// both — helper prefers aggregated when it says the plan files the
+// extra, else falls through to the raw path so old behavior remains
+// intact when aggregated isn't threaded.
+//
+// partb_giveback lives at the Plan-top level (not on PlanBenefits),
+// so callers must pass `planLevel` for that key to work.
+export type ExtraKey =
+  | 'dental'
+  | 'vision'
+  | 'otc'
+  | 'partb_giveback'
+  | 'hearing'
+  | 'fitness'
+  | 'transportation'
+  | 'telehealth'
+  | 'meals';
+
+export function extractExtraAnnualFromAggregated(
+  pb: PlanBenefits | null | undefined,
+  planLevel: { part_b_giveback?: number | null } | null | undefined,
+  key: ExtraKey,
+): number {
+  if (key === 'partb_giveback') {
+    return (planLevel?.part_b_giveback ?? 0) * 12;
+  }
+  if (!pb) return 0;
+  switch (key) {
+    case 'dental':
+      return pb.dental?.annual_max ?? 0;
+    case 'vision':
+      return pb.vision?.eyewear_allowance_year ?? 0;
+    case 'hearing':
+      return pb.hearing?.aid_allowance_year ?? 0;
+    case 'otc':
+      return (pb.otc?.allowance_per_quarter ?? 0) * 4;
+    case 'meals':
+      return (pb.food_card?.allowance_per_month ?? 0) * 12;
+    case 'transportation':
+      return pb.transportation?.rides_per_year ?? 0;
+    case 'fitness':
+      return pb.fitness?.enabled ? 1 : 0;
+    case 'telehealth': {
+      const t = pb.medical?.telehealth;
+      if (!t) return 0;
+      const has =
+        t.copay != null ||
+        t.coinsurance != null ||
+        (typeof t.description === 'string' && t.description.trim().length > 0);
+      return has ? 1 : 0;
+    }
+    default:
+      return 0;
+  }
+}
+
 export function partBGivebackAnnual(benefits: PlanBenefitRow[]): number {
   const b = benefitByCategory(benefits, 'partb_giveback');
   if (!b) return 0;
@@ -1015,12 +1161,20 @@ export function classifyDentalTier(
  * brain (scoring path) and PlanBenefitDetail (UI label) so the
  * displayed tier always matches the tier the brain scored on.
  */
-export function classifyPlanDentalTier(benefits: PlanBenefitRow[]): DentalTier {
-  // Walk the dental family in priority order — comprehensive label
-  // wins over preventive-only when both are present. dental_preventive
-  // is the bulk of pbp_federal data (preventive baseline); 'dental' is
-  // the consumer-facing merged row that may carry "comprehensive" copy
-  // and an allowance.
+export function classifyPlanDentalTier(
+  benefits: PlanBenefitRow[],
+  plan?: PlanBenefits | null,
+): DentalTier {
+  // Aggregated path first: /api/plans buildBenefits has already
+  // normalized dental.annual_max (from row.coverage_amount / copay
+  // fallback / medicare_gov scraper) and dental.description carries
+  // the comprehensive/preventive text classifyDentalTier keys on. Raw
+  // PlanBenefitRow[] hits the hardcoded-null adapter and always
+  // classifies to 'preventive' — see extractExtraAnnualFromAggregated
+  // for context.
+  if (plan?.dental) {
+    return classifyDentalTier(plan.dental.description, plan.dental.annual_max);
+  }
   const order: ReadonlyArray<string> = ['dental', 'dental_comprehensive', 'dental_preventive'];
   for (const cat of order) {
     const row = benefitByCategory(benefits, cat);

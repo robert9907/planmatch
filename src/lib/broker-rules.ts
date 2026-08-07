@@ -16,7 +16,10 @@
 
 import type { BrainScoredPlan } from './plan-brain-types';
 import type { DetectedCondition } from './condition-detector';
-import { extractCategoryAnnualValue } from './plan-brain-utils';
+import {
+  extractCategoryAnnualValue,
+  extractExtraAnnualFromAggregated,
+} from './plan-brain-utils';
 
 export interface ClientProfile {
   age: number | null;
@@ -161,7 +164,9 @@ function isPpoLike(plan: BrainScoredPlan): boolean {
 function qualifiesForPpoHalving(_p: ClientProfile, plan: BrainScoredPlan): boolean {
   if (!isPpoLike(plan)) return false;
   if (!plan.score.primaryProviderInNetwork) return false;
-  const dentalAnnual = extractCategoryAnnualValue(plan.benefits, 'dental');
+  const dentalAnnual = plan.plan
+    ? extractExtraAnnualFromAggregated(plan.plan.benefits, plan.plan, 'dental')
+    : extractCategoryAnnualValue(plan.benefits, 'dental');
   return dentalAnnual >= 2000;
 }
 

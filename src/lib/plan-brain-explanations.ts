@@ -15,8 +15,10 @@ import type {
   ProviderNetworkCacheEntry,
 } from './plan-brain-types';
 import type { FormularyCoverage } from './brain-foreign-types';
+import type { Plan } from '../types/plans';
 import {
   extractCategoryAnnualValue,
+  extractExtraAnnualFromAggregated,
   extractOtcQuarterly,
 } from './plan-brain-utils';
 
@@ -109,11 +111,27 @@ function evaluatePriorityChecks(args: {
   thresholds: Partial<
     Record<'dental' | 'vision' | 'otc' | 'partb_giveback', number>
   >;
+  // Optional aggregated Plan (post-buildBenefits). When provided,
+  // extras readers pull from this source instead of the raw benefits
+  // array — the latter is broken end-to-end in prod (see
+  // extractExtraAnnualFromAggregated for context).
+  plan?: Plan | null;
 }): PriorityCheckInternal[] {
+  const pb = args.plan?.benefits ?? null;
+  const planLevel = args.plan ?? null;
+  // Reader that prefers the aggregated Plan when available; falls back
+  // to the raw benefits array otherwise. Keeps every branch below
+  // uniform.
+  const readAnnual = (
+    key: 'dental' | 'vision' | 'hearing' | 'fitness' | 'transportation' | 'telehealth' | 'meals',
+  ): number => {
+    if (pb) return extractExtraAnnualFromAggregated(pb, planLevel, key);
+    return extractCategoryAnnualValue(args.benefits, key);
+  };
   const out: PriorityCheckInternal[] = [];
   for (const pri of args.priorities) {
     if (pri === 'dental' || pri === 'vision') {
-      const annual = extractCategoryAnnualValue(args.benefits, pri);
+      const annual = readAnnual(pri);
       const threshold = args.thresholds[pri] ?? 0;
       const score =
         threshold > 0
@@ -136,7 +154,15 @@ function evaluatePriorityChecks(args: {
         score,
       });
     } else if (pri === 'otc') {
-      const { quarterly, period } = extractOtcQuarterly(args.benefits);
+      // Aggregated Plan carries OTC as allowance_per_quarter — treat as
+      // canonical quarterly value. Raw path uses extractOtcQuarterly
+      // which normalizes across "$/month" and "$/quarter" filings.
+      const quarterly = pb
+        ? (pb.otc?.allowance_per_quarter ?? 0)
+        : extractOtcQuarterly(args.benefits).quarterly;
+      const period: 'month' | 'quarter' = pb
+        ? 'quarter'
+        : extractOtcQuarterly(args.benefits).period;
       const threshold = args.thresholds.otc ?? 0;
       const score =
         threshold > 0
@@ -162,7 +188,9 @@ function evaluatePriorityChecks(args: {
         score,
       });
     } else if (pri === 'partb_giveback') {
-      const monthly = extractGivebackMonthly(args.benefits);
+      const monthly = planLevel
+        ? (planLevel.part_b_giveback ?? 0)
+        : extractGivebackMonthly(args.benefits);
       const threshold = args.thresholds.partb_giveback ?? 0;
       const score =
         threshold > 0
@@ -220,10 +248,14 @@ function evaluatePriorityChecks(args: {
               : pri === 'telehealth'
                 ? 'telehealth'
                 : null;
-      const filed = cat ? extractCategoryAnnualValue(args.benefits, cat) : 0;
+      const filed = cat ? readAnnual(cat) : 0;
+      // Healthy-foods fallback: aggregated Plan has food_card.
+      // allowance_per_month; raw path checks for a 'meals' row.
       const fallback =
         pri === 'healthy_foods'
-          ? args.benefits.some((b) => b.benefit_category === 'meals')
+          ? pb
+            ? (pb.food_card?.allowance_per_month ?? 0) > 0
+            : args.benefits.some((b) => b.benefit_category === 'meals')
           : false;
       const meets = filed > 0 || fallback;
       const label = TOGGLE_LABEL_BY_KEY[pri] ?? pri;
@@ -332,6 +364,7 @@ export function buildGate3Explanations(
   thresholds: Partial<
     Record<'dental' | 'vision' | 'otc' | 'partb_giveback', number>
   >,
+  plan?: Plan | null,
 ): string[] {
   if (priorities.size === 0) return [];
   return evaluatePriorityChecks({
@@ -341,6 +374,7 @@ export function buildGate3Explanations(
     drugCostScore,
     priorities,
     thresholds,
+    plan,
   }).map((c) => c.label);
 }
 

@@ -53,6 +53,7 @@ import {
   deriveUtilization,
   estimateBundleYearlyCost,
   extractCategoryAnnualValue,
+  extractExtraAnnualFromAggregated,
   extractOtcQuarterly,
   normalizeDirect,
   normalizeInverse,
@@ -371,13 +372,27 @@ const EXTRAS_GATE_KEYS = [
 type ExtrasGateKey = (typeof EXTRAS_GATE_KEYS)[number];
 
 function planHasTransportation(s: BrainScoredPlan): boolean {
+  // Aggregated Plan.benefits.transportation.rides_per_year > 0 is the
+  // production source of truth; fall back to raw for compatibility with
+  // legacy call sites that don't build planByKey.
+  if (s.plan) {
+    const rides = s.plan.benefits.transportation?.rides_per_year ?? 0;
+    if (rides > 0) return true;
+    const desc = s.plan.benefits.transportation?.description;
+    if (typeof desc === 'string' && desc.trim().length > 0) return true;
+    return false;
+  }
   return s.benefits.some((b) => b.benefit_category === 'transportation');
 }
 
 function planOffersExtra(s: BrainScoredPlan, key: ExtrasGateKey): boolean {
   if (key === 'transportation') return planHasTransportation(s);
+  if (s.plan) {
+    // Aggregated path — the broken hardcoded-null adapter is bypassed.
+    // partb_giveback isn't a Gate 3 key here so planLevel isn't needed.
+    return extractExtraAnnualFromAggregated(s.plan.benefits, s.plan, key) > 0;
+  }
   if (key === 'otc') return extractOtcQuarterly(s.benefits).quarterly > 0;
-  // dental / vision / hearing / fitness — annualized allowance > 0.
   return extractCategoryAnnualValue(s.benefits, key) > 0;
 }
 
@@ -600,6 +615,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   const rawScored: BrainScoredPlan[] = eligible.map((row) => {
     const benefits = input.benefitsByPlanKey.get(planKeyWithSegment(row)) ?? [];
     const formulary = input.formularyByPlanKey.get(planKeyNoSegment(row)) ?? new Map();
+    const aggregatedPlan = input.planByKey?.get(planKeyWithSegment(row)) ?? null;
 
     const planDrugCache = input.drugCostCacheByPlanKey?.get(planKeyWithSegment(row));
     const drugEstimates = estimateBundleYearlyCost({
@@ -639,6 +655,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       benefits,
       input.userProfile.priorities,
       conditionProfile?.keyExtras ?? [],
+      aggregatedPlan,
     );
 
     const supplyCoverage = computeSupplyCoverage(
@@ -720,7 +737,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       },
     });
 
-    const dentalTier = classifyPlanDentalTier(benefits);
+    const dentalTier = classifyPlanDentalTier(benefits, aggregatedPlan?.benefits ?? null);
 
     // Cost-breakdown string — simple, no condition-aware copy. The
     // consumer's buildCostBreakdown is omitted in this port; the
@@ -769,6 +786,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       0,
       userPriorities,
       input.userProfile.priorityThresholds ?? {},
+      aggregatedPlan,
     );
     const explanations: GateExplanations = {
       gate1: gate1Explanations,
@@ -829,7 +847,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       gate3Passed: false,
       explanations,
     };
-    return { row, benefits, formulary, score };
+    return { row, benefits, formulary, score, plan: aggregatedPlan };
   });
 
   // ── Pool-wide OTC / non-Rx pre-pass ────────────────────────────────
@@ -1007,6 +1025,9 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   // (the adapter slices to liveTop3.picks).
   const passesPriorityGates = (s: BrainScoredPlan): boolean => {
     if (!userPriorities.has('dental')) return true;
+    if (s.plan) {
+      return extractExtraAnnualFromAggregated(s.plan.benefits, s.plan, 'dental') > 0;
+    }
     return extractCategoryAnnualValue(s.benefits, 'dental') > 0;
   };
   assignRibbons(rankedByCost, { passesPriorityGates });

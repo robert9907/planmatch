@@ -487,6 +487,23 @@ function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
   const county = client.county || '';
   const planRows: PmPlanRow[] = plans.map((p, i) => planToPmRow(p, county, i + 1));
 
+  // ── planByKey (aggregated Plan objects) ──────────────────────────
+  // Brain-side extras readers prefer these over the raw PlanBenefitRow[]
+  // path because benefitToBrain hardcodes coverage_amount/max_coverage
+  // to null (extras filed by CMS as allowances land on row.copay in
+  // pbp_benefits_v2 and /api/plans buildBenefits already normalizes them
+  // into PlanBenefits fields like dental.annual_max).
+  // Key format matches planKeyWithSegment: contract-plan-segment with
+  // leading zeros stripped from the segment.
+  const planByKey = new Map<string, Plan>();
+  for (const p of plans) {
+    const parts = p.id.split('-');
+    const contract = parts[0] ?? p.contract_id;
+    const planNum = parts[1] ?? p.plan_number;
+    const segRaw = (parts[2] ?? '0').replace(/^0+/, '') || '0';
+    planByKey.set(`${contract}-${planNum}-${segRaw}`, p);
+  }
+
   // ── benefitsByPlanKey ─────────────────────────────────────────────
   // agent payload: `${contract}-${plan}-${segment}` (one zero-padded
   // segment form) → BenefitRow[]. Brain expects the same triple key.
@@ -650,6 +667,7 @@ function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
     plans: planRows,
     benefitsByPlanKey,
     formularyByPlanKey,
+    planByKey,
     userProfile,
     county: county || null,
     drugCostCacheByPlanKey,

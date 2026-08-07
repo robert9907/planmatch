@@ -377,6 +377,13 @@ export interface BrainScoredPlan {
   benefits: PlanBenefitRow[];
   formulary: Map<string, FormularyCoverage>;
   score: BrainScore;
+  // Aggregated Plan (from /api/plans buildBenefits) when available.
+  // Preferred source of truth for extras value — the raw `benefits`
+  // array is broken end-to-end for coverage_amount / max_coverage in
+  // the current production data path (see extractExtraAnnualFromAggregated
+  // in plan-brain-utils.ts). Null when the adapter couldn't match a
+  // Plan by contract-plan-segment key.
+  plan: import('../types/plans').Plan | null;
 }
 
 // Tradeoff warnings — broker-style "you asked for X but this plan
@@ -496,6 +503,12 @@ export interface BrainInputs {
   plans: readonly PmPlanRow[];
   benefitsByPlanKey: Map<string, PlanBenefitRow[]>;       // `${contract_id}-${plan_id}-${segment_id}`
   formularyByPlanKey: Map<string, Map<string, FormularyCoverage>>; // `${contract_id}-${plan_id}` (no segment)
+  // Aggregated Plan objects from /api/plans buildBenefits, keyed
+  // `${contract_id}-${plan_id}-${segment_id}` with the segment
+  // normalized (leading zeros stripped) to match planKeyWithSegment.
+  // Optional — legacy call sites that don't build it fall back to the
+  // raw benefits path (which returns 0 for filed-null coverage).
+  planByKey?: Map<string, import('../types/plans').Plan>;
   userProfile: UserProfile;
   county: string | null;
   // Optional: when provided, cost axis uses cache; when absent, falls
