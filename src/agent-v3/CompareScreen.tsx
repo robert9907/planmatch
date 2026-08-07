@@ -2147,7 +2147,7 @@ function BenchCard({
             e.stopPropagation();
             setExpanded((v) => !v);
           }}
-          title="Toggle the summary-of-benefits snapshot for this plan"
+          title="Expand benefit snapshot for this plan"
           style={{
             flex: 1,
             textAlign: 'center',
