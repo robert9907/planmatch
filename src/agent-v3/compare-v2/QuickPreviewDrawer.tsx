@@ -21,6 +21,18 @@ import {
 import { formatInpatientLadder } from '@/lib/inpatient-format';
 import { formatOtc } from '@/lib/extractBenefitValue';
 
+// Fields the Quick Preview extras-only view surfaces. Sourced from
+// the same helpers the pre-scope-cut drawer already used:
+//   • Dental      → planDisplay.dentalMax
+//   • Vision      → planDisplay.visionAllowance
+//   • OTC / qtr   → formatOtc(plan.benefits.otc.allowance_per_quarter,
+//                              plan.benefits.otc.description)
+//   • Food card   → planDisplay.meals
+//   • Fitness     → planDisplay.fitness
+// The full Provider & care / Hospital / Rx & pharmacy detail moved
+// to the board-level SummaryOfBenefits comparison view — no need to
+// duplicate it here where the broker is triaging bench options.
+
 // ─── Public entry points ────────────────────────────────────────────
 
 export interface QuickPreviewDrawerProps {
@@ -65,8 +77,61 @@ export function QuickPreviewDrawer(props: QuickPreviewDrawerProps) {
         ) : null
       }
     >
-      <PreviewGrid plan={plan} />
+      <ExtrasOnlyList plan={plan} />
     </PreviewDrawerShell>
+  );
+}
+
+// Extras-only body — five benefit lines the broker uses to decide
+// whether a bench plan is worth putting on the board. Reuses the same
+// planDisplay + formatOtc helpers the full-detail drawer used.
+function ExtrasOnlyList({ plan }: { plan: Plan }) {
+  const display = planDisplay(plan);
+  const otc = formatOtc(
+    plan.benefits.otc.allowance_per_quarter,
+    plan.benefits.otc.description,
+  );
+  const rows: Array<{ label: string; value: string }> = [
+    { label: 'Dental', value: display.dentalMax },
+    { label: 'Vision', value: display.visionAllowance },
+    { label: 'OTC / qtr', value: otc },
+    { label: 'Healthy food card', value: display.meals },
+    { label: 'Fitness', value: display.fitness },
+  ];
+  return (
+    <div style={{ padding: '14px 18px' }}>
+      {rows.map((r, i) => (
+        <div
+          key={r.label}
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'baseline',
+            fontFamily: F.label,
+            fontSize: 13,
+            padding: '10px 0',
+            borderTop: i === 0 ? 'none' : `1px solid ${T.navyRow}`,
+            gap: 12,
+          }}
+        >
+          <span style={{ color: T.navyTextMuted, fontWeight: 500 }}>
+            {r.label}
+          </span>
+          <span
+            style={{
+              color: '#EAF0F6',
+              fontFamily: F.num,
+              fontWeight: 600,
+              textAlign: 'right',
+              whiteSpace: 'pre-line',
+              lineHeight: 1.35,
+            }}
+          >
+            {r.value}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 

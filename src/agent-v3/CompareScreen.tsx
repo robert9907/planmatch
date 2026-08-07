@@ -809,19 +809,23 @@ export function CompareScreen({
   const [mode, setMode] = useState<'grid' | 'h2h'>('grid');
   const [challenger, setChallenger] = useState<Plan | null>(null);
 
-  // Two mutually-exclusive detail drawers (bench Quick Preview vs
-  // board Summary of Benefits). Only one open at a time — opening
-  // either clears the other. Both are presentation-only overlays;
-  // slot/bench state underneath is untouched when they close.
+  // Two mutually-exclusive detail drawers:
+  //   • Quick Preview  — per-plan, extras-only, opened from bench cards
+  //   • Summary of Benefits — SINGLE side-by-side view of every plan
+  //     currently on the board (up to 4 columns). Opened from ANY
+  //     board slot; every board card's button opens the same drawer.
+  // Only one open at a time; opening either clears the other. Both
+  // are presentation-only overlays; slot/bench state underneath is
+  // untouched when they close.
   const [previewPlan, setPreviewPlan] = useState<Plan | null>(null);
-  const [summaryPlan, setSummaryPlan] = useState<Plan | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState<boolean>(false);
   const openPreview = (p: Plan) => {
-    setSummaryPlan(null);
+    setSummaryOpen(false);
     setPreviewPlan(p);
   };
-  const openSummary = (p: Plan) => {
+  const openSummary = () => {
     setPreviewPlan(null);
-    setSummaryPlan(p);
+    setSummaryOpen(true);
   };
 
   // ── Bench filter engine (shared between slots + bench) ─────────────
@@ -1289,15 +1293,11 @@ export function CompareScreen({
           isOnBoard={slotIds.has(previewPlan.id)}
         />
       )}
-      {summaryPlan && (
+      {summaryOpen && (
         <SummaryOfBenefitsDrawer
-          plan={summaryPlan}
-          onClose={() => setSummaryPlan(null)}
-          drugBreakdown={
-            drugBreakdownByPlanId
-              ? drugBreakdownByPlanId[summaryPlan.id] ?? null
-              : null
-          }
+          plans={filteredSlots.filter((p): p is Plan => p != null)}
+          onClose={() => setSummaryOpen(false)}
+          drugBreakdownByPlanId={drugBreakdownByPlanId}
         />
       )}
 
@@ -2731,8 +2731,10 @@ function SlotCell({
   onFill: () => void;
   onOpenH2H: (p: Plan) => void;
   /** Opens the Summary of Benefits drawer at the CompareScreen level.
-   *  Only wired for filled slots; empty-slot placeholder ignores it. */
-  onOpenSummary: (p: Plan) => void;
+   *  Every filled board slot's button opens the SAME comparison view
+   *  spanning every plan on the board — takes no plan arg. Empty-slot
+   *  placeholder ignores it. */
+  onOpenSummary: () => void;
   onEnroll: () => void;
 }) {
   const [dragOver, setDragOver] = useState(false);
@@ -3131,9 +3133,9 @@ function SlotCell({
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            onOpenSummary(plan);
+            onOpenSummary();
           }}
-          title="Open the full Summary of Benefits drawer for this plan, including per-drug cost breakdown"
+          title="Open a side-by-side Summary of Benefits comparing every plan currently on the board, including per-drug cost breakdowns"
           style={{
             flex: 1,
             textAlign: 'center',
