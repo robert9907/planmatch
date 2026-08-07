@@ -307,6 +307,15 @@ export interface PlanBrainResult {
    *  note explaining why the Top 4 contains zero C-SNPs. Null when
    *  the user did not qualify or a C-SNP is in the Top 4. */
   csnpNote: string | null;
+  /** User drugs the brain could not evaluate because they arrived
+   *  without a resolvable rxcui (typically CRM free-text entries
+   *  that never routed through the drug-search autocomplete). The
+   *  Compare screen renders a data-quality banner listing these
+   *  names when the array is non-empty — rankings are computed with
+   *  these drugs bypassed at Gate 2 to avoid an empty pool, but
+   *  they DID NOT participate in coverage elimination. Empty when
+   *  every user drug has an rxcui or the user has no drugs. */
+  unresolvedDrugs: ReadonlyArray<{ index: number; name: string }>;
 }
 
 // ─── Adapter input ──────────────────────────────────────────────────
@@ -1030,6 +1039,7 @@ function adaptBrainOutput(
     medicationPatterns: adaptMedicationPatterns(brain.medicationPatterns),
     archetype: adaptArchetype(brain.archetype),
     csnpNote: brain.csnpNote,
+    unresolvedDrugs: brain.unresolvedDrugs ?? [],
   };
 }
 

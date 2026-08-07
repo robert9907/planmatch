@@ -592,6 +592,10 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       csnpNote: null,
       enrollmentGated,
       enrollmentPeriodLabel,
+      // No pool ⇒ nothing was scored ⇒ nothing to flag as unresolved.
+      // UI's session-based fallback still surfaces the banner if the
+      // client has meds without rxcuis.
+      unresolvedDrugs: [],
     };
   }
 
@@ -860,28 +864,99 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   // so those meds are skipped for elimination purposes but stay in
   // the UI drug list. Count is stamped on every score for downstream
   // consumers (UI badges, brain-snapshot).
+  // ── Pool-wide pre-pass — split into two distinct buckets ──────────
+  //
+  // Before this split (pre-2026-08-07), a single Set called
+  // `poolWideUncoveredIndices` collected every drug index where every
+  // plan reported covered=false and passed it to Gate 2 as the "treat
+  // as OTC" bypass list. The intent was legit — Vitamin D3 shouldn't
+  // disqualify plans. But it silently caught null-rxcui prescriptions
+  // too: without a rxcui, estimateBundleYearlyCost never looks up the
+  // formulary → covered=false everywhere → drug misclassified as OTC.
+  // Real Rx skipped Gate 2. Ranking materially wrong for the ~98% of
+  // captured AgentBase meds that arrive without a rxcui (see the
+  // Aug 2026 blast-radius report).
+  //
+  // New behavior:
+  //   • genuinelyUncoveredIndices — drug HAS a resolvable rxcui, but
+  //     no plan in the pool covers it. Real OTC / non-formulary. Keep
+  //     the Gate 2 bypass.
+  //   • unresolvedIndices — drug has NULL/empty rxcui. Brain never
+  //     performed a formulary lookup at all. NOT treated as OTC in
+  //     any downstream logic; surfaced on BrainOutput.unresolvedDrugs
+  //     so the UI can render a data-quality warning.
+  //
+  // NOTE ON THE Gate-2 CALL BELOW:
+  // Rob's spec literally reads "Pass only genuinelyUncoveredIndices
+  // to applyMedicationGate as otcIndices." Applying that literally
+  // would cause every plan to fail Gate 2 for any client with an
+  // unresolved drug (98% of AEP-primary clients per the blast-radius
+  // report). Rob also explicitly said "Do NOT silently fail the
+  // plans or empty the pool — the broker needs plans AND a clear
+  // warning." Those two rules conflict; the second one wins here.
+  // We pass the UNION of both sets to Gate 2 so plans still rank,
+  // and rely on the new BrainOutput.unresolvedDrugs field + the
+  // Compare-screen banner to tell the broker the ranking is
+  // incomplete. If Rob wants the literal spec (empty-pool + banner),
+  // the change is a one-liner below.
   const userDrugCount = input.userProfile.drugs.length;
-  const poolWideUncoveredIndices = new Set<number>();
+  const genuinelyUncoveredIndices = new Set<number>();
+  const unresolvedIndices = new Set<number>();
   if (rawScored.length > 0 && userDrugCount > 0) {
     for (let i = 0; i < userDrugCount; i += 1) {
+      const drug = input.userProfile.drugs[i];
+      const rx = drug?.rxcui;
+      const hasRxcui = typeof rx === 'string' && rx.trim().length > 0;
+      if (!hasRxcui) {
+        unresolvedIndices.add(i);
+        continue;
+      }
       let allUncovered = true;
       for (const s of rawScored) {
         const b = s.score.drugBreakdown[i];
         if (!b || b.covered === true) { allUncovered = false; break; }
       }
-      if (allUncovered) poolWideUncoveredIndices.add(i);
+      if (allUncovered) genuinelyUncoveredIndices.add(i);
     }
   }
-  const poolWideUncoveredDrugCount = poolWideUncoveredIndices.size;
+  // poolWideUncoveredDrugCount stays as the combined count so the
+  // downstream budget-option / tiebreaker helpers (allNonOtcCovered
+  // at line ~215) see the same denominator they did before this
+  // split. Rob's spec limits changes to Gate 2 classification + the
+  // new output field.
+  const poolWideUncoveredDrugCount =
+    genuinelyUncoveredIndices.size + unresolvedIndices.size;
   for (const s of rawScored) s.score.poolWideUncoveredDrugCount = poolWideUncoveredDrugCount;
-  if (poolWideUncoveredDrugCount > 0 && typeof console !== 'undefined' && console.info) {
-    const names = [...poolWideUncoveredIndices]
-      .map((i) => input.userProfile.drugs[i]?.name ?? `#${i}`)
-      .join(', ');
-    console.info(
-      `[brain-funnel] pool-wide-uncovered drugs (bypass Gate 2 as non-Rx): ${names}`,
-    );
+  if (typeof console !== 'undefined' && console.info) {
+    if (genuinelyUncoveredIndices.size > 0) {
+      const names = [...genuinelyUncoveredIndices]
+        .map((i) => input.userProfile.drugs[i]?.name ?? `#${i}`)
+        .join(', ');
+      console.info(
+        `[brain-funnel] pool-wide-uncovered drugs (bypass Gate 2 as non-Rx): ${names}`,
+      );
+    }
+    if (unresolvedIndices.size > 0) {
+      const names = [...unresolvedIndices]
+        .map((i) => input.userProfile.drugs[i]?.name ?? `#${i}`)
+        .join(', ');
+      console.info(
+        `[brain-funnel] unresolved drugs (no rxcui — Gate 2 bypasses to avoid empty pool; UI banner should surface): ${names}`,
+      );
+    }
   }
+  // Union of both is what Gate 2 sees (see NOTE above).
+  const gate2BypassIndices = new Set<number>([
+    ...genuinelyUncoveredIndices,
+    ...unresolvedIndices,
+  ]);
+  // Materialize the unresolved list for BrainOutput consumers.
+  const unresolvedDrugs: ReadonlyArray<{ index: number; name: string }> = [
+    ...unresolvedIndices,
+  ].map((i) => ({
+    index: i,
+    name: input.userProfile.drugs[i]?.name ?? `#${i}`,
+  }));
 
   // ── Dual-eligible / LIS cost adjustment ────────────────────────────
   // Runs after every raw BrainScore is computed and BEFORE any cost-
@@ -941,7 +1016,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   console.log('Gate 1:', gate1.length, 'survived of', rawScored.length);
 
   // ── Gate 2 — medications ──────────────────────────────────────────
-  const gate2Survivors = applyMedicationGate(gate1, userHasDrugs, poolWideUncoveredIndices);
+  const gate2Survivors = applyMedicationGate(gate1, userHasDrugs, gate2BypassIndices);
   for (const s of gate2Survivors) s.score.gate2Passed = true;
   const gate2Sorted = [...gate2Survivors].sort(
     (a, b) => a.score.totalAnnualDrugCost - b.score.totalAnnualDrugCost,
@@ -1089,5 +1164,6 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     csnpNote,
     enrollmentGated,
     enrollmentPeriodLabel,
+    unresolvedDrugs,
   };
 }

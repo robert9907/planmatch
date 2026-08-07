@@ -605,4 +605,14 @@ export interface BrainOutput {
   enrollmentGated?: boolean;
   /** Human-readable enrollment period context for compliance display. */
   enrollmentPeriodLabel?: string;
+  /** User drugs the brain could not evaluate because they arrived
+   *  without a resolvable rxcui — CRM free-text entries never routed
+   *  through the drug-search autocomplete. Bypassed at Gate 2 (paired
+   *  with genuine pool-wide-uncovered indices) so plans still rank,
+   *  but exposed here so the UI can render a data-quality banner
+   *  telling the broker the ranking is incomplete until they re-pick
+   *  these drugs via the Meds screen. `index` refers to the position
+   *  in `userProfile.drugs`; `name` is the best-effort display name
+   *  (falls back to `#N` if the input didn't carry one). */
+  unresolvedDrugs: ReadonlyArray<{ index: number; name: string }>;
 }

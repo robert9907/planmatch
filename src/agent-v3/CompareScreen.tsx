@@ -160,6 +160,13 @@ interface Props {
    *  on each SlotCell (this-plan's composite / best-in-current-pool).
    *  Missing entries fall back to a position-based ordering. */
   compositeByPlanId?: Record<string, number>;
+  /** User drugs the brain couldn't score because they arrived without
+   *  a resolvable rxcui. Sourced from BrainOutput.unresolvedDrugs via
+   *  the usePlanBrain adapter. Non-empty → renders the amber
+   *  DATA QUALITY banner at the top of the Compare screen so the
+   *  broker knows the ranking is incomplete for these meds. Empty
+   *  when every user drug has an rxcui or the user has no drugs. */
+  unresolvedDrugs?: ReadonlyArray<{ index: number; name: string }>;
   /** Per-plan dual-eligible / LIS cost adjustment sourced from
    *  BrainScore.dualEligibleAdjustment via AgentV3App's adapter.
    *  When present for a plan, the board slot / bench card / Quick
@@ -684,6 +691,7 @@ export function CompareScreen({
   benchGateResultsByPlanId,
   explanationsByPlanId,
   compositeByPlanId,
+  unresolvedDrugs,
   dualEligibleByPlanId,
   onRecommend,
   onBack,
@@ -760,6 +768,16 @@ export function CompareScreen({
     () => providers.filter((p) => !p.npi).length,
     [providers],
   );
+  // Prefer the brain-emitted list (has names + guaranteed to match
+  // what actually got scored) when the brain has run; fall back to
+  // session-derived names for the pre-brain-ready window so the
+  // banner names always align with the count above.
+  const unresolvedMedNames = useMemo<string[]>(() => {
+    if (unresolvedDrugs && unresolvedDrugs.length > 0) {
+      return unresolvedDrugs.map((d) => d.name);
+    }
+    return medications.filter((m) => !m.rxcui).map((m) => m.name);
+  }, [unresolvedDrugs, medications]);
 
   // Baseline = the plan every slot is compared against. The client's
   // current plan when one is on file; otherwise the brain's #1 pick
@@ -1057,6 +1075,7 @@ export function CompareScreen({
         annualDrugByPlanId={annualDrugByPlanId}
         unresolvedMedCount={unresolvedMedCount}
         totalMedCount={medications.length}
+        unresolvedMedNames={unresolvedMedNames}
         missingNpiCount={missingNpiCount}
         totalProviderCount={providers.length}
         onPickChallenger={setChallenger}
@@ -1162,6 +1181,7 @@ export function CompareScreen({
       <DataQualityBanner
         unresolvedMedCount={unresolvedMedCount}
         totalMedCount={medications.length}
+        unresolvedMedNames={unresolvedMedNames}
         missingNpiCount={missingNpiCount}
         totalProviderCount={providers.length}
       />
@@ -1497,11 +1517,18 @@ function eliminationReason(g: {
 function DataQualityBanner({
   unresolvedMedCount,
   totalMedCount,
+  unresolvedMedNames,
   missingNpiCount,
   totalProviderCount,
 }: {
   unresolvedMedCount: number;
   totalMedCount: number;
+  /** Optional list of the specific drug names that failed rxcui
+   *  resolution. Sourced from BrainOutput.unresolvedDrugs when the
+   *  brain has scored; falls back to just the count when the brain
+   *  hasn't emitted names yet. Rendered inline so the broker knows
+   *  which meds to re-pick, not just how many. */
+  unresolvedMedNames?: ReadonlyArray<string>;
   missingNpiCount: number;
   totalProviderCount: number;
 }) {
@@ -1540,12 +1567,26 @@ function DataQualityBanner({
             fontSize: 12,
             fontWeight: 600,
             color: '#78350f',
+            lineHeight: 1.45,
           }}
         >
           ⚠ {unresolvedMedCount} of {totalMedCount} medication
-          {totalMedCount === 1 ? '' : 's'} couldn't resolve to an RxNorm
-          rxcui — drug coverage shows 0/N on every plan. Open the{' '}
-          <strong>Meds</strong> screen and re-pick from the autocomplete.
+          {totalMedCount === 1 ? '' : 's'} could not be matched to a drug
+          code — <strong>plan rankings do not account for these</strong>.
+          Re-select them from the <strong>Meds</strong> tab to include
+          them.
+          {unresolvedMedNames && unresolvedMedNames.length > 0 && (
+            <div
+              style={{
+                marginTop: 4,
+                fontSize: 11,
+                fontWeight: 500,
+                color: '#78350f',
+              }}
+            >
+              Unmatched: {unresolvedMedNames.join(', ')}
+            </div>
+          )}
         </div>
       )}
       {missingNpiCount > 0 && (
@@ -3770,6 +3811,7 @@ function H2HView({
   annualDrugByPlanId,
   unresolvedMedCount,
   totalMedCount,
+  unresolvedMedNames,
   missingNpiCount,
   totalProviderCount,
   onPickChallenger,
@@ -3785,6 +3827,7 @@ function H2HView({
   annualDrugByPlanId: Record<string, number | null>;
   unresolvedMedCount: number;
   totalMedCount: number;
+  unresolvedMedNames: ReadonlyArray<string>;
   missingNpiCount: number;
   totalProviderCount: number;
   onPickChallenger: (p: Plan) => void;
@@ -3816,6 +3859,7 @@ function H2HView({
       <DataQualityBanner
         unresolvedMedCount={unresolvedMedCount}
         totalMedCount={totalMedCount}
+        unresolvedMedNames={unresolvedMedNames}
         missingNpiCount={missingNpiCount}
         totalProviderCount={totalProviderCount}
       />
