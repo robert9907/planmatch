@@ -25,6 +25,11 @@ import { searchDrug, type RxNormDrug } from './rxnorm';
 import { buildNameVariants } from '@/hooks/useResolveRxcuis';
 
 export interface AgentBaseDrugInput {
+  /** CRM row primary key (client_medications.id). Optional — callers
+   *  outside the AgentBase hydration path may not have one. Threaded
+   *  through so the caller can persist the resolved rxcui back to the
+   *  originating row without re-matching on free-text name. */
+  id?: string;
   /** Free-text drug name as filed in AgentBase (raw broker input). */
   name: string;
   /** Separate dose column when the broker split it; often empty. */
@@ -38,6 +43,14 @@ export interface AgentBaseDrugInput {
 }
 
 export interface ResolvedAgentBaseDrug {
+  /** CRM row primary key echoed from the input, when supplied. Callers
+   *  use it to persist the resolved rxcui back to the originating row. */
+  id?: string;
+  /** True when the input carried a non-null rxcui (already resolved
+   *  server-side). Callers use this to skip writeback for rows that
+   *  don't need it — the writeback path only targets originally-null
+   *  rows anyway, but this saves the round trip. */
+  hadInputRxcui: boolean;
   /** Raw AgentBase name preserved for display + re-search pre-fill. */
   originalName: string;
   /** Canonical name derived from the picked RxNorm concept, or the
@@ -192,6 +205,8 @@ export async function resolveAgentBaseDrugs(
     // concept from a prior sync. Trust it and skip the library call.
     if (input.rxcui) {
       out.push({
+        id: input.id,
+        hadInputRxcui: true,
         originalName,
         canonicalName: originalName,
         rxcui: input.rxcui,
@@ -263,6 +278,8 @@ export async function resolveAgentBaseDrugs(
 
     if (best?.rxcui) {
       out.push({
+        id: input.id,
+        hadInputRxcui: false,
         originalName,
         canonicalName: displayFromPicked(best),
         rxcui: best.rxcui,
@@ -272,6 +289,8 @@ export async function resolveAgentBaseDrugs(
       });
     } else {
       out.push({
+        id: input.id,
+        hadInputRxcui: false,
         originalName,
         canonicalName: originalName,
         rxcui: null,

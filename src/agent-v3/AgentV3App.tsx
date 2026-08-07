@@ -368,6 +368,7 @@ export function AgentV3App() {
       // useResolveRxcuis catches up asynchronously.
       const resolvedMeds = await resolveAgentBaseDrugs(
         rawMeds.map((m) => ({
+          id: m.id,
           name: m.name,
           dose: m.dose || undefined,
           form: m.form || undefined,
@@ -403,6 +404,36 @@ export function AgentV3App() {
           confidence: r.resolved ? 'high' : 'low',
         });
       }
+      // ── Fire-and-forget rxcui writeback ────────────────────────────
+      // Persist the newly-resolved rxcui values back to AgentBase so
+      // next hydration doesn't re-do the /api/library/drug-search
+      // round trips. Only for rows the CRM filed WITHOUT a rxcui
+      // (skip the pre-resolved echo path) AND that the resolver
+      // matched with 'high' confidence (r.resolved === true, meaning
+      // the library returned an actual match). The endpoint's own
+      // WHERE clause enforces `rxcui IS NULL` — never overwrites.
+      const persistCandidates = resolvedMeds
+        .filter((r) => r.id && !r.hadInputRxcui && r.resolved && r.rxcui)
+        .map((r) => ({ id: r.id as string, rxcui: r.rxcui as string }));
+      if (persistCandidates.length > 0) {
+        // Fire-and-forget: don't await, don't block hydration. Failures
+        // are non-fatal — the resolved rxcuis are already in the
+        // session store; the next hydration will just re-resolve.
+        void fetch('/api/agentbase-backfill-rxcuis', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientId, updates: persistCandidates }),
+          keepalive: true,
+        }).then((r) => r.json().then((body) => {
+          console.info(
+            `[agent-v3] rxcui backfill: requested=${persistCandidates.length} → ` +
+            JSON.stringify(body?.summary ?? { error: body?.error }),
+          );
+        })).catch((err) => {
+          console.warn('[agent-v3] rxcui backfill failed (non-fatal):', err?.message ?? err);
+        });
+      }
+
       for (const p of detail.providers) {
         if (!p.name.trim()) continue;
         // Pre-seed networkStatus for the plan the CRM last verified
