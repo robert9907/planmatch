@@ -2848,6 +2848,21 @@ function SlotCell({
       : null;
   const annualEst = annualEstimate(plan, annualDrugSum).total;
 
+  // "Cost pending" gate — when the client has captured meds but the
+  // brain's drug-cost pipeline emitted $0 for every drug on this plan
+  // AND the plan is a $0-premium D-SNP, annualEst mathematically
+  // resolves to $0. That reads as "this plan is free" when the truth
+  // is "we don't have data for this drug on this plan" (missing
+  // pm_drug_ndc row + missing pm_formulary row — see Part-3 report on
+  // fix/preview-extras-and-sbs-comparison for the underlying cause).
+  // Consumer approval to display as pending: 2026-08-06.
+  const costPending =
+    medications.length > 0 &&
+    plan.premium <= 0 &&
+    (annualDrugSum == null || annualDrugSum <= 0) &&
+    annualEst != null &&
+    annualEst <= 0;
+
   // Pull display-formatted metric values from the shared Metric[] so
   // this card stays in sync with H2H formatting (safeCostShare, dental
   // formatter, etc.).
@@ -3109,8 +3124,13 @@ function SlotCell({
         />
         <MetricLine
           label="Est. annual cost"
-          value={annualEst != null ? `$${Math.round(annualEst).toLocaleString('en-US')}` : '—'}
-          pending={annualEst == null}
+          value={
+            annualEst != null
+              ? `$${Math.round(annualEst).toLocaleString('en-US')}`
+              : '—'
+          }
+          pending={costPending || annualEst == null}
+          pendingLabel={costPending ? 'Cost pending' : undefined}
         />
         <MetricLine
           label="MOOP"
@@ -3203,11 +3223,17 @@ function MetricLine({
   label,
   value,
   pending,
+  pendingLabel,
   strike,
 }: {
   label: string;
   value: string;
   pending?: boolean;
+  /** Text shown in place of `value` when `pending` is true. Defaults
+   *  to 'Verifying…' — used for the initial async-load state on
+   *  Est. annual cost. Callers can override to distinguish real
+   *  loading ("Verifying…") from data-missing pending ("Cost pending"). */
+  pendingLabel?: string;
   /** Optional pre-adjustment value shown inline in parens with a
    *  strikethrough. Used for dual-eligible premium ($0 vs original
    *  $68) so brokers can point at "Medicaid pays this" during a
@@ -3257,7 +3283,7 @@ function MetricLine({
             color: pending ? T.muted2 : T.ink,
           }}
         >
-          {pending ? 'Verifying…' : value}
+          {pending ? (pendingLabel ?? 'Verifying…') : value}
         </span>
       </span>
     </div>

@@ -583,9 +583,23 @@ function MedRow({
 
 function MedCellNumbers({ row }: { row: DrugRow }) {
   const tierLabel = row.tier != null ? `Tier ${row.tier}` : 'Tier —';
-  const monthly = row.monthlyCopay;
-  const quarterly = monthly == null ? null : monthly * 3;
   const annual = row.annualCost;
+  // Prefer the filed monthly copay. When CMS filed only tier + annual
+  // (no per-drug copay — common when the plan-level tier uses
+  // coinsurance or a CMS-typical fallback), derive from the annual so
+  // the broker sees a real number instead of a dash. Prefix with "~"
+  // to signal it's averaged, not the exact per-fill cost. See the
+  // Part-3 report in this branch's commit message for the data-source
+  // asymmetry driving this. Consumer approval: 2026-08-06.
+  const filedMonthly = row.monthlyCopay;
+  const derived = filedMonthly == null && annual > 0;
+  const monthly = filedMonthly ?? (annual > 0 ? Math.round(annual / 12) : null);
+  const quarterly = filedMonthly != null
+    ? filedMonthly * 3
+    : annual > 0
+      ? Math.round(annual / 4)
+      : null;
+  const prefix = derived ? '~' : '';
   return (
     <>
       <span
@@ -601,9 +615,9 @@ function MedCellNumbers({ row }: { row: DrugRow }) {
         {tierLabel}
       </span>
       <span style={{ fontFamily: F.num, fontSize: 11, color: '#EAF0F6' }}>
-        {monthly == null ? '—' : fmtDollars(monthly)}
+        {monthly == null ? '—' : `${prefix}${fmtDollars(monthly)}`}
         {' · '}
-        {quarterly == null ? '—' : fmtDollars(quarterly)}
+        {quarterly == null ? '—' : `${prefix}${fmtDollars(quarterly)}`}
         {' · '}
         <span style={{ color: T.mintOnDark, fontWeight: 700 }}>
           {fmtDollars(annual)}
@@ -616,8 +630,13 @@ function MedCellNumbers({ row }: { row: DrugRow }) {
           color: T.navyTextMuted,
           letterSpacing: 0.2,
         }}
+        title={
+          derived
+            ? 'Monthly / quarterly derived from annual estimate; CMS did not file a fixed per-fill copay for this drug on this plan.'
+            : undefined
+        }
       >
-        mo · qtr · yr
+        mo · qtr · yr{derived ? ' (avg)' : ''}
       </span>
     </>
   );
@@ -644,11 +663,24 @@ function MedTotalsRow({
       </div>
       {plans.map((p, i) => {
         const rows = (drugBreakdownByPlanId?.[p.id] ?? []).filter((r) => r.covered);
-        const monthly = rows.reduce((s, r) => s + (r.monthlyCopay ?? 0), 0);
-        const quarterly = monthly * 3;
+        // Match the per-row derivation: use filed monthly when
+        // present, else derive from annual. Same rule as MedCellNumbers
+        // so the totals stay arithmetically consistent with the rows
+        // above them.
+        let monthly = 0;
+        let quarterly = 0;
+        let derivedInTotal = false;
+        for (const r of rows) {
+          if (r.monthlyCopay != null) {
+            monthly += r.monthlyCopay;
+            quarterly += r.monthlyCopay * 3;
+          } else if (r.annualCost > 0) {
+            monthly += Math.round(r.annualCost / 12);
+            quarterly += Math.round(r.annualCost / 4);
+            derivedInTotal = true;
+          }
+        }
         const annual = rows.reduce((s, r) => s + r.annualCost, 0);
-        const filedMonthlyCount = rows.filter((r) => r.monthlyCopay != null).length;
-        const asterisk = filedMonthlyCount < rows.length; // some drug's monthlyCopay was null
         return (
           <div
             key={i}
@@ -665,23 +697,21 @@ function MedTotalsRow({
           >
             <span style={{ fontFamily: F.num, fontSize: 11, color: '#FFFFFF', fontWeight: 700 }}>
               {fmtDollars(monthly)}
-              {asterisk && '*'}
               {' · '}
               {fmtDollars(quarterly)}
-              {asterisk && '*'}
               {' · '}
               <span style={{ color: T.mintOnDark }}>{fmtDollars(annual)}</span>
             </span>
-            {asterisk && (
+            {derivedInTotal && (
               <span
                 style={{
                   fontFamily: F.label,
                   fontSize: 9,
                   color: T.navyTextMuted,
                 }}
-                title="Some drugs on this plan file annual cost but no per-fill copay — monthly / quarterly totals are undercounted"
+                title="Some rows had null monthly copay; their monthly + quarterly contributions were derived from the annual estimate."
               >
-                * excludes drugs without a filed monthly copay
+                mo · qtr include derived (~) values
               </span>
             )}
           </div>
