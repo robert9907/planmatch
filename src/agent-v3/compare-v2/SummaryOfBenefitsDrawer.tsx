@@ -584,22 +584,20 @@ function MedRow({
 function MedCellNumbers({ row }: { row: DrugRow }) {
   const tierLabel = row.tier != null ? `Tier ${row.tier}` : 'Tier —';
   const annual = row.annualCost;
-  // Prefer the filed monthly copay. When CMS filed only tier + annual
-  // (no per-drug copay — common when the plan-level tier uses
-  // coinsurance or a CMS-typical fallback), derive from the annual so
-  // the broker sees a real number instead of a dash. Prefix with "~"
-  // to signal it's averaged, not the exact per-fill cost. See the
-  // Part-3 report in this branch's commit message for the data-source
-  // asymmetry driving this. Consumer approval: 2026-08-06.
+  // Rob's call as the licensed broker (2026-08-06): a monthly figure
+  // computed as annualCost ÷ 12 must NOT be shown, even prefixed with
+  // "~" — it is not a carrier-filed number and could be quoted to a
+  // client as if it were. When pm_formulary.copay is null, monthly
+  // and quarterly render "Cost pending" (italic muted) instead. The
+  // annual figure IS still shown because it's derived from real filed
+  // inputs (tier + plan.benefits.rx_tier_N cost share via the
+  // partDTimeline math OR pm_drug_cost_cache when the NDC bridge
+  // exists). See Part-2 formulary-gap report on this branch for the
+  // annual-vs-monthly provenance distinction.
   const filedMonthly = row.monthlyCopay;
-  const derived = filedMonthly == null && annual > 0;
-  const monthly = filedMonthly ?? (annual > 0 ? Math.round(annual / 12) : null);
-  const quarterly = filedMonthly != null
-    ? filedMonthly * 3
-    : annual > 0
-      ? Math.round(annual / 4)
-      : null;
-  const prefix = derived ? '~' : '';
+  const monthlyPending = filedMonthly == null;
+  const monthly = filedMonthly;
+  const quarterly = filedMonthly == null ? null : filedMonthly * 3;
   return (
     <>
       <span
@@ -615,9 +613,17 @@ function MedCellNumbers({ row }: { row: DrugRow }) {
         {tierLabel}
       </span>
       <span style={{ fontFamily: F.num, fontSize: 11, color: '#EAF0F6' }}>
-        {monthly == null ? '—' : `${prefix}${fmtDollars(monthly)}`}
+        {monthlyPending ? (
+          <PendingSpan title="Monthly copay not filed by CMS for this drug on this plan — see annual estimate." />
+        ) : (
+          fmtDollars(monthly!)
+        )}
         {' · '}
-        {quarterly == null ? '—' : `${prefix}${fmtDollars(quarterly)}`}
+        {monthlyPending ? (
+          <PendingSpan title="Quarterly copay not filed by CMS for this drug on this plan — see annual estimate." />
+        ) : (
+          fmtDollars(quarterly!)
+        )}
         {' · '}
         <span style={{ color: T.mintOnDark, fontWeight: 700 }}>
           {fmtDollars(annual)}
@@ -630,15 +636,29 @@ function MedCellNumbers({ row }: { row: DrugRow }) {
           color: T.navyTextMuted,
           letterSpacing: 0.2,
         }}
-        title={
-          derived
-            ? 'Monthly / quarterly derived from annual estimate; CMS did not file a fixed per-fill copay for this drug on this plan.'
-            : undefined
-        }
       >
-        mo · qtr · yr{derived ? ' (avg)' : ''}
+        mo · qtr · yr
       </span>
     </>
+  );
+}
+
+// Small pending pill used inline in med cells + totals. Italic muted
+// so it reads as "we don't have this" — same visual language as the
+// SlotCell "Cost pending" state on Est. annual cost.
+function PendingSpan({ title }: { title?: string }) {
+  return (
+    <span
+      style={{
+        color: T.navyTextMuted,
+        fontStyle: 'italic',
+        fontFamily: F.label,
+        fontWeight: 500,
+      }}
+      title={title}
+    >
+      Cost pending
+    </span>
   );
 }
 
@@ -663,24 +683,18 @@ function MedTotalsRow({
       </div>
       {plans.map((p, i) => {
         const rows = (drugBreakdownByPlanId?.[p.id] ?? []).filter((r) => r.covered);
-        // Match the per-row derivation: use filed monthly when
-        // present, else derive from annual. Same rule as MedCellNumbers
-        // so the totals stay arithmetically consistent with the rows
-        // above them.
-        let monthly = 0;
-        let quarterly = 0;
-        let derivedInTotal = false;
-        for (const r of rows) {
-          if (r.monthlyCopay != null) {
-            monthly += r.monthlyCopay;
-            quarterly += r.monthlyCopay * 3;
-          } else if (r.annualCost > 0) {
-            monthly += Math.round(r.annualCost / 12);
-            quarterly += Math.round(r.annualCost / 4);
-            derivedInTotal = true;
-          }
-        }
-        const annual = rows.reduce((s, r) => s + r.annualCost, 0);
+        // Broker-safe totals: if ANY covered drug has null monthlyCopay,
+        // the monthly + quarterly totals BOTH read "Cost pending" —
+        // summing a partial subset would understate real cost and could
+        // be quoted as if it were the full monthly bill. Annual sums
+        // as-is because every DrugRow carries an annualCost derived
+        // from real filed inputs (tier + plan-level cost share).
+        const anyMonthlyPending = rows.some((r) => r.monthlyCopay == null);
+        const monthlyTotal = anyMonthlyPending
+          ? null
+          : rows.reduce((s, r) => s + (r.monthlyCopay ?? 0), 0);
+        const quarterlyTotal = monthlyTotal == null ? null : monthlyTotal * 3;
+        const annualTotal = rows.reduce((s, r) => s + r.annualCost, 0);
         return (
           <div
             key={i}
@@ -696,22 +710,29 @@ function MedTotalsRow({
             }}
           >
             <span style={{ fontFamily: F.num, fontSize: 11, color: '#FFFFFF', fontWeight: 700 }}>
-              {fmtDollars(monthly)}
+              {monthlyTotal == null ? (
+                <PendingSpan title="One or more covered drugs on this plan have no CMS-filed monthly copay — total intentionally not summed." />
+              ) : (
+                fmtDollars(monthlyTotal)
+              )}
               {' · '}
-              {fmtDollars(quarterly)}
+              {quarterlyTotal == null ? (
+                <PendingSpan title="One or more covered drugs on this plan have no CMS-filed monthly copay — quarterly total intentionally not summed." />
+              ) : (
+                fmtDollars(quarterlyTotal)
+              )}
               {' · '}
-              <span style={{ color: T.mintOnDark }}>{fmtDollars(annual)}</span>
+              <span style={{ color: T.mintOnDark }}>{fmtDollars(annualTotal)}</span>
             </span>
-            {derivedInTotal && (
+            {anyMonthlyPending && (
               <span
                 style={{
                   fontFamily: F.label,
                   fontSize: 9,
                   color: T.navyTextMuted,
                 }}
-                title="Some rows had null monthly copay; their monthly + quarterly contributions were derived from the annual estimate."
               >
-                mo · qtr include derived (~) values
+                Monthly / quarterly withheld — see per-drug rows.
               </span>
             )}
           </div>
