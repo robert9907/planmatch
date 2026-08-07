@@ -471,7 +471,7 @@ function conditionToCsnp(c: ConditionKey | null | undefined): CsnpCondition | nu
   }
 }
 
-interface AdapterArgs {
+export interface AdapterArgs {
   plans: Plan[];
   client: Client;
   medications: Medication[];
@@ -482,7 +482,9 @@ interface AdapterArgs {
   weightsOverride?: BrainWeights | null;
 }
 
-function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
+// Exported for Node-side smoke harnesses only. Do not use from React
+// components — call the usePlanBrain hook instead.
+export function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
   const { plans, client, medications, providers, data } = args;
   const county = client.county || '';
   const planRows: PmPlanRow[] = plans.map((p, i) => planToPmRow(p, county, i + 1));
