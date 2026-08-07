@@ -1209,6 +1209,7 @@ const explanationsByPlanId = useMemo<
             drugBreakdownByPlanId={drugBreakdownByPlanId}
             explanationsByPlanId={explanationsByPlanId}
             compositeByPlanId={compositeByPlanId}
+            unresolvedDrugs={brain.result?.unresolvedDrugs ?? []}
             dualEligibleByPlanId={dualEligibleByPlanId}
             rankedPlans={
               ranked.result
