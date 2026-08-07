@@ -68,6 +68,15 @@ export interface ResolvedAgentBaseDrug {
    *  to the original name. Drives the yellow "tap to re-search"
    *  warning on the Meds screen. */
   resolved: boolean;
+  /** true only when the picked concept survived the strength filter in
+   *  pickBestAgent (target strength was extractable AND at least one
+   *  result matched it). False when the pick came from the full-results
+   *  fallback (no strength match) or when no target strength was
+   *  extractable. Persistence callers gate on this — a resolved-but-
+   *  strength-mismatched pick keeps rendering in the session but does
+   *  NOT get written to the client's permanent CRM row. Always true
+   *  for the input.rxcui echo path (the CRM row already trusts it). */
+  strengthMatched: boolean;
 }
 
 /** Extract a "20 MG" style strength from the tail of a free-text drug
@@ -127,11 +136,24 @@ function parseStrengthMg(raw: string): number | null {
  *  monotherapy for ingredients like hydrochlorothiazide, and no
  *  broker types "hydrochlorothiazide" meaning "hydrochlorothiazide
  *  25 MG / lisinopril 20 MG". */
+interface PickedDrug {
+  drug: RxNormDrug;
+  /** True only when a target strength was extractable from the input
+   *  AND at least one result matched it (i.e. the pick came from the
+   *  strength-filtered pool, not the full-results fallback). Callers
+   *  use this to gate persistence — a strength-mismatched pick still
+   *  drives the in-memory session (better than "No RxNorm match" on
+   *  the Meds screen) but should NOT be written to the client's
+   *  permanent CRM row. Also false when the input carried no parseable
+   *  strength — the pick is a guess relative to the intended row. */
+  strengthMatched: boolean;
+}
+
 function pickBestAgent(
   results: RxNormDrug[],
   rawStrength: string,
   rawInputName: string,
-): RxNormDrug | null {
+): PickedDrug | null {
   if (results.length === 0) return null;
   const target = parseStrengthMg(rawStrength);
   const inputLower = rawInputName.toLowerCase();
@@ -146,6 +168,7 @@ function pickBestAgent(
         return s != null && Math.abs(s - target) < 0.0001;
       })
     : results;
+  const strengthMatched = target != null && filtered.length > 0;
   const pool = filtered.length > 0 ? filtered : results;
 
   const scored = pool.map((r) => {
@@ -168,7 +191,9 @@ function pickBestAgent(
     };
   });
   scored.sort((a, b) => a.score - b.score);
-  return scored[0]?.r ?? null;
+  const winner = scored[0]?.r;
+  if (!winner) return null;
+  return { drug: winner, strengthMatched };
 }
 
 /** Preferred display label for a resolved drug. Matches the consumer
@@ -213,6 +238,7 @@ export async function resolveAgentBaseDrugs(
         dose: inputDose,
         form: inputForm,
         resolved: true,
+        strengthMatched: true,
       });
       continue;
     }
@@ -258,14 +284,14 @@ export async function resolveAgentBaseDrugs(
     }
     for (const v of variants) push(v);
 
-    let best: RxNormDrug | null = null;
+    let best: PickedDrug | null = null;
     try {
       for (const q of queries) {
         if (signal?.aborted) return out;
         const results = await searchDrug(q, signal);
         if (results.length === 0) continue;
         const picked = pickBestAgent(results, strength, originalName);
-        if (picked?.rxcui) {
+        if (picked?.drug.rxcui) {
           best = picked;
           break;
         }
@@ -276,16 +302,17 @@ export async function resolveAgentBaseDrugs(
       // background if the med lands in state without a rxcui.
     }
 
-    if (best?.rxcui) {
+    if (best?.drug.rxcui) {
       out.push({
         id: input.id,
         hadInputRxcui: false,
         originalName,
-        canonicalName: displayFromPicked(best),
-        rxcui: best.rxcui,
-        dose: best.strength ?? inputDose,
-        form: best.dose_form ?? inputForm,
+        canonicalName: displayFromPicked(best.drug),
+        rxcui: best.drug.rxcui,
+        dose: best.drug.strength ?? inputDose,
+        form: best.drug.dose_form ?? inputForm,
         resolved: true,
+        strengthMatched: best.strengthMatched,
       });
     } else {
       out.push({
@@ -297,6 +324,7 @@ export async function resolveAgentBaseDrugs(
         dose: inputDose,
         form: inputForm,
         resolved: false,
+        strengthMatched: false,
       });
     }
   }

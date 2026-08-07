@@ -407,13 +407,21 @@ export function AgentV3App() {
       // ── Fire-and-forget rxcui writeback ────────────────────────────
       // Persist the newly-resolved rxcui values back to AgentBase so
       // next hydration doesn't re-do the /api/library/drug-search
-      // round trips. Only for rows the CRM filed WITHOUT a rxcui
-      // (skip the pre-resolved echo path) AND that the resolver
-      // matched with 'high' confidence (r.resolved === true, meaning
-      // the library returned an actual match). The endpoint's own
-      // WHERE clause enforces `rxcui IS NULL` — never overwrites.
+      // round trips. Persistence gate (all must hold):
+      //   • Row has an id we can target
+      //   • Row's CRM rxcui was null (skip the pre-resolved echo path)
+      //   • Resolver returned a match (r.resolved && r.rxcui)
+      //   • The picked concept came from the strength-filtered pool,
+      //     not the full-results fallback (r.strengthMatched)
+      // Strength-mismatched matches still hydrate the in-memory
+      // session (better than "No RxNorm match" on Meds), but the
+      // resolver's guess doesn't get written to permanent storage —
+      // e.g. Vitamin D 50000 UNIT → 199832 (ergocalciferol 0.01 MG)
+      // is a plausible-but-wrong pick that stays in-memory only.
+      // The endpoint's own WHERE clause enforces `rxcui IS NULL` too —
+      // second gate, in case a caller ever drops this filter.
       const persistCandidates = resolvedMeds
-        .filter((r) => r.id && !r.hadInputRxcui && r.resolved && r.rxcui)
+        .filter((r) => r.id && !r.hadInputRxcui && r.resolved && r.rxcui && r.strengthMatched)
         .map((r) => ({ id: r.id as string, rxcui: r.rxcui as string }));
       if (persistCandidates.length > 0) {
         // Fire-and-forget: don't await, don't block hydration. Failures
