@@ -60,7 +60,7 @@ import { TOKENS as T, FONT as F } from './compare-v2/tokens';
 // itself (restored 2026-08-07). The QuickPreviewDrawer.tsx file stays
 // on disk because SummaryOfBenefitsDrawer imports its shared
 // PreviewDrawerShell + PreviewGrid primitives.
-import { SummaryOfBenefitsDrawer } from './compare-v2/SummaryOfBenefitsDrawer';
+import { BoardComparisonView } from './compare-v2/BoardComparisonView';
 import { formatOtc } from '@/lib/extractBenefitValue';
 
 // Per the current product rule: rows stay visible, but unfiled values
@@ -841,9 +841,16 @@ export function CompareScreen({
   // pre-slice behavior; see BenchCard's `expanded` state below).
   // Because there's no drawer state to manage for the bench flow,
   // CompareScreen only tracks summaryPlan here.
-  const [summaryPlan, setSummaryPlan] = useState<Plan | null>(null);
-  const openSummary = (p: Plan) => {
-    setSummaryPlan(p);
+  // Board-level scored comparison (feat/four-up-scored-comparison).
+  // The "Summary of benefits" button on any SlotCell now opens ONE
+  // view containing every plan currently on the board — a single
+  // toggle rather than per-plan. The click target's plan argument is
+  // preserved (unused) so BoardSlotCard's existing onOpenSummary(plan)
+  // signature keeps working.
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const openSummary = (_p: Plan) => {
+    void _p;
+    setSummaryOpen(true);
   };
 
   // ── Bench filter engine (shared between slots + bench) ─────────────
@@ -1297,21 +1304,23 @@ export function CompareScreen({
         );
       })()}
 
-      {/* Summary of Benefits — per-plan drawer opened from a specific
-          board-slot card. Renders between the board and the SummaryBar
-          so slot state stays visible above and the bench stays
-          reachable via scroll. Suppress on empty state / when nothing
-          selected. Bench Quick Preview is an inline expander on the
-          bench card itself — no drawer for that flow. */}
-      {summaryPlan && (
-        <SummaryOfBenefitsDrawer
-          plan={summaryPlan}
-          onClose={() => setSummaryPlan(null)}
-          drugBreakdown={
-            drugBreakdownByPlanId
-              ? drugBreakdownByPlanId[summaryPlan.id] ?? null
-              : null
-          }
+      {/* Board-level scored comparison — opens from ANY SlotCell's
+          "Summary of benefits" button and renders every plan
+          currently on the board (2-4 columns). Green = wins on that
+          row, red = worse/absent, ties go green without swaying the
+          tally. Leader's Take-to-H2H invokes the existing openH2H —
+          H2HView itself is not modified. */}
+      {summaryOpen && visibleSlotPlans.length > 0 && (
+        <BoardComparisonView
+          plans={visibleSlotPlans}
+          drugBreakdownByPlanId={drugBreakdownByPlanId}
+          annualDrugByPlanId={annualDrugByPlanId}
+          onClose={() => setSummaryOpen(false)}
+          onTakeToH2H={(plan) => {
+            setSummaryOpen(false);
+            openH2H(plan);
+          }}
+          baselineId={baseline?.id ?? null}
         />
       )}
 
