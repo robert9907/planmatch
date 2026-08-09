@@ -360,87 +360,101 @@ export function AgentV3App() {
         return Number.isFinite(n) ? n : undefined;
       };
       const rawMeds = detail.medications.filter((m) => m.name.trim());
-      // Pre-resolve every AgentBase drug against /api/library/drug-search
-      // BEFORE the meds land in the store. CRM rows arrive as free-text
-      // ("Atorvastatin Calcium TAB 20MG") with no rxcui — resolving in
-      // place means the MedsScreen paints canonical names + tier badges
-      // on first render instead of flashing "No RxNorm match" while
-      // useResolveRxcuis catches up asynchronously.
-      const resolvedMeds = await resolveAgentBaseDrugs(
-        rawMeds.map((m) => ({
-          id: m.id,
+      // Land every AgentBase med in the store IMMEDIATELY with its raw
+      // broker text — hydration must never wait on /api/library/drug-
+      // search. Rob's 2026-08-09 handoff hung when a slow drug-search
+      // fetch blocked the whole hydration. Now the Meds screen renders
+      // instantly (canonical name upgrades in later); pre-resolved rows
+      // land with rxcui already set. The async resolver below upgrades
+      // each unresolved row to canonical name + rxcui + tier badge as
+      // results arrive.
+      //
+      // AgentBase-row-id → store-med-id mapping so the async resolver
+      // can (a) patch each row with the resolved shape and (b) fire the
+      // rxcui writeback with the AgentBase row id.
+      const abIdToStoreId = new Map<string, string>();
+      for (const m of rawMeds) {
+        const storeId = store.addMedication({
           name: m.name,
+          originalName: m.name,
+          rxcui: m.rxcui || undefined,
           dose: m.dose || undefined,
           form: m.form || undefined,
-          rxcui: m.rxcui || undefined,
-        })),
-        ctl.signal,
-      );
-      if (ctl.signal.aborted) return;
-      for (let i = 0; i < rawMeds.length; i++) {
-        const m = rawMeds[i];
-        const r = resolvedMeds[i];
-        // Parse tier and refillDays from the AgentBase text columns
-        // into the numeric Medication shape. Tier carries "Tier N" today
-        // and (post-migration) just "N" — both produce a clean digit
-        // here. refill_days is always a numeric string. NaN falls back
-        // to undefined so we don't pollute the store with bad values.
-        store.addMedication({
-          name: r.canonicalName,
-          originalName: r.originalName,
-          rxcui: r.rxcui ?? undefined,
-          dose: r.dose ?? undefined,
-          form: r.form ?? undefined,
           frequency: m.frequency || undefined,
           tier: parseDigit(m.tier),
           quantity: m.quantity || undefined,
           refillDays: parseDigit(m.refill_days),
-          // Phase 4: form + broker-entry context now round-trip
-          // through the store.
           pharmacyId: m.pharmacy_id ?? undefined,
           refillDate: m.refill_date || undefined,
           notes: m.notes || undefined,
           source: 'agentbase',
-          confidence: r.resolved ? 'high' : 'low',
+          // Pre-resolved rows go straight to high; everything else
+          // starts low and gets upgraded when the async resolver lands.
+          confidence: m.rxcui ? 'high' : 'low',
         });
+        if (m.id) abIdToStoreId.set(m.id, storeId);
       }
-      // ── Fire-and-forget rxcui writeback ────────────────────────────
-      // Persist the newly-resolved rxcui values back to AgentBase so
-      // next hydration doesn't re-do the /api/library/drug-search
-      // round trips. Persistence gate (all must hold):
-      //   • Row has an id we can target
-      //   • Row's CRM rxcui was null (skip the pre-resolved echo path)
-      //   • Resolver returned a match (r.resolved && r.rxcui)
-      //   • The picked concept came from the strength-filtered pool,
-      //     not the full-results fallback (r.strengthMatched)
-      // Strength-mismatched matches still hydrate the in-memory
-      // session (better than "No RxNorm match" on Meds), but the
-      // resolver's guess doesn't get written to permanent storage —
-      // e.g. Vitamin D 50000 UNIT → 199832 (ergocalciferol 0.01 MG)
-      // is a plausible-but-wrong pick that stays in-memory only.
-      // The endpoint's own WHERE clause enforces `rxcui IS NULL` too —
-      // second gate, in case a caller ever drops this filter.
-      const persistCandidates = resolvedMeds
-        .filter((r) => r.id && !r.hadInputRxcui && r.resolved && r.rxcui && r.strengthMatched)
-        .map((r) => ({ id: r.id as string, rxcui: r.rxcui as string }));
-      if (persistCandidates.length > 0) {
-        // Fire-and-forget: don't await, don't block hydration. Failures
-        // are non-fatal — the resolved rxcuis are already in the
-        // session store; the next hydration will just re-resolve.
-        void fetch('/api/agentbase-backfill-rxcuis', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clientId, updates: persistCandidates }),
-          keepalive: true,
-        }).then((r) => r.json().then((body) => {
-          console.info(
-            `[agent-v3] rxcui backfill: requested=${persistCandidates.length} → ` +
-            JSON.stringify(body?.summary ?? { error: body?.error }),
-          );
-        })).catch((err) => {
-          console.warn('[agent-v3] rxcui backfill failed (non-fatal):', err?.message ?? err);
-        });
-      }
+
+      // Fire-and-forget async resolver + rxcui writeback. Per-drug
+      // parallel fan-out (Promise.all in resolveAgentBaseDrugs) + 5s
+      // per-fetch timeout in library-client.ts bounds worst-case
+      // latency to (5s × queries-per-drug). A stuck query yields a
+      // null-rxcui and leaves the yellow warning in place instead of
+      // freezing hydration.
+      void (async () => {
+        const resolvedMeds = await resolveAgentBaseDrugs(
+          rawMeds.map((m) => ({
+            id: m.id,
+            name: m.name,
+            dose: m.dose || undefined,
+            form: m.form || undefined,
+            rxcui: m.rxcui || undefined,
+          })),
+          ctl.signal,
+        );
+        if (ctl.signal.aborted) return;
+        for (const r of resolvedMeds) {
+          if (!r.id) continue;
+          const storeId = abIdToStoreId.get(r.id);
+          if (!storeId) continue;
+          if (r.hadInputRxcui) continue;
+          if (!r.resolved || !r.rxcui) continue;
+          store.updateMedication(storeId, {
+            name: r.canonicalName,
+            rxcui: r.rxcui,
+            dose: r.dose ?? undefined,
+            form: r.form ?? undefined,
+            confidence: 'high',
+          });
+        }
+        // ── Fire-and-forget rxcui writeback ─────────────────────────
+        // Persist the newly-resolved rxcui values back to AgentBase so
+        // next hydration doesn't re-do the /api/library/drug-search
+        // round trips. Persistence gate (all must hold):
+        //   • Row has an AgentBase id we can target
+        //   • Row's CRM rxcui was null (skip the pre-resolved echo)
+        //   • Resolver returned a match (r.resolved && r.rxcui)
+        //   • The picked concept came from the strength-filtered pool,
+        //     not the full-results fallback (r.strengthMatched)
+        const persistCandidates = resolvedMeds
+          .filter((r) => r.id && !r.hadInputRxcui && r.resolved && r.rxcui && r.strengthMatched)
+          .map((r) => ({ id: r.id as string, rxcui: r.rxcui as string }));
+        if (persistCandidates.length > 0) {
+          void fetch('/api/agentbase-backfill-rxcuis', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clientId, updates: persistCandidates }),
+            keepalive: true,
+          }).then((r) => r.json().then((body) => {
+            console.info(
+              `[agent-v3] rxcui backfill: requested=${persistCandidates.length} → ` +
+              JSON.stringify(body?.summary ?? { error: body?.error }),
+            );
+          })).catch((err) => {
+            console.warn('[agent-v3] rxcui backfill failed (non-fatal):', err?.message ?? err);
+          });
+        }
+      })();
 
       for (const p of detail.providers) {
         if (!p.name.trim()) continue;
