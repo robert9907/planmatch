@@ -20,6 +20,7 @@ import {
   useState,
   type CSSProperties,
   type DragEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactElement,
 } from 'react';
 import type { CostShare, Plan } from '@/types/plans';
@@ -180,7 +181,11 @@ interface Props {
    * summary bar. The hook on the shell handles state + retries; this
    * screen never blocks on it.
    */
-  onRecommend?: (plan: Plan) => void;
+  /** Returns the sync result so the per-card Enroll button can surface
+   *  success or an explicit error inline. Void return kept for
+   *  backwards compat with legacy callers (`onRecommend?.(plan)` still
+   *  fires-and-forgets when the caller doesn't await). */
+  onRecommend?: (plan: Plan) => Promise<{ ok: true } | { ok: false; error: string }> | void;
   onBack: () => void;
   onNext: () => void;
   /** Full ranked list (top + bench) feeding the Send Quote panel. The
@@ -1063,6 +1068,29 @@ export function CompareScreen({
     onNext();
   };
 
+  // Per-SlotCell enrollment — same underlying onRecommend, but await
+  // the async result so the button can surface success/failure inline.
+  // Does NOT advance the screen — the broker stays on the board so they
+  // can enroll another plan (e.g. a shared-plan sibling policy) or
+  // review the recommendation before moving on.
+  const enrollFromCard = (plan: Plan | null) => async (): Promise<{ ok: true } | { ok: false; error: string }> => {
+    if (!plan) return { ok: false, error: 'No plan on this slot' };
+    setRecommendation(plan.id);
+    const result = onRecommend?.(plan);
+    // Fire-and-forget legacy callers return void; treat that as success
+    // since we have no signal either way. New async callers return the
+    // actual outcome from POST /api/agentbase-recommend.
+    if (!result || typeof (result as Promise<unknown>).then !== 'function') {
+      return { ok: true };
+    }
+    try {
+      return await result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err ?? 'Unknown error');
+      return { ok: false, error: message };
+    }
+  };
+
   // ── H2H mode ───────────────────────────────────────────────
   if (mode === 'h2h' && challenger && baseline) {
     return (
@@ -1290,7 +1318,7 @@ export function CompareScreen({
                 onFill={() => fillEmptySlot(i)}
                 onOpenH2H={openH2H}
                 onOpenSummary={openSummary}
-                onEnroll={recommendAndAdvance(plan)}
+                onEnroll={enrollFromCard(plan)}
               />
             ))}
           </div>
@@ -2837,9 +2865,21 @@ function SlotCell({
    *  CompareScreen level for the plan currently in this slot. Only
    *  wired for filled slots; empty-slot placeholder ignores it. */
   onOpenSummary: (p: Plan) => void;
-  onEnroll: () => void;
+  /** Async enroll for THIS specific card. Returns the POST result so
+   *  the button can surface success ("Sent to AgentBase") or the
+   *  server error inline instead of failing silently. Does not advance
+   *  the screen — the broker stays on the board. */
+  onEnroll: () => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   const [dragOver, setDragOver] = useState(false);
+  // Per-card enrollment status. Auto-resets to idle after 4s on
+  // success, 8s on error (longer read time for the message).
+  const [enrollStatus, setEnrollStatus] = useState<
+    | { kind: 'idle' }
+    | { kind: 'sending' }
+    | { kind: 'success' }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
 
   function onDragOverHandler(e: DragEvent<HTMLDivElement>) {
     e.preventDefault();
@@ -3296,6 +3336,27 @@ function SlotCell({
         >
           Head-to-head
         </button>
+        <EnrollCardButton
+          status={enrollStatus}
+          disabled={isBaseline && baselineIsCurrent}
+          disabledTitle={
+            isBaseline && baselineIsCurrent
+              ? "This is the client's current plan — no re-enrollment needed"
+              : undefined
+          }
+          onClick={async (e) => {
+            e.stopPropagation();
+            setEnrollStatus({ kind: 'sending' });
+            const result = await onEnroll();
+            if (result.ok) {
+              setEnrollStatus({ kind: 'success' });
+              window.setTimeout(() => setEnrollStatus({ kind: 'idle' }), 4000);
+            } else {
+              setEnrollStatus({ kind: 'error', message: result.error });
+              window.setTimeout(() => setEnrollStatus({ kind: 'idle' }), 8000);
+            }
+          }}
+        />
       </div>
 
       {/* Compare v2: the params below are still supplied by the
@@ -3315,6 +3376,81 @@ function SlotCell({
         />
       </div>
     </div>
+  );
+}
+
+// Per-SlotCell Enroll button. Secondary styling (transparent, mint
+// outline) so it doesn't dominate the card — Summary of benefits and
+// Head-to-head are the primary reads. Renders 4 states inline:
+//   • idle    — "Enroll" (mint outline)
+//   • sending — "Sending…" (mint outline, disabled, italic)
+//   • success — "Sent to AgentBase ✓" (mint filled)
+//   • error   — "Enroll failed" + message on hover title (red outline)
+//
+// Auto-reset to idle after 4s (success) / 8s (error) handled by the
+// callsite. Disabled when the plan IS the client's current plan — no
+// re-enrollment needed there.
+type EnrollStatus =
+  | { kind: 'idle' }
+  | { kind: 'sending' }
+  | { kind: 'success' }
+  | { kind: 'error'; message: string };
+function EnrollCardButton({
+  status,
+  disabled,
+  disabledTitle,
+  onClick,
+}: {
+  status: EnrollStatus;
+  disabled: boolean;
+  disabledTitle?: string;
+  onClick: (e: ReactMouseEvent<HTMLButtonElement>) => void;
+}) {
+  const isBusy = status.kind === 'sending';
+  const isSuccess = status.kind === 'success';
+  const isError = status.kind === 'error';
+  const label =
+    status.kind === 'sending'
+      ? 'Sending…'
+      : status.kind === 'success'
+        ? 'Sent to AgentBase ✓'
+        : status.kind === 'error'
+          ? 'Enroll failed — retry'
+          : 'Enroll';
+  const bg = isSuccess ? T.mint600 : 'transparent';
+  const color = isSuccess ? T.mintOnMint : isError ? '#B91C1C' : T.mint600;
+  const border = isError ? '#B91C1C' : T.mint600;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || isBusy}
+      title={
+        isError
+          ? `Enroll failed: ${status.message} — click to retry`
+          : disabled
+            ? disabledTitle
+            : 'Enroll this plan for the client — writes to AgentBase clients + queues the session in the ⚡ PlanMatch approval list'
+      }
+      style={{
+        flex: 1,
+        textAlign: 'center',
+        fontSize: 11.5,
+        fontWeight: 600,
+        padding: 8,
+        borderRadius: 7,
+        border: `1px solid ${border}`,
+        color,
+        background: bg,
+        cursor: disabled || isBusy ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.4 : 1,
+        fontStyle: isBusy ? 'italic' : 'normal',
+        fontFamily: F.label,
+        transition: 'background 120ms, border-color 120ms, color 120ms',
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
