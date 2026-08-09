@@ -29,7 +29,7 @@
 // Explicitly out of scope: Head-to-Head. Take-to-H2H button just
 // invokes the parent-supplied handler; H2HView itself is untouched.
 
-import type { CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 import type { Plan, PlanBenefits } from '@/types/plans';
 import { TOKENS as T, FONT as F } from './tokens';
 import { PreviewDrawerShell } from './QuickPreviewDrawer';
@@ -67,6 +67,12 @@ export interface BoardComparisonViewProps {
   drugBreakdownByPlanId: Record<string, ReadonlyArray<DrugRow>> | null | undefined;
   /** Per-plan annual drug cost for the est-annual-cost row. */
   annualDrugByPlanId: Record<string, number | null>;
+  /** Per-plan flag from the brain: true when at least one user drug on
+   *  this plan has no cache row AND isn't on the formulary — the annual
+   *  drug estimate is unknown. Est. annual cost renders "Cost pending"
+   *  (neutral, not scored) instead of showing premium-only as if it
+   *  were a real $0-drug total. */
+  drugCoverageUnknownByPlanId?: Record<string, boolean>;
   onClose: () => void;
   /** Take-to-H2H invocation on the leader. Wired to the parent's
    *  existing openH2H(plan) — H2HView itself is not modified. */
@@ -78,12 +84,24 @@ export interface BoardComparisonViewProps {
 }
 
 export function BoardComparisonView(props: BoardComparisonViewProps) {
-  const { plans, drugBreakdownByPlanId, annualDrugByPlanId, onClose, onTakeToH2H, baselineId } = props;
+  const { plans, drugBreakdownByPlanId, annualDrugByPlanId, drugCoverageUnknownByPlanId, onClose, onTakeToH2H, baselineId } = props;
+
+  // "Differences only" — hides rows where every plan on the board has
+  // the same value (rowScore.differentiates === false). Default off so
+  // the full ladder is visible on first open; brokers who want to cut
+  // ties for a fast scan flip it on. Section headers also hide when
+  // every row in the section is hidden.
+  const [differencesOnly, setDifferencesOnly] = useState(false);
 
   if (plans.length === 0) return null;
 
   // ── Row descriptors + scoring pass ──────────────────────────────
-  const sections = buildSections(plans, annualDrugByPlanId);
+  const sections = buildSections(plans, annualDrugByPlanId, drugCoverageUnknownByPlanId ?? {})
+    // Drop entirely-empty sections. A section can have zero rows when
+    // every row in it was gated by "at least one plan has data" and
+    // none of the plans on the board file the field (e.g. Diagnostics
+    // for a pool of plans that only filed inpatient copays).
+    .filter((s) => s.rows.length > 0);
 
   // Tally: greens vs reds per plan, only counting rows that differentiate.
   const tally: PlanTally[] = plans.map(() => ({ greens: 0, reds: 0 }));
@@ -140,18 +158,78 @@ export function BoardComparisonView(props: BoardComparisonViewProps) {
       onClose={onClose}
       footer={null}
     >
-      {/* Plan-column header row */}
-      <div style={{ display: 'grid', gridTemplateColumns: gridCols, borderBottom: `1px solid ${T.navyLine}` }}>
+      {/* "Differences only" toggle — hides rows where every plan
+          shares the same value. Section headers hide when all their
+          rows would be filtered out. */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          padding: '10px 18px 6px',
+          borderBottom: `1px solid ${T.navyLine}`,
+        }}
+      >
+        <label
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            cursor: 'pointer',
+            fontFamily: F.label,
+            fontSize: 11,
+            fontWeight: 600,
+            color: differencesOnly ? T.mintOnDark : T.navyTextDim,
+            letterSpacing: 0.3,
+            textTransform: 'uppercase',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={differencesOnly}
+            onChange={(e) => setDifferencesOnly(e.target.checked)}
+            style={{ accentColor: T.mint600, margin: 0 }}
+          />
+          Differences only
+        </label>
+      </div>
+
+      {/* Plan-column header row — no fills, no column borders. A single
+          hairline separates it from the body. */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: gridCols,
+          borderBottom: `1px solid rgba(255,255,255,0.08)`,
+        }}
+      >
         <div style={CELL_HEADER_LABEL} />
-        {plans.map((p, i) => (
-          <div key={p.id} style={{ ...CELL_HEADER_PLAN, borderLeft: i === 0 ? 'none' : `1px solid ${T.navyLine}` }}>
-            <div style={{ color: T.mintOnDark, fontFamily: F.label, fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase' }}>
+        {plans.map((p) => (
+          <div key={p.id} style={CELL_HEADER_PLAN}>
+            <div
+              style={{
+                color: T.mintOnDark,
+                fontFamily: F.label,
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: 0.6,
+                textTransform: 'uppercase',
+              }}
+            >
               {p.carrier}
             </div>
-            <div style={{ color: '#FFFFFF', fontFamily: F.label, fontSize: 12.5, fontWeight: 600, lineHeight: 1.25, marginTop: 2 }}>
+            <div
+              style={{
+                color: '#FFFFFF',
+                fontFamily: F.label,
+                fontSize: 13,
+                fontWeight: 500,
+                lineHeight: 1.3,
+                marginTop: 3,
+              }}
+            >
               {planCleanName(p)}
             </div>
-            <div style={{ color: T.navyTextDim, fontFamily: F.num, fontSize: 10.5, marginTop: 2 }}>
+            <div style={{ color: T.navyTextMuted, fontFamily: F.num, fontSize: 11, marginTop: 4 }}>
               {planContract(p)}
             </div>
           </div>
@@ -167,6 +245,7 @@ export function BoardComparisonView(props: BoardComparisonViewProps) {
           plans={plans}
           rowScores={rowScores}
           gridCols={gridCols}
+          differencesOnly={differencesOnly}
         />
       ))}
 
@@ -178,19 +257,29 @@ export function BoardComparisonView(props: BoardComparisonViewProps) {
           plans={plans}
           rowScores={rowScores}
           gridCols={gridCols}
+          differencesOnly={differencesOnly}
         />
       )}
 
-      {/* Tally scoreboard */}
+      {/* Tally scoreboard — restraint treatment: big mono counts, no
+          pills, no filled background. Leader gets a single mint accent
+          bar above their column, not a block. */}
       <div
         style={{
           display: 'grid',
           gridTemplateColumns: gridCols,
-          borderTop: `2px solid ${T.navyLine}`,
-          background: '#0C1626',
+          borderTop: `1px solid rgba(255,255,255,0.08)`,
+          marginTop: 4,
         }}
       >
-        <div style={{ ...CELL_LABEL, padding: '14px 16px', color: T.mintOnDark, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+        <div
+          style={{
+            ...CELL_LABEL,
+            fontSize: 12,
+            color: T.navyTextMuted,
+            padding: '20px 16px',
+          }}
+        >
           Scoreboard
         </div>
         {plans.map((p, i) => {
@@ -201,45 +290,60 @@ export function BoardComparisonView(props: BoardComparisonViewProps) {
             <div
               key={p.id}
               style={{
-                borderLeft: i === 0 ? 'none' : `1px solid ${T.navyLine}`,
-                padding: '14px 12px',
+                padding: '18px 14px 20px',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 8,
-                alignItems: 'center',
-                background: isLeader ? 'rgba(127,224,196,0.08)' : 'transparent',
+                gap: 6,
+                alignItems: 'flex-start',
+                position: 'relative',
               }}
             >
-              <div style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
-                <span style={{ color: SCORE_GREEN_FG, fontFamily: F.num, fontSize: 22, fontWeight: 700 }}>
+              {isLeader && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 14,
+                    right: 14,
+                    height: 2,
+                    background: T.mintOnDark,
+                    borderRadius: 2,
+                  }}
+                  aria-hidden
+                />
+              )}
+              <div style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
+                <span style={{ color: SCORE_GREEN_FG, fontFamily: F.num, fontSize: 26, fontWeight: 500, lineHeight: 1 }}>
                   {t.greens}
                 </span>
-                <span style={{ color: T.navyTextMuted, fontFamily: F.label, fontSize: 10.5 }}>
-                  greens
+                <span style={{ color: T.navyTextMuted, fontFamily: F.label, fontSize: 11 }}>
+                  wins
                 </span>
-                <span style={{ color: SCORE_RED_FG, fontFamily: F.num, fontSize: 18, fontWeight: 600, marginLeft: 6 }}>
-                  {t.reds}
-                </span>
-                <span style={{ color: T.navyTextMuted, fontFamily: F.label, fontSize: 10.5 }}>
-                  reds
-                </span>
+                {t.reds > 0 && (
+                  <>
+                    <span style={{ color: SCORE_RED_FG, fontFamily: F.num, fontSize: 20, fontWeight: 500, marginLeft: 6, lineHeight: 1 }}>
+                      {t.reds}
+                    </span>
+                    <span style={{ color: T.navyTextMuted, fontFamily: F.label, fontSize: 11 }}>
+                      missing
+                    </span>
+                  </>
+                )}
               </div>
               {isLeader && (
                 <div
                   style={{
-                    background: 'rgba(127,224,196,0.22)',
                     color: T.mintOnDark,
                     fontFamily: F.label,
-                    fontSize: 10,
-                    fontWeight: 700,
-                    letterSpacing: 0.4,
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    letterSpacing: 0.5,
                     textTransform: 'uppercase',
-                    padding: '3px 8px',
-                    borderRadius: 3,
+                    marginTop: 2,
                   }}
                   title={leaderTiedWithSomeone ? 'Tied for the lead — leftmost slot shown as leader' : undefined}
                 >
-                  {leaderTiedWithSomeone ? 'Leader (tied)' : 'Leader'}
+                  {leaderTiedWithSomeone ? 'Leader · tied' : 'Leader'}
                 </div>
               )}
               {isLeader && canTakeToH2H && (
@@ -247,14 +351,15 @@ export function BoardComparisonView(props: BoardComparisonViewProps) {
                   type="button"
                   onClick={() => onTakeToH2H(p)}
                   style={{
-                    background: T.mint600,
-                    color: T.mintOnMint,
-                    border: 'none',
-                    borderRadius: 8,
-                    padding: '8px 14px',
+                    marginTop: 4,
+                    background: 'transparent',
+                    color: T.mintOnDark,
+                    border: `1px solid ${T.mintOnDark}`,
+                    borderRadius: 6,
+                    padding: '6px 12px',
                     fontFamily: F.label,
                     fontSize: 11.5,
-                    fontWeight: 700,
+                    fontWeight: 600,
                     letterSpacing: 0.3,
                     cursor: 'pointer',
                   }}
@@ -268,11 +373,11 @@ export function BoardComparisonView(props: BoardComparisonViewProps) {
                     color: T.navyTextMuted,
                     fontFamily: F.label,
                     fontSize: 10.5,
-                    textAlign: 'center',
-                    lineHeight: 1.3,
+                    lineHeight: 1.4,
+                    marginTop: 2,
                   }}
                 >
-                  Baseline plan · H2H compares<br/>vs the baseline
+                  Baseline plan · H2H compares vs the baseline
                 </div>
               )}
             </div>
@@ -291,36 +396,45 @@ function Section({
   plans,
   rowScores,
   gridCols,
+  differencesOnly,
 }: {
   title: string;
   rows: ReadonlyArray<ScoreableRow>;
   plans: ReadonlyArray<Plan>;
   rowScores: Map<string, RowScore>;
   gridCols: string;
+  differencesOnly: boolean;
 }) {
+  // Filter rows against the differencesOnly toggle. When on, drop rows
+  // whose score doesn't differentiate (every plan tied). Keep the whole
+  // section hidden if nothing survives — the section header is signal,
+  // not chrome.
+  const visibleRows = differencesOnly
+    ? rows.filter((row) => rowScores.get(rowKey(title, row.label))?.differentiates === true)
+    : rows;
+  if (visibleRows.length === 0) return null;
+
   return (
     <>
       <div
         style={{
-          padding: '12px 16px 6px',
-          background: '#0C1626',
-          borderTop: `1px solid ${T.navyLine}`,
+          padding: '26px 18px 6px',
         }}
       >
         <div
           style={{
             color: T.mintOnDark,
             fontFamily: F.label,
-            fontSize: 10,
-            fontWeight: 700,
+            fontSize: 11,
+            fontWeight: 600,
             textTransform: 'uppercase',
-            letterSpacing: 0.5,
+            letterSpacing: 1.2,
           }}
         >
           {title}
         </div>
       </div>
-      {rows.map((row) => {
+      {visibleRows.map((row) => {
         const scored = rowScores.get(rowKey(title, row.label));
         return (
           <div
@@ -328,8 +442,11 @@ function Section({
             style={{
               display: 'grid',
               gridTemplateColumns: gridCols,
-              borderTop: `1px solid ${T.navyRow}`,
-              alignItems: 'stretch',
+              // Hairline row separator at low opacity — the only fill
+              // in the whole view. No column borders; whitespace does
+              // the column-separation work.
+              borderTop: `1px solid rgba(255,255,255,0.04)`,
+              alignItems: 'baseline',
             }}
           >
             <div style={CELL_LABEL}>{row.label}</div>
@@ -337,15 +454,13 @@ function Section({
               const rendered = row.render(p);
               const color = scored?.colors?.[i] ?? 'neutral';
               return (
-                <div
-                  key={p.id}
-                  style={{
-                    ...CELL_VALUE,
-                    borderLeft: i === 0 ? 'none' : `1px solid ${T.navyRow}`,
-                    ...(rendered.multiline ? { whiteSpace: 'pre-line' as const } : {}),
-                  }}
-                >
-                  <ScoreChip color={color} text={rendered.text} subtext={rendered.subtext} multiline={rendered.multiline} />
+                <div key={p.id} style={CELL_VALUE}>
+                  <ScoreCell
+                    color={color}
+                    text={rendered.text}
+                    subtext={rendered.subtext}
+                    multiline={rendered.multiline}
+                  />
                 </div>
               );
             })}
@@ -356,7 +471,18 @@ function Section({
   );
 }
 
-function ScoreChip({
+// ScoreCell — restraint-first render. No pill background, no border.
+// The NUMBER carries the color; everything else is whitespace and
+// typography.
+//
+// Color model (2026-08-08 refinement):
+//   • green  — winner on this row. Text color + slightly heavier weight.
+//   • neutral — present-but-not-winner. Regular navy-ink text. This is
+//               the default state for the vast majority of rows; a
+//               plan losing a copay by $5 shouldn't scream in red.
+//   • red    — absent / missing / "None" / "Not filed". Reserved for
+//               genuinely bad outcomes so it stays informative.
+function ScoreCell({
   color,
   text,
   subtext,
@@ -365,35 +491,38 @@ function ScoreChip({
   color: RowColor;
   text: string;
   subtext?: string | null;
+  /** Ladder rows: `subtext` carries multi-line per-day breakdown. */
   multiline?: boolean;
 }) {
-  const bg =
-    color === 'green' ? SCORE_GREEN_BG :
-    color === 'red' ? SCORE_RED_BG :
-    'transparent';
   const fg =
     color === 'green' ? SCORE_GREEN_FG :
     color === 'red' ? SCORE_RED_FG :
-    T.navyTextMuted;
+    T.navyText;
   return (
-    <div
-      style={{
-        background: bg,
-        color: fg,
-        borderRadius: 5,
-        padding: multiline ? '6px 8px' : '5px 8px',
-        fontFamily: F.num,
-        fontSize: multiline ? 11 : 12,
-        fontWeight: 600,
-        display: 'inline-block',
-        maxWidth: '100%',
-        wordBreak: 'break-word',
-        lineHeight: 1.35,
-      }}
-    >
-      {text}
+    <div style={{ maxWidth: '100%', wordBreak: 'break-word' }}>
+      <div
+        style={{
+          fontFamily: F.num,
+          fontSize: 19,
+          fontWeight: color === 'green' ? 600 : 500,
+          lineHeight: 1.1,
+          color: fg,
+        }}
+      >
+        {text}
+      </div>
       {subtext && (
-        <div style={{ fontFamily: F.label, fontSize: 10, fontWeight: 500, opacity: 0.85, marginTop: 2 }}>
+        <div
+          style={{
+            fontFamily: multiline ? F.num : F.label,
+            fontSize: 11,
+            fontWeight: 400,
+            color: T.navyTextMuted,
+            marginTop: 6,
+            lineHeight: 1.45,
+            whiteSpace: multiline ? ('pre-line' as const) : undefined,
+          }}
+        >
           {subtext}
         </div>
       )}
@@ -459,25 +588,48 @@ function scoreRow(row: ScoreableRow, plans: ReadonlyArray<Plan>): RowScore {
     row.direction === 'lower'
       ? Math.min(...nonNullEligible)
       : Math.max(...nonNullEligible);
+  const worst =
+    row.direction === 'lower'
+      ? Math.max(...nonNullEligible)
+      : Math.min(...nonNullEligible);
 
-  // All eligible plans share the best value AND there are no
-  // ineligible-but-non-neutral plans (missing counts as differentiation
-  // — winner beats absent). Score check: every plan must be either
-  // eligible + at best, OR neutral (drug-pending). Otherwise it
-  // differentiates.
-  const allAtBest = eligibleScores.every((s, i) => {
-    if (isNeutral[i]) return true;
-    return s != null && s === best;
-  });
+  // Best/worst polarity model (2026-08-09):
+  //   • BEST value          → 'green'  (weight 600 text)
+  //   • WORST value          → 'red'
+  //   • Middle (>=3 plans)   → 'neutral'
+  //   • Absent / missing     → 'red'    (absent is worst)
+  //   • Ties on best         → all tied plans green
+  //   • Ties on worst        → all tied plans red
+  //   • All eligible tie AND no absent → all 'neutral' (row has no signal)
+  //   • 2 plans, both with values → best green, worst red, no middle
+  //   • Cost-pending flagged  → 'neutral' (unscored, not tallied)
+  //
+  // Note best === worst means every eligible plan has the same value.
+  // When there's also an absent plan, that eligible value is
+  // simultaneously best (tied among the present) and worst (relative
+  // to the row as a whole isn't meaningful, but relative to the absent
+  // plan, present > absent) — so the eligible plans should read as
+  // "green tied for best" not "red tied for worst."
+  const allEligibleTie = best === worst;
+  const hasAbsent = eligibleScores.some((s, i) => !isNeutral[i] && s == null);
 
   const colors: RowColor[] = plans.map((_, i) => {
     if (isNeutral[i]) return 'neutral';
     const s = scores[i];
-    if (s == null) return 'red'; // absent when others have a value → red
-    return s === best ? 'green' : 'red';
+    if (s == null) return 'red'; // absent → red
+    if (allEligibleTie) {
+      // Every present plan has the same value. If no absents, no
+      // signal — everything neutral. If any absents, the present
+      // plans win by default (green).
+      return hasAbsent ? 'green' : 'neutral';
+    }
+    if (s === best) return 'green';
+    if (s === worst) return 'red';
+    return 'neutral'; // middle band — only reachable with >= 3 plans
   });
 
-  return { colors, differentiates: !allAtBest };
+  const differentiates = colors.some((c) => c === 'green' || c === 'red');
+  return { colors, differentiates };
 }
 
 // Extract numeric $ or % from a display string. Returns null when
@@ -548,6 +700,7 @@ function fmtMoney(n: number): string {
 function buildSections(
   _plans: ReadonlyArray<Plan>,
   annualDrugByPlanId: Record<string, number | null>,
+  drugCoverageUnknownByPlanId: Record<string, boolean>,
 ): Section[] {
   const cs = (plan: Plan, getter: (b: PlanBenefits['medical']) => Parameters<typeof formatCostShareWithRange>[0]) => {
     const isPdp = plan.plan_type === 'PDP';
@@ -557,6 +710,75 @@ function buildSections(
       score: parseMoneyOrPct(formatCostShareWithRange(val, { isPdp })),
     };
   };
+
+  // Row-in-section only rendered when at least one plan has any data
+  // (copay OR coinsurance non-null) for it. Prevents the view from
+  // filling with 'Not filed'-only rows that penalize every plan.
+  const anyPlanHasCostShare = (
+    plans: ReadonlyArray<Plan>,
+    getter: (m: PlanBenefits['medical']) => { copay: number | null; coinsurance: number | null },
+  ): boolean =>
+    plans.some((p) => {
+      const v = getter(p.benefits.medical);
+      return v.copay != null || v.coinsurance != null;
+    });
+
+  const medicalRow = (
+    label: string,
+    getter: (m: PlanBenefits['medical']) => PlanBenefits['medical']['primary_care'],
+  ): ScoreableRow => ({
+    label,
+    direction: 'lower',
+    render: (p) => cs(p, getter),
+  });
+
+  // Ladder row — inpatient / SNF / MH-inpatient. The computed Total is
+  // the primary read (large mono in ScoreChip), the per-day breakdown
+  // stays small and secondary. Empty ladder falls through to "Not
+  // filed" as the primary text.
+  const ladderRow = (
+    label: string,
+    getter: (m: PlanBenefits['medical']) => PlanBenefits['medical']['inpatient'],
+  ): ScoreableRow => ({
+    label,
+    direction: 'lower',
+    render: (p) => {
+      const m = getter(p.benefits.medical);
+      const ladder = formatInpatientLadder(m.description, m.copay, m.coinsurance);
+      const { total, fallback } = ladderTotal(m.description, m.copay, m.coinsurance);
+      // Primary large: the total. Falls back to the ladder value or
+      // "Not filed" when total isn't computable (coinsurance-only, no
+      // ladder at all). Secondary small: the per-day breakdown.
+      if (total != null) {
+        const suffix = fallback ? ` · ${fallback}` : '';
+        return {
+          text: `${fmtMoney(total)}${suffix}`,
+          subtext: ladder ?? null,
+          score: total,
+          multiline: true,
+        };
+      }
+      return {
+        text: ladder ?? (fallback ?? 'Not filed'),
+        subtext: null,
+        score: null,
+        multiline: true,
+      };
+    },
+  });
+
+  // Optional medical row — only included when at least one board plan
+  // has data for the field. Rob's spec: "only render the row if at least
+  // one plan on the board has data for it — don't add rows that are
+  // pending across the board."
+  const optionalMedicalRow = (
+    label: string,
+    getter: (m: PlanBenefits['medical']) => PlanBenefits['medical']['primary_care'],
+  ): ScoreableRow | null =>
+    anyPlanHasCostShare(_plans, getter) ? medicalRow(label, getter) : null;
+
+  const compact = (rows: (ScoreableRow | null)[]): ScoreableRow[] =>
+    rows.filter((r): r is ScoreableRow => r !== null);
 
   return [
     {
@@ -579,9 +801,30 @@ function buildSections(
           label: 'Est. annual cost',
           direction: 'lower',
           render: (p) => {
-            const est = annualEstimate(p, annualDrugByPlanId[p.id] ?? null);
+            // If drug coverage is unknown for this plan (brain couldn't
+            // resolve at least one user drug against cache OR formulary),
+            // the "annual cost" would silently collapse to premium × 12
+            // and read as $0-drug in green — a missing value looking
+            // like the best value. Route through the same neutral
+            // "Cost pending" treatment used in the medication section
+            // so this row doesn't sway the tally.
+            const drugCost = annualDrugByPlanId[p.id];
+            const drugUnknown = drugCoverageUnknownByPlanId[p.id] === true;
+            if (drugCost == null || drugUnknown) {
+              return {
+                text: 'Cost pending',
+                score: null,
+                neutralOnPending: true,
+                subtext: `Premium ${formatPremium(p)}/mo · drug est. unavailable`,
+              };
+            }
+            const est = annualEstimate(p, drugCost);
             if (est.total == null) {
-              return { text: 'Cost pending', score: null };
+              return {
+                text: 'Cost pending',
+                score: null,
+                neutralOnPending: true,
+              };
             }
             return { text: fmtMoney(est.total), score: est.total };
           },
@@ -590,7 +833,7 @@ function buildSections(
     },
     {
       title: 'Provider & care',
-      rows: [
+      rows: compact([
         {
           label: 'PCP copay',
           direction: 'lower',
@@ -601,82 +844,56 @@ function buildSections(
           direction: 'lower',
           render: (p) => ({ text: formatSpecialist(p), score: parseMoneyOrPct(formatSpecialist(p)) }),
         },
-        {
-          label: 'Urgent care',
-          direction: 'lower',
-          render: (p) => cs(p, (m) => m.urgent_care),
-        },
-        {
-          label: 'Emergency',
-          direction: 'lower',
-          render: (p) => cs(p, (m) => m.emergency),
-        },
-        {
-          label: 'Telehealth',
-          direction: 'lower',
-          render: (p) => cs(p, (m) => m.telehealth),
-        },
-      ],
+        medicalRow('Telehealth', (m) => m.telehealth),
+        optionalMedicalRow('Physical / speech therapy', (m) => m.physical_speech_therapy),
+        optionalMedicalRow('Occupational therapy', (m) => m.occupational_therapy),
+        optionalMedicalRow('Mental health (individual)', (m) => m.mental_health_individual),
+        optionalMedicalRow('Mental health (group)', (m) => m.mental_health_group),
+        optionalMedicalRow('Substance abuse / opioid tx', (m) => m.substance_abuse),
+        optionalMedicalRow('Podiatry', (m) => m.podiatry),
+        optionalMedicalRow('Chiropractic', (m) => m.chiropractic),
+        optionalMedicalRow('Acupuncture', (m) => m.acupuncture),
+      ]),
     },
     {
-      title: 'Hospital',
-      rows: [
-        {
-          label: 'Inpatient',
-          direction: 'lower',
-          render: (p) => {
-            const m = p.benefits.medical.inpatient;
-            const ladder = formatInpatientLadder(m.description, m.copay, m.coinsurance);
-            const { total, fallback } = ladderTotal(m.description, m.copay, m.coinsurance);
-            return {
-              text: ladder ?? 'Not filed',
-              subtext: total != null ? `Total: ${fmtMoney(total)}${fallback ? ` · ${fallback}` : ''}` : (fallback ?? null),
-              score: total,
-              multiline: true,
-            };
-          },
-        },
-        {
-          label: 'Inpatient mental',
-          direction: 'lower',
-          render: (p) => {
-            const m = p.benefits.medical.mental_health_inpatient;
-            const ladder = formatInpatientLadder(m.description, m.copay, m.coinsurance);
-            const { total, fallback } = ladderTotal(m.description, m.copay, m.coinsurance);
-            return {
-              text: ladder ?? 'Not filed',
-              subtext: total != null ? `Total: ${fmtMoney(total)}${fallback ? ` · ${fallback}` : ''}` : (fallback ?? null),
-              score: total,
-              multiline: true,
-            };
-          },
-        },
-        {
-          label: 'Skilled nursing',
-          direction: 'lower',
-          render: (p) => {
-            const m = p.benefits.medical.snf;
-            const ladder = formatInpatientLadder(m.description, m.copay, m.coinsurance);
-            const { total, fallback } = ladderTotal(m.description, m.copay, m.coinsurance);
-            return {
-              text: ladder ?? 'Not filed',
-              subtext: total != null ? `Total: ${fmtMoney(total)}${fallback ? ` · ${fallback}` : ''}` : (fallback ?? null),
-              score: total,
-              multiline: true,
-            };
-          },
-        },
-        {
-          label: 'Outpatient surg. (hosp)',
-          direction: 'lower',
-          render: (p) => cs(p, (m) => m.outpatient_surgery_hospital),
-        },
-        {
-          label: 'Outpatient surg. (ASC)',
-          direction: 'lower',
-          render: (p) => cs(p, (m) => m.outpatient_surgery_asc),
-        },
-      ],
+      title: 'Emergency & urgent',
+      rows: compact([
+        medicalRow('Urgent care', (m) => m.urgent_care),
+        medicalRow('Emergency room', (m) => m.emergency),
+        optionalMedicalRow('Ambulance', (m) => m.ambulance),
+        optionalMedicalRow('Air transportation', (m) => m.air_transportation),
+      ]),
+    },
+    {
+      title: 'Hospital & inpatient',
+      rows: compact([
+        ladderRow('Inpatient', (m) => m.inpatient),
+        ladderRow('Inpatient mental', (m) => m.mental_health_inpatient),
+        ladderRow('Skilled nursing', (m) => m.snf),
+        medicalRow('Outpatient surg. (hosp)', (m) => m.outpatient_surgery_hospital),
+        medicalRow('Outpatient surg. (ASC)', (m) => m.outpatient_surgery_asc),
+        optionalMedicalRow('Outpatient observation', (m) => m.outpatient_observation),
+        optionalMedicalRow('Home health', (m) => m.home_health),
+      ]),
+    },
+    {
+      title: 'Diagnostics & imaging',
+      rows: compact([
+        optionalMedicalRow('Lab services', (m) => m.lab_services),
+        optionalMedicalRow('Diagnostic procedures', (m) => m.diagnostic_procedures),
+        optionalMedicalRow('X-ray', (m) => m.xray),
+        optionalMedicalRow('Advanced imaging (MRI/CT)', (m) => m.advanced_imaging),
+      ]),
+    },
+    {
+      title: 'Equipment & Part B drugs',
+      rows: compact([
+        optionalMedicalRow('DME / prosthetics', (m) => m.dme_prosthetics),
+        optionalMedicalRow('Part B drugs / chemo', (m) => m.partb_drugs),
+        optionalMedicalRow('Diabetic supplies', (m) => m.diabetic_supplies),
+        optionalMedicalRow('Insulin', (m) => m.insulin),
+        optionalMedicalRow('Renal dialysis', (m) => m.renal_dialysis),
+      ]),
     },
     {
       title: 'Rx & pharmacy',
@@ -947,19 +1164,21 @@ function rowKey(sectionTitle: string, rowLabel: string): string {
 // ─── Style constants ────────────────────────────────────────────────
 
 const CELL_LABEL: CSSProperties = {
-  color: T.navyTextDim,
+  // Reference-weight label: small, muted, regular weight. No fill.
+  // The number to the right is the read; this anchors the row without
+  // competing.
+  color: T.navyTextMuted,
   fontFamily: F.label,
-  fontSize: 11,
-  fontWeight: 500,
-  padding: '9px 14px',
-  background: '#101B2E',
+  fontSize: 12,
+  fontWeight: 400,
+  padding: '15px 16px',
   display: 'flex',
-  alignItems: 'center',
+  alignItems: 'baseline',
 };
 const CELL_VALUE: CSSProperties = {
-  padding: '9px 10px',
+  padding: '15px 14px',
   display: 'flex',
-  alignItems: 'center',
+  alignItems: 'baseline',
 };
 const CELL_HEADER_LABEL: CSSProperties = {
   padding: '14px 14px 12px',
@@ -970,7 +1189,6 @@ const CELL_HEADER_PLAN: CSSProperties = {
   minWidth: 0,
 };
 
-const SCORE_GREEN_BG = 'rgba(127,224,196,0.20)';
+// Color-carries-the-signal palette (no pill backgrounds).
 const SCORE_GREEN_FG = '#7FE0C4';
-const SCORE_RED_BG = 'rgba(239,68,68,0.18)';
 const SCORE_RED_FG = '#fca5a5';

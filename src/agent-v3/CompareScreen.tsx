@@ -15,6 +15,7 @@
 // to the existing compliance → enroll funnel.
 
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -61,6 +62,7 @@ import { TOKENS as T, FONT as F } from './compare-v2/tokens';
 // on disk because SummaryOfBenefitsDrawer imports its shared
 // PreviewDrawerShell + PreviewGrid primitives.
 import { BoardComparisonView } from './compare-v2/BoardComparisonView';
+import { PoolMetricsBar } from './compare-v2/PoolMetricsBar';
 import { formatOtc } from '@/lib/extractBenefitValue';
 
 // Per the current product rule: rows stay visible, but unfiled values
@@ -1005,6 +1007,75 @@ export function CompareScreen({
     [reconciledSlots, matchedPlanIds],
   );
 
+  // ── Dev-only convenience: URL-param autofill + auto-open comparison ─
+  //
+  // Gated on `import.meta.env.DEV` — Vite compile-time constant, always
+  // `false` in `vite build` output; the whole branch (including the
+  // query-param read and the setter calls) is dead-code-eliminated from
+  // the production bundle. Zero prod bytes, zero prod behavior change.
+  //
+  //   ?autofill=<N>       fills the first N empty board slots (max 4)
+  //                       from `pool` once pool becomes non-empty.
+  //                       Purpose: initSlots() only runs at mount; when
+  //                       pool arrives via async hydration the slots
+  //                       stay null and the broker has to click
+  //                       "Add to board" four times just to review the
+  //                       comparison view. Dev bypasses that noise.
+  //   ?view=comparison    opens the BoardComparisonView drawer on load
+  //                       once at least one slot is filled.
+  //
+  // Both fire once per condition-transition, not on every render.
+  const autofillCountRef = useRef<number | null>(
+    typeof window === 'undefined'
+      ? null
+      : (() => {
+          if (!import.meta.env.DEV) return null;
+          const raw = new URLSearchParams(window.location.search).get('autofill');
+          const n = raw == null ? null : parseInt(raw, 10);
+          return Number.isFinite(n) && n! > 0 ? Math.min(n!, 4) : null;
+        })(),
+  );
+  const autoViewRef = useRef<string | null>(
+    typeof window === 'undefined'
+      ? null
+      : (() => {
+          if (!import.meta.env.DEV) return null;
+          return new URLSearchParams(window.location.search).get('view');
+        })(),
+  );
+  const autofillFiredRef = useRef(false);
+  const autoOpenFiredRef = useRef(false);
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const n = autofillCountRef.current;
+    if (n == null || autofillFiredRef.current) return;
+    if (stablePool.length === 0) return;
+    // Only fill slots that are still null — never clobber a plan the
+    // agent already placed by hand.
+    const allNull = slots.every((s) => s == null);
+    if (!allNull) {
+      autofillFiredRef.current = true; // agent's already interacted; don't fight them
+      return;
+    }
+    autofillFiredRef.current = true;
+    const nextSlots: (Plan | null)[] = [null, null, null, null];
+    const source = stablePool;
+    for (let i = 0; i < Math.min(n, 4, source.length); i += 1) {
+      nextSlots[i] = source[i];
+    }
+    setSlots(nextSlots);
+    console.info(`[dev] autofill: placed ${nextSlots.filter(Boolean).length} plans into empty slots`);
+  }, [stablePool, slots]);
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    if (autoOpenFiredRef.current) return;
+    if (autoViewRef.current !== 'comparison') return;
+    if (filteredSlots.every((s) => s == null)) return; // wait for autofill
+    autoOpenFiredRef.current = true;
+    setSummaryOpen(true);
+    console.info('[dev] view=comparison: opening BoardComparisonView');
+  }, [filteredSlots]);
+
   const visibleSlotPlans = useMemo(
     () => filteredSlots.filter((p): p is Plan => !!p),
     [filteredSlots],
@@ -1200,6 +1271,17 @@ export function CompareScreen({
         onH2H={enterH2HFromToggle}
       />
 
+      {/* Pool intelligence bar — 3-row stat strip above the bench.
+          Reads directly off brain output that CompareScreen already
+          receives (scoredPlans, benchPlans, benchGateResultsByPlanId,
+          drugCoverageUnknownByPlanId). No new fetches. */}
+      <PoolMetricsBar
+        scoredPlans={scoredPlans}
+        benchPlans={benchPlans ?? []}
+        benchGateResultsByPlanId={benchGateResultsByPlanId ?? {}}
+        drugCoverageUnknownByPlanId={drugCoverageUnknownByPlanId}
+      />
+
       <Bench
         filters={filters}
         slotIds={slotIds}
@@ -1315,6 +1397,7 @@ export function CompareScreen({
           plans={visibleSlotPlans}
           drugBreakdownByPlanId={drugBreakdownByPlanId}
           annualDrugByPlanId={annualDrugByPlanId}
+          drugCoverageUnknownByPlanId={drugCoverageUnknownByPlanId}
           onClose={() => setSummaryOpen(false)}
           onTakeToH2H={(plan) => {
             setSummaryOpen(false);
@@ -3341,9 +3424,9 @@ function MetricLine({
   value: string;
   pending?: boolean;
   /** Text shown in place of `value` when `pending` is true. Defaults
-   *  to 'Verifying…' — used for the initial async-load state on
-   *  Est. annual cost. Callers can override to distinguish real
-   *  loading ("Verifying…") from data-missing pending ("Cost pending"). */
+   *  to 'Cost pending' — unified across surfaces so the async-load and
+   *  data-missing states read the same way on board cards + the
+   *  comparison view. */
   pendingLabel?: string;
   /** Optional pre-adjustment value shown inline in parens with a
    *  strikethrough. Used for dual-eligible premium ($0 vs original
@@ -3394,7 +3477,7 @@ function MetricLine({
             color: pending ? T.muted2 : T.ink,
           }}
         >
-          {pending ? (pendingLabel ?? 'Verifying…') : value}
+          {pending ? (pendingLabel ?? 'Cost pending') : value}
         </span>
       </span>
     </div>
