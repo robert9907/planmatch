@@ -261,6 +261,16 @@ export interface SessionState {
    */
   currentPlanId: string | null;
   /**
+   * Display name for the current plan when the store was seeded from an
+   * outside source (AgentBase hydration). Preserved separately from the
+   * catalog lookup so the CompareScreen "current plan missing from pool"
+   * plate can still show the plan name when `currentPlanId` doesn't
+   * resolve to a row in the county pool. Null when the current-plan
+   * picker filled the id and the display name is derivable from the
+   * resolved Plan.
+   */
+  currentPlanName: string | null;
+  /**
    * Explicit "no current plan" marker. Distinguishes between
    *   (a) currentPlanId === null && noCurrentPlan === false → unselected (block Continue)
    *   (b) currentPlanId === null && noCurrentPlan === true  → new to Medicare

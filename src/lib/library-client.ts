@@ -36,6 +36,38 @@ export function normalizePlanId(id: string): string {
   return `${parts[0]}-${parts[1]}-${segNormalized}`;
 }
 
+// Per-call timeout for library fetches. Rob's 2026-08-09 broker session
+// hung on the AgentBase → Plan Match handoff because /api/library/drug-
+// search had no client-side timeout; a slow (or cold-started) response
+// blocked hydration indefinitely because the meds resolver awaited each
+// drug sequentially. 5s bounds a single library call so an outer resolver
+// can move on to the "unresolved med with yellow warning" path rather
+// than freezing the whole handoff.
+const LIBRARY_FETCH_TIMEOUT_MS = 5000;
+
+function withTimeoutSignal(
+  external: AbortSignal | undefined,
+  timeoutMs: number,
+): { signal: AbortSignal; cleanup: () => void } {
+  const ctl = new AbortController();
+  const onExternalAbort = (): void => ctl.abort(external?.reason);
+  if (external) {
+    if (external.aborted) ctl.abort(external.reason);
+    else external.addEventListener('abort', onExternalAbort, { once: true });
+  }
+  const timer = setTimeout(
+    () => ctl.abort(new DOMException(`library fetch timed out after ${timeoutMs}ms`, 'TimeoutError')),
+    timeoutMs,
+  );
+  return {
+    signal: ctl.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+      if (external) external.removeEventListener('abort', onExternalAbort);
+    },
+  };
+}
+
 // ─── drug-search ─────────────────────────────────────────────────
 
 export interface LibraryDrug {
@@ -54,18 +86,23 @@ export async function searchDrugs(
   limit: number = 10,
   signal?: AbortSignal,
 ): Promise<LibraryDrug[]> {
-  const res = await fetch(`${LIBRARY_URL}/api/library/drug-search`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, limit }),
-    signal,
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`library/drug-search ${res.status} ${body.slice(0, 200)}`);
+  const { signal: timedSignal, cleanup } = withTimeoutSignal(signal, LIBRARY_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${LIBRARY_URL}/api/library/drug-search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, limit }),
+      signal: timedSignal,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`library/drug-search ${res.status} ${body.slice(0, 200)}`);
+    }
+    const data = (await res.json()) as { drugs?: LibraryDrug[] };
+    return data.drugs ?? [];
+  } finally {
+    cleanup();
   }
-  const data = (await res.json()) as { drugs?: LibraryDrug[] };
-  return data.drugs ?? [];
 }
 
 // ─── provider-network ────────────────────────────────────────────

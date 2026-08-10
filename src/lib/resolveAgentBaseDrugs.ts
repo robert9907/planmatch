@@ -209,124 +209,120 @@ function displayFromPicked(d: RxNormDrug): string {
   return d.name;
 }
 
-/** Resolve a list of AgentBase free-text drug rows to canonical
- *  RxNorm concepts by hitting the library drug-search endpoint. Runs
- *  serially (not in parallel) — the endpoint's cold-start cost and
- *  the rate at which brokers actually load a client (one at a time)
- *  make a queue safer than a fan-out that could throw AbortErrors on
- *  the wire. Aborts cleanly when the caller's signal fires. */
+/** Resolve a single AgentBase drug row against the library. Extracted
+ *  so the outer resolver can fan the drugs out concurrently — the
+ *  break-on-first-hit query loop stays serialised per-drug (order
+ *  matters for pickBest's precision-vs-brand ranking), but individual
+ *  drugs no longer wait behind each other. Each searchDrug fetch is
+ *  wrapped with a 5s timeout inside library-client.ts, so a stuck query
+ *  yields a null-rxcui result instead of freezing the entire hydration. */
+async function resolveOne(
+  input: AgentBaseDrugInput,
+  signal?: AbortSignal,
+): Promise<ResolvedAgentBaseDrug> {
+  const originalName = input.name;
+  const inputDose = input.dose?.trim() || null;
+  const inputForm = input.form?.trim() || null;
+
+  // rxcui already present — the CRM row already carries a resolved
+  // concept from a prior sync. Trust it and skip the library call.
+  if (input.rxcui) {
+    return {
+      id: input.id,
+      hadInputRxcui: true,
+      originalName,
+      canonicalName: originalName,
+      rxcui: input.rxcui,
+      dose: inputDose,
+      form: inputForm,
+      resolved: true,
+      strengthMatched: true,
+    };
+  }
+
+  // Strength for pickBest: dose column wins when populated, else
+  // extract from the tail of the name. Empty string ("") is the
+  // sentinel pickBest uses to fall through to results[0].
+  const strength =
+    inputDose ?? extractStrengthFromName(originalName) ?? '';
+  const variants = buildNameVariants(originalName);
+  const normalized = normalizeStrength(strength);
+  const queries: string[] = [];
+  const seen = new Set<string>();
+  const push = (q: string): void => {
+    if (!seen.has(q)) {
+      seen.add(q);
+      queries.push(q);
+    }
+  };
+  // Two-pass: precision variants (shortest first), then bare variants
+  // (longest first — same order buildNameVariants emits). Shortest-first
+  // for the precision pass ranks the bare stem + strength above the
+  // intermediate variant carrying a residual dose-form token, so
+  // pickBestAgent routes ambiguous cases to the canonical monotherapy
+  // generic instead of the brand equivalent.
+  if (normalized) {
+    const byLength = [...variants].sort((a, b) => a.length - b.length);
+    for (const v of byLength) push(`${v} ${normalized}`);
+  }
+  for (const v of variants) push(v);
+
+  let best: PickedDrug | null = null;
+  try {
+    for (const q of queries) {
+      if (signal?.aborted) break;
+      const results = await searchDrug(q, signal);
+      if (results.length === 0) continue;
+      const picked = pickBestAgent(results, strength, originalName);
+      if (picked?.drug.rxcui) {
+        best = picked;
+        break;
+      }
+    }
+  } catch {
+    // Transient error (fetch failure, 5s library timeout, abort) —
+    // fall through to unresolved. The Meds screen renders the yellow
+    // warning and useResolveRxcuis retries in the background if the
+    // med lands in state without a rxcui.
+  }
+
+  if (best?.drug.rxcui) {
+    return {
+      id: input.id,
+      hadInputRxcui: false,
+      originalName,
+      canonicalName: displayFromPicked(best.drug),
+      rxcui: best.drug.rxcui,
+      dose: best.drug.strength ?? inputDose,
+      form: best.drug.dose_form ?? inputForm,
+      resolved: true,
+      strengthMatched: best.strengthMatched,
+    };
+  }
+  return {
+    id: input.id,
+    hadInputRxcui: false,
+    originalName,
+    canonicalName: originalName,
+    rxcui: null,
+    dose: inputDose,
+    form: inputForm,
+    resolved: false,
+    strengthMatched: false,
+  };
+}
+
+/** Resolve a batch of AgentBase free-text drug rows to canonical RxNorm
+ *  concepts. Fans out per-drug in parallel (Promise.all) — the previous
+ *  serial-over-drugs loop meant one stalled /api/library/drug-search
+ *  invocation blocked every subsequent drug's resolution, which
+ *  manifested as "meds hung" in Rob's 2026-08-09 handoff session. The
+ *  library-client.ts 5s per-fetch timeout bounds worst-case latency to
+ *  (5s × queries-per-drug). Aborts cleanly when the caller's signal
+ *  fires. */
 export async function resolveAgentBaseDrugs(
   inputs: AgentBaseDrugInput[],
   signal?: AbortSignal,
 ): Promise<ResolvedAgentBaseDrug[]> {
-  const out: ResolvedAgentBaseDrug[] = [];
-  for (const input of inputs) {
-    if (signal?.aborted) break;
-    const originalName = input.name;
-    const inputDose = input.dose?.trim() || null;
-    const inputForm = input.form?.trim() || null;
-
-    // rxcui already present — the CRM row already carries a resolved
-    // concept from a prior sync. Trust it and skip the library call.
-    if (input.rxcui) {
-      out.push({
-        id: input.id,
-        hadInputRxcui: true,
-        originalName,
-        canonicalName: originalName,
-        rxcui: input.rxcui,
-        dose: inputDose,
-        form: inputForm,
-        resolved: true,
-        strengthMatched: true,
-      });
-      continue;
-    }
-
-    // Strength for pickBest: dose column wins when populated, else
-    // extract from the tail of the name. Empty string ("") is the
-    // sentinel pickBest uses to fall through to results[0].
-    const strength =
-      inputDose ?? extractStrengthFromName(originalName) ?? '';
-    const variants = buildNameVariants(originalName);
-    // Precision-first: prepend "<bareStem> <normalizedStrength>"
-    // queries to each variant. For ingredients like hydrochlorothiazide
-    // where the pm_drugs monotherapy ranks BELOW combo drugs on a bare
-    // stem query, the strength-included form surfaces the 25 MG
-    // monotherapy at position 1. Without this, pickBest can't
-    // distinguish "hydrochlorothiazide 25 MG / lisinopril 20 MG" from
-    // the true "hydrochlorothiazide 25 MG Oral Tablet" — both match
-    // strength 25 MG, and the combo ranks higher on the bare query.
-    const normalized = normalizeStrength(strength);
-    const queries: string[] = [];
-    const seen = new Set<string>();
-    const push = (q: string): void => {
-      if (!seen.has(q)) {
-        seen.add(q);
-        queries.push(q);
-      }
-    };
-    // Two-pass: precision variants (shortest first), then bare variants
-    // (longest first — same order buildNameVariants emits).
-    //
-    // Shortest-first for the precision pass is deliberate: the bare
-    // stem + strength ("Levetiracetam 500 MG") ranks the true generic
-    // monotherapy ABOVE the branded equivalent (Keppra), while an
-    // intermediate strip carrying a residual dose-form token
-    // ("Levetiracetam TAB 500 MG") ranks Keppra first. The latter
-    // wins if we hit it before the bare-stem precision query, and
-    // pickBestAgent's brand penalty can't overcome the ranking gap.
-    // Sorting precision variants shortest-first + break-on-first-hit
-    // routes ambiguous cases to the canonical monotherapy generic.
-    if (normalized) {
-      const byLength = [...variants].sort((a, b) => a.length - b.length);
-      for (const v of byLength) push(`${v} ${normalized}`);
-    }
-    for (const v of variants) push(v);
-
-    let best: PickedDrug | null = null;
-    try {
-      for (const q of queries) {
-        if (signal?.aborted) return out;
-        const results = await searchDrug(q, signal);
-        if (results.length === 0) continue;
-        const picked = pickBestAgent(results, strength, originalName);
-        if (picked?.drug.rxcui) {
-          best = picked;
-          break;
-        }
-      }
-    } catch {
-      // Transient error — leave unresolved. The Meds screen will
-      // render the yellow warning and useResolveRxcuis retries in the
-      // background if the med lands in state without a rxcui.
-    }
-
-    if (best?.drug.rxcui) {
-      out.push({
-        id: input.id,
-        hadInputRxcui: false,
-        originalName,
-        canonicalName: displayFromPicked(best.drug),
-        rxcui: best.drug.rxcui,
-        dose: best.drug.strength ?? inputDose,
-        form: best.drug.dose_form ?? inputForm,
-        resolved: true,
-        strengthMatched: best.strengthMatched,
-      });
-    } else {
-      out.push({
-        id: input.id,
-        hadInputRxcui: false,
-        originalName,
-        canonicalName: originalName,
-        rxcui: null,
-        dose: inputDose,
-        form: inputForm,
-        resolved: false,
-        strengthMatched: false,
-      });
-    }
-  }
-  return out;
+  return Promise.all(inputs.map((input) => resolveOne(input, signal)));
 }

@@ -172,6 +172,7 @@ export function IntakeScreen({
   const updateClient = useSession((s) => s.updateClient);
   const currentPlanId = useSession((s) => s.currentPlanId);
   const setCurrentPlanId = useSession((s) => s.setCurrentPlanId);
+  const setCurrentPlanName = useSession((s) => s.setCurrentPlanName);
   const setNoCurrentPlan = useSession((s) => s.setNoCurrentPlan);
   const disclaimersConfirmed = useSession((s) => s.disclaimersConfirmed);
   const confirmDisclaimer = useSession((s) => s.confirmDisclaimer);
@@ -416,6 +417,7 @@ export function IntakeScreen({
 
   function selectPlan(plan: Plan) {
     setCurrentPlanId(plan.id);
+    setCurrentPlanName(plan.plan_name);
     setPlanQuery('');
     setPlanOpen(false);
   }
