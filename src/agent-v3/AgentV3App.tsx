@@ -1079,13 +1079,35 @@ const explanationsByPlanId = useMemo<
     const idParam = getClientIdParam();
     const agentbaseClientId =
       idParam && /^\d+$/.test(idParam) ? Number(idParam) : null;
+    // Rotate session_token per Enroll click so every enrollment gets
+    // its own row in planmatch_sessions (its own ⚡ queue entry Rob
+    // can approve/reject independently). Before this, one token per
+    // CompareScreen mount meant enrolling plan A then plan B upserted
+    // one row and B silently overwrote A.
+    //
+    // Single-click idempotence is preserved by useAgentBaseRecommend's
+    // syncedPlanIdRef.current === planId early-return: two clicks on
+    // the SAME plan within the same hook instance short-circuit the
+    // second call, so a double-click can't create two rows for the
+    // same plan.
+    //
+    // The store's `sessionId` (useSession) is still valid as a
+    // per-mount identifier for other uses, but the outbound
+    // session_token is now per-enroll to give each enrollment its own
+    // life in the CRM queue.
+    // Token shape: <sessionId>__<planId>__<clickId>. The double-
+    // underscore delimiter avoids collision with the ses_XXX prefix
+    // useSession assigns, and the clickId is Date+random so a fast
+    // second click on a different plan still yields a distinct row.
+    const clickId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const perEnrollToken = `${sessionId}__${plan.id}__${clickId}`;
     const input = await buildAgentV3SyncInput({
       plan,
       client,
       medications,
       providers,
       brainResult: brain.result,
-      sessionId,
+      sessionId: perEnrollToken,
       startedAt,
       agentbaseClientId,
       compliance: snapshot?.compliance,

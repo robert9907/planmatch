@@ -290,22 +290,63 @@ export function useAgentBaseRecommend() {
     setState('syncing');
     setError(null);
     const body = buildBody(input);
+
+    // Convert a raw handler response into a success/failure decision.
+    // The handler returns top-level ok:true even when the webhook forward
+    // to planmatch_sessions fails (best-effort), because the direct
+    // clients-table write succeeded — but a webhook failure means the
+    // ⚡ approval queue never fires and the enrollment is only
+    // half-landed. Surface it as a failure with an explicit "half-landed"
+    // message so callers (SlotCell EnrollCardButton, QuoteDeliveryV4
+    // SyncStatusPill) can show the broker exactly what happened. This
+    // is the fix for the silent-webhook-failure bug documented in the
+    // Aug 9 smoke report.
+    const decide = (
+      r: RecommendSyncResult,
+    ): { ok: true; result: RecommendSyncResult } | { ok: false; error: string } => {
+      if (r.webhook_forwarded === false) {
+        const msg =
+          `Client record updated, but the AgentBase queue forward failed: ${r.webhook_error ?? 'unknown error'}`;
+        return { ok: false, error: msg };
+      }
+      return { ok: true, result: r };
+    };
+
     try {
       const r = await postOnce(body);
-      setResult(r);
-      setState('synced');
-      syncedPlanIdRef.current = planId;
-      return { ok: true, result: r };
+      const outcome = decide(r);
+      if (outcome.ok) {
+        setResult(r);
+        setState('synced');
+        syncedPlanIdRef.current = planId;
+      } else {
+        // Half-landed: direct write succeeded so we DO stash the result
+        // (so the pill can still show the CRM URL / giveback badge),
+        // but leave syncedPlanIdRef.current unset so a retry click
+        // actually re-fires — otherwise the same-plan short-circuit
+        // above would swallow the retry.
+        setResult(r);
+        setError(outcome.error);
+        setState('error');
+      }
+      return outcome;
     } catch (err1) {
       console.warn('[agentbase-recommend] first attempt failed:', (err1 as Error).message);
       setState('retrying');
       await new Promise((resolve) => window.setTimeout(resolve, RETRY_DELAY_MS));
       try {
         const r = await postOnce(body);
-        setResult(r);
-        setState('synced');
-        syncedPlanIdRef.current = planId;
-        return { ok: true, result: r };
+        const outcome = decide(r);
+        if (outcome.ok) {
+          setResult(r);
+          setState('synced');
+          syncedPlanIdRef.current = planId;
+        } else {
+          setResult(r);
+          setError(outcome.error);
+          setState('error');
+        }
+        return outcome;
       } catch (err2) {
         const msg = (err2 as Error).message;
         console.error('[agentbase-recommend] retry failed:', msg);
