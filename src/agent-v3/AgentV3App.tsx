@@ -207,6 +207,7 @@ export function AgentV3App() {
   const providers = useSession((s) => s.providers);
   const currentPlanId = useSession((s) => s.currentPlanId);
   const setCurrentPlanId = useSession((s) => s.setCurrentPlanId);
+  const setCurrentPlanName = useSession((s) => s.setCurrentPlanName);
   const updateProvider = useSession((s) => s.updateProvider);
   const checked = useSession((s) => s.complianceChecked);
   const confirmed = useSession((s) => s.disclaimersConfirmed);
@@ -351,8 +352,18 @@ export function AgentV3App() {
       // current_plan_id seeds the swipe deck's benchmark column when the
       // CRM has it; otherwise IntakeScreen's CurrentPlanPicker handles
       // it later. Skip annual-review auto-flip here — agent-v3 doesn't
-      // surface that mode the way v4 does.
-      if (c.plan_id) store.setCurrentPlanId(c.plan_id);
+      // surface that mode the way v4 does. Persist plan_name too so
+      // CompareScreen's "current plan not in pool" plate can name it
+      // even when the id doesn't resolve to a row in eligiblePlans
+      // (~76% of AgentBase clients today per the 2026-08-09 audit).
+      if (c.plan_id) {
+        store.setCurrentPlanId(c.plan_id);
+        // AgentBaseClient wire shape names it `plan` (mapped from
+        // clients.plan_name in api/_lib/clientSession.ts). Preserve
+        // it so CompareScreen's plate can name the incumbent even
+        // when the id doesn't resolve in the county pool.
+        store.setCurrentPlanName(c.plan || null);
+      }
 
       const parseDigit = (s: string | null | undefined): number | undefined => {
         if (!s) return undefined;
@@ -528,8 +539,11 @@ export function AgentV3App() {
     if (currentPlanId) return;
     if (eligiblePlans.length === 0) return;
     const pick = pickCurrentPlanForSeed(eligiblePlans);
-    if (pick) setCurrentPlanId(pick.id);
-  }, [eligiblePlans, currentPlanId, setCurrentPlanId]);
+    if (pick) {
+      setCurrentPlanId(pick.id);
+      setCurrentPlanName(pick.plan_name);
+    }
+  }, [eligiblePlans, currentPlanId, setCurrentPlanId, setCurrentPlanName]);
 
   // ── Plan Brain ranking (single pass for the whole shell) ─────────
   const userPriorityKeys = useMemo(

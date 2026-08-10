@@ -44,7 +44,7 @@ import {
   classifyExplanation,
   summarizeExplanations,
 } from '@/lib/classify-explanation';
-import type { LibraryRankPlan } from '@/lib/library-client';
+import { normalizePlanId, type LibraryRankPlan } from '@/lib/library-client';
 import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
 import { useDrugPhases, type DrugPhaseHit } from '@/hooks/useDrugPhases';
 // DrugCostCard hidden from the Board in Compare v2 reskin (2026-08-05) —
@@ -703,6 +703,14 @@ export function CompareScreen({
   const medications = useSession((s) => s.medications);
   const client = useSession((s) => s.client);
   const setRecommendation = useSession((s) => s.setRecommendation);
+  // Read directly from the store so the "current plan not in pool"
+  // plate can name the client's plan (from AgentBase hydration or the
+  // CurrentPlanPicker) even when the id doesn't resolve to a Plan row
+  // in eligiblePlans. Prior behaviour silently substituted the brain's
+  // top-ranked plan as the baseline, hiding the incumbent from the
+  // broker — see 2026-08-09 handoff audit.
+  const currentPlanIdRaw = useSession((s) => s.currentPlanId);
+  const currentPlanName = useSession((s) => s.currentPlanName);
 
   const rxcuis = useMemo(
     () => medications.map((m) => m.rxcui).filter((s): s is string => !!s),
@@ -786,6 +794,47 @@ export function CompareScreen({
   // we've fallen back to scoredPlans[0] the ribbon flips to TOP PICK.
   const baseline: Plan | null = current ?? scoredPlans[0] ?? null;
   const baselineIsCurrent = current != null;
+
+  // "Current plan missing from pool" plate. Fires when the broker
+  // filed a current plan (via CurrentPlanPicker or AgentBase hydration)
+  // but the id didn't resolve to a Plan row in eligiblePlans, so the
+  // baseline silently fell back to the brain's top pick. Rob's
+  // 2026-08-09 audit found ~76% of AgentBase clients with a
+  // non-empty plan_id hit this today (id format skew: 2-part
+  // "H5253-117" vs pool "H5253-117-0"; also 3-char segment "S4802-
+  // 143-000" vs pool "S4802-143-0"). The plate makes the substitution
+  // visible to the broker and — when a normalized lookup matches —
+  // names the pool row that would have been the correct baseline.
+  const countyPool: Plan[] = useMemo(
+    () => [...scoredPlans, ...(benchPlans ?? [])],
+    [scoredPlans, benchPlans],
+  );
+  const currentPlanMissing = useMemo<
+    | { name: string; rawId: string; reason: string; skewMatchId: string | null }
+    | null
+  >(() => {
+    if (!currentPlanIdRaw) return null;
+    if (current) return null;
+    if (countyPool.length === 0) return null;
+    const normalizedRaw = normalizePlanId(currentPlanIdRaw);
+    const skew = countyPool.find(
+      (p) => normalizePlanId(p.id) === normalizedRaw,
+    );
+    let reason: string;
+    if (skew) {
+      reason = `Id format skew — client stored "${currentPlanIdRaw}", pool uses "${skew.id}". Direct-equality lookup missed it; normalization would resolve.`;
+    } else if (currentPlanIdRaw.split('-').length < 2) {
+      reason = `Malformed plan id "${currentPlanIdRaw}" — not a contract-plan triple.`;
+    } else {
+      reason = `Not in this county's 2026 pool — likely sanctioned, non-commissionable, filed under a prior plan year, or the client moved counties.`;
+    }
+    return {
+      name: currentPlanName || `Plan ${currentPlanIdRaw}`,
+      rawId: currentPlanIdRaw,
+      reason,
+      skewMatchId: skew?.id ?? null,
+    };
+  }, [currentPlanIdRaw, currentPlanName, current, countyPool]);
 
   // Pool = baseline first (always slot 0), then scoredPlans (Top 4),
   // then benchPlans (every other eligible plan in the county). The
@@ -1192,6 +1241,41 @@ export function CompareScreen({
         onGrid={() => setMode('grid')}
         onH2H={enterH2HFromToggle}
       />
+
+      {currentPlanMissing && (
+        <div
+          role="alert"
+          style={{
+            margin: '10px 0 14px',
+            padding: '10px 14px',
+            borderRadius: 8,
+            background: '#fef3c7',
+            border: '1px solid #f59e0b',
+            color: '#78350f',
+            fontSize: 13,
+            lineHeight: 1.45,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+          }}
+        >
+          <span aria-hidden style={{ fontSize: 16, lineHeight: '18px' }}>⚠</span>
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 2 }}>
+              Current plan — <span style={{ fontWeight: 800 }}>{currentPlanMissing.name}</span> — not on the board.
+            </div>
+            <div style={{ marginBottom: 2 }}>
+              Baseline defaulted to Top Pick. {currentPlanMissing.reason}
+            </div>
+            <div style={{ fontSize: 11, opacity: 0.85 }}>
+              plan_id: <code style={{ background: 'rgba(0,0,0,0.05)', padding: '1px 4px', borderRadius: 3 }}>{currentPlanMissing.rawId}</code>
+              {currentPlanMissing.skewMatchId && (
+                <> · pool row: <code style={{ background: 'rgba(0,0,0,0.05)', padding: '1px 4px', borderRadius: 3 }}>{currentPlanMissing.skewMatchId}</code></>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <Bench
         filters={filters}

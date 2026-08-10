@@ -62,6 +62,7 @@ function initialState(): SessionState & { benefitFilters: BenefitFilterState } {
     complianceTimestamps: {},
     disclaimerTimestamps: {},
     currentPlanId: null,
+    currentPlanName: null,
     noCurrentPlan: false,
     selectedFinalists: [],
     givebackPlanEnrolled: false,
@@ -82,6 +83,7 @@ interface SessionStore extends SessionState {
   addNote: (type: NoteType, body: string, opts?: { carrier?: string; scenario?: string }) => void;
   removeNote: (id: string) => void;
   setCurrentPlanId: (id: string | null) => void;
+  setCurrentPlanName: (name: string | null) => void;
   setNoCurrentPlan: (flag: boolean) => void;
   setBenefitFilter: (key: BenefitKey, patch: Partial<import('@/types/plans').BenefitFilter>) => void;
   resetBenefitFilters: () => void;
@@ -173,12 +175,25 @@ export const useSession = create<SessionStore>()(
         // Medicare" flag (the broker just told us what plan the
         // client is on). Setting to null leaves noCurrentPlan
         // alone — the broker may be clearing the picker on the
-        // way to clicking "New to Medicare".
-        set((s) => ({ currentPlanId: id, noCurrentPlan: id ? false : s.noCurrentPlan })),
+        // way to clicking "New to Medicare". Always resets the
+        // display name — callers that want a name (AgentBase
+        // hydration, CurrentPlanPicker) must follow with
+        // setCurrentPlanName so a stale name from a prior client
+        // can't stick to the new id.
+        set((s) => ({
+          currentPlanId: id,
+          currentPlanName: null,
+          noCurrentPlan: id ? false : s.noCurrentPlan,
+        })),
+      setCurrentPlanName: (name) => set({ currentPlanName: name }),
       setNoCurrentPlan: (flag) =>
         // Marking "new to Medicare" clears any previously-picked
         // plan so the two states stay mutually exclusive.
-        set((s) => ({ noCurrentPlan: flag, currentPlanId: flag ? null : s.currentPlanId })),
+        set((s) => ({
+          noCurrentPlan: flag,
+          currentPlanId: flag ? null : s.currentPlanId,
+          currentPlanName: flag ? null : s.currentPlanName,
+        })),
 
       setBenefitFilter: (key, patch) =>
         set((state) => ({
