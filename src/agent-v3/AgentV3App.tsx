@@ -1022,9 +1022,22 @@ const explanationsByPlanId = useMemo<
   }, [brain.result]);
 
   // ── Current plan lookup ──────────────────────────────────────────
+  // Normalize both sides so an AgentBase 2-part id ("H5253-117") or a
+  // 3-char-segment id ("S4802-143-000") still resolves to the pool row
+  // ("H5253-117-0" / "S4802-143-0") that pm_plans emits via /api/plans.
+  // Rob's 2026-08-09 audit found ~76% of AgentBase clients with a
+  // non-empty plan_id missed the strict === lookup for pure format
+  // reasons; the plate above the board (e127d01) keeps covering the
+  // residual malformed / sanctioned / non-commissionable / prior-year
+  // cases. `currentPlan` is only consumed downstream by CompareScreen
+  // (baseline column + delta arrows) and EnrollScreen (annual-cost
+  // benchmark); the brain's ranking pipeline receives `currentPlanId`
+  // directly, so this change cannot affect ranking, gates, or which
+  // plans enter the pool.
   const currentPlan = useMemo<Plan | null>(() => {
     if (!currentPlanId) return null;
-    return eligiblePlans.find((p) => p.id === currentPlanId) ?? null;
+    const target = normalizePlanId(currentPlanId);
+    return eligiblePlans.find((p) => normalizePlanId(p.id) === target) ?? null;
   }, [currentPlanId, eligiblePlans]);
 
   // ── Brain-ranked plans (scored ∪ bench) in ranking order ─────────
