@@ -52,3 +52,5 @@ _scrape-debug/
 .env.local.bak*
 .claude/
 _tmp/
+vercel.dev.json
+src/_apilibrary_dev

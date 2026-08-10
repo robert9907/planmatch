@@ -66,6 +66,33 @@ export async function requireSession(
   req: VercelRequest,
   res: VercelResponse,
 ): Promise<boolean> {
+  // Dev-only bypass — fires only under local `vercel dev`, where
+  // Vercel sets VERCEL_ENV='development'. Vercel-hosted deployments
+  // always set VERCEL_ENV to 'production' or 'preview'; VERCEL_ENV is
+  // a reserved system env var and cannot be user-overridden in the
+  // Vercel project settings. Bypass cannot activate on any shipped
+  // deployment even if a stray custom env var leaked. Purpose: local
+  // dev flow doesn't require pasting a gh_session cookie into
+  // DevTools every session.
+  // Dev-only bypass — fires only under local `vercel dev`. Two
+  // simultaneous conditions, both set by Vercel infrastructure (not
+  // user-controllable):
+  //   1. x-vercel-id starts with 'dev1::' — vercel dev's marker for
+  //      requests it served locally. Hosted deployments always use a
+  //      real region prefix (iad1::, sfo1::, cdg1::, etc.); the value
+  //      is set by Vercel's edge and overrides any user-supplied
+  //      X-Vercel-Id header.
+  //   2. host is localhost / 127.0.0.1 — a Vercel-hosted request's
+  //      Host is always one of the deployment domains.
+  // Even if a bad actor spoofed one header, the other still gates.
+  // Purpose: local dev doesn't need to paste a gh_session cookie into
+  // DevTools every session. No env-var setup required.
+  const vercelId = String(req.headers['x-vercel-id'] ?? '');
+  const host = String(req.headers.host ?? '');
+  const isLocalDev =
+    vercelId.startsWith('dev1::') &&
+    (host.startsWith('localhost:') || host.startsWith('127.0.0.1:'));
+  if (isLocalDev) return false;
   try {
     const token = readSessionCookie(req.headers.cookie);
     if (!token) throw new UnauthenticatedError('no_cookie');
