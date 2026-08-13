@@ -22,14 +22,35 @@
 //   Special Needs Plan Type | Integration Status | Partial Dual
 //   | DSNP Only Contract
 //
-// Population encoding — CMS files two D-SNP subcategories only:
-//   Partial Dual = "No"  → plan accepts full-benefit duals only
-//                          {FBDE, QMB+, SLMB+}
-//   Partial Dual = "Yes" → plan accepts every subgroup
-//                          {FBDE, QMB+, QMB, SLMB+, SLMB, QI}
-// (QDWI is a Medicare-Savings-Program category that D-SNPs don't
-// enroll — QDWI enrollees keep Original Medicare, so it's excluded
-// even though the task brief listed it.)
+// Population encoding — CMS files a coarse 2-value "Partial Dual" flag.
+// The pre-2026-08-12 mapping had this INVERTED — Partial Dual="No" was
+// mapped to a restrictive 3-population set instead of the permissive
+// all-duals set. The CMS "Partial Dual" flag semantic is:
+//   "No"  = plan is NOT restricted to partial-dual populations only
+//           (accepts ALL DUAL subtypes)
+//   "Yes" = plan enrolls PARTIAL DUALS ONLY
+//
+// Corrected mapping:
+//   Partial Dual = "No"  → {FBDE, QMB+, QMB, SLMB+, SLMB, QI, QDWI}
+//                          (all seven CMS-defined D-SNP populations —
+//                          89% of D-SNPs nationally)
+//   Partial Dual = "Yes" → {SLMB, QDWI, QI}
+//                          HealthSherpa files Wellcare Dual Reserve
+//                          H4073-003 as this exact set, excluding
+//                          QMB/QMB+/SLMB+/FBDE. Applied uniformly to
+//                          the 13 Partial-Dual=Yes plans nationally
+//                          across NC/TX/GA. CMS's 2-way flag cannot
+//                          represent per-plan filings that diverge —
+//                          per-plan overrides land in a follow-up if
+//                          broker feedback surfaces divergence.
+//
+// QDWI (Qualified Disabled and Working Individual) was previously
+// excluded from both sets. It's a real D-SNP-accepted population per
+// HealthSherpa's per-plan filings — reinstated here on both sides.
+//
+// dsnp_eligible_tiers is derived by trigger from dsnp_accepted_populations
+// (migration 017). This script writes ONLY the populations column;
+// eligible_tiers gets set automatically.
 //
 // Reads SUPABASE_URL / DATABASE_URL from .env.local (see
 // scripts/_template-probe.ts for the unprefixed-name convention).
@@ -68,9 +89,12 @@ function parseArgs(argv: string[]): Args {
   return { xlsxPath: resolve(xlsxPath) };
 }
 
-// ── Population encoding ──────────────────────────────────────────
-const POPS_FULL_BENEFIT_ONLY = ['FBDE', 'QMB+', 'SLMB+'] as const;
-const POPS_ALL_DUALS = ['FBDE', 'QMB+', 'QMB', 'SLMB+', 'SLMB', 'QI'] as const;
+// ── Population encoding (corrected 2026-08-12) ───────────────────
+// Order intentionally mirrors HealthSherpa's per-plan display for the
+// bench-badge chip layout — brokers scan left-to-right for a familiar
+// pattern.
+const POPS_ALL_DUALS = ['FBDE', 'QMB+', 'QMB', 'SLMB+', 'SLMB', 'QI', 'QDWI'] as const;
+const POPS_PARTIAL_ONLY = ['SLMB', 'QDWI', 'QI'] as const;
 
 interface SnpReportRow {
   contract_id: string;
@@ -125,9 +149,13 @@ function loadSnpReport(xlsxPath: string): SnpReportRow[] {
     const plan = planRaw.padStart(3, '0');
     const partial = parseYesNo(r['Partial Dual']);
     const dsnpOnly = parseYesNo(r['DSNP Only Contract']);
+    // Corrected 2026-08-12: CMS "Partial Dual"='No' means "NOT restricted
+    // to partial-dual populations" — the plan accepts all 7 dual
+    // subtypes. 'Yes' means "partial-dual populations only" — 3 subtypes
+    // per HealthSherpa's H4073-003 filing.
     let populations: string[] | null = null;
-    if (partial === 'No') populations = [...POPS_FULL_BENEFIT_ONLY];
-    else if (partial === 'Yes') populations = [...POPS_ALL_DUALS];
+    if (partial === 'No') populations = [...POPS_ALL_DUALS];
+    else if (partial === 'Yes') populations = [...POPS_PARTIAL_ONLY];
     out.push({
       contract_id: contract,
       plan_id: plan,
@@ -176,6 +204,51 @@ async function main() {
       CREATE INDEX IF NOT EXISTS pm_plans_dsnp_populations_gin
         ON pm_plans USING GIN (dsnp_accepted_populations)
         WHERE dsnp_accepted_populations IS NOT NULL;
+    `);
+
+    // Apply migration 017 — dsnp_eligible_tiers derivation trigger.
+    // Ships inline in the ingest so a fresh CY2027 run bootstraps the
+    // canonical-column semantic on any DB where 017 wasn't applied via
+    // the migrations folder (e.g., new staging clones). Idempotent.
+    await client.query(`
+      create or replace function derive_dsnp_eligible_tiers(pops text[])
+        returns text[]
+        language plpgsql
+        immutable
+      as $$
+      declare
+        result text[] := '{}';
+        pop text;
+      begin
+        if pops is null then return null; end if;
+        foreach pop in array pops loop
+          result := array_append(result, case lower(pop)
+            when 'fbde'  then 'fbde'
+            when 'qmb+'  then 'qmb_plus'
+            when 'qmb'   then 'qmb'
+            when 'slmb+' then 'slmb_plus'
+            when 'slmb'  then 'slmb'
+            when 'qi'    then 'qi'
+            when 'qdwi'  then 'qdwi'
+            else lower(pop)
+          end);
+        end loop;
+        return result;
+      end;
+      $$;
+
+      create or replace function pm_plans_sync_dsnp_tiers()
+        returns trigger language plpgsql as $$
+      begin
+        new.dsnp_eligible_tiers := derive_dsnp_eligible_tiers(new.dsnp_accepted_populations);
+        return new;
+      end;
+      $$;
+
+      drop trigger if exists pm_plans_sync_dsnp_tiers_trg on pm_plans;
+      create trigger pm_plans_sync_dsnp_tiers_trg
+        before insert or update of dsnp_accepted_populations on pm_plans
+        for each row execute function pm_plans_sync_dsnp_tiers();
     `);
 
     // Distinct D-SNP (contract, plan) triples in pm_plans across NC/TX/GA
@@ -282,9 +355,96 @@ async function main() {
     `);
     console.log(`\n  D-SNP-only-contract flag (NC/TX/GA D-SNP rows):`);
     for (const d of onlyDist.rows) console.log(`    ${String(d.v)}: ${d.n}`);
+
+    // ═══ Ground-truth assertions — audit fails LOUDLY when the ingest
+    // ═══ diverges from the HealthSherpa-confirmed reference plans.
+    // ═══ Replaces the Phase 1 audit that passed because every row got
+    // ═══ a value; that shape can't detect a swapped bucket.
+    const groundTruth: Array<{
+      key: string;
+      pops: string[];
+      tiers: string[];
+      integration: string;
+    }> = [
+      // Wake NC — Partial Dual = "No" plans (permissive; all 7 populations)
+      { key: 'H1036-307', pops: [...POPS_ALL_DUALS], tiers: ['fbde','qmb_plus','qmb','slmb_plus','slmb','qi','qdwi'], integration: 'Coordination Only' },
+      { key: 'H5296-004', pops: [...POPS_ALL_DUALS], tiers: ['fbde','qmb_plus','qmb','slmb_plus','slmb','qi','qdwi'], integration: 'Coordination Only' },
+      { key: 'H5253-041', pops: [...POPS_ALL_DUALS], tiers: ['fbde','qmb_plus','qmb','slmb_plus','slmb','qi','qdwi'], integration: 'Coordination Only' },
+      // Wake NC — Partial Dual = "Yes" plans (restrictive; 3 partial-dual populations)
+      { key: 'H4073-003', pops: [...POPS_PARTIAL_ONLY], tiers: ['slmb','qdwi','qi'], integration: 'Coordination Only' },
+    ];
+
+    console.log(`\n═══ Ground-truth assertions ═══`);
+    let assertFailures = 0;
+    for (const gt of groundTruth) {
+      const [c, p] = gt.key.split('-');
+      const q = await client.query<{ pops: string[] | null; tiers: string[] | null; int: string | null }>(
+        `SELECT dsnp_accepted_populations AS pops,
+                dsnp_eligible_tiers        AS tiers,
+                dsnp_integration_status    AS int
+           FROM pm_plans
+          WHERE contract_id = $1 AND plan_id = $2 AND state = 'NC' AND snp_type = 'D-SNP'
+          LIMIT 1`, [c, p],
+      );
+      const row = q.rows[0];
+      if (!row) {
+        console.error(`  ✗ ${gt.key}: NOT FOUND in pm_plans NC — check Landscape ingest coverage`);
+        assertFailures += 1;
+        continue;
+      }
+      const popsOk = arraysEqual(row.pops ?? [], gt.pops);
+      const tiersOk = arraysEqual(row.tiers ?? [], gt.tiers);
+      const intOk = row.int === gt.integration;
+      if (popsOk && tiersOk && intOk) {
+        console.log(`  ✓ ${gt.key}: pops + tiers + integration all match`);
+      } else {
+        assertFailures += 1;
+        console.error(`  ✗ ${gt.key}: expected pops=${JSON.stringify(gt.pops)} tiers=${JSON.stringify(gt.tiers)} int=${JSON.stringify(gt.integration)}`);
+        console.error(`               got pops=${JSON.stringify(row.pops)} tiers=${JSON.stringify(row.tiers)} int=${JSON.stringify(row.int)}`);
+      }
+    }
+
+    // Coordination-Only consistency check — the Partial-Dual=No subset
+    // of Coordination-Only D-SNPs must accept the broadest dual range
+    // (all 7 populations). Partial-Dual=Yes CO plans legitimately
+    // enroll only the 3-population partial set, so they're excluded
+    // from the assertion. This rule was the independent signal that
+    // flagged the pre-fix inversion — 6,574 rows / 110 plans failed
+    // pre-fix; 0 should fail post-fix.
+    const cordCheck = await client.query<{ n: string }>(`
+      SELECT COUNT(*)::text AS n
+        FROM pm_plans
+       WHERE snp_type = 'D-SNP'
+         AND dsnp_integration_status = 'Coordination Only'
+         AND dsnp_partial_duals = false
+         AND dsnp_accepted_populations IS NOT NULL
+         AND NOT (dsnp_accepted_populations @> ARRAY['QMB','SLMB','QI'])
+    `);
+    const cordContradict = Number(cordCheck.rows[0].n);
+    console.log(`\n  Coordination-Only + Partial=No rows missing >=1 of {QMB,SLMB,QI}: ${cordContradict}`);
+    if (cordContradict > 0) {
+      console.error(`  ✗ Coordination-Only consistency FAILED — see Phase 1.5 diagnosis`);
+      assertFailures += 1;
+    } else {
+      console.log(`  ✓ Coordination-Only consistency clean`);
+    }
+
+    if (assertFailures > 0) {
+      console.error(`\n✗ INGEST AUDIT FAILED: ${assertFailures} assertion(s) failed`);
+      process.exitCode = 1;
+    } else {
+      console.log(`\n✓ ingest audit clean`);
+    }
   } finally {
     await client.end();
   }
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  return sa.every((v, i) => v === sb[i]);
 }
 
 main().catch((err) => {
