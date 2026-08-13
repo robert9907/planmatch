@@ -1881,55 +1881,88 @@ function ModeToggle({
 // category leaders only; most plans return null. Unknown ribbon
 // strings render with the default seafoam treatment so a future brain
 // ribbon doesn't blank-render here.
-// Compact D-SNP accepted-Medicaid-population chip row for the header
-// block of BenchCard / SlotCell. Renders one small badge per entry in
-// plan.dsnp_accepted_populations (populated by CMS SNP Comprehensive
-// Report ingest); green for full-benefit-dual codes (FBDE / QMB+ /
-// SLMB+), amber for partial-benefit codes (QMB / SLMB / QI / QDWI).
+// Single-line D-SNP accepted-Medicaid-population summary for the header
+// block of BenchCard / SlotCell. Reads plan.dsnp_accepted_populations
+// (populated by CMS SNP Comprehensive Report ingest, canonicalized by
+// migration 017 to the 7-value full set for Partial Dual=No plans and
+// {SLMB, QDWI, QI} for Partial Dual=Yes plans).
+//
+// Two states, no ambiguity:
+//   • Permissive (all 7 populations accepted) → green line, list of all 7.
+//   • Restricted (any subset) → amber line, "Partial dual only · <accepted>
+//     — does not accept <excluded>". Exclusion list is derived from
+//     {full} \ {accepted} so if CMS ever revises the partial-only set,
+//     the copy stays correct without a code change.
+//
+// Replaces the 2026-08-12 seven-chip row that read amber on QMB/SLMB/
+// QI/QDWI for permissive plans. That styling implied "not accepted" to
+// brokers on live calls when those categories WERE accepted — amber
+// now means restricted, and it only appears on the ~11% of D-SNPs that
+// actually restrict.
+//
 // No-op on non-D-SNP plans so the same JSX slot can render every card
-// unconditionally.
-const FULL_BENEFIT_POPULATIONS = new Set(['FBDE', 'QMB+', 'SLMB+']);
+// unconditionally. Filter tree in useBenchFilters keeps per-population
+// sub-rows with live counts (correct there — checkboxes need per-
+// population targets).
+//
+// Display order matches the user-facing spec, not the DB storage order.
+const DSNP_POPULATION_DISPLAY_ORDER = ['QMB', 'QMB+', 'SLMB', 'SLMB+', 'QI', 'QDWI', 'FBDE'] as const;
+function formatListWithOr(items: string[]): string {
+  if (items.length === 0) return '';
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} or ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')}, or ${items[items.length - 1]}`;
+}
 function DsnpPopulationBadges({ plan }: { plan: Plan }) {
   if (plan.snp_type !== 'D-SNP') return null;
   const pops = plan.dsnp_accepted_populations;
   if (!pops || pops.length === 0) return null;
+
+  const acceptedSet = new Set(pops);
+  const isPermissive = DSNP_POPULATION_DISPLAY_ORDER.every((p) => acceptedSet.has(p));
+  const acceptedInOrder = DSNP_POPULATION_DISPLAY_ORDER.filter((p) => acceptedSet.has(p));
+  const excludedInOrder = DSNP_POPULATION_DISPLAY_ORDER.filter((p) => !acceptedSet.has(p));
+
+  const baseStyle: React.CSSProperties = {
+    fontFamily: F.label,
+    fontSize: 10,
+    fontWeight: 600,
+    padding: '4px 8px',
+    borderRadius: 4,
+    letterSpacing: 0.2,
+    lineHeight: 1.35,
+  };
+
+  if (isPermissive) {
+    return (
+      <div
+        title="Accepted Medicaid populations (CMS SNP Comprehensive Report — Partial Dual = No)"
+        style={{
+          ...baseStyle,
+          background: T.mint100,
+          color: T.mint700,
+          border: '1px solid rgba(15,158,119,0.35)',
+        }}
+      >
+        Accepts all dual categories · {acceptedInOrder.join(', ')}
+      </div>
+    );
+  }
+
   return (
     <div
-      title="Accepted Medicaid populations (CMS SNP Comprehensive Report)"
+      title="Restricted D-SNP (CMS SNP Comprehensive Report — Partial Dual = Yes)"
       style={{
-        display: 'flex',
-        gap: 4,
-        flexWrap: 'wrap',
+        ...baseStyle,
+        background: T.amber100,
+        color: T.amber700,
+        border: '1px solid rgba(154,91,10,0.30)',
       }}
     >
-      {pops.map((pop) => {
-        const full = FULL_BENEFIT_POPULATIONS.has(pop);
-        return (
-          <span
-            key={pop}
-            style={{
-              // Compare v2: light-fill chip on the new white card.
-              // Full-benefit codes (FBDE / QMB+ / SLMB+) get the mint
-              // palette; partial-benefit codes (QMB / SLMB / QI / QDWI)
-              // get amber to signal "narrower coverage."
-              background: full ? T.mint100 : T.amber100,
-              color: full ? T.mint700 : T.amber700,
-              border: `1px solid ${
-                full ? 'rgba(15,158,119,0.35)' : 'rgba(154,91,10,0.30)'
-              }`,
-              fontFamily: F.label,
-              fontSize: 9,
-              fontWeight: 700,
-              padding: '2px 6px',
-              borderRadius: 4,
-              letterSpacing: 0.4,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {pop}
-          </span>
-        );
-      })}
+      Partial dual only · {acceptedInOrder.join(', ')}
+      {excludedInOrder.length > 0 && (
+        <> — does not accept {formatListWithOr(excludedInOrder)}</>
+      )}
     </div>
   );
 }
