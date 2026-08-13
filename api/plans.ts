@@ -66,6 +66,15 @@ interface Plan {
   // null on non-D-SNP plans.
   dsnp_accepted_populations: string[] | null;
   dsnp_only_contract: boolean | null;
+  // Per-plan manual capture from pm_dsnp_populations. Same population
+  // vocabulary as dsnp_accepted_populations. Preferred over the
+  // CMS-derived column at every read site (bench filters, compare-card
+  // badges, audit); the raw CMS value stays exposed on
+  // dsnp_accepted_populations as a fallback source. null when no
+  // manual override exists for this (contract, plan, segment). Joined
+  // by attachManualDsnpPopulations below; mirrors consumer repo main
+  // commit 74915b7.
+  dsnp_accepted_populations_manual: string[] | null;
   premium: number;
   // Member-payable premium. For D-SNPs this is always $0 because LIS
   // covers the Part D Basic premium; for all other plans it equals
@@ -652,6 +661,79 @@ function mapPlanType(raw: string | null, snp: boolean, snpType: string | null): 
   return 'MAPD';
 }
 
+// Normalize a segment_id to a canonical no-leading-zeros form so the
+// seed convention ('000', '001', …) matches pm_plans ('0', '1', …).
+// Empty / all-zeros normalizes to '0'. Non-numeric segments (never
+// seen in practice) pass through lowercased for stability.
+// Mirrors consumer repo api/plans.ts canonicalSegment().
+function canonicalSegment(s: string | null | undefined): string {
+  if (s == null) return '0';
+  const t = String(s).trim();
+  if (t === '') return '0';
+  if (/^\d+$/.test(t)) {
+    const stripped = t.replace(/^0+/, '');
+    return stripped === '' ? '0' : stripped;
+  }
+  return t.toLowerCase();
+}
+
+// Fetch per-plan manual D-SNP populations from pm_dsnp_populations for
+// the D-SNPs in the current query result, keyed by
+// (contract_id, plan_id, canonicalSegment(segment_id)). Returns an
+// empty Map when nothing matches; on fetch failure logs a warning and
+// returns an empty Map so the caller falls through to the CMS-derived
+// pm_plans.dsnp_accepted_populations path unchanged.
+//
+// Segment normalization matters for TX H4513-060, H8849-010, H8849-011
+// and GA H3256-004/005/006, H5322-049/050 — each files disjoint
+// regional service areas as separate segments with distinct populations.
+// Consumer repo commit 74915b7 for the reference implementation.
+async function fetchManualDsnpPopulations(
+  sb: ReturnType<typeof supabase>,
+  rows: readonly Pick<PlanRow, 'contract_id' | 'snp_type'>[],
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const dsnpContracts = new Set<string>();
+  for (const r of rows) {
+    if ((r.snp_type ?? '').toUpperCase().includes('D-SNP')) {
+      dsnpContracts.add(r.contract_id);
+    }
+  }
+  if (dsnpContracts.size === 0) return out;
+  try {
+    const { data, error } = await sb
+      .from('pm_dsnp_populations')
+      .select('contract_id, plan_id, segment_id, accepted_populations')
+      .in('contract_id', [...dsnpContracts])
+      .limit(2000);
+    if (error) {
+      console.warn(
+        `[api/plans] pm_dsnp_populations fetch failed (${error.code ?? '?'}): ${error.message} — ` +
+          `falling back to CMS-derived only`,
+      );
+      return out;
+    }
+    for (const r of (data ?? []) as Array<{
+      contract_id: string;
+      plan_id: string;
+      segment_id: string;
+      accepted_populations: string[];
+    }>) {
+      out.set(
+        `${r.contract_id}-${r.plan_id}-${canonicalSegment(r.segment_id)}`,
+        r.accepted_populations,
+      );
+    }
+    return out;
+  } catch (err) {
+    console.warn(
+      '[api/plans] pm_dsnp_populations fetch threw — falling back:',
+      err,
+    );
+    return out;
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
   if (req.method !== 'GET') return badRequest(res, 'GET required');
@@ -807,6 +889,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // convention where only specific plans within a contract are
     // blocked, not the whole contract.
     rows = filterPlanLevelExclusions(rows, nonComm.plans);
+
+    // ─── Manual D-SNP populations override ──────────────────────────
+    // pm_dsnp_populations holds per-plan HealthSherpa-captured accepted
+    // populations for NC/TX/GA D-SNPs — the CMS bulk data (Partial Dual
+    // boolean expanded to a coarse 3-value / 7-value set) is wrong for
+    // most plans. Preferred over dsnp_accepted_populations at every
+    // read site downstream (bench filter, compare-card badges, audit).
+    // Consumer repo commit 74915b7 defines the same pattern.
+    const manualByCps = await fetchManualDsnpPopulations(sb, rows);
 
     // ─── Step 2: aggregate by (contract_id, plan_id, segment_id) ────
     // Landscape rows are one-per-county; the app wants one plan per
@@ -1221,6 +1312,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         csnp_condition_type: row.csnp_condition_type,
         dsnp_accepted_populations: row.dsnp_accepted_populations ?? null,
         dsnp_only_contract: row.dsnp_only_contract ?? null,
+        // Manual override wins over CMS-derived at every read site;
+        // populated by attachManualDsnpPopulations above.
+        dsnp_accepted_populations_manual: manualByCps.get(`${row.contract_id}-${row.plan_id}-${canonicalSegment(row.segment_id)}`) ?? null,
         has_drug_coverage: row.drug_deductible !== null,
         premium: row.monthly_premium ?? 0,
         // D-SNPs file a Part D Basic Premium in monthly_premium (typically

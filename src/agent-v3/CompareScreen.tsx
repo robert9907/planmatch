@@ -1882,10 +1882,14 @@ function ModeToggle({
 // strings render with the default seafoam treatment so a future brain
 // ribbon doesn't blank-render here.
 // Single-line D-SNP accepted-Medicaid-population summary for the header
-// block of BenchCard / SlotCell. Reads plan.dsnp_accepted_populations
-// (populated by CMS SNP Comprehensive Report ingest, canonicalized by
+// block of BenchCard / SlotCell. Prefers plan.dsnp_accepted_populations_manual
+// (per-plan HealthSherpa capture in pm_dsnp_populations — per-plan
+// truth for NC/TX/GA D-SNPs Rob has captured) with fallback to
+// plan.dsnp_accepted_populations (CMS-derived, canonicalized by
 // migration 017 to the 7-value full set for Partial Dual=No plans and
-// {SLMB, QDWI, QI} for Partial Dual=Yes plans).
+// {SLMB, QDWI, QI} for Partial Dual=Yes plans). Same precedence as
+// the bench filter's normalize boundary and the consumer widget's
+// brain gate — one truth flowing to every surface.
 //
 // Two states, no ambiguity:
 //   • Permissive (all 7 populations accepted) → green line, list of all 7.
@@ -1915,8 +1919,19 @@ function formatListWithOr(items: string[]): string {
 }
 function DsnpPopulationBadges({ plan }: { plan: Plan }) {
   if (plan.snp_type !== 'D-SNP') return null;
-  const pops = plan.dsnp_accepted_populations;
+  const manualPops = plan.dsnp_accepted_populations_manual;
+  const cmsPops = plan.dsnp_accepted_populations;
+  const pops =
+    manualPops && manualPops.length > 0
+      ? manualPops
+      : cmsPops;
   if (!pops || pops.length === 0) return null;
+  const source: 'manual' | 'cms' =
+    manualPops && manualPops.length > 0 ? 'manual' : 'cms';
+  const sourceLabel =
+    source === 'manual'
+      ? 'per-plan capture (pm_dsnp_populations)'
+      : 'CMS SNP Comprehensive Report';
 
   const acceptedSet = new Set(pops);
   const isPermissive = DSNP_POPULATION_DISPLAY_ORDER.every((p) => acceptedSet.has(p));
@@ -1936,7 +1951,7 @@ function DsnpPopulationBadges({ plan }: { plan: Plan }) {
   if (isPermissive) {
     return (
       <div
-        title="Accepted Medicaid populations (CMS SNP Comprehensive Report — Partial Dual = No)"
+        title={`Accepted Medicaid populations (source: ${sourceLabel})`}
         style={{
           ...baseStyle,
           background: T.mint100,
@@ -1951,7 +1966,7 @@ function DsnpPopulationBadges({ plan }: { plan: Plan }) {
 
   return (
     <div
-      title="Restricted D-SNP (CMS SNP Comprehensive Report — Partial Dual = Yes)"
+      title={`Restricted D-SNP (source: ${sourceLabel})`}
       style={{
         ...baseStyle,
         background: T.amber100,

@@ -208,11 +208,20 @@ export interface NormalizedPlan {
    *  Kept raw so filter equality holds; humanizeCsnpCondition() below
    *  is responsible for the display label. */
   csnpCondition: string | null;
-  /** CMS SNP Comprehensive Report accepted-populations set. Non-null
-   *  only on D-SNPs. Either ['FBDE','QMB+','SLMB+'] (full-benefit
-   *  only) or ['FBDE','QMB+','QMB','SLMB+','SLMB','QI'] (accepts every
-   *  subgroup). Predicates below read this. */
+  /** Effective D-SNP accepted-populations set for filter predicates.
+   *  Prefers the per-plan manual capture (pm_dsnp_populations,
+   *  HealthSherpa-sourced, per-plan truth) over the CMS-derived
+   *  pm_plans column (coarse expansion of a two-value Partial Dual
+   *  boolean). Non-null only on D-SNPs. All bench predicates below
+   *  read this. */
   dsnpAcceptedPopulations: string[] | null;
+  /** Which source `dsnpAcceptedPopulations` came from. 'manual' when
+   *  the pm_dsnp_populations row won; 'cms' when the CMS-derived
+   *  pm_plans.dsnp_accepted_populations was the only source; 'none'
+   *  when neither had data (non-D-SNP, or unmapped D-SNP where both
+   *  columns are null). Read by the audit warning below to keep it
+   *  from firing on plans that ARE covered by manual truth. */
+  dsnpPopulationsSource: 'manual' | 'cms' | 'none';
   /** True when the plan's CMS contract is D-SNP-only. */
   dsnpOnlyContract: boolean | null;
   isVa: boolean; // MA-only (no Part D bundled)
@@ -256,6 +265,28 @@ function normalizePlan(
   // fingerprint memo at the useBenchFilters call site.
   const inNetworkNpiCount = inNetworkCountByPlanId?.get(plan.id) ?? 0;
 
+  // D-SNP populations: prefer per-plan manual capture (pm_dsnp_populations)
+  // over CMS-derived pm_plans.dsnp_accepted_populations. Manual is
+  // per-plan truth; CMS is a coarse expansion of a two-value boolean
+  // and disagrees with per-plan filings for most plans. Every bench
+  // predicate reads the effective value from `dsnpAcceptedPopulations`
+  // — the fallback happens here so no predicate needs to know both
+  // sources exist. Mirrors consumer commit 74915b7.
+  const manualPops =
+    plan.dsnp_accepted_populations_manual && plan.dsnp_accepted_populations_manual.length > 0
+      ? plan.dsnp_accepted_populations_manual
+      : null;
+  const cmsPops =
+    plan.dsnp_accepted_populations && plan.dsnp_accepted_populations.length > 0
+      ? plan.dsnp_accepted_populations
+      : null;
+  const effectivePops = manualPops ?? cmsPops;
+  const popsSource: 'manual' | 'cms' | 'none' = manualPops
+    ? 'manual'
+    : cmsPops
+      ? 'cms'
+      : 'none';
+
   return {
     id: plan.id,
     contractId: plan.contract_id ?? '',
@@ -268,7 +299,8 @@ function normalizePlan(
     dsnpIntegration: plan.dsnp_integration_status || null,
     zeroCostSharing: Boolean(plan.zero_cost_sharing),
     csnpCondition: plan.csnp_condition_type || null,
-    dsnpAcceptedPopulations: plan.dsnp_accepted_populations ?? null,
+    dsnpAcceptedPopulations: effectivePops,
+    dsnpPopulationsSource: popsSource,
     dsnpOnlyContract: plan.dsnp_only_contract ?? null,
     isVa: !plan.has_drug_coverage,
     consumerPremium,
@@ -874,12 +906,16 @@ export function useBenchFilters(
       }
       if (
         p.snpType === 'D-SNP' &&
-        (!p.dsnpAcceptedPopulations || p.dsnpAcceptedPopulations.length === 0)
+        p.dsnpPopulationsSource === 'none'
       ) {
+        // Neither pm_dsnp_populations (manual) nor
+        // pm_plans.dsnp_accepted_populations (CMS-derived) had data.
+        // The bench filter will fall through to permissive on this
+        // plan; the manual capture is the fix.
         issues.push({
           planId: p.id,
           issue: 'missing_dsnp_populations',
-          detail: `snp_type=D-SNP but dsnp_accepted_populations empty on ${p.planName} — rerun scripts/import-snp-comprehensive-report.ts`,
+          detail: `snp_type=D-SNP but both pm_dsnp_populations and pm_plans.dsnp_accepted_populations empty on ${p.planName} — add a row to data/dsnp-populations/<state>-YYYY-MM.json (consumer repo) or rerun scripts/import-snp-comprehensive-report.ts`,
         });
       }
     }
