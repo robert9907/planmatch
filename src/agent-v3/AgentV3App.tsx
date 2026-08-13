@@ -591,7 +591,9 @@ export function AgentV3App() {
         if (ctl.signal.aborted) return;
         const patch: Partial<typeof client> = {};
         if (body.county) patch.county = body.county;
-        if (body.state && !client.state) patch.state = body.state as typeof client.state;
+        if (body.state && /^[A-Z]{2}$/i.test(body.state) && !client.state) {
+          patch.state = body.state.toUpperCase() as StateCode;
+        }
         if (Object.keys(patch).length > 0) {
           console.info(
             `[agent-v3] zip-county fallback resolved zip=${client.zip} → county=${body.county ?? 'null'}`,
@@ -1619,7 +1621,6 @@ interface PoolIntegrityBannerProps {
 
 function PoolIntegrityBanner({
   missingGeo,
-  truncated,
   clientState,
   clientZip,
 }: PoolIntegrityBannerProps) {
