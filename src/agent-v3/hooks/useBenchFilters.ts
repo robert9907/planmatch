@@ -132,62 +132,7 @@ function buildCostQualityDefs(selectedProviderCount: number): CostQualityDef[] {
       label: 'Zero-Cost Sharing',
       predicate: (p) => p.zeroCostSharing,
     },
-    // CMS-SNP-report accepted-populations predicates. All read the
-    // dsnpAcceptedPopulations array populated by migration 015. Non-
-    // D-SNP plans have a null array and therefore fail every check
-    // — which is what we want, since these predicates only make
-    // sense for D-SNPs.
-    //
-    // "Accepts QMB / SLMB" match on either the plus or standalone
-    // variant so brokers looking at partial-dual clients get the
-    // full set. "Full-Benefit Only" is exact-match on the three-
-    // element array; "Accepts Partial Duals" mirrors the Partial
-    // Dual = Yes filing.
-    // The four accepted-population predicates below are hidden from
-    // the Cost & Quality dropdown (show: false) and instead auto-
-    // activated from client.medicaidLevel in CompareScreen's
-    // initialFilterState. They still function as normal filters when
-    // present in state.costQuality — the auto-populated chip stays
-    // dismissible via the standard activeChips row.
-    {
-      key: 'accepts_qmb',
-      label: 'Accepts QMB',
-      predicate: (p) =>
-        (p.dsnpAcceptedPopulations ?? []).some((v) => v === 'QMB' || v === 'QMB+'),
-      show: false,
-    },
-    {
-      key: 'accepts_slmb',
-      label: 'Accepts SLMB',
-      predicate: (p) =>
-        (p.dsnpAcceptedPopulations ?? []).some((v) => v === 'SLMB' || v === 'SLMB+'),
-      show: false,
-    },
-    {
-      key: 'full_benefit_only',
-      label: 'Full-Benefit Duals Only',
-      predicate: (p) => {
-        const pops = p.dsnpAcceptedPopulations;
-        if (!pops || pops.length === 0) return false;
-        // CMS files this as Partial Dual = No; ingest expands to the
-        // exact three-element set. Compare-as-set instead of exact-
-        // order so a future CMS ordering change doesn't break the
-        // predicate silently.
-        const set = new Set(pops);
-        return set.size === 3 && set.has('FBDE') && set.has('QMB+') && set.has('SLMB+');
-      },
-      show: false,
-    },
-    {
-      key: 'accepts_partial_duals',
-      label: 'Accepts Partial Duals',
-      predicate: (p) =>
-        (p.dsnpAcceptedPopulations ?? []).some(
-          (v) => v === 'QMB' || v === 'SLMB' || v === 'QI',
-        ),
-      show: false,
-    },
-    // Bonus signal from the same SNP report: the plan's contract is
+    // Bonus signal from the SNP report: the plan's contract is
     // exclusively D-SNP (no mixed MA/D-SNP under the same contract).
     // Steer members to carriers built ground-up for dual populations.
     {
@@ -196,7 +141,28 @@ function buildCostQualityDefs(selectedProviderCount: number): CostQualityDef[] {
       predicate: (p) => p.dsnpOnlyContract === true,
     },
   ];
+  // Note: the four accepted-population predicates (Accepts QMB/SLMB,
+  // Full-Benefit Only, Accepts Partial Duals) used to live here with
+  // show:false. Moved 2026-08-12 into the SNP dropdown as `D-SNP:pop:X`
+  // sub-filters so an auto-applied chip has a visible, clearable
+  // control in the dropdown (Phase 2.3 fix — the silent-gating hazard
+  // was that state.costQuality could hold predicates the options list
+  // never surfaced). CompareScreen's initialFilterState pushes to
+  // state.snp instead of state.costQuality now.
 }
+
+// ── D-SNP population sub-filter constants ────────────────────────
+// Full CMS-defined dual-eligible set as of 2026-08-12 (extended from
+// the pre-fix 6-value list to add QDWI). Order intentionally mirrors
+// HealthSherpa's per-plan acceptance display — brokers scan left-to-
+// right for a familiar pattern.
+export const DSNP_POPULATIONS = ['FBDE', 'QMB+', 'QMB', 'SLMB+', 'SLMB', 'QI', 'QDWI'] as const;
+export type DsnpPopulation = (typeof DSNP_POPULATIONS)[number];
+// Sub-filter namespace prefix. Keeps population subs from colliding
+// with the older integration-status subs (which share the D-SNP
+// parent). parseSnpFilter reads the sub as either 'pop:<POP>' or a
+// raw integration status.
+const DSNP_POP_PREFIX = 'pop:';
 
 // ── Sort options ──────────────────────────────────────────────────
 export type SortKey =
@@ -546,6 +512,13 @@ export function useBenchFilters(
     const csnpConditionCounts: Record<string, number> = {};
     const carrierCounts: Record<string, number> = {};
 
+    // D-SNP population sub-filter counts. Same shape as the
+    // integration/condition counts above but read from the CMS-SNP-
+    // report accepted-populations array. Each population increments
+    // once per plan whose acceptance list includes it — a plan filed
+    // with all 7 populations increments 7 keys (which is fine, since
+    // the dropdown surfaces "how many plans accept X" per row).
+    const dsnpPopulationCounts: Record<string, number> = {};
     for (const p of normalized) {
       planTypeCounts[p.planType] = (planTypeCounts[p.planType] ?? 0) + 1;
       networkCounts[p.network] = (networkCounts[p.network] ?? 0) + 1;
@@ -553,6 +526,11 @@ export function useBenchFilters(
       if (p.snpType === 'D-SNP' && p.dsnpIntegration) {
         dsnpIntegrationCounts[p.dsnpIntegration] =
           (dsnpIntegrationCounts[p.dsnpIntegration] ?? 0) + 1;
+      }
+      if (p.snpType === 'D-SNP' && p.dsnpAcceptedPopulations) {
+        for (const pop of p.dsnpAcceptedPopulations) {
+          dsnpPopulationCounts[pop] = (dsnpPopulationCounts[pop] ?? 0) + 1;
+        }
       }
       if (p.snpType === 'C-SNP' && p.csnpCondition) {
         csnpConditionCounts[p.csnpCondition] =
@@ -611,6 +589,21 @@ export function useBenchFilters(
           value: `D-SNP${SNP_SUB_SEP}${k}`,
           label: `${subPrefix}${k}`,
           count: dsnpIntegrationCounts[k],
+        });
+      }
+      // Population sub-filters — one row per CMS-defined dual category
+      // in canonical order (FBDE, QMB+, QMB, SLMB+, SLMB, QI, QDWI).
+      // Only surfaces populations present in the pool (count > 0), same
+      // rule the integration + carrier + condition rows follow. Sub key
+      // uses the DSNP_POP_PREFIX namespace so it can't collide with an
+      // integration status that happens to be named 'FBDE' etc.
+      for (const pop of DSNP_POPULATIONS) {
+        const count = dsnpPopulationCounts[pop] ?? 0;
+        if (count === 0) continue;
+        snp.push({
+          value: `D-SNP${SNP_SUB_SEP}${DSNP_POP_PREFIX}${pop}`,
+          label: `${subPrefix}Accepts ${pop}`,
+          count,
         });
       }
     }
@@ -678,9 +671,10 @@ export function useBenchFilters(
       if (!passDimension(networkSet, p.network)) return false;
       if (snpSet.size > 0) {
         // OR across every selected token. Top-level ("D-SNP") passes
-        // any plan in that bucket. Sub-filter ("D-SNP:FIDE") passes
-        // only plans whose Landscape sub-value equals the token. See
-        // parseSnpFilter above for encoding.
+        // any plan in that bucket. Sub-filter ("D-SNP:FIDE" for
+        // integration, "D-SNP:pop:QMB" for population) passes only
+        // plans whose corresponding attribute matches the sub-token.
+        // See parseSnpFilter above for encoding.
         let matches = false;
         for (const token of snpSet) {
           const { top, sub } = parseSnpFilter(token);
@@ -690,7 +684,16 @@ export function useBenchFilters(
           }
           if (p.snpType !== top) continue;
           if (sub == null) { matches = true; break; }
-          if (top === 'D-SNP' && p.dsnpIntegration === sub) { matches = true; break; }
+          if (top === 'D-SNP') {
+            if (sub.startsWith(DSNP_POP_PREFIX)) {
+              const pop = sub.slice(DSNP_POP_PREFIX.length);
+              const pops = p.dsnpAcceptedPopulations ?? [];
+              if (pops.includes(pop)) { matches = true; break; }
+              continue;
+            }
+            if (p.dsnpIntegration === sub) { matches = true; break; }
+            continue;
+          }
           if (top === 'C-SNP' && p.csnpCondition === sub) { matches = true; break; }
         }
         if (!matches) return false;
@@ -793,6 +796,9 @@ export function useBenchFilters(
         const { top, sub } = parseSnpFilter(v);
         if (sub == null) return SNP_LABELS[top] ?? top;
         if (top === 'C-SNP') return `C-SNP: ${humanizeCsnpCondition(sub)}`;
+        if (top === 'D-SNP' && sub.startsWith(DSNP_POP_PREFIX)) {
+          return `D-SNP: accepts ${sub.slice(DSNP_POP_PREFIX.length)}`;
+        }
         return `${top}: ${sub}`;
       },
       setters.setSnp,

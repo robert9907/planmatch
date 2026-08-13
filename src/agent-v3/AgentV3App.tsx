@@ -36,7 +36,7 @@
 // owns screen sharing only; AgentBase owns the call. Two apps, one
 // session.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { usePlanBrain } from '@/hooks/usePlanBrain';
 import { useRankedPlans } from '@/hooks/useRankedPlans';
@@ -49,7 +49,7 @@ import { fetchClientSession } from '@/lib/agentbase';
 import { buildAgentV3LisMaps } from '@/lib/lis-cap-agent-v3';
 import { resolveAgentBaseDrugs } from '@/lib/resolveAgentBaseDrugs';
 import { bulkLookupFormulary } from '@/lib/formularyLookup';
-import { fetchPlansForClient } from '@/lib/planCatalog';
+import { fetchPlansForClient, lastPlanTruncated } from '@/lib/planCatalog';
 import { totalComplianceItems } from '@/lib/compliance';
 import type { Plan } from '@/types/plans';
 import type { StateCode } from '@/types/session';
@@ -512,19 +512,101 @@ export function AgentV3App() {
   // buckets before they ever reach Bench. The brain's gates still cull
   // by client eligibility; this just widens the pool feeding them.
   const [eligiblePlans, setEligiblePlans] = useState<Plan[]>([]);
+  // Truncation banner state — /api/plans hit its row cap and returned a
+  // partial county universe. Bench surfaces this so the broker never
+  // silently renders a partial pool.
+  const [poolTruncated, setPoolTruncated] = useState(false);
+  // Missing-geo banner state — the client record hydrated from
+  // AgentBase without a resolvable state/county pair. Fixed the Teresa
+  // Partin case (zip=27603, county='') by resolving via /api/zip-county
+  // after AgentBase hydration; this banner covers the residual case
+  // where zip is ALSO empty and there's nothing to resolve from.
+  const [poolMissingGeo, setPoolMissingGeo] = useState<
+    { reason: 'no-state' | 'no-county' } | null
+  >(null);
+  // Race guard — every fetch bumps the generation; only the newest
+  // fetch's response is allowed to write eligiblePlans. Prevents the
+  // AgentBase-hydrate race where an in-flight fetch(state=NC, county='')
+  // could land AFTER a re-fired fetch(state=NC, county='Wake') and
+  // overwrite the correct pool with the truncated 45-plan slice.
+  const planFetchGen = useRef(0);
   useEffect(() => {
-    let cancelled = false;
+    // Refuse to fire until we have both. Empty string is missing.
+    const stateOk = Boolean(client.state && client.state.trim());
+    const countyOk = Boolean(client.county && client.county.trim());
+    if (!stateOk || !countyOk) {
+      setEligiblePlans([]);
+      setPoolTruncated(false);
+      setPoolMissingGeo({ reason: !stateOk ? 'no-state' : 'no-county' });
+      return;
+    }
+    setPoolMissingGeo(null);
+    const my = ++planFetchGen.current;
+    const ctl = new AbortController();
     fetchPlansForClient({
       state: client.state,
       county: client.county,
       planType: null,
-    }).then((plans) => {
-      if (!cancelled) setEligiblePlans(plans);
-    });
+      signal: ctl.signal,
+    })
+      .then((plans) => {
+        // Race guard — a newer fetch has already superseded us; drop
+        // this response even though our AbortController wasn't fired
+        // (both effects can run to completion before the newer cleanup
+        // aborts us).
+        if (my !== planFetchGen.current) return;
+        setEligiblePlans(plans);
+        setPoolTruncated(lastPlanTruncated());
+      })
+      .catch((err) => {
+        if (my !== planFetchGen.current) return;
+        // MissingGeoError should never fire here — the guard above
+        // catches empty geo before we call fetchPlansForClient — but if
+        // it does, log loudly. AbortError is expected on cleanup and
+        // silently ignored.
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        console.error('[agent-v3] fetchPlansForClient failed:', err);
+      });
     return () => {
-      cancelled = true;
+      ctl.abort();
     };
   }, [client.state, client.county]);
+
+  // AgentBase hydration follow-up: if the CRM record carried a zip but
+  // no county (~10 clients as of 2026-08-12), resolve the county from
+  // /api/zip-county so the pool query above doesn't stay indefinitely
+  // idle. IntakeScreen has the same resolver but only fires while the
+  // broker is on that screen — the AgentBase deep-link path skips
+  // Intake entirely, which is how Teresa Partin's 45-plan bug was
+  // reproducing consistently.
+  useEffect(() => {
+    if (!client.zip || !/^\d{5}$/.test(client.zip)) return;
+    if (client.county && client.county.trim()) return;
+    const ctl = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch(`/api/zip-county?zip=${client.zip}`, { signal: ctl.signal });
+        if (!res.ok) return;
+        const body = (await res.json()) as { county?: string | null; state?: string | null };
+        if (ctl.signal.aborted) return;
+        const patch: Partial<typeof client> = {};
+        if (body.county) patch.county = body.county;
+        if (body.state && /^[A-Z]{2}$/i.test(body.state) && !client.state) {
+          patch.state = body.state.toUpperCase() as StateCode;
+        }
+        if (Object.keys(patch).length > 0) {
+          console.info(
+            `[agent-v3] zip-county fallback resolved zip=${client.zip} → county=${body.county ?? 'null'}`,
+          );
+          useSession.getState().updateClient(patch);
+        }
+      } catch {
+        // Best-effort — if the resolver fails, the missing-geo banner
+        // still surfaces via the pool effect above.
+      }
+    })();
+    return () => ctl.abort();
+  }, [client.zip, client.county, client.state]);
 
   // Phase 2 of the test seed — once eligiblePlans has landed, pick a
   // plausible current plan so the swipe deck has something to benchmark
@@ -1357,6 +1439,20 @@ const explanationsByPlanId = useMemo<
         />
       )}
 
+      {/* Pool-integrity banners — hard-fails when the plan pool didn't
+          reach the county universe. Either state is a session-blocker:
+          without a real pool the bench renders the wrong plans, so the
+          banner is sticky and unmissable. Placed as a top strip so it
+          shows across every screen, not just Compare. See Phase 1.10. */}
+      {(poolMissingGeo || poolTruncated) && (
+        <PoolIntegrityBanner
+          missingGeo={poolMissingGeo}
+          truncated={poolTruncated}
+          clientState={client.state}
+          clientZip={client.zip}
+        />
+      )}
+
       {/* Bottom-left tag so reviewers know which build they're in,
           with the broker / CMS-not-reviewed disclaimer beneath. Agent
           v3 is internal broker tooling, not a consumer surface, but
@@ -1512,6 +1608,65 @@ function HydrationToast({ state, onDismiss }: HydrationToastProps) {
       >
         ✕
       </button>
+    </div>
+  );
+}
+
+interface PoolIntegrityBannerProps {
+  missingGeo: { reason: 'no-state' | 'no-county' } | null;
+  truncated: boolean;
+  clientState: StateCode | null;
+  clientZip: string;
+}
+
+function PoolIntegrityBanner({
+  missingGeo,
+  clientState,
+  clientZip,
+}: PoolIntegrityBannerProps) {
+  // Missing geo takes precedence — no pool at all is a worse state than
+  // a truncated pool. Both are sticky, no dismiss: silently rendering
+  // the wrong pool is exactly the failure mode the banner fixes.
+  const isError = missingGeo != null;
+  const bg = isError ? '#7f1d1d' : '#78350f';
+  const border = isError ? '#ef4444' : '#f59e0b';
+  const fg = isError ? '#fecaca' : '#fed7aa';
+  let msg: string;
+  if (missingGeo?.reason === 'no-state') {
+    msg = 'Client has no state on file — bench can\'t load a county plan pool. Set the state on Intake.';
+  } else if (missingGeo?.reason === 'no-county') {
+    msg = clientZip
+      ? `Client has no county on file. Resolving from ZIP ${clientZip}…`
+      : 'Client has no county or ZIP on file — bench can\'t load a plan pool. Set the county or ZIP on Intake.';
+  } else {
+    // truncated
+    msg =
+      `Bench pool is truncated${clientState ? ` for ${clientState}` : ''}` +
+      ' — the /api/plans row cap fired and the pool is a partial county universe. Every dropdown count understates. Reload the county or narrow the limit.';
+  }
+  return (
+    <div
+      role="alert"
+      style={{
+        position: 'fixed',
+        top: 12,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 210,
+        maxWidth: 720,
+        background: bg,
+        color: fg,
+        border: `1px solid ${border}`,
+        borderRadius: 8,
+        padding: '10px 14px',
+        fontFamily: 'Inter, -apple-system, sans-serif',
+        fontSize: 13,
+        fontWeight: 600,
+        boxShadow: '0 6px 20px rgba(0,0,0,0.28)',
+      }}
+    >
+      <span aria-hidden style={{ marginRight: 8 }}>{isError ? '⚠' : '⚡'}</span>
+      {msg}
     </div>
   );
 }

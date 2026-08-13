@@ -58,6 +58,9 @@ interface ApiPlan {
 interface ApiPlansResponse {
   plans: ApiPlan[];
   source: 'pm_plans' | 'static_fallback';
+  /** Server-side flag: true when the row cap was hit and the pool is a
+   *  partial county universe. Absent on older builds; treat as false. */
+  truncated?: boolean;
 }
 
 export interface FetchPlansParams {
@@ -66,6 +69,22 @@ export interface FetchPlansParams {
   planType: PlanType | null;
   /** Pass explicit ids to refetch a known finalist set (Step 6). */
   ids?: string[];
+  /** Optional abort signal — cancel this fetch when the caller re-fires
+   *  with newer inputs. Prevents a stale response from overwriting a
+   *  newer eligiblePlans state (the AgentBase-hydrate race). */
+  signal?: AbortSignal;
+}
+
+/** Missing-geo hard-fail. Callers MUST guard on state+county being
+ *  non-empty before invoking fetchPlansForClient — the server now
+ *  rejects empty geo with 400 (previously it silently returned a
+ *  statewide truncated slice). This subclass lets callers distinguish
+ *  a guard failure from a real fetch error. See Phase 1.10 diagnosis. */
+export class MissingGeoError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MissingGeoError';
+  }
 }
 
 // Filled in on every fetch so callers can cheaply ask "did the last
@@ -73,18 +92,39 @@ export interface FetchPlansParams {
 // channel through React Query. `'static_fallback'` means the server
 // errored and we returned the 12-plan const below.
 let lastSource: ApiPlansResponse['source'] = 'pm_plans';
+let lastTruncated = false;
 
 export function lastPlanSource(): ApiPlansResponse['source'] {
   return lastSource;
 }
 
+/** True when the most recent fetch reported the row cap was hit. Bench
+ *  UI reads this to render the partial-pool banner. */
+export function lastPlanTruncated(): boolean {
+  return lastTruncated;
+}
+
 export async function fetchPlansForClient(params: FetchPlansParams): Promise<Plan[]> {
+  const usingIds = Boolean(params.ids && params.ids.length > 0);
+  // Guard: refuse to fire without complete geo unless the caller passed
+  // ids. The server enforces the same rule; guarding client-side
+  // suppresses the pointless request and gives us a typed error the
+  // caller can react to differently than a network failure.
+  if (!usingIds) {
+    if (!params.state) {
+      throw new MissingGeoError('state is required');
+    }
+    if (!params.county || !params.county.trim()) {
+      throw new MissingGeoError('county is required');
+    }
+  }
+
   const qs = new URLSearchParams();
-  if (params.ids && params.ids.length > 0) {
-    qs.set('ids', params.ids.join(','));
+  if (usingIds) {
+    qs.set('ids', params.ids!.join(','));
   } else {
-    if (params.state) qs.set('state', params.state);
-    if (params.county) qs.set('county', params.county);
+    qs.set('state', params.state!);
+    qs.set('county', params.county);
     if (params.planType) qs.set('planType', params.planType);
   }
   qs.set('limit', '2000');
@@ -93,6 +133,7 @@ export async function fetchPlansForClient(params: FetchPlansParams): Promise<Pla
     const res = await fetch(`/api/plans?${qs.toString()}`, {
       method: 'GET',
       headers: { Accept: 'application/json' },
+      signal: params.signal,
     });
     if (!res.ok) {
       const text = await res.text();
@@ -100,10 +141,30 @@ export async function fetchPlansForClient(params: FetchPlansParams): Promise<Pla
     }
     const body = (await res.json()) as ApiPlansResponse;
     lastSource = body.source ?? 'pm_plans';
+    lastTruncated = body.truncated === true;
+    if (lastTruncated) {
+      console.warn(
+        `[planCatalog] server truncated: ${body.plans.length} plans returned at ` +
+          `row cap for state=${params.state} county=${params.county}. Bench pool is a ` +
+          `partial county universe — check /api/plans limit or query filters.`,
+      );
+    }
     return body.plans.map(toPlan);
   } catch (err) {
+    // Re-throw guard errors so the caller can distinguish "we refused to
+    // fetch because geo is incomplete" from "the fetch failed and we're
+    // falling back to seeds". Guard errors must NEVER trigger the static
+    // fallback — that would just paper over the missing geo.
+    if (err instanceof MissingGeoError) throw err;
+    // AbortError shouldn't fall back either — the caller cancelled us,
+    // typically because a newer fetch is in flight. Return an empty
+    // pool so the newer response wins deterministically.
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      return [];
+    }
     console.warn('[planCatalog] fetch failed, falling back to static seed:', err);
     lastSource = 'static_fallback';
+    lastTruncated = false;
     const { fallbackPlansForClient } = await import('./cmsPlans');
     return fallbackPlansForClient(params);
   }
