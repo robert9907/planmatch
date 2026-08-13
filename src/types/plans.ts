@@ -187,6 +187,17 @@ export interface Plan {
   // Bench filter predicates read the array — "Accepts Partial Duals",
   // "Full-Benefit Only" — so the raw set stays the filter key.
   dsnp_accepted_populations: string[] | null;
+  // Per-plan manual capture from pm_dsnp_populations (populated for
+  // NC/TX/GA D-SNPs Rob captured from HealthSherpa). Same population
+  // vocabulary as dsnp_accepted_populations above. Preferred over the
+  // CMS-derived column at every read site — the manual value is
+  // per-plan truth; the CMS value is a coarse expansion of a
+  // two-value Partial Dual boolean and disagrees with per-plan
+  // filings for most plans. Absent when no manual capture exists
+  // for this (contract, plan, segment); readers should fall back to
+  // dsnp_accepted_populations. Optional on the wire because older
+  // /api/plans builds and static fixtures don't emit it.
+  dsnp_accepted_populations_manual?: string[] | null;
   // True when the plan's contract is D-SNP-only (no mixed MA/D-SNP
   // under the same contract number). Signals a carrier with a
   // dedicated dual-population network + care model.
