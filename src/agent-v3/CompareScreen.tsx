@@ -920,48 +920,61 @@ export function CompareScreen({
   //
   // Seed the initial filter state from intake data. The intent is
   // "start the agent where they were probably going to end up":
-  //   • dsnpEligible === true → SNP filter pre-set to ['D-SNP']
   //   • ≥1 provider on file  → Cost & Quality pre-set to
   //                             ['has_docs_in_net']
   //   • priorities includes 'healthy_foods' → 'has_food_card'
   //   • priorities includes 'partb_giveback' → 'part_b_giveback'
-  //   • medicaidLevel = 'qmb'  → 'accepts_qmb'
-  //   • medicaidLevel = 'slmb' → 'accepts_slmb'
-  //   • medicaidLevel = 'qi'   → 'accepts_partial_duals'
-  //   • medicaidLevel = 'fbde' → 'accepts_qmb' + 'full_benefit_only'
+  //   • dsnpEligible + no medicaidLevel → SNP filter ['D-SNP']
+  //     (broad; any D-SNP passes)
+  //   • dsnpEligible + medicaidLevel → SNP filter ['D-SNP:pop:<POP>']
+  //     (narrow; only D-SNPs whose accepted-populations list includes
+  //     that category. Every population sub-filter has a visible,
+  //     clearable control in the SNP dropdown — Phase 2.3 rule.)
   //
-  // The Medicaid-derived pills are pulled out of the Cost & Quality
-  // dropdown entirely (show: false in useBenchFilters) so they only
-  // reach state via this seed. They stay dismissible via the standard
-  // activeChips row.
+  // Pre-fix (removed 2026-08-12): medicaidLevel auto-activated show:false
+  // Cost & Quality predicates (accepts_qmb / accepts_slmb / …). Those
+  // predicates had no visible dropdown control — the chip could stick
+  // in state and gate the bench with no way to clear it from the
+  // filter bar. Population sub-filters under D-SNP replace them.
   const initialFilterState = useMemo(() => {
     const snp: string[] = [];
-    if (client.dsnpEligible === true) snp.push('D-SNP');
     const costQuality: string[] = [];
     if (providers.length > 0) costQuality.push('has_docs_in_net');
     if (priorities?.includes('healthy_foods')) costQuality.push('has_food_card');
     if (priorities?.includes('partb_giveback')) costQuality.push('part_b_giveback');
-    // Medicaid-derived auto-pills. QMB/SLMB/QI map 1:1 to the
-    // CMS-filed accepted-populations predicates; FBDE gets both
-    // accepts_qmb (QMB+ is a member of the FBDE row) and
-    // full_benefit_only so the bench narrows to plans built for
-    // full duals.
-    switch (client.medicaidLevel) {
-      case 'qmb':
-        costQuality.push('accepts_qmb');
-        break;
-      case 'slmb':
-        costQuality.push('accepts_slmb');
-        break;
-      case 'qi':
-        costQuality.push('accepts_partial_duals');
-        break;
-      case 'fbde':
-        costQuality.push('accepts_qmb');
-        costQuality.push('full_benefit_only');
-        break;
-      default:
-        break;
+    // Medicaid-derived SNP sub-filter. Each MedicaidLevel enum value
+    // maps 1:1 to a D-SNP population sub-filter — the population the
+    // beneficiary would actually be enrolled under. Extended
+    // 2026-08-12 to include qmb_plus / slmb_plus / qdwi (the pre-fix
+    // map handled only qmb / slmb / qi / fbde and left the other
+    // three unrouted).
+    //
+    // Rule: an auto-applied chip MUST have a visible, clearable
+    // control in the dropdown. If you add a new MedicaidLevel enum
+    // value, add a matching entry both here AND in useBenchFilters'
+    // DSNP_POPULATIONS constant.
+    const POP_BY_MEDICAID: Record<string, string> = {
+      qmb: 'D-SNP:pop:QMB',
+      qmb_plus: 'D-SNP:pop:QMB+',
+      slmb: 'D-SNP:pop:SLMB',
+      slmb_plus: 'D-SNP:pop:SLMB+',
+      qi: 'D-SNP:pop:QI',
+      qdwi: 'D-SNP:pop:QDWI',
+      fbde: 'D-SNP:pop:FBDE',
+    };
+    const popToken = client.medicaidLevel && client.medicaidLevel !== 'none'
+      ? POP_BY_MEDICAID[client.medicaidLevel]
+      : undefined;
+    if (popToken) {
+      // A precise population sub-filter is strictly narrower than the
+      // top-level D-SNP token — pushing both would OR them together
+      // and re-broaden the pool to every D-SNP. Push ONLY the sub.
+      snp.push(popToken);
+    } else if (client.dsnpEligible === true) {
+      // Dual-eligible but no MSP category on file — top-level D-SNP
+      // is the right default. Broker can drill down manually once
+      // they capture the category on Intake.
+      snp.push('D-SNP');
     }
     return { snp, costQuality };
     // Seed is captured once on hook mount (see useBenchFilters). Later
