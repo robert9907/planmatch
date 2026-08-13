@@ -13,8 +13,15 @@
 //                already committed to these ids upstream.
 //   limit?       default 500, max 2000.
 //
-// Response: { plans: Plan[], source: 'pm_plans' }
+// Response: { plans: Plan[], source: 'pm_plans', truncated: boolean }
 // Errors: { error, detail? } on 4xx/5xx.
+//
+// Hard-fail on missing state or county (unless `ids` is set) — an empty
+// county was previously treated as "no filter" and returned a truncated
+// statewide slice, which the agent bench rendered as a Wake NC pool of
+// 45 plans / 3 D-SNP instead of the real 76 / 19. AgentBase-hydrated
+// clients whose CRM record has state but no county hit this
+// consistently. See Phase 1.10 diagnosis 2026-08-12.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
@@ -669,6 +676,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const wantedCounty = normalizeCounty(county);
 
+  // Hard-fail on missing geo. Empty string counts as missing — this is
+  // the guard that stops the silent statewide-truncation bug. `ids`
+  // callers (Step 6 finalist refetch) bypass geo entirely, so skip the
+  // check on that path.
+  if (!idsParam) {
+    if (!state) return badRequest(res, 'state is required (2-letter code)');
+    if (!wantedCounty) return badRequest(res, 'county is required');
+  }
+
   try {
     const sb = supabase();
 
@@ -714,7 +730,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
-      if (ids.length === 0) return sendJson(res, 200, { plans: [], source: 'pm_plans' });
+      if (ids.length === 0) return sendJson(res, 200, { plans: [], source: 'pm_plans', truncated: false });
       // Parse ids: "H1234-005-000" → { contract_id: 'H1234', plan_id: '005', segment_id: '000' }
       const triples = ids
         .map((id) => {
@@ -727,7 +743,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           };
         })
         .filter((t): t is { contract_id: string; plan_id: string; segment_id: string } => !!t);
-      if (triples.length === 0) return sendJson(res, 200, { plans: [], source: 'pm_plans' });
+      if (triples.length === 0) return sendJson(res, 200, { plans: [], source: 'pm_plans', truncated: false });
       // Postgrest doesn't do composite IN() — union on the three cols.
       const contractIds = [...new Set(triples.map((t) => t.contract_id))];
       const planIds = [...new Set(triples.map((t) => t.plan_id))];
@@ -751,6 +767,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const { data: rawRows, error: planErr } = await plansQuery;
     if (planErr) throw planErr;
+
+    // Truncation hint. When the row count came back exactly at limit,
+    // PostgREST likely capped us and the downstream pool is a partial
+    // county universe. Never silently — the client surfaces this in a
+    // banner so the broker sees they're on a partial slice.
+    const truncated = (rawRows?.length ?? 0) >= limit;
 
     let rows = (rawRows ?? []) as PlanRow[];
 
@@ -1255,7 +1277,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
     res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300');
-    return sendJson(res, 200, { plans, source: 'pm_plans' });
+    return sendJson(res, 200, { plans, source: 'pm_plans', truncated });
   } catch (err) {
     return serverError(res, err);
   }
