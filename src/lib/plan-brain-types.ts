@@ -145,6 +145,30 @@ export interface BrainScore {
   // False when the user entered no providers.
   anyProviderDefinitivelyOut: boolean;
   anyProviderUnverified: boolean;
+  /** Tri-state roll-up of the per-NPI network reads for this plan.
+   *  Derived from the two flags above in precedence order:
+   *    • 'out_of_network' — at least one user NPI has a cache row with
+   *      covered=false. This is the ONLY ELIMINATING state at Gate 1.
+   *    • 'unverified' — no definitive out-of-network read, but at least
+   *      one user NPI has no cache row for this plan (carrier not
+   *      scraped, or no provider directory exists). NON-ELIMINATING:
+   *      absence of evidence is not evidence of absence. The plan stays
+   *      in the pool and carries providerVerificationNeeded=true so the
+   *      broker sees "call the carrier to confirm" rather than the plan
+   *      silently vanishing.
+   *    • 'in_network' — every user NPI confirmed in-network.
+   *  null when the user entered no providers (Gate 1 is open).
+   *  NOTE: distinct from the ScoredPlan.providerNetworkStatus compat
+   *  enum in usePlanBrain.ts ('all_in' | 'partial' | 'all_out' |
+   *  'unknown'), which is a display-layer shape. This field is the
+   *  gate-authoritative one and is mirrored 1:1 in the consumer brain
+   *  (plan-match/packages/brain/src/plan-brain-types.ts). */
+  providerNetworkState: 'in_network' | 'out_of_network' | 'unverified' | null;
+  /** True iff providerNetworkState === 'unverified'. Convenience flag
+   *  mirrored onto the pick shape so surfaces can badge a plan without
+   *  re-deriving the tri-state. Never true when the user entered no
+   *  providers. */
+  providerVerificationNeeded: boolean;
   // True when the user's *primary* provider (first entry in their
   // providers array) is confirmed in-network on this plan via the
   // per-NPI provider cache. False when there is no primary, no NPI,
@@ -280,6 +304,27 @@ export interface BrainScore {
    *  ADJUSTED — the pre-adjustment snapshot lives on
    *  dualEligibleAdjustment.original for strikethrough rendering. */
   dualEligibleAdjustment?: DualEligibleAdjustment;
+  /** Cost-sharing exposure flag for the dual populations Medicaid does
+   *  NOT cover (slmb, qi, qdwi). True when this plan files coinsurance
+   *  on primary_care / specialist / advanced_imaging — the member pays
+   *  every filed copay/coinsurance out of pocket, so a plan billing 20%
+   *  on these three high-frequency services exposes them in a way a
+   *  $0-copay standard MA-PD does not.
+   *
+   *  `false` for every other medicaidLevel (none, qmb, qmb_plus,
+   *  slmb_plus, fbde) — those are either not dual or have their
+   *  Medicare cost sharing paid by Medicaid (see COST_SHARING_PROTECTION
+   *  in dual-eligible.ts).
+   *
+   *  Read the two flags together: `costSharingExposed` is the ranking
+   *  signal (drives the $500-band tie-break in
+   *  compareByCostThenTiebreakers). `costSharingExposureIncomplete` is
+   *  the data-quality flag — true when at least one of the three
+   *  benefit rows was missing or had both copay and coinsurance null.
+   *  Missing data defensively classifies as exposed (better to lose a
+   *  tiebreak than to hide a 20% coinsurance behind a NULL). */
+  costSharingExposed?: boolean;
+  costSharingExposureIncomplete?: boolean;
   // Per-gate customer-facing micro-explainer strings. One entry per
   // user-supplied provider / drug / priority for gates 1–3; a single
   // line for gate 4 (cost rank). Empty array when the user didn't
@@ -310,6 +355,13 @@ export interface LiveTop3PickPlan {
   totalAnnualCost: number;
   extrasValue: number;
   allProvidersInNetwork: boolean;
+  /** Mirror of BrainScore.providerNetworkState — the tri-state network
+   *  roll-up. 'unverified' plans are IN the pool by design; the card
+   *  should badge them "call to confirm", not present them as
+   *  confirmed in-network. null when the user entered no providers. */
+  providerNetworkState: 'in_network' | 'out_of_network' | 'unverified' | null;
+  /** Mirror of BrainScore.providerVerificationNeeded. */
+  providerVerificationNeeded: boolean;
   suppliesCovered: number;
   suppliesTotal: number;
   /** Semantic dental tier — see BrainScore.dentalTier. Surfaced on the

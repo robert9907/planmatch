@@ -132,6 +132,7 @@ import { BROKER } from '@/lib/constants';
 import { buildSunfireRecommendationText } from '@/lib/clipboardFormat';
 import { parseDrugName } from '@/lib/parseDrugName';
 import { dedupeMedContext, dedupeProviderContext } from '@/lib/agentbaseSyncDedup';
+import { normalizeLisTierForClient } from '@/lib/dual-eligible';
 
 // Single source of truth for the SunFire workspace URL — see
 // src/lib/constants.ts BROKER.sunfire. The previous in-file constant
@@ -360,7 +361,11 @@ export function QuoteDeliveryV4({
 }: Props) {
   const currentPlanId = useSession((s) => s.currentPlanId);
   const isAnnualReview = useSession((s) => s.isAnnualReview);
-  const clientLisTier = useSession((s) => s.client.lisTier);
+  // Normalized at the selector: a session persisted between 2026-07-23
+  // and 2026-08-15 can carry the retired `qmb_uniform` tier, which no
+  // longer exists in LIS_COPAYS_2026. normalizeLisTierForClient
+  // re-derives it from medicaidLevel + livingSetting.
+  const clientLisTier = useSession((s) => normalizeLisTierForClient(s.client));
   const [pharmacyFill, setPharmacyFill] = useState<PharmacyFill>('retail_30');
   const [pickerOpen, setPickerOpen] = useState(false);
   // Weight preset — drives weightOverride for usePlanBrain. null lets
@@ -1050,6 +1055,14 @@ export function QuoteDeliveryV4({
   //   2. broker-playbook red-flag engine (critical / disqualify)
   // Either signal lights the warning chip; tooltip merges every
   // reason so the broker sees the full picture on hover.
+  //
+  // NOTE (verified 2026-08-15): BOTH layers are inert today, so this
+  // chip never lights. The funnel-based runPlanBrain sets
+  // `appliedBrokerRules: []` and `redFlags: []` as neutral defaults and
+  // never populates them — `applyBrokerRules` and `evaluateRedFlags`
+  // both have zero callsites. The code below is left as-is so it starts
+  // working again if either engine is re-wired; see the STATUS block at
+  // the top of src/lib/broker-rules.ts.
   const redFlagByColumnId = useMemo<Record<string, boolean>>(() => {
     const out: Record<string, boolean> = {};
     for (const c of columns) {

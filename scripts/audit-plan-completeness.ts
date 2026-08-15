@@ -7,8 +7,8 @@
 //                     plan_name, plan_type, drug_deductible)        25%
 //   • 31 medical copay categories — full MedicalCopays surface       35%
 //   • 5 Part D tiers (rx_tier_1..5)                                  20%
-//   • 8 extras categories (dental, vision, hearing, transportation,
-//                          otc, food_card, diabetic, fitness)        20%
+//   • 7 extras categories (dental, vision, hearing, transportation,
+//                          otc, food_card, fitness)                  20%
 //
 // A field counts as "present" when EITHER pm_plan_benefits has a row
 // with a non-null copay/coinsurance/coverage_amount/max_coverage/desc
@@ -79,6 +79,52 @@ async function paginate<T>(
   return out;
 }
 
+// ── Chunked `.in()` filters ──────────────────────────────────────────
+// PostgREST puts filters in the query string, so a single `.in()` with a
+// few thousand keys produces a request line far past the ~16 KB header
+// limit and undici aborts with HeadersOverflowError
+// (UND_ERR_HEADERS_OVERFLOW) before the request is answered. That is the
+// exact failure the 2026-08 data audit hit on a cross-state
+// (`--state`-omitted) run: 791 triples expanded to ~2k pbp_benefits key
+// variants, URL length 20,178 chars, and the run died after the
+// pm_plan_benefits step. Splitting the key list keeps every URL well
+// under the limit, so a single invocation covers all states again.
+//
+// Chunks must be disjoint on the filtered column for the concatenated
+// result to equal the unchunked one — both callers below chunk on a
+// de-duplicated key set, so no row is returned twice.
+const IN_CHUNK_MAX_CHARS = 6000;
+
+function chunkKeys(keys: string[], maxChars = IN_CHUNK_MAX_CHARS): string[][] {
+  const out: string[][] = [];
+  let cur: string[] = [];
+  let len = 0;
+  for (const k of keys) {
+    // key + quotes + comma, plus slack for percent-encoding
+    const cost = k.length + 6;
+    if (cur.length > 0 && len + cost > maxChars) {
+      out.push(cur);
+      cur = [];
+      len = 0;
+    }
+    cur.push(k);
+    len += cost;
+  }
+  if (cur.length > 0) out.push(cur);
+  return out;
+}
+
+async function paginateIn<T>(
+  keys: string[],
+  fn: (chunk: string[], f: number, t: number) => PromiseLike<PostgrestSingleResponse<T[]>>,
+): Promise<T[]> {
+  const out: T[] = [];
+  for (const chunk of chunkKeys(keys)) {
+    out.push(...(await paginate<T>((f, t) => fn(chunk, f, t))));
+  }
+  return out;
+}
+
 // ── Field taxonomy ───────────────────────────────────────────────────
 // Core scalars on pm_plans. carrier/parent_organization rolls up to a
 // single "carrier" check via the same OR the API uses.
@@ -129,6 +175,17 @@ const MEDICAL_CATEGORIES = [
   'renal_dialysis',
 ] as const;
 const RX_TIERS = ['rx_tier_1', 'rx_tier_2', 'rx_tier_3', 'rx_tier_4', 'rx_tier_5'] as const;
+// NOTE: 'diabetic' is deliberately NOT scored here. No storage key of
+// that name exists — every diabetic benefit is filed under
+// `diabetic_supplies` in both pm_plan_benefits.benefit_category and
+// pbp_benefits.benefit_type, and that key IS scored above in
+// MEDICAL_CATEGORIES (35% bucket) alongside `insulin`. Scoring a literal
+// 'diabetic' here matched nothing and reported the benefit missing on
+// 100% of plans (798/798 across NC/TX/GA) while the data was present —
+// see the 2026-08 data audit, Finding 23. The API's extras field
+// `diabetic` is a hardcoded `covered: true` constant in
+// api/plans.ts (buildBenefits), not a filed value, so there is nothing
+// data-side for the rubric to measure.
 const EXTRAS = [
   'dental',
   'vision',
@@ -136,7 +193,6 @@ const EXTRAS = [
   'transportation',
   'otc',
   'food_card',
-  'diabetic',
   'fitness',
 ] as const;
 
@@ -339,13 +395,13 @@ async function main() {
   const contractIds = [...new Set([...byTriple.values()].map((v) => v.head.contract_id))];
   const planIds = [...new Set([...byTriple.values()].map((v) => v.head.plan_id))];
 
-  const pmBenefits = await paginate<PmBenefitRow>((f, t) =>
+  const pmBenefits = await paginateIn<PmBenefitRow>(contractIds, (chunk, f, t) =>
     sb
       .from('pm_plan_benefits')
       .select(
         'contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage',
       )
-      .in('contract_id', contractIds)
+      .in('contract_id', chunk)
       .in('plan_id', planIds)
       .order('contract_id', { ascending: true })
       .order('plan_id', { ascending: true })
@@ -368,11 +424,11 @@ async function main() {
   for (const key of byTriple.keys()) {
     for (const v of pbpKeyVariants(key)) allPbpKeys.add(v);
   }
-  const pbpRows = await paginate<PbpRow>((f, t) =>
+  const pbpRows = await paginateIn<PbpRow>([...allPbpKeys], (chunk, f, t) =>
     sb
       .from('pbp_benefits')
       .select('plan_id, benefit_type, copay, copay_max, coinsurance, description, source')
-      .in('plan_id', [...allPbpKeys])
+      .in('plan_id', chunk)
       .in('source', ['medicare_gov', 'sb_ocr', 'cms_pbp', 'manual', 'pbp_federal'])
       .order('plan_id', { ascending: true })
       .range(f, t),
@@ -426,11 +482,11 @@ async function main() {
     const missingMedical = MEDICAL_CATEGORIES.filter((c) => !hasCategory(c));
     const missingRx = RX_TIERS.filter((c) => !hasCategory(c));
     const missingExtras = EXTRAS.filter((c) => {
-      // diabetic + fitness are defaulted-true in buildBenefits because
-      // they're near-universal on MA plans; only flag missing when
-      // neither pm_plan_benefits nor pbp_benefits has anything. We
-      // still check explicitly because the audit is about filed data,
-      // not the UI default.
+      // fitness is defaulted-true in buildBenefits because it's
+      // near-universal on MA plans; only flag missing when neither
+      // pm_plan_benefits nor pbp_benefits has anything. We still check
+      // explicitly because the audit is about filed data, not the UI
+      // default.
       return !hasCategory(c);
     });
 

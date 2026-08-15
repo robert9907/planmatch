@@ -66,7 +66,7 @@ import {
   combineUtilization,
   type UtilizationCondition,
 } from './utilization-model';
-import { applyDualEligibleCostAdjustment } from './dual-eligible';
+import { applyDualEligibleCostAdjustment, classifyCostSharingExposure } from './dual-eligible';
 import { firstTierCopay } from './inpatient-format';
 
 // Day-1 SNF copay from the ladder description ("Days 1-20: $0/day · …"),
@@ -197,6 +197,9 @@ function totalAnnualCost(s: BrainScoredPlan): number {
 //   1. Confirmed in-network provider count (desc). Zero for personas
 //      with no providers ⇒ everyone tied on step 1, falls through to
 //      drug cost.
+//   1b. Cost-sharing exposure (SLMB / QI / QDWI only). Within a $500
+//      net-annual band, a plan that bills the member coinsurance loses
+//      to one that doesn't. No-op for every other population.
 //   2. Drug cost (asc). Rewards formulary strength directly.
 //   3. MOOP (asc). Caps catastrophic exposure.
 //   4. Star rating (desc). CMS quality signal.
@@ -218,10 +221,45 @@ function allNonOtcCovered(s: BrainScore): boolean {
   return eff <= 0 || s.coveredCount === eff;
 }
 
+// Cost band inside which the SLMB/QI/QDWI cost-sharing exposure gate
+// can break a tie. Mirrors the consumer brain's
+// GATE3_TIEBREAK_COST_BAND (packages/brain/src/plan-brain.ts) — chosen
+// small enough (~$40/month) that a member rarely cares about the dollar
+// difference, but large enough to actually surface when it matters.
+const EXPOSURE_TIEBREAK_COST_BAND = 500;
+
 function compareByCostThenTiebreakers(a: BrainScoredPlan, b: BrainScoredPlan): number {
   // 1. In-network provider count — providers ALWAYS rank above cost.
   const inNetDiff = b.score.providersInNetworkCount - a.score.providersInNetworkCount;
   if (inNetDiff !== 0) return inNetDiff;
+  // 1b. SLMB/QI/QDWI cost-sharing exposure gate. When the two plans sit
+  //     within EXPOSURE_TIEBREAK_COST_BAND of each other on net annual
+  //     cost and one bills the member coinsurance on PCP / specialist /
+  //     imaging while the other does not, the exposed plan cannot win
+  //     the tie. The member has no Medicaid protection for those copays
+  //     and calculateRealAnnualCost deliberately doesn't debit medical
+  //     cost-sharing, so without this gate the exposed plan rides a
+  //     cheaper drug subtotal or a lower MOOP to a win the member pays
+  //     for at the point of care.
+  //
+  //     Ported from the consumer's compareByCostThenTiebreakers, which
+  //     runs the same check inside its $500 gate3Score band. The agent
+  //     comparator is providers-first and carries no gate3Score, so the
+  //     gate sits directly after the provider step — providers still
+  //     outrank it, everything cost-shaped below it does not.
+  //
+  //     Only fires when medicaidLevel is 'slmb' / 'qi' / 'qdwi';
+  //     costSharingExposed is false for every plan otherwise, so this
+  //     collapses to a no-op for none / qmb / qmb_plus / slmb_plus /
+  //     fbde. See classifyCostSharingExposure in dual-eligible.ts.
+  const aExposed = a.score.costSharingExposed === true;
+  const bExposed = b.score.costSharingExposed === true;
+  if (
+    aExposed !== bExposed &&
+    Math.abs(totalAnnualCost(a) - totalAnnualCost(b)) < EXPOSURE_TIEBREAK_COST_BAND
+  ) {
+    return aExposed ? 1 : -1; // non-exposed wins
+  }
   // 2. Drug cost (ascending).
   const drugDiff = a.score.totalAnnualDrugCost - b.score.totalAnnualDrugCost;
   if (drugDiff !== 0) return drugDiff;
@@ -289,12 +327,20 @@ function unionUtilizationConditions(
 //
 // Three states per (plan, npi) from pm_provider_network_cache:
 //
-//   • covered=true      — verified in-network → PASS, no flag
-//   • covered=false     — verified OUT of network → ELIMINATED
-//   • cache row absent  — UNVERIFIED → PASS with anyProviderUnverified
-//                         flag (surfaces as 'unknown' on the Compare
+//   • covered=true      — verified in-network → 'in_network'     → PASS
+//   • covered=false     — verified OUT of net  → 'out_of_network' → ELIMINATED
+//   • cache row absent  — UNVERIFIED           → 'unverified'     → PASS + flag
+//                         (surfaces as 'unknown' on the Compare
 //                         screen so the broker knows to call the
 //                         carrier).
+//
+// The roll-up lives on score.providerNetworkState; 'unverified' also
+// sets score.providerVerificationNeeded, which the pick shape mirrors.
+// Only 'out_of_network' eliminates — absence of evidence is not
+// evidence of absence. Mirrored 1:1 in the consumer brain
+// (plan-match/packages/brain/src/plan-brain.ts applyProviderGate),
+// which used to eliminate on unverified as well; see
+// gh-audit-2026/session-2/05-gate1-elimination.md.
 //
 // Strict-elim-on-absent over-killed: cache coverage is sparse outside
 // the 3 active FHIR carriers (uhc / humana / bcbsnc), so a client like
@@ -308,7 +354,7 @@ function applyProviderGate(
   userHasProviders: boolean,
 ): BrainScoredPlan[] {
   if (!userHasProviders) return [...pool];
-  return pool.filter((s) => !s.score.anyProviderDefinitivelyOut);
+  return pool.filter((s) => s.score.providerNetworkState !== 'out_of_network');
 }
 
 // ─── Gate 2 — medications ────────────────────────────────────────────
@@ -481,6 +527,8 @@ function brainToLiveTop3Pick(
       totalAnnualCost: s.score.realAnnualCost.netAnnual,
       extrasValue: s.score.extrasValueAnnual,
       allProvidersInNetwork: s.score.allProvidersInNetwork,
+      providerNetworkState: s.score.providerNetworkState,
+      providerVerificationNeeded: s.score.providerVerificationNeeded,
       suppliesCovered: s.score.suppliesCovered,
       suppliesTotal: s.score.suppliesTotal,
       dentalTier: s.score.dentalTier,
@@ -714,6 +762,25 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       anyUnverified = true;
     }
 
+    // Tri-state roll-up. Precedence: a confirmed out-of-network read on
+    // ANY user NPI dominates (that is the eliminating state); otherwise
+    // any missing row makes the whole plan 'unverified'; only a plan
+    // with every NPI confirmed is 'in_network'. null when the user
+    // entered no providers, so Gate 1 is open and there is nothing to
+    // verify. The trailing 'unverified' fallback keeps the mapping
+    // total — it is unreachable while the loop above sets one of the
+    // two flags for every non-in-network NPI.
+    const providerNetworkState: BrainScore['providerNetworkState'] =
+      userProviderNpis.length === 0
+        ? null
+        : anyDefinitelyOut
+          ? 'out_of_network'
+          : anyUnverified
+            ? 'unverified'
+            : allInNet
+              ? 'in_network'
+              : 'unverified';
+
     const realAnnualCost = calculateRealAnnualCost({
       annualPremium,
       totalAnnualDrugCost,
@@ -824,6 +891,8 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       allProvidersOutOfNetwork: allOut,
       anyProviderDefinitivelyOut: anyDefinitelyOut,
       anyProviderUnverified: anyUnverified,
+      providerNetworkState,
+      providerVerificationNeeded: providerNetworkState === 'unverified',
       primaryProviderInNetwork: primaryInNet,
       suppliesCovered,
       suppliesTotal,
@@ -979,6 +1048,24 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
         lisTier,
       );
     }
+  }
+
+  // ── SLMB/QI/QDWI cost-sharing exposure classifier ─────────────────
+  // For the dual populations Medicaid does NOT cover (slmb, qi, qdwi),
+  // a plan filing coinsurance on primary_care / specialist /
+  // advanced_imaging exposes the member to real out-of-pocket cost.
+  // The comparator uses this flag to keep an exposed plan from winning
+  // the $500 cost-band tiebreak over a non-exposed plan; see
+  // compareByCostThenTiebreakers. No-op for every other medicaidLevel
+  // (returns {false, false}). Runs unconditionally so the flag is
+  // present on every BrainScore, matching the consumer brain.
+  for (const scored of rawScored) {
+    const { exposed, incomplete } = classifyCostSharingExposure(
+      medicaidLevel,
+      scored.benefits,
+    );
+    scored.score.costSharingExposed = exposed;
+    scored.score.costSharingExposureIncomplete = incomplete;
   }
 
   // ── Informational axis scores ─────────────────────────────────────

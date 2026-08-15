@@ -50,6 +50,7 @@ import type { DetectedConditionKey } from '@/lib/condition-detector';
 import { BROKER_IMPLICATIONS } from '@/lib/condition-detector';
 import { ARCHETYPE_RULES } from '@/lib/broker-playbook';
 import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
+import { normalizeLisTier } from '@/lib/dual-eligible';
 import type {
   AnnualCostEstimate,
   AnnualUtilization,
@@ -670,7 +671,17 @@ export function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
     // applyDualEligibleCostAdjustment. Defaults keep the adjustment
     // a no-op for older sessions that haven't captured these fields.
     medicaidLevel: client.medicaidLevel ?? 'none',
-    lisTier: client.lisTier ?? 'none',
+    // normalizeLisTier re-derives the tier when a session was persisted
+    // with the retired `qmb_uniform` value (2026-07-23 → 2026-08-15).
+    // Derived from medicaidLevel rather than mapped from the stale tier,
+    // because qmb_uniform was written for both full-benefit duals in the
+    // community (→ full_low) and standalone QMB (→ full_high); guessing
+    // would understate drug cost for the QMB-only case.
+    lisTier: normalizeLisTier(
+      client.lisTier,
+      client.medicaidLevel ?? 'none',
+      derivedLivingSetting,
+    ),
     livingSetting: derivedLivingSetting,
   };
 

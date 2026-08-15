@@ -64,6 +64,26 @@ export interface CostShare {
   copay: number | null;
   coinsurance: number | null;
   description: string | null;
+  /** ── The other filed cost-share, when the sources disagreed ─────
+   *  api/plans.ts merges pm_plan_benefits with pbp_benefits and has to
+   *  pick ONE copay/coinsurance per category. For medical cost-sharing
+   *  that pick is not neutral: which filing the beneficiary actually
+   *  owes depends on their CMS dual-eligible population. QMB / QMB+ /
+   *  SLMB+ / FBDE have their Medicare cost sharing paid by Medicaid;
+   *  SLMB / QI / QDWI owe every filed dollar. 8 UHC D-SNPs file
+   *  coinsurance=20 (medicare_gov) against coinsurance=0 (cms_pbp) on
+   *  primary_care, and all 8 accept all seven populations.
+   *
+   *  So the losing value rides along here instead of being dropped at
+   *  the endpoint, and the brain — which knows medicaidLevel — decides.
+   *  All three are null/absent when the sources agreed or only one
+   *  source filed the category, which is the overwhelming majority of
+   *  rows. See gh-audit-2026/msp-exposure §7. */
+  alt_copay?: number | null;
+  alt_coinsurance?: number | null;
+  /** Which source filed the alternate ('medicare_gov' | 'cms_pbp' |
+   *  'sb_ocr' | 'manual' | 'landscape'). */
+  alt_source?: string | null;
 }
 
 export interface MedicalCopays {

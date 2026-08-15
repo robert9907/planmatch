@@ -12,8 +12,13 @@
 //                state/county/planType filters are ignored — the client
 //                already committed to these ids upstream.
 //   limit?       default 500, max 2000.
+//   medicaidLevel? one of the eight MedicaidLevel tokens (none | qi |
+//                slmb | slmb_plus | qmb | qmb_plus | fbde | qdwi). The
+//                beneficiary's CMS dual-eligible population. See the
+//                MEDICAID_LEVELS note below for what it does and —
+//                deliberately — does not do.
 //
-// Response: { plans: Plan[], source: 'pm_plans', truncated: boolean }
+// Response: { plans: Plan[], source: 'pm_plans', truncated: boolean, medicaidLevel }
 // Errors: { error, detail? } on 4xx/5xx.
 //
 // Hard-fail on missing state or county (unless `ids` is set) — an empty
@@ -32,6 +37,40 @@ import {
 import { supabase } from './_lib/supabase.js';
 
 type AppPlanType = 'MA' | 'MAPD' | 'DSNP' | 'CSNP' | 'ISNP' | 'PDP' | 'MEDSUPP';
+
+// The eight MedicaidLevel tokens — the seven CMS dual-eligible
+// populations a D-SNP can enroll, plus `none`. Kept in lockstep with
+// MedicaidLevel in src/lib/dual-eligible.ts.
+//
+// PROTECTED (Medicaid pays their Medicare cost sharing, so the plan's
+// filed copay/coinsurance is NOT what they owe): qmb, qmb_plus,
+// slmb_plus, fbde.
+// EXPOSED (the beneficiary owes every filed dollar): slmb, qi, qdwi.
+//
+// WHY THIS ENDPOINT TAKES THE PARAMETER AT ALL: before 2026-08-15 the
+// population was simply unknown here, so the merge below had to pick a
+// single coinsurance scalar per (plan, category) with no idea which
+// side of the exposure line the reader sat on — and every D-SNP in
+// NC/TX/GA accepts at least one exposed population (166/166), so both
+// directions of that error were always live. See gh-audit-2026/
+// msp-exposure §7 + 04-population-reaches-value.md.
+//
+// WHAT IT DOES NOT DO: it does NOT select a cost-share value. Picking
+// one here would just move the collapse, not remove it — the response
+// is cached and shared across the bench, and the brain is the layer
+// that owns population-aware cost modelling. Instead the merge below
+// preserves BOTH filed values (see `alt_copay` / `alt_coinsurance` /
+// `alt_source` on CostShare) and the brain decides. The parameter is
+// echoed on the response so the caller can assert the catalog it got
+// back was built for the population it asked about, and so future
+// population-scoped work (cache keying, per-population telemetry) has
+// the value at the boundary rather than having to re-plumb it.
+const MEDICAID_LEVELS: ReadonlySet<string> = new Set([
+  'none', 'qi', 'slmb', 'slmb_plus', 'qmb', 'qmb_plus', 'fbde', 'qdwi',
+]);
+type MedicaidLevel =
+  | 'none' | 'qi' | 'slmb' | 'slmb_plus'
+  | 'qmb' | 'qmb_plus' | 'fbde' | 'qdwi';
 
 // Keep aligned with src/types/plans.ts — the API is the single source
 // of truth for Plan shape as far as the UI is concerned.
@@ -114,6 +153,26 @@ export interface CostShare {
   copay: number | null;
   coinsurance: number | null;
   description: string | null;
+  /** ── The other filed cost-share, when the sources disagreed ─────
+   *  api/plans.ts merges pm_plan_benefits with pbp_benefits and has to
+   *  pick ONE copay/coinsurance per category. For medical cost-sharing
+   *  that pick is not neutral: which filing the beneficiary actually
+   *  owes depends on their CMS dual-eligible population. QMB / QMB+ /
+   *  SLMB+ / FBDE have their Medicare cost sharing paid by Medicaid;
+   *  SLMB / QI / QDWI owe every filed dollar. 8 UHC D-SNPs file
+   *  coinsurance=20 (medicare_gov) against coinsurance=0 (cms_pbp) on
+   *  primary_care, and all 8 accept all seven populations.
+   *
+   *  So the losing value rides along here instead of being dropped at
+   *  the endpoint, and the brain — which knows medicaidLevel — decides.
+   *  All three are null/absent when the sources agreed or only one
+   *  source filed the category, which is the overwhelming majority of
+   *  rows. See gh-audit-2026/msp-exposure §7. */
+  alt_copay?: number | null;
+  alt_coinsurance?: number | null;
+  /** Which source filed the alternate ('medicare_gov' | 'cms_pbp' |
+   *  'sb_ocr' | 'manual' | 'landscape'). */
+  alt_source?: string | null;
 }
 
 interface PlanBenefits {
@@ -214,6 +273,31 @@ export interface BenefitRow {
   copay: number | null;
   coinsurance: number | null;
   max_coverage: number | null;
+  // ── Displaced cost-share (the "other" filing) ───────────────────
+  // Two independent merges below pick ONE cost-share per (triple,
+  // category): the pbp source-priority dedup (medicare_gov 5 >
+  // sb_ocr 4 > cms_pbp 3 > manual 2) and the landscape-vs-synth
+  // `synthFiltered` gate. Both used to drop the loser on the floor.
+  //
+  // That is fine for a benefit where the sources merely disagree about
+  // precision. It is NOT fine for medical cost-sharing, where the two
+  // filings can be $0 vs 20% and WHICH ONE IS TRUE DEPENDS ON THE
+  // READER: a QMB / QMB+ / SLMB+ / FBDE beneficiary has their Medicare
+  // cost sharing paid by Medicaid, a SLMB / QI / QDWI beneficiary owes
+  // every filed dollar. 8 UHC D-SNPs surfaced this — medicare_gov
+  // filed coinsurance=20 on primary_care where cms_pbp filed 0, the
+  // `> 0` "is it real" gate handed the win to 20, and the 0 never
+  // reached the brain. All 8 accept all seven populations, so the
+  // collapsed scalar is wrong in one direction for some of every
+  // plan's enrollees. See gh-audit-2026/msp-exposure §7.
+  //
+  // So the loser rides along instead of dying. Null when the two
+  // sources agreed, or when only one source filed the category.
+  alt_copay?: number | null;
+  alt_coinsurance?: number | null;
+  /** Which source filed `alt_copay` / `alt_coinsurance`. 'landscape'
+   *  means the pm_plan_benefits row that lost the synth merge. */
+  alt_source?: string | null;
 }
 
 interface PbpBenefitRow {
@@ -748,6 +832,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ? req.query.planType
     : null) as AppPlanType | null;
   const idsParam = typeof req.query.ids === 'string' ? req.query.ids : '';
+  // Unknown / absent → 'none'. Deliberately lenient rather than a 400:
+  // older agent clients don't send the param at all, and a typo must
+  // not take the whole plan catalog down.
+  const medicaidLevel: MedicaidLevel =
+    typeof req.query.medicaidLevel === 'string' &&
+    MEDICAID_LEVELS.has(req.query.medicaidLevel)
+      ? (req.query.medicaidLevel as MedicaidLevel)
+      : 'none';
   const limit = Math.min(
     Math.max(
       Number.isFinite(Number(req.query.limit)) ? Number(req.query.limit) : DEFAULT_LIMIT,
@@ -812,7 +904,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
-      if (ids.length === 0) return sendJson(res, 200, { plans: [], source: 'pm_plans', truncated: false });
+      if (ids.length === 0) return sendJson(res, 200, { plans: [], source: 'pm_plans', truncated: false, medicaidLevel });
       // Parse ids: "H1234-005-000" → { contract_id: 'H1234', plan_id: '005', segment_id: '000' }
       const triples = ids
         .map((id) => {
@@ -825,7 +917,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           };
         })
         .filter((t): t is { contract_id: string; plan_id: string; segment_id: string } => !!t);
-      if (triples.length === 0) return sendJson(res, 200, { plans: [], source: 'pm_plans', truncated: false });
+      if (triples.length === 0) return sendJson(res, 200, { plans: [], source: 'pm_plans', truncated: false, medicaidLevel });
       // Postgrest doesn't do composite IN() — union on the three cols.
       const contractIds = [...new Set(triples.map((t) => t.contract_id))];
       const planIds = [...new Set(triples.map((t) => t.plan_id))];
@@ -914,7 +1006,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (byTriple.size === 0) {
-      return sendJson(res, 200, { plans: [], source: 'pm_plans' });
+      return sendJson(res, 200, { plans: [], source: 'pm_plans', medicaidLevel });
     }
 
     // ─── Step 3: fetch pm_plan_benefits for these triples ───────────
@@ -1049,6 +1141,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // Second pass — keep the highest-ranked LOSER whose cost-share
+    // actually disagrees with the winner's, so the dedup above stops
+    // being a lossy decision. This is the medicare_gov-20-vs-cms_pbp-0
+    // case: which value the beneficiary owes depends on their MSP
+    // population, which this endpoint deliberately does not decide
+    // (see MEDICAID_LEVELS at the top of the file). Rows that merely
+    // restate the winner are not recorded — an alternate only exists
+    // when there is a real disagreement to carry forward.
+    const altByKey = new Map<string, { copay: number | null; coinsurance: number | null; source: string | null }>();
+    for (const row of broadPbpRows) {
+      const key = `${row.plan_id}|${row.benefit_type}|${row.tier_id ?? 0}`;
+      const winner = bestByKey.get(key);
+      if (!winner || winner === row) continue;
+      if (row.copay === winner.copay && row.coinsurance === winner.coinsurance) continue;
+      if (row.copay == null && row.coinsurance == null) continue;
+      const prior = altByKey.get(key);
+      if (
+        prior &&
+        sourceRank(prior.source, row.benefit_type) >= sourceRank(row.source, row.benefit_type)
+      ) {
+        continue;
+      }
+      altByKey.set(key, {
+        copay: row.copay,
+        coinsurance: row.coinsurance,
+        source: row.source,
+      });
+    }
+
     // Map canonical 2-part pbp keys back to each finalist's full triple
     // so the synthesized rows carry the same contract/plan/segment the
     // landscape rows do — required for the merge keying below.
@@ -1113,12 +1234,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const synthBenefits: BenefitRow[] = [];
-    for (const row of bestByKey.values()) {
+    for (const [key, row] of bestByKey) {
       const canonical = normalizePbpKey(row.plan_id);
       const plan = planByCanonical.get(canonical);
       if (!plan) continue;
       const t = transformPbpRow(row, plan.contract_id, plan.plan_id, plan.segment_id);
-      if (t) synthBenefits.push(t);
+      if (!t) continue;
+      const alt = altByKey.get(key);
+      if (alt) {
+        t.alt_copay = alt.copay;
+        t.alt_coinsurance = alt.coinsurance;
+        t.alt_source = alt.source;
+      }
+      synthBenefits.push(t);
     }
 
     // Backfill coverage_amount + max_coverage + copay + benefit_description
@@ -1252,6 +1380,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (land.copay != null || land.coinsurance != null) return false;
       return true;
     });
+    // Every row in synthFiltered is about to displace the landscape row
+    // at the same (triple, category) — that's what pbpKeyset does two
+    // statements down. Before that happens, carry the landscape row's
+    // cost-share forward as the alternate when the two disagree.
+    //
+    // This is the second of the two lossy picks (the pbp source dedup
+    // above is the first) and the one the `> 0` gate drives: a
+    // landscape row filing coinsurance=0 reads as "no real cost-share"
+    // to `landHasReal`, so a synth row filing 20 wins outright and the
+    // 0 disappears. For a QMB / QMB+ / SLMB+ / FBDE beneficiary the 0
+    // is the number that matters; for SLMB / QI / QDWI it's the 20.
+    // The endpoint can't know which, so it keeps both.
+    //
+    // An alternate recorded by the pbp source dedup wins — it comes
+    // from the same pbp_benefits filing set as the value it disagrees
+    // with, so it's the closer comparison.
+    for (const b of synthFiltered) {
+      if (b.alt_source != null) continue;
+      const triple = `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}`;
+      const land = landscapeByKey.get(`${triple}|${b.benefit_category}`);
+      if (!land) continue;
+      if (land.copay == null && land.coinsurance == null) continue;
+      if (land.copay === b.copay && land.coinsurance === b.coinsurance) continue;
+      b.alt_copay = land.copay;
+      b.alt_coinsurance = land.coinsurance;
+      b.alt_source = 'landscape';
+    }
+
     const pbpKeyset = new Set(
       synthFiltered.map(
         (b) => `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}|${b.benefit_category}`,
@@ -1371,7 +1527,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
     res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300');
-    return sendJson(res, 200, { plans, source: 'pm_plans', truncated });
+    return sendJson(res, 200, { plans, source: 'pm_plans', truncated, medicaidLevel });
   } catch (err) {
     return serverError(res, err);
   }
@@ -1463,6 +1619,12 @@ export function costShareFor(
       copay: useMaxAsCopay ? maxCoverage : rawCopay,
       coinsurance: toNum(hit.coinsurance),
       description: hit.benefit_description ?? null,
+      // Pass the displaced filing straight through — no range-collapse
+      // promotion, no coercion. It is the raw value the losing source
+      // filed, and the brain compares it against the winner above.
+      alt_copay: toNum(hit.alt_copay),
+      alt_coinsurance: toNum(hit.alt_coinsurance),
+      alt_source: hit.alt_source ?? null,
     };
   }
   // pbp_benefits fallback for the categories the structured importer

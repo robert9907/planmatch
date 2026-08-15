@@ -797,6 +797,15 @@ const RED_FLAG_DEFS: ReadonlyArray<RedFlagDef> = [
   },
 ];
 
+// STATUS (verified 2026-08-15): `evaluateRedFlags` is INERT — zero
+// callsites. The funnel-based runPlanBrain sets `redFlags: []` as a
+// neutral default and never calls this. Same for `classifyArchetype`
+// below/above (archetype is hardcoded to 'general' in plan-brain.ts).
+// Only the static ARCHETYPE_RULES table is still consumed, by
+// usePlanBrain.ts, for display copy. Kept because this logic is not
+// reproduced anywhere else; see the STATUS block in
+// src/lib/broker-rules.ts for the full picture and the compliance
+// caveat on the `star_rating` flag.
 export function evaluateRedFlags(
   profile: ArchetypeProfile,
   archetype: ClientArchetype,

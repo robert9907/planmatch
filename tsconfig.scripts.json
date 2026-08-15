@@ -1,0 +1,38 @@
+{
+  // Typecheck project for `scripts/`. The root tsconfig.json references
+  // only tsconfig.app.json (src), tsconfig.node.json (vite/tailwind
+  // config) and tsconfig.api.json (api) — nothing covers `scripts/`, so
+  // the ingest + audit scripts have no typecheck gate at all.
+  //
+  // compilerOptions mirror tsconfig.app.json (the scripts import freely
+  // from src/ via the @/* paths alias) plus `types: ["node"]`, which the
+  // app project does not need but every script does.
+  //
+  // Scoped with "files" rather than `"include": ["scripts"]` because
+  // compiling the whole directory currently reports 74 errors across 15
+  // files — almost entirely ad-hoc probe/smoke scripts
+  // (scripts/_smoke/dsnp-diagnosis-phase0.ts 22, scripts/_audit-vision.ts
+  // 18, scripts/probe-aetna-inpatient.ts 12). The durable ingest/audit
+  // scripts are close to clean. Add files to the list as they are
+  // brought to zero so this project keeps passing and can be wired into
+  // CI; flip to "include" once the probe scripts are fixed or excluded.
+  //
+  // Run: npx tsc -p tsconfig.scripts.json
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] },
+    "types": ["node"]
+  },
+  "files": ["scripts/audit-plan-completeness.ts"]
+}
