@@ -48,6 +48,7 @@ import {
 } from '@/lib/classify-explanation';
 import { normalizePlanId, type LibraryRankPlan } from '@/lib/library-client';
 import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
+import { normalizeLisTierForClient } from '@/lib/dual-eligible';
 import { useDrugPhases, type DrugPhaseHit } from '@/hooks/useDrugPhases';
 // DrugCostCard hidden from the Board in Compare v2 reskin (2026-08-05) —
 // component still on disk at ./DrugCostCard.tsx and its type export is
@@ -1497,7 +1498,7 @@ export function CompareScreen({
                 confidence={confidenceFor(plan)}
                 isBestMatch={plan != null && i === bestMatchSlotIdx}
                 medications={medications}
-                lisTier={client.lisTier ?? 'none'}
+                lisTier={normalizeLisTierForClient(client)}
                 drugPhasesByPlanIdRxcui={drugPhases.byPlanIdRxcui}
                 drugCostComparisonPlans={drugCostComparisonPlans}
                 onDrop={handleDrop}

@@ -83,21 +83,48 @@ export interface Client {
    *  session payloads / AgentBase hydrations don't need a backfill. */
   dsnpEligible?: boolean;
   /** Medicaid category — drives the brain's medical cost-sharing
-   *  zeroing (QMB or FBDE) and Part C premium payment (QMB+ on
-   *  D-SNP). Broker sets on the Intake screen; usePlanBrain forwards
+   *  zeroing (QMB / QMB+ / SLMB+ / FBDE) and Part C premium payment
+   *  on D-SNPs. Broker sets on the Intake screen; usePlanBrain forwards
    *  to UserProfile.medicaidLevel. Optional so hydrated sessions
    *  and older AgentBase payloads keep decoding — undefined means
    *  "not yet captured" and the brain treats it as 'none'.
    *  Runs alongside `medicaidConfirmed` during the transition; the
    *  boolean stays until every downstream reader (D-SNP eligibility
-   *  gate, AgentBase sync, QuoteDelivery ContextField) is migrated. */
-  medicaidLevel?: 'none' | 'qi' | 'slmb' | 'qmb' | 'fbde';
+   *  gate, AgentBase sync, QuoteDelivery ContextField) is migrated.
+   *
+   *  MUST stay in lockstep with MedicaidLevel in src/lib/dual-eligible.ts
+   *  — the union is spelled out inline here (rather than imported) to
+   *  keep the session payload type free of brain imports, so widening
+   *  one without the other silently re-closes the hole for hydrated
+   *  sessions. Widened 2026-08-15 from 5 to all 8 tokens (all seven CMS
+   *  dual-eligible populations + none); see gh-audit-2026/msp-exposure
+   *  finding M4. */
+  medicaidLevel?:
+    | 'none'
+    | 'qi'
+    | 'slmb'
+    | 'slmb_plus'
+    | 'qmb'
+    | 'qmb_plus'
+    | 'fbde'
+    | 'qdwi';
   /** LIS (Extra Help) copay tier — drives the brain's Part D copay
    *  override. Auto-deemed from `medicaidLevel` + `livingSetting`
    *  by IntakeScreen via deemLisTier(); broker can override for
    *  LIS-only clients who applied directly (no Medicaid). Optional
    *  for the same session-decode reason as medicaidLevel. */
-  lisTier?: 'none' | 'full_institutional' | 'qmb_uniform' | 'full_low' | 'full_high';
+  lisTier?:
+    | 'none'
+    | 'full_institutional'
+    | 'full_low'
+    | 'full_high'
+    /** RETIRED 2026-08-15 — matched no row of the CY2026 LIS memo's
+     *  Table 2. Still accepted here because sessions persisted between
+     *  2026-07-23 and 2026-08-15 carry it; every read path runs it
+     *  through normalizeLisTier(), which re-derives the correct tier
+     *  from medicaidLevel + livingSetting. Remove once those sessions
+     *  have aged out. */
+    | 'qmb_uniform';
   /** Living setting — only affects LIS tier for FBDE (community →
    *  full_low, institutional/HCBS → full_institutional). Defaults
    *  to 'community' when omitted. */

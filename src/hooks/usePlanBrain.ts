@@ -50,6 +50,7 @@ import type { DetectedConditionKey } from '@/lib/condition-detector';
 import { BROKER_IMPLICATIONS } from '@/lib/condition-detector';
 import { ARCHETYPE_RULES } from '@/lib/broker-playbook';
 import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
+import { normalizeLisTier } from '@/lib/dual-eligible';
 import type {
   AnnualCostEstimate,
   AnnualUtilization,
@@ -80,6 +81,14 @@ export interface BenefitRow {
   coinsurance: number | null;
   description: string | null;
   source: string;
+  // Highest-ranked LOSER of /api/plan-brain-data's source-priority
+  // dedup — populated when a lower-priority source disagreed with
+  // the winner. Carried through PlanBenefitRow so selectCostShare()
+  // in src/lib/dual-eligible.ts can pick the value appropriate to
+  // the beneficiary's MSP population.
+  alt_copay?: number | null;
+  alt_coinsurance?: number | null;
+  alt_source?: string | null;
 }
 export interface DrugCostCacheRow {
   plan_id: string;
@@ -425,6 +434,22 @@ function benefitToBrain(
       : row.source === 'sb_ocr' || row.source === 'manual'
         ? row.source
         : 'pbp';
+  // alt_ passes through raw — PlanBenefitRow.alt_source's union
+  // accepts every raw source name (medicare_gov / cms_pbp /
+  // pbp_federal) plus the normalized landscape / pbp / sb_ocr /
+  // manual set, because the population-aware picker in
+  // selectCostShare needs to match on cms_pbp specifically to know
+  // "this was the plan's filed value for protected populations."
+  // Normalizing to 'pbp' here would erase that distinction.
+  const rawAltSource = (row.alt_source ?? null) as
+    | 'landscape'
+    | 'pbp'
+    | 'sb_ocr'
+    | 'manual'
+    | 'medicare_gov'
+    | 'cms_pbp'
+    | 'pbp_federal'
+    | null;
   return {
     id: `agent:${contract}-${planNum}-${segment}:${row.benefit_type}:${row.tier_id ?? i}`,
     contract_id: contract,
@@ -439,6 +464,9 @@ function benefitToBrain(
     coinsurance: row.coinsurance,
     max_coverage: null,
     source: allowedSource as 'pbp' | 'sb_ocr' | 'manual',
+    alt_copay: row.alt_copay ?? null,
+    alt_coinsurance: row.alt_coinsurance ?? null,
+    alt_source: rawAltSource,
   };
 }
 
@@ -670,7 +698,17 @@ export function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
     // applyDualEligibleCostAdjustment. Defaults keep the adjustment
     // a no-op for older sessions that haven't captured these fields.
     medicaidLevel: client.medicaidLevel ?? 'none',
-    lisTier: client.lisTier ?? 'none',
+    // normalizeLisTier re-derives the tier when a session was persisted
+    // with the retired `qmb_uniform` value (2026-07-23 → 2026-08-15).
+    // Derived from medicaidLevel rather than mapped from the stale tier,
+    // because qmb_uniform was written for both full-benefit duals in the
+    // community (→ full_low) and standalone QMB (→ full_high); guessing
+    // would understate drug cost for the QMB-only case.
+    lisTier: normalizeLisTier(
+      client.lisTier,
+      client.medicaidLevel ?? 'none',
+      derivedLivingSetting,
+    ),
     livingSetting: derivedLivingSetting,
   };
 

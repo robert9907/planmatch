@@ -8,11 +8,55 @@
 // human-readable adjustment with a reason string the consumer can
 // eventually read in the "why this plan" copy.
 //
-// Rules fire AFTER the per-axis composite is computed and BEFORE the
-// final sort. Their score adjustments compound (a plan can earn
-// multiple boosts or penalties). The applied list is captured on the
-// BrainScore so the UI + analytics can show the broker's reasoning
-// per plan.
+// Rules were designed to fire AFTER the per-axis composite is computed
+// and BEFORE the final sort. Their score adjustments compound (a plan
+// can earn multiple boosts or penalties). The applied list is captured
+// on the BrainScore so the UI + analytics can show the broker's
+// reasoning per plan.
+//
+// ───────────────────────────────────────────────────────────────────
+// STATUS (verified 2026-08-15): INERT — NOT WIRED INTO ANY RANKING.
+// ───────────────────────────────────────────────────────────────────
+//
+// `applyBrokerRules` has ZERO callsites. Every plan carries
+// `appliedBrokerRules: []` (plan-brain.ts sets the neutral default
+// directly). None of the 12 rules below fires on any surface, on
+// either the agent or the consumer app. The consumer brain
+// (~/Code/plan-match/packages/brain) has no equivalent module at all.
+//
+// WHY: the weighted composite model these rules attach to was
+// deliberately removed. `runPlanBrain` is now a funnel — eliminate,
+// then rank by total annual cost (premium×12 + drug cost − giveback×12),
+// lowest wins, top 4 (see plan-brain.ts header). There is no composite
+// left for `adjustment` to be added to, which is why re-wiring is not
+// a mechanical change: it requires deciding how a point adjustment
+// composes with a pure-cost ranking.
+//
+// NOT DUPLICATED ELSEWHERE. The broker-playbook red-flag engine is
+// sometimes assumed to have replaced this module. It did not:
+// `evaluateRedFlags` and `classifyArchetype` in broker-playbook.ts also
+// have zero callsites, `archetype` is hardcoded to 'general', and
+// `redFlags` is likewise a neutral `[]`. Only the static
+// `ARCHETYPE_RULES` label/weight table is still imported (by
+// usePlanBrain.ts, for display copy). So this file is the ONLY place
+// the C-SNP matching, diabetic-supplies, and sliding-scale MOOP logic
+// is encoded. Do not delete it on the assumption something else covers
+// it — nothing does.
+//
+// BEFORE RE-ENABLING — two rules would reorder plans on grounds the
+// beneficiary never expressed, and need a compliance decision first:
+//   * `low_star_warning` (−10) demotes plans by CMS star rating alone.
+//   * broker-playbook's `star_rating` red flag (−10) is the same trigger
+//     in the flag layer.
+// Both are system quality screens, not beneficiary preferences, and
+// firing them would understate a beneficiary's access to low-star
+// plans. Neither ties to carrier identity or compensation, and no rule
+// here references carrier, contract_id or plan_id.
+//
+// This is flagged for a human product/compliance decision: wire it back
+// in (and decide how points compose with cost ranking), or retire the
+// module deliberately. It is left intact rather than deleted because
+// the logic is not reproduced anywhere else in either repo.
 
 import type { BrainScoredPlan } from './plan-brain-types';
 import type { DetectedCondition } from './condition-detector';

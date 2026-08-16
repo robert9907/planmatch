@@ -39,6 +39,7 @@ import {
   type CsnpConditionKey,
   type LibraryRankResult,
 } from '@/lib/library-client';
+import { normalizeLisTierForClient } from '@/lib/dual-eligible';
 
 export interface UseRankedPlansArgs {
   client: Client;
@@ -227,7 +228,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
         dsnp_eligible: dsnpEligible === true ? true : undefined,
         enrollment_period: enrollmentPeriod,
         sep_reason_code: sepReasonCode,
-        lis_tier: client.lisTier,
+        lis_tier: normalizeLisTierForClient(client),
         medicaid_level: client.medicaidLevel,
         living_setting: client.livingSetting,
       },

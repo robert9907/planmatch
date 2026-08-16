@@ -116,6 +116,31 @@ export interface PlanBenefitRow {
    *   'manual'    — pbp_benefits row edited by hand
    */
   source?: 'landscape' | 'pbp' | 'sb_ocr' | 'manual';
+  /**
+   * Alternate cost-share carried forward from the highest-ranked LOSER
+   * of the source-priority dedup in /api/plans.ts (bestByKey / altByKey)
+   * and mirrored in /api/plan-brain-data.ts. Populated only when a
+   * lower-priority source filed a value that DISAGREES with the winner
+   * — the classic case is UHC D-SNP primary_care where medicare_gov
+   * files 20% coinsurance and cms_pbp files 0% for the same (plan,
+   * benefit, tier). The winner (medicare_gov 20%) reaches `copay` /
+   * `coinsurance`; the loser (cms_pbp 0%) is preserved here so a
+   * population-aware consumer — see `selectCostShare` in
+   * `src/lib/dual-eligible.ts` — can pick the value that ACTUALLY
+   * applies to a given MSP population. Absent (undefined / null) when
+   * every source filed the same values.
+   */
+  alt_copay?: number | null;
+  alt_coinsurance?: number | null;
+  alt_source?:
+    | 'landscape'
+    | 'pbp'
+    | 'sb_ocr'
+    | 'manual'
+    | 'medicare_gov'
+    | 'cms_pbp'
+    | 'pbp_federal'
+    | null;
 }
 
 // ---------------------------------------------------------------------------

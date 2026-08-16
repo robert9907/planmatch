@@ -44,13 +44,35 @@ import { SnapTrigger } from './SnapTrigger';
 // src/lib/dual-eligible.ts; the brain reads client.medicaidLevel /
 // livingSetting / lisTier verbatim.
 
+// All seven CMS dual-eligible populations + none, in ascending order
+// of Medicaid protection. QMB+, SLMB+ and QDWI were added 2026-08-15
+// alongside the MedicaidLevel widening — before that a broker had no
+// way to select them and the three populations were silently coerced
+// to a neighbouring category (gh-audit-2026/msp-exposure finding M4).
+// QMB / QMB+ / SLMB+ / FBDE are cost-sharing PROTECTED (Medicaid pays
+// their Medicare cost sharing); SLMB / QI / QDWI are EXPOSED (they owe
+// the plan's filed copay/coinsurance) — see COST_SHARING_PROTECTION in
+// src/lib/dual-eligible.ts.
 const MEDICAID_LEVEL_CHIPS: ReadonlyArray<{ key: MedicaidLevel; label: string }> = [
-  { key: 'none', label: 'None' },
-  { key: 'qi',   label: 'QI' },
-  { key: 'slmb', label: 'SLMB' },
-  { key: 'qmb',  label: 'QMB' },
-  { key: 'fbde', label: 'FBDE' },
+  { key: 'none',      label: 'None' },
+  { key: 'qdwi',      label: 'QDWI' },
+  { key: 'qi',        label: 'QI' },
+  { key: 'slmb',      label: 'SLMB' },
+  { key: 'slmb_plus', label: 'SLMB+' },
+  { key: 'qmb',       label: 'QMB' },
+  { key: 'qmb_plus',  label: 'QMB+' },
+  { key: 'fbde',      label: 'FBDE' },
 ];
+
+// Medicaid categories whose LIS deeming actually varies by living
+// setting — the full-benefit duals. CMS' $0/$0 institutional row is
+// full-benefit-dual only, so the Living setting pill row stays hidden
+// for QMB-only / SLMB / QI / QDWI where it would be a no-op.
+const LIVING_SETTING_RELEVANT_LEVELS: ReadonlySet<MedicaidLevel> = new Set<MedicaidLevel>([
+  'fbde',
+  'qmb_plus',
+  'slmb_plus',
+]);
 
 const LIVING_SETTING_CHIPS: ReadonlyArray<{ key: LivingSetting; label: string }> = [
   { key: 'community',              label: 'Community' },
@@ -837,9 +859,11 @@ export function IntakeScreen({
           })}
         </div>
 
-        {/* Living setting — only relevant for FBDE. HCBS/institutional
-            promotes LIS to full_institutional ($0/$0 copays). */}
-        {client.medicaidLevel === 'fbde' && (
+        {/* Living setting — only relevant for the full-benefit duals
+            (FBDE / QMB+ / SLMB+). HCBS/institutional promotes LIS to
+            full_institutional ($0/$0 copays). */}
+        {client.medicaidLevel != null &&
+          LIVING_SETTING_RELEVANT_LEVELS.has(client.medicaidLevel) && (
           <>
             <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>
               Living setting
@@ -855,7 +879,10 @@ export function IntakeScreen({
                     onClick={() =>
                       updateClient({
                         livingSetting: chip.key,
-                        lisTier: deemLisTier('fbde', chip.key),
+                        lisTier: deemLisTier(
+                          client.medicaidLevel ?? 'fbde',
+                          chip.key,
+                        ),
                       })
                     }
                   />

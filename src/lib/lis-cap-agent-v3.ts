@@ -18,6 +18,7 @@
 
 import {
   getLisCopays,
+  isCostSharingProtected,
   type DualEligibleAdjustment,
   type LisTier,
   type LivingSetting,
@@ -116,7 +117,11 @@ export function buildAgentV3LisMaps(args: {
   const lisTier = client.lisTier ?? 'none';
   const medicaidLevel = client.medicaidLevel ?? 'none';
   const livingSetting = client.livingSetting ?? 'community';
-  const isQmbOrHigher = medicaidLevel === 'qmb' || medicaidLevel === 'fbde';
+  // Single source of truth — COST_SHARING_PROTECTION in dual-eligible.ts.
+  // Covers QMB, QMB+, SLMB+ and FBDE. Kept in lockstep with
+  // applyDualEligibleCostAdjustment so the agent-v3 Compare surface and
+  // the brain can't disagree about who owes the filed cost sharing.
+  const isQmbOrHigher = isCostSharingProtected(medicaidLevel);
   const noAdjustment = lisTier === 'none' && medicaidLevel === 'none';
 
   const processPlan = (lp: LibraryRankPlan) => {

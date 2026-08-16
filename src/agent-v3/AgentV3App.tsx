@@ -74,6 +74,7 @@ import {
   pickCurrentPlanForSeed,
 } from './seed';
 import { AGENT_V3_CSS } from './styles';
+import { normalizeLisTierForClient } from '@/lib/dual-eligible';
 
 /** Returns the AgentBase clients.id passed in via ?clientId=… or null
  *  when the parameter is absent / blank. The AgentBase CRM links to
@@ -937,7 +938,15 @@ export function AgentV3App() {
         planById,
         normalizePlanId,
         client: {
-          lisTier: client.lisTier,
+          // Retired-tier normalization — see normalizeLisTier. Passed as
+          // an explicit three-field literal rather than `client` so the
+          // memo's dependency list below stays exact (and lint-visible):
+          // these are the only fields the normalizer reads.
+          lisTier: normalizeLisTierForClient({
+            lisTier: client.lisTier,
+            medicaidLevel: client.medicaidLevel,
+            livingSetting: client.livingSetting,
+          }),
           medicaidLevel: client.medicaidLevel,
           livingSetting: client.livingSetting,
         },
