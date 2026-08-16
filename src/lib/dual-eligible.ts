@@ -383,6 +383,72 @@ export function classifyCostSharingExposure(
   return { exposed, incomplete };
 }
 
+/** The medical benefit categories whose filed cost-share is consumed
+ *  by `annualMedicalCostFromUtilization` (see plan-brain-utils.ts).
+ *  These are the rows whose (copay, coinsurance) must be reconciled
+ *  against the beneficiary's MSP population before the utilization ×
+ *  copay math runs — otherwise a medicare_gov 20% that won the source
+ *  dedup will silently displace the cms_pbp 0% a QMB / QMB+ / SLMB+ /
+ *  FBDE member actually owes.
+ *
+ *  Distinct from COST_SHARING_EXPOSURE_CATEGORIES above: that set is
+ *  the TIEBREAK signal (three high-frequency services used to fire
+ *  the "exposed" flag in classifyCostSharingExposure). This set is
+ *  the COST-CALC set — every row the medical-cost estimator reads.
+ *  Rx tiers, MOOP, and extras (dental / vision / OTC / fitness) are
+ *  intentionally NOT here: LIS handles rx separately, MOOP has no
+ *  filed disagreement to reconcile, and extras aren't Medicare cost-
+ *  sharing at all. Keep in sync with annualMedicalCostFromUtilization. */
+export const MEDICAL_COST_SHARE_CATEGORIES: ReadonlySet<string> = new Set([
+  'primary_care',
+  'specialist',
+  'lab',
+  'advanced_imaging',
+  'emergency',
+  'inpatient',
+]);
+
+/** Given a benefit row with filed + alt cost-share and a beneficiary
+ *  population, return the cost-share values that ACTUALLY apply.
+ *
+ *  Protected populations (QMB / QMB+ / SLMB+ / FBDE — Medicaid pays
+ *  their Medicare cost sharing per COST_SHARING_PROTECTION) see the
+ *  filed cms_pbp value even when medicare_gov's higher filing won the
+ *  source dedup — the plan filed zero for them and Medicaid covers what
+ *  remains.
+ *
+ *  Exposed populations (SLMB / QI / QDWI / none) see the filed value
+ *  as-is — the winning source is what they actually owe.
+ *
+ *  Absent alt_ or `medicaidLevel === 'none'` collapses to the filed
+ *  value. Rx tiers and extras are not in scope — this helper is only
+ *  called for medical cost-share categories per plan-brain.ts's
+ *  consumption path (see MEDICAL_COST_SHARE_CATEGORIES). */
+export function selectCostShare(
+  row: {
+    copay: number | null;
+    coinsurance: number | null;
+    alt_copay?: number | null;
+    alt_coinsurance?: number | null;
+    alt_source?: string | null;
+  },
+  medicaidLevel: MedicaidLevel,
+): { copay: number | null; coinsurance: number | null } {
+  const filed = { copay: row.copay, coinsurance: row.coinsurance };
+  if (medicaidLevel === 'none') return filed;
+  if (!isCostSharingProtected(medicaidLevel)) return filed;
+  // Protected: prefer the cms_pbp filing when it's the alt. Only
+  // cms_pbp is treated as the population-aware alternate because it's
+  // the extract of what the plan actually filed with CMS for this
+  // benefit. medicare_gov's Plan Finder scrape reflects the display
+  // value (typically the higher / consumer-facing figure) and is not
+  // a substitute for the cms_pbp filing.
+  if (row.alt_source === 'cms_pbp' && (row.alt_copay != null || row.alt_coinsurance != null)) {
+    return { copay: row.alt_copay ?? null, coinsurance: row.alt_coinsurance ?? null };
+  }
+  return filed;
+}
+
 /** Snapshot of everything the dual-eligible / LIS adjustment changed
  *  on a BrainScore. Present on `BrainScore.dualEligibleAdjustment`
  *  only when the beneficiary has Medicaid, LIS, or both. When

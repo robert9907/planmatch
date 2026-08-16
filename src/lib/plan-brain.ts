@@ -25,7 +25,7 @@
 // medicationPatterns, appliedBrokerRules, redFlags) are populated
 // with neutral / rank-derived values.
 
-import type { PmPlanRow, CsnpCondition } from './brain-foreign-types';
+import type { PmPlanRow, CsnpCondition, PlanBenefitRow } from './brain-foreign-types';
 import {
   type BrainInputs,
   type BrainOutput,
@@ -66,7 +66,12 @@ import {
   combineUtilization,
   type UtilizationCondition,
 } from './utilization-model';
-import { applyDualEligibleCostAdjustment, classifyCostSharingExposure } from './dual-eligible';
+import {
+  applyDualEligibleCostAdjustment,
+  classifyCostSharingExposure,
+  selectCostShare,
+  MEDICAL_COST_SHARE_CATEGORIES,
+} from './dual-eligible';
 import { firstTierCopay } from './inpatient-format';
 
 // Day-1 SNF copay from the ladder description ("Days 1-20: $0/day · …"),
@@ -663,9 +668,34 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   const userHasDrugs = input.userProfile.drugs.length > 0;
   const userPriorities = input.userProfile.priorities ?? new Set<string>();
 
+  // Hoisted so the per-plan cost-share swap below can consult it
+  // BEFORE annualMedicalCostFromUtilization runs. Reassigned as a
+  // const in the applyDualEligibleCostAdjustment block below (same
+  // value, kept close to its use). See selectCostShare in
+  // dual-eligible.ts for the population-aware pick.
+  const scoringMedicaidLevel = input.userProfile.medicaidLevel ?? 'none';
+
   // ── Build per-plan raw scored entries ──────────────────────────────
   const rawScored: BrainScoredPlan[] = eligible.map((row) => {
-    const benefits = input.benefitsByPlanKey.get(planKeyWithSegment(row)) ?? [];
+    const rawBenefits = input.benefitsByPlanKey.get(planKeyWithSegment(row)) ?? [];
+    // Population-aware cost-share reconciliation for MSP-protected
+    // beneficiaries. When the source-priority dedup in
+    // /api/plan-brain-data.ts kept a medicare_gov 20% winner over a
+    // cms_pbp 0% loser (classic UHC D-SNP primary_care shape), a
+    // QMB / QMB+ / SLMB+ / FBDE member actually owes the 0% — Medicaid
+    // covers the difference. selectCostShare consults alt_source and
+    // returns the value that ACTUALLY applies; alt_ fields are
+    // preserved on the row so downstream display / audit surfaces can
+    // still see both filings.
+    const benefits: PlanBenefitRow[] =
+      scoringMedicaidLevel === 'none'
+        ? rawBenefits
+        : rawBenefits.map((b) => {
+            if (!MEDICAL_COST_SHARE_CATEGORIES.has(b.benefit_category)) return b;
+            const picked = selectCostShare(b, scoringMedicaidLevel);
+            if (picked.copay === b.copay && picked.coinsurance === b.coinsurance) return b;
+            return { ...b, copay: picked.copay, coinsurance: picked.coinsurance };
+          });
     const formulary = input.formularyByPlanKey.get(planKeyNoSegment(row)) ?? new Map();
     const aggregatedPlan = input.planByKey?.get(planKeyWithSegment(row)) ?? null;
 

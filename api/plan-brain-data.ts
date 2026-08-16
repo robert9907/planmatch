@@ -57,6 +57,59 @@ interface BenefitRow {
   coinsurance: number | null;
   description: string | null;
   source: string;
+  // Highest-ranked LOSER of the source-priority dedup — populated only
+  // when a lower-priority source disagreed with the winner. Downstream
+  // consumers (usePlanBrain → PlanBenefitRow → selectCostShare in
+  // src/lib/dual-eligible.ts) use these to pick the population-
+  // appropriate value for MSP-protected beneficiaries. Null when every
+  // source agreed. Mirror of the alt_ projection in /api/plans.ts.
+  alt_copay?: number | null;
+  alt_coinsurance?: number | null;
+  alt_source?: string | null;
+}
+
+interface PbpBenefitRawRow {
+  plan_id: string;
+  benefit_type: string;
+  tier_id: string | null;
+  copay: number | null;
+  coinsurance: number | null;
+  description: string | null;
+  source: string;
+}
+
+// Source priority — MUST stay in lockstep with the definitions in
+// api/plans.ts (SOURCE_PRIORITY, CARRIER_AUTHORITATIVE_TYPES,
+// SOURCE_PRIORITY_CARRIER, sourceRank at lines ~487-513). Copied
+// rather than imported because api/plans.ts does not export these
+// today and the task closing this endpoint's gap explicitly rules
+// api/plans.ts out of the change set. If the priority table ever
+// shifts in one place, update BOTH — a divergence silently changes
+// which source's value wins the dedup, which quietly flips filed
+// cost-share for every downstream reader.
+const SOURCE_PRIORITY: Readonly<Record<string, number>> = {
+  medicare_gov: 5,
+  sb_ocr: 4,
+  cms_pbp: 3,
+  manual: 2,
+  pbp_federal: 1,
+};
+const CARRIER_AUTHORITATIVE_TYPES: ReadonlySet<string> = new Set([
+  'otc_allowance',
+  'food_card',
+]);
+const SOURCE_PRIORITY_CARRIER: Readonly<Record<string, number>> = {
+  manual: 4,
+  sb_ocr: 3,
+  medicare_gov: 2,
+  pbp_federal: 1,
+};
+function sourceRank(source: string | null | undefined, benefitType: string): number {
+  if (!source) return 0;
+  const table = CARRIER_AUTHORITATIVE_TYPES.has(benefitType)
+    ? SOURCE_PRIORITY_CARRIER
+    : SOURCE_PRIORITY;
+  return table[source] ?? 0;
 }
 
 interface DrugCacheRow {
@@ -162,10 +215,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Run the five queries in parallel — none of them depend on each
     // other's results.
     const [benefitsRes, drugCacheRes, formularyRes, ndcRes, networkRes] = await Promise.all([
-      sb
-        .from('pbp_benefits')
-        .select('plan_id, benefit_type, tier_id, copay, coinsurance, description, source')
-        .in('plan_id', uniqueAcceptableIds(ids, tripleIds)),
+      // Paginated + filtered to the four real sources so the alt_
+      // dedup below sees every candidate (a source-restricted query
+      // truncated at PostgREST's 1000-row cap would silently drop the
+      // losing filing on high-density D-SNP / MAPD county pools). The
+      // source list matches api/plans.ts's pbp_benefits pull exactly.
+      paginatedFetch<PbpBenefitRawRow>((from, to) =>
+        sb
+          .from('pbp_benefits')
+          .select('plan_id, benefit_type, tier_id, copay, coinsurance, description, source')
+          .in('plan_id', uniqueAcceptableIds(ids, tripleIds))
+          .in('source', ['medicare_gov', 'sb_ocr', 'cms_pbp', 'manual'])
+          .order('plan_id', { ascending: true })
+          .order('benefit_type', { ascending: true })
+          .order('tier_id', { ascending: true, nullsFirst: true })
+          .range(from, to),
+      ),
       // pm_drug_cost_cache uses (plan_id="<contract>-<plan>", segment_id, ndc).
       rxcuis.length > 0
         ? sb
@@ -214,11 +279,77 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (ndcRes.error) throw ndcRes.error;
     if (networkRes.error) throw networkRes.error;
 
+    // ─── Source-priority dedup + alt_ projection ─────────────────
+    // Mirror of the winner/alt logic in api/plans.ts (bestByKey +
+    // altByKey around lines 1020-1059). For each (plan_id,
+    // benefit_type, tier_id) triple: pick the highest-source-rank row
+    // as the winner and track the highest-rank LOSER whose cost-share
+    // actually disagrees as the alt. Without this pass, a medicare_gov
+    // 20% row would silently displace a cms_pbp 0% row for the 8 UHC
+    // D-SNPs on primary_care, and the brain — which now has no visibility
+    // into the losing filing — would score every MSP population against
+    // 20% even though QMB/QMB+/SLMB+/FBDE members owe 0% (Medicaid
+    // covers the difference). See selectCostShare in
+    // src/lib/dual-eligible.ts for the population-aware pick.
+    const rawPbpRows = (benefitsRes.data ?? []) as PbpBenefitRawRow[];
+    const bestByKey = new Map<string, PbpBenefitRawRow>();
+    for (const row of rawPbpRows) {
+      const key = `${row.plan_id}|${row.benefit_type}|${row.tier_id ?? 0}`;
+      const prior = bestByKey.get(key);
+      if (
+        !prior ||
+        sourceRank(row.source, row.benefit_type) > sourceRank(prior.source, prior.benefit_type)
+      ) {
+        bestByKey.set(key, row);
+      }
+    }
+    // Second pass — keep the highest-ranked LOSER whose (copay,
+    // coinsurance) actually disagrees with the winner's. Rows that
+    // merely restate the winner do NOT become alts (only real
+    // disagreements matter). Rows that file (null, null) are excluded
+    // — a shell row carries no cost-share signal to preserve.
+    const altByKey = new Map<
+      string,
+      { copay: number | null; coinsurance: number | null; source: string }
+    >();
+    for (const row of rawPbpRows) {
+      const key = `${row.plan_id}|${row.benefit_type}|${row.tier_id ?? 0}`;
+      const winner = bestByKey.get(key);
+      if (!winner || winner === row) continue;
+      if (row.copay === winner.copay && row.coinsurance === winner.coinsurance) continue;
+      if (row.copay == null && row.coinsurance == null) continue;
+      const prior = altByKey.get(key);
+      if (
+        prior &&
+        sourceRank(prior.source, row.benefit_type) >= sourceRank(row.source, row.benefit_type)
+      ) {
+        continue;
+      }
+      altByKey.set(key, {
+        copay: row.copay,
+        coinsurance: row.coinsurance,
+        source: row.source,
+      });
+    }
+
     // ─── Index by triple id ────────────────────────────────────────
     const benefitsByPlan: Record<string, BenefitRow[]> = {};
-    for (const r of (benefitsRes.data ?? []) as BenefitRow[]) {
-      const key = normalizeTripleId(r.plan_id, ids);
-      (benefitsByPlan[key] ||= []).push(r);
+    for (const [key, winner] of bestByKey) {
+      const alt = altByKey.get(key) ?? null;
+      const benefitRow: BenefitRow = {
+        plan_id: winner.plan_id,
+        benefit_type: winner.benefit_type,
+        tier_id: winner.tier_id,
+        copay: winner.copay,
+        coinsurance: winner.coinsurance,
+        description: winner.description,
+        source: winner.source,
+        alt_copay: alt ? alt.copay : null,
+        alt_coinsurance: alt ? alt.coinsurance : null,
+        alt_source: alt ? alt.source : null,
+      };
+      const triple = normalizeTripleId(winner.plan_id, ids);
+      (benefitsByPlan[triple] ||= []).push(benefitRow);
     }
 
     const drugCostCache: Record<string, Record<string, DrugCacheRow>> = {};

@@ -81,6 +81,14 @@ export interface BenefitRow {
   coinsurance: number | null;
   description: string | null;
   source: string;
+  // Highest-ranked LOSER of /api/plan-brain-data's source-priority
+  // dedup — populated when a lower-priority source disagreed with
+  // the winner. Carried through PlanBenefitRow so selectCostShare()
+  // in src/lib/dual-eligible.ts can pick the value appropriate to
+  // the beneficiary's MSP population.
+  alt_copay?: number | null;
+  alt_coinsurance?: number | null;
+  alt_source?: string | null;
 }
 export interface DrugCostCacheRow {
   plan_id: string;
@@ -426,6 +434,22 @@ function benefitToBrain(
       : row.source === 'sb_ocr' || row.source === 'manual'
         ? row.source
         : 'pbp';
+  // alt_ passes through raw — PlanBenefitRow.alt_source's union
+  // accepts every raw source name (medicare_gov / cms_pbp /
+  // pbp_federal) plus the normalized landscape / pbp / sb_ocr /
+  // manual set, because the population-aware picker in
+  // selectCostShare needs to match on cms_pbp specifically to know
+  // "this was the plan's filed value for protected populations."
+  // Normalizing to 'pbp' here would erase that distinction.
+  const rawAltSource = (row.alt_source ?? null) as
+    | 'landscape'
+    | 'pbp'
+    | 'sb_ocr'
+    | 'manual'
+    | 'medicare_gov'
+    | 'cms_pbp'
+    | 'pbp_federal'
+    | null;
   return {
     id: `agent:${contract}-${planNum}-${segment}:${row.benefit_type}:${row.tier_id ?? i}`,
     contract_id: contract,
@@ -440,6 +464,9 @@ function benefitToBrain(
     coinsurance: row.coinsurance,
     max_coverage: null,
     source: allowedSource as 'pbp' | 'sb_ocr' | 'manual',
+    alt_copay: row.alt_copay ?? null,
+    alt_coinsurance: row.alt_coinsurance ?? null,
+    alt_source: rawAltSource,
   };
 }
 
