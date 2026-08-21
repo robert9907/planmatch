@@ -58,6 +58,13 @@
 // Run with:  npx tsx scripts/import-snp-comprehensive-report.ts
 //   [--snp-xlsx <path>] [--snp-zip <path>]
 // Defaults to _tmp/cms-sync/snp-report/SNP_2026_06/SNP_2026_06.xlsx.
+//
+// **CY2027 refresh** — see docs/cy2027-refresh.md before running against
+// the first CY2027 SNP XLSX. The mapping below reads r['Partial Dual']
+// by name; a CMS column rename would produce silent NULLs (not a loud
+// failure), which the downstream filters treat as "unmapped/permissive"
+// — the same class of bug this ingest fixed. The audit at the bottom
+// exits with code 1 on ground-truth mismatch, so run it immediately.
 
 import pg from 'pg';
 import { readFileSync, existsSync } from 'node:fs';
