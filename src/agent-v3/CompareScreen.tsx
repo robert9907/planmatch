@@ -58,6 +58,7 @@ import { useDrugPhases, type DrugPhaseHit } from '@/hooks/useDrugPhases';
 import type { DrugCostCardComparisonPlan } from './DrugCostCard';
 import { QuoteBuilder } from './QuoteBuilder';
 import { TOKENS as T, FONT as F } from './compare-v2/tokens';
+import { Btn } from './compare-v2/Button';
 // QuickPreviewDrawer no longer rendered from CompareScreen — bench
 // "Quick preview" is the pre-slice inline expander on BenchCard
 // itself (restored 2026-08-07). The QuickPreviewDrawer.tsx file stays
@@ -1658,22 +1659,9 @@ function QuotePanel({
             </div>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          style={{
-            padding: '6px 12px',
-            borderRadius: 8,
-            border: `1px solid ${NAVY}`,
-            background: '#fff',
-            color: NAVY,
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-          }}
-        >
+        <Btn tier="secondary" size="sm" onClick={() => setOpen(true)}>
           Open quote builder
-        </button>
+        </Btn>
       </div>
     );
   }
@@ -2449,48 +2437,27 @@ function BenchCard({
             CompareScreen.tsx:1989-2010 on commit 0250c7d:
             `onClick={() => setExpanded((v) => !v)}` with the label
             flipping between "Quick preview" and "Hide preview". */}
-        <button
-          type="button"
+        <Btn
+          tier="quiet"
+          size="xs"
           onClick={(e) => {
             e.stopPropagation();
             setExpanded((v) => !v);
           }}
           title="Expand benefit snapshot for this plan"
-          style={{
-            flex: 1,
-            textAlign: 'center',
-            fontSize: 10.5,
-            fontWeight: 600,
-            padding: 7,
-            borderRadius: 6,
-            border: `1px solid ${T.mint100}`,
-            background: T.mint100,
-            color: T.mint700,
-            cursor: 'pointer',
-            fontFamily: F.label,
-          }}
+          style={{ flex: 1, minWidth: 0 }}
         >
           {expanded ? 'Hide preview' : 'Quick preview'}
-        </button>
-        <button
-          type="button"
+        </Btn>
+        <Btn
+          tier="primary"
+          size="xs"
           onClick={() => onAddToBoard(plan)}
-          style={{
-            flex: 1,
-            textAlign: 'center',
-            fontSize: 10.5,
-            fontWeight: 600,
-            padding: 7,
-            borderRadius: 6,
-            border: `1px solid ${T.navy950}`,
-            background: T.navy950,
-            color: '#FFFFFF',
-            cursor: 'pointer',
-            fontFamily: F.label,
-          }}
+          title="Drop this plan into the first empty board slot"
+          style={{ flex: 1, minWidth: 0 }}
         >
           Add to board
-        </button>
+        </Btn>
       </div>
 
       {/* Original pre-slice inline expander body — verbatim 12-row
@@ -3403,6 +3370,43 @@ function SlotCell({
           >
             {planIdShort(plan.id)}
           </p>
+          {/* Document cluster. "Benefits" moved up here from the
+              action row: it opens the SoB drawer, the chip beside it
+              links the CMS source PDF, and they belong together. That
+              also buys back a row in the action block below, which is
+              what keeps the card from growing ~80px. */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              marginTop: 6,
+              flexWrap: 'wrap',
+            }}
+          >
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenSummary(plan);
+              }}
+              title="Open the full Summary of Benefits drawer for this plan, including per-drug cost breakdown"
+              style={{
+                background: 'rgba(127,224,196,0.18)',
+                border: '1px solid rgba(127,224,196,0.28)',
+                color: T.mintOnDark,
+                fontFamily: F.label,
+                fontSize: 9,
+                fontWeight: 700,
+                padding: '2px 6px',
+                borderRadius: 3,
+                letterSpacing: 0.3,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Benefits
+            </button>
           {plan.sbf_url && (
             <a
               href={plan.sbf_url}
@@ -3411,7 +3415,6 @@ function SlotCell({
               onClick={(e) => e.stopPropagation()}
               style={{
                 display: 'inline-block',
-                marginTop: 6,
                 background: 'rgba(127,224,196,0.18)',
                 color: T.mintOnDark,
                 fontFamily: F.label,
@@ -3427,6 +3430,7 @@ function SlotCell({
               📄 SBF ↗
             </a>
           )}
+          </div>
         </div>
         <div
           aria-label={confidence == null ? 'Confidence pending' : `Confidence ${confidence}%`}
@@ -3529,52 +3533,24 @@ function SlotCell({
         />
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpenSummary(plan);
-          }}
-          title="Open the full Summary of Benefits drawer for this plan, including per-drug cost breakdown"
-          style={{
-            flex: 1,
-            textAlign: 'center',
-            fontSize: 11.5,
-            fontWeight: 600,
-            padding: 8,
-            borderRadius: 7,
-            border: `1px solid ${T.lineStrong}`,
-            color: T.ink,
-            background: T.card,
-            cursor: 'pointer',
-            fontFamily: F.label,
-          }}
-        >
-          Summary of benefits
-        </button>
-        <button
-          type="button"
-          onClick={() => onOpenH2H(plan)}
-          disabled={isBaseline || !baseline}
-          style={{
-            flex: 1,
-            textAlign: 'center',
-            fontSize: 11.5,
-            fontWeight: 600,
-            padding: 8,
-            borderRadius: 7,
-            border: `1px solid ${T.navy950}`,
-            color: '#FFFFFF',
-            background: T.navy950,
-            cursor: isBaseline || !baseline ? 'not-allowed' : 'pointer',
-            opacity: isBaseline || !baseline ? 0.4 : 1,
-            fontFamily: F.label,
-          }}
-          title={isBaseline ? 'This is the baseline plan' : 'Open head-to-head'}
-        >
-          Head-to-head
-        </button>
+      {/* Action block — stacked, one tier per row.
+          Was: three equal-width buttons in three different treatments
+          (mint tint / navy fill / mint outline), with "Summary of
+          benefits" wrapping to three lines inside a ~74px target and
+          Enroll — the action that matters — rendered as the quietest
+          of the three. Now: one primary on top, two quiet utilities
+          beneath. Two rows, not three: "Summary of benefits" measured
+          159px in a 157px action column and moved up to the header
+          document cluster as "Benefits", which keeps the card from
+          growing. "Head-to-head" measures 112px and keeps its name. */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6,
+          marginTop: 2,
+        }}
+      >
         <EnrollCardButton
           status={enrollStatus}
           disabled={isBaseline && baselineIsCurrent}
@@ -3596,6 +3572,22 @@ function SlotCell({
             }
           }}
         />
+        <Btn
+          tier="quiet"
+          size="sm"
+          block
+          onClick={() => onOpenH2H(plan)}
+          disabled={isBaseline || !baseline}
+          title={
+            isBaseline
+              ? 'This is the baseline plan'
+              : !baseline
+                ? 'Set a baseline plan to compare against'
+                : 'Open head-to-head'
+          }
+        >
+          Head-to-head
+        </Btn>
       </div>
 
       {/* Compare v2: the params below are still supplied by the
@@ -3618,13 +3610,20 @@ function SlotCell({
   );
 }
 
-// Per-SlotCell Enroll button. Secondary styling (transparent, mint
-// outline) so it doesn't dominate the card — Summary of benefits and
-// Head-to-head are the primary reads. Renders 4 states inline:
-//   • idle    — "Enroll" (mint outline)
-//   • sending — "Sending…" (mint outline, disabled, italic)
-//   • success — "Sent to AgentBase ✓" (mint filled)
-//   • error   — "Enroll failed" + message on hover title (red outline)
+// Per-SlotCell Enroll button. PRIMARY tier — solid mint, full width,
+// the single filled control on the card. It used to be the quietest
+// thing in the row (transparent + mint outline) while Head-to-head
+// wore the heaviest treatment available; weight now matches intent.
+//
+// Renders 4 states inline:
+//   • idle    — "Enroll"
+//   • sending — "Sending…"     (disabled, italic)
+//   • success — "Sent ✓"       (mint600 fill)
+//   • error   — "Retry enroll" (red fill)
+//
+// Success and error labels are deliberately short: the board card is
+// ~157px wide and a button label must never wrap. The full sentence
+// ("Sent to AgentBase", the failure reason) lives in `title`.
 //
 // Auto-reset to idle after 4s (success) / 8s (error) handled by the
 // callsite. Disabled when the plan IS the client's current plan — no
@@ -3652,44 +3651,37 @@ function EnrollCardButton({
     status.kind === 'sending'
       ? 'Sending…'
       : status.kind === 'success'
-        ? 'Sent to AgentBase ✓'
+        ? 'Sent ✓'
         : status.kind === 'error'
-          ? 'Enroll failed — retry'
+          ? 'Retry enroll'
           : 'Enroll';
-  const bg = isSuccess ? T.mint600 : 'transparent';
-  const color = isSuccess ? T.mintOnMint : isError ? '#B91C1C' : T.mint600;
-  const border = isError ? '#B91C1C' : T.mint600;
+  // Status colours override the primary tier only while the button is
+  // reporting; idle/sending fall through to the .pma3-btn--primary rules.
+  const statusStyle = isSuccess
+    ? { background: T.mint600, borderColor: T.mint600, color: T.mintOnMint }
+    : isError
+      ? { background: '#B91C1C', borderColor: '#B91C1C', color: '#FFFFFF' }
+      : undefined;
   return (
-    <button
-      type="button"
+    <Btn
+      tier="primary"
+      size="md"
+      block
       onClick={onClick}
       disabled={disabled || isBusy}
       title={
         isError
           ? `Enroll failed: ${status.message} — click to retry`
-          : disabled
-            ? disabledTitle
-            : 'Enroll this plan for the client — writes to AgentBase clients + queues the session in the ⚡ PlanMatch approval list'
+          : isSuccess
+            ? 'Sent to AgentBase'
+            : disabled
+              ? disabledTitle
+              : 'Enroll this plan for the client — writes to AgentBase clients + queues the session in the ⚡ PlanMatch approval list'
       }
-      style={{
-        flex: 1,
-        textAlign: 'center',
-        fontSize: 11.5,
-        fontWeight: 600,
-        padding: 8,
-        borderRadius: 7,
-        border: `1px solid ${border}`,
-        color,
-        background: bg,
-        cursor: disabled || isBusy ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.4 : 1,
-        fontStyle: isBusy ? 'italic' : 'normal',
-        fontFamily: F.label,
-        transition: 'background 120ms, border-color 120ms, color 120ms',
-      }}
+      style={{ fontStyle: isBusy ? 'italic' : 'normal', ...statusStyle }}
     >
       {label}
-    </button>
+    </Btn>
   );
 }
 
@@ -4153,25 +4145,9 @@ function SummaryBar({
           </div>
         </div>
       )}
-      <button
-        type="button"
-        onClick={onEnroll}
-        style={{
-          background: GREEN,
-          color: 'white',
-          border: 'none',
-          borderRadius: 10,
-          padding: '12px 22px',
-          fontFamily: FONT_LABEL,
-          fontSize: 13,
-          fontWeight: 800,
-          letterSpacing: 0.6,
-          textTransform: 'uppercase',
-          cursor: 'pointer',
-        }}
-      >
+      <Btn tier="primary" size="lg" onClick={onEnroll}>
         Enroll →
-      </button>
+      </Btn>
     </div>
   );
 }
@@ -4662,44 +4638,12 @@ function H2HView({
           </div>
         )}
         <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            type="button"
-            onClick={onBackToGrid}
-            style={{
-              background: 'rgba(255,255,255,0.12)',
-              color: 'white',
-              border: '1px solid rgba(255,255,255,0.25)',
-              borderRadius: 10,
-              padding: '12px 18px',
-              fontFamily: FONT_LABEL,
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: 'pointer',
-              letterSpacing: 0.5,
-              textTransform: 'uppercase',
-            }}
-          >
+          <Btn tier="onDark" size="lg" onClick={onBackToGrid}>
             Keep {baselineLabel}
-          </button>
-          <button
-            type="button"
-            onClick={onEnroll}
-            style={{
-              background: GREEN,
-              color: 'white',
-              border: 'none',
-              borderRadius: 10,
-              padding: '12px 22px',
-              fontFamily: FONT_LABEL,
-              fontSize: 13,
-              fontWeight: 800,
-              letterSpacing: 0.6,
-              textTransform: 'uppercase',
-              cursor: 'pointer',
-            }}
-          >
+          </Btn>
+          <Btn tier="primary" size="lg" onClick={onEnroll}>
             Enroll →
-          </button>
+          </Btn>
         </div>
       </div>
 

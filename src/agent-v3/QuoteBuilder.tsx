@@ -13,6 +13,7 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import { useSession } from '@/lib/session';
 import type { LibraryRankPlan } from '@/lib/library-client';
+import { Btn } from './compare-v2/Button';
 
 const MAX_PLANS = 5;
 // Consumer-side host where pm_quotes lives and where the public
@@ -242,29 +243,25 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
         </div>
       )}
 
-      <button
-        type="button"
+      <Btn
+        tier="primary"
+        size="lg"
+        block
         disabled={!canSend}
         onClick={onSend}
-        style={{
-          marginTop: 16,
-          width: '100%',
-          padding: '12px 16px',
-          borderRadius: 999,
-          border: 'none',
-          background: canSend ? BRAND_BLUE : '#cbd5e1',
-          color: '#fff',
-          fontWeight: 600,
-          fontSize: 14,
-          cursor: canSend ? 'pointer' : 'not-allowed',
-        }}
+        title={
+          canSend
+            ? undefined
+            : `Add ${missingFields.join(', ')} on the Intake screen before sending`
+        }
+        style={{ marginTop: 16 }}
       >
         {submitting
           ? 'Sending…'
           : phoneOverride.trim() || client.phone
             ? `Text quote to ${displayPhone(phoneOverride.trim() || client.phone || '')}`
             : 'Create quote link'}
-      </button>
+      </Btn>
 
       {missingFields.length > 0 && (
         <div style={{ marginTop: 8, fontSize: 11, color: '#92400e' }}>

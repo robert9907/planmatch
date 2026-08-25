@@ -12,6 +12,7 @@
 import type { CSSProperties } from 'react';
 import type { Plan } from '@/types/plans';
 import { TOKENS as T, FONT as F } from './tokens';
+import { Btn } from './Button';
 import {
   planDisplay,
   formatCostShareWithRange,
@@ -56,24 +57,13 @@ export function QuickPreviewDrawer(props: QuickPreviewDrawerProps) {
       onClose={onClose}
       footer={
         !isOnBoard ? (
-          <button
-            type="button"
+          <Btn
+            tier="primary"
+            size="md"
             onClick={() => onAddToBoard(plan)}
-            style={{
-              background: T.mint600,
-              color: T.mintOnMint,
-              border: 'none',
-              borderRadius: 8,
-              padding: '9px 22px',
-              fontFamily: F.label,
-              fontSize: 12.5,
-              fontWeight: 700,
-              letterSpacing: 0.3,
-              cursor: 'pointer',
-            }}
           >
             Add to board →
-          </button>
+          </Btn>
         ) : null
       }
     >

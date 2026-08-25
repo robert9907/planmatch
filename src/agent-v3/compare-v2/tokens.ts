@@ -38,6 +38,10 @@ export const TOKENS = {
 
   // Mint accent (rank, success, live)
   mint700: '#0B7A5A',
+  // Darker steps below mint700, added for the button system: primary
+  // hover is one step down, active is two. Nothing else uses them.
+  mint800: '#096A4E',
+  mint900: '#075541',
   mint600: '#0F9E77',
   mint100: '#E4F7EF',
   mintOnDark: '#7FE0C4',
