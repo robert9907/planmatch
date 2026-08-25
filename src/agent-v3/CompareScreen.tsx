@@ -4145,25 +4145,9 @@ function SummaryBar({
           </div>
         </div>
       )}
-      <button
-        type="button"
-        onClick={onEnroll}
-        style={{
-          background: GREEN,
-          color: 'white',
-          border: 'none',
-          borderRadius: 10,
-          padding: '12px 22px',
-          fontFamily: FONT_LABEL,
-          fontSize: 13,
-          fontWeight: 800,
-          letterSpacing: 0.6,
-          textTransform: 'uppercase',
-          cursor: 'pointer',
-        }}
-      >
+      <Btn tier="primary" size="lg" onClick={onEnroll}>
         Enroll →
-      </button>
+      </Btn>
     </div>
   );
 }
@@ -4654,44 +4638,12 @@ function H2HView({
           </div>
         )}
         <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            type="button"
-            onClick={onBackToGrid}
-            style={{
-              background: 'rgba(255,255,255,0.12)',
-              color: 'white',
-              border: '1px solid rgba(255,255,255,0.25)',
-              borderRadius: 10,
-              padding: '12px 18px',
-              fontFamily: FONT_LABEL,
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: 'pointer',
-              letterSpacing: 0.5,
-              textTransform: 'uppercase',
-            }}
-          >
+          <Btn tier="onDark" size="lg" onClick={onBackToGrid}>
             Keep {baselineLabel}
-          </button>
-          <button
-            type="button"
-            onClick={onEnroll}
-            style={{
-              background: GREEN,
-              color: 'white',
-              border: 'none',
-              borderRadius: 10,
-              padding: '12px 22px',
-              fontFamily: FONT_LABEL,
-              fontSize: 13,
-              fontWeight: 800,
-              letterSpacing: 0.6,
-              textTransform: 'uppercase',
-              cursor: 'pointer',
-            }}
-          >
+          </Btn>
+          <Btn tier="primary" size="lg" onClick={onEnroll}>
             Enroll →
-          </button>
+          </Btn>
         </div>
       </div>
 

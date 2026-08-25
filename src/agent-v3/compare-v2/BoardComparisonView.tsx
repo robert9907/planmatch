@@ -32,6 +32,7 @@
 import { useState, type CSSProperties } from 'react';
 import type { Plan, PlanBenefits } from '@/types/plans';
 import { TOKENS as T, FONT as F } from './tokens';
+import { Btn } from './Button';
 import { PreviewDrawerShell } from './QuickPreviewDrawer';
 import {
   planDisplay,
@@ -347,25 +348,14 @@ export function BoardComparisonView(props: BoardComparisonViewProps) {
                 </div>
               )}
               {isLeader && canTakeToH2H && (
-                <button
-                  type="button"
+                <Btn
+                  tier="onDark"
+                  size="sm"
                   onClick={() => onTakeToH2H(p)}
-                  style={{
-                    marginTop: 4,
-                    background: 'transparent',
-                    color: T.mintOnDark,
-                    border: `1px solid ${T.mintOnDark}`,
-                    borderRadius: 6,
-                    padding: '6px 12px',
-                    fontFamily: F.label,
-                    fontSize: 11.5,
-                    fontWeight: 600,
-                    letterSpacing: 0.3,
-                    cursor: 'pointer',
-                  }}
+                  style={{ marginTop: 4 }}
                 >
-                  Take to Head-to-Head →
-                </button>
+                  Take to head-to-head →
+                </Btn>
               )}
               {isLeader && !canTakeToH2H && baselineId === p.id && (
                 <div

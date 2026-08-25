@@ -69,6 +69,7 @@ export const AGENT_V3_CSS = `
 .pma3 .pma3-btn:disabled { cursor: not-allowed; box-shadow: none; }
 
 /* sizes */
+.pma3 .pma3-btn--lg { height: 44px; padding: 0 22px; font-size: 14px; border-radius: 10px; letter-spacing: -0.005em; }
 .pma3 .pma3-btn--md { height: 38px; padding: 0 16px; font-size: 13px; letter-spacing: -0.005em; }
 .pma3 .pma3-btn--sm { height: 32px; padding: 0 11px; font-size: 11.5px; }
 .pma3 .pma3-btn--xs { height: 28px; padding: 0 7px; font-size: 10.5px; border-radius: 6px; }
@@ -93,6 +94,17 @@ export const AGENT_V3_CSS = `
 .pma3 .pma3-btn--secondary:not(:disabled):hover { background: #D3F2E5; }
 .pma3 .pma3-btn--secondary:not(:disabled):active { border-color: ${T.mint700}; }
 .pma3 .pma3-btn--secondary:disabled { background: ${T.paper}; color: ${T.muted2}; border-color: ${T.line}; }
+
+/* tier 3b — quiet, on a navy surface */
+.pma3 .pma3-btn--onDark {
+  background: rgba(255, 255, 255, 0.12);
+  color: #FFFFFF;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.pma3 .pma3-btn--onDark:not(:disabled):hover { background: rgba(255, 255, 255, 0.2); }
+.pma3 .pma3-btn--onDark:not(:disabled):active { background: rgba(255, 255, 255, 0.08); }
+.pma3 .pma3-btn--onDark:focus-visible { outline-color: #FFFFFF; }
+.pma3 .pma3-btn--onDark:disabled { color: rgba(255, 255, 255, 0.4); border-color: rgba(255, 255, 255, 0.12); }
 
 /* tier 3 — quiet */
 .pma3 .pma3-btn--quiet {

@@ -7,9 +7,11 @@
 //   primary    solid mint    the action that commits — Enroll, Add to board
 //   secondary  mint tint     a meaningful next step — Open quote builder
 //   quiet      hairline      reference + utility — Head-to-head, Quick preview
+//   onDark     translucent   the quiet tier's counterpart on navy bars,
+//                            where a white-filled button would glare
 //
-// Sizes: md (38px) board primary · sm (32px) board utility + page bars
-//        xs (28px) bench cards, which are denser than the board
+// Sizes: lg (44px) page bars · md (38px) board primary
+//        sm (32px) board utility · xs (28px) bench cards
 //
 // Visual states live in AGENT_V3_CSS as `.pma3-btn*` rules rather than
 // inline styles, so :hover / :active / :focus-visible / :disabled are
@@ -23,8 +25,8 @@
 
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
-export type BtnTier = 'primary' | 'secondary' | 'quiet';
-export type BtnSize = 'md' | 'sm' | 'xs';
+export type BtnTier = 'primary' | 'secondary' | 'quiet' | 'onDark';
+export type BtnSize = 'lg' | 'md' | 'sm' | 'xs';
 
 export function Btn({
   tier = 'quiet',
