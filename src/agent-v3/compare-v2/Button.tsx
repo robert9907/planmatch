@@ -4,9 +4,12 @@
 // action row (mint-tint / navy-fill / mint-outline at identical width)
 // with a three-tier ladder where rank is carried by WEIGHT, not hue:
 //
-//   primary    solid mint    the action that commits — Enroll
-//   secondary  mint tint     a meaningful next step — Send quote
-//   quiet      hairline      reference + utility — Summary, Head-to-head
+//   primary    solid mint    the action that commits — Enroll, Add to board
+//   secondary  mint tint     a meaningful next step — Open quote builder
+//   quiet      hairline      reference + utility — Head-to-head, Quick preview
+//
+// Sizes: md (38px) board primary · sm (32px) board utility + page bars
+//        xs (28px) bench cards, which are denser than the board
 //
 // Visual states live in AGENT_V3_CSS as `.pma3-btn*` rules rather than
 // inline styles, so :hover / :active / :focus-visible / :disabled are
@@ -21,7 +24,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
 export type BtnTier = 'primary' | 'secondary' | 'quiet';
-export type BtnSize = 'md' | 'sm';
+export type BtnSize = 'md' | 'sm' | 'xs';
 
 export function Btn({
   tier = 'quiet',

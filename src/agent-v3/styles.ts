@@ -71,6 +71,7 @@ export const AGENT_V3_CSS = `
 /* sizes */
 .pma3 .pma3-btn--md { height: 38px; padding: 0 16px; font-size: 13px; letter-spacing: -0.005em; }
 .pma3 .pma3-btn--sm { height: 32px; padding: 0 11px; font-size: 11.5px; }
+.pma3 .pma3-btn--xs { height: 28px; padding: 0 7px; font-size: 10.5px; border-radius: 6px; }
 .pma3 .pma3-btn--block { width: 100%; }
 
 /* tier 1 — primary */

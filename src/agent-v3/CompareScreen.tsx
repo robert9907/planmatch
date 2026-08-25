@@ -1659,22 +1659,9 @@ function QuotePanel({
             </div>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          style={{
-            padding: '6px 12px',
-            borderRadius: 8,
-            border: `1px solid ${NAVY}`,
-            background: '#fff',
-            color: NAVY,
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-          }}
-        >
+        <Btn tier="secondary" size="sm" onClick={() => setOpen(true)}>
           Open quote builder
-        </button>
+        </Btn>
       </div>
     );
   }
@@ -2450,48 +2437,27 @@ function BenchCard({
             CompareScreen.tsx:1989-2010 on commit 0250c7d:
             `onClick={() => setExpanded((v) => !v)}` with the label
             flipping between "Quick preview" and "Hide preview". */}
-        <button
-          type="button"
+        <Btn
+          tier="quiet"
+          size="xs"
           onClick={(e) => {
             e.stopPropagation();
             setExpanded((v) => !v);
           }}
           title="Expand benefit snapshot for this plan"
-          style={{
-            flex: 1,
-            textAlign: 'center',
-            fontSize: 10.5,
-            fontWeight: 600,
-            padding: 7,
-            borderRadius: 6,
-            border: `1px solid ${T.mint100}`,
-            background: T.mint100,
-            color: T.mint700,
-            cursor: 'pointer',
-            fontFamily: F.label,
-          }}
+          style={{ flex: 1, minWidth: 0 }}
         >
           {expanded ? 'Hide preview' : 'Quick preview'}
-        </button>
-        <button
-          type="button"
+        </Btn>
+        <Btn
+          tier="primary"
+          size="xs"
           onClick={() => onAddToBoard(plan)}
-          style={{
-            flex: 1,
-            textAlign: 'center',
-            fontSize: 10.5,
-            fontWeight: 600,
-            padding: 7,
-            borderRadius: 6,
-            border: `1px solid ${T.navy950}`,
-            background: T.navy950,
-            color: '#FFFFFF',
-            cursor: 'pointer',
-            fontFamily: F.label,
-          }}
+          title="Drop this plan into the first empty board slot"
+          style={{ flex: 1, minWidth: 0 }}
         >
           Add to board
-        </button>
+        </Btn>
       </div>
 
       {/* Original pre-slice inline expander body — verbatim 12-row
@@ -3404,6 +3370,43 @@ function SlotCell({
           >
             {planIdShort(plan.id)}
           </p>
+          {/* Document cluster. "Benefits" moved up here from the
+              action row: it opens the SoB drawer, the chip beside it
+              links the CMS source PDF, and they belong together. That
+              also buys back a row in the action block below, which is
+              what keeps the card from growing ~80px. */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              marginTop: 6,
+              flexWrap: 'wrap',
+            }}
+          >
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenSummary(plan);
+              }}
+              title="Open the full Summary of Benefits drawer for this plan, including per-drug cost breakdown"
+              style={{
+                background: 'rgba(127,224,196,0.18)',
+                border: '1px solid rgba(127,224,196,0.28)',
+                color: T.mintOnDark,
+                fontFamily: F.label,
+                fontSize: 9,
+                fontWeight: 700,
+                padding: '2px 6px',
+                borderRadius: 3,
+                letterSpacing: 0.3,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Benefits
+            </button>
           {plan.sbf_url && (
             <a
               href={plan.sbf_url}
@@ -3412,7 +3415,6 @@ function SlotCell({
               onClick={(e) => e.stopPropagation()}
               style={{
                 display: 'inline-block',
-                marginTop: 6,
                 background: 'rgba(127,224,196,0.18)',
                 color: T.mintOnDark,
                 fontFamily: F.label,
@@ -3428,6 +3430,7 @@ function SlotCell({
               📄 SBF ↗
             </a>
           )}
+          </div>
         </div>
         <div
           aria-label={confidence == null ? 'Confidence pending' : `Confidence ${confidence}%`}
@@ -3536,11 +3539,10 @@ function SlotCell({
           benefits" wrapping to three lines inside a ~74px target and
           Enroll — the action that matters — rendered as the quietest
           of the three. Now: one primary on top, two quiet utilities
-          beneath. Stacking is what keeps every label on one line at
-          25% board width. "Summary of benefits" measured 159px in a
-          157px box even stacked, so it is now "Benefits" — the SBF ↗
-          chip in the card header already names the source document.
-          "Head-to-head" measures 112px and keeps its name. */}
+          beneath. Two rows, not three: "Summary of benefits" measured
+          159px in a 157px action column and moved up to the header
+          document cluster as "Benefits", which keeps the card from
+          growing. "Head-to-head" measures 112px and keeps its name. */}
       <div
         style={{
           display: 'flex',
@@ -3585,18 +3587,6 @@ function SlotCell({
           }
         >
           Head-to-head
-        </Btn>
-        <Btn
-          tier="quiet"
-          size="sm"
-          block
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpenSummary(plan);
-          }}
-          title="Open the full Summary of Benefits drawer for this plan, including per-drug cost breakdown"
-        >
-          Benefits
         </Btn>
       </div>
 
