@@ -27,37 +27,6 @@ export function IncomingCard({ item, onApprove, onReject }: IncomingCardProps) {
       }}
     >
       <div className="flex gap-3">
-        {item.image_url ? (
-          <img
-            src={item.image_url}
-            alt="Captured label"
-            style={{
-              width: 60,
-              height: 60,
-              borderRadius: 6,
-              objectFit: 'cover',
-              border: '1px solid var(--w2)',
-              flexShrink: 0,
-            }}
-          />
-        ) : (
-          <div
-            style={{
-              width: 60,
-              height: 60,
-              borderRadius: 6,
-              background: 'var(--w2)',
-              display: 'grid',
-              placeItems: 'center',
-              color: 'var(--i3)',
-              fontSize: 10,
-              flexShrink: 0,
-            }}
-          >
-            no img
-          </div>
-        )}
-
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             {extracted ? (
