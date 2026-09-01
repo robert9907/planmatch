@@ -36,7 +36,9 @@ export type ExtractedItem = ExtractedMedication | ExtractedProvider | ExtractedU
 export interface CaptureItem {
   id: string;
   created_at: string;
-  image_url: string;
+  /** @deprecated Capture photos are no longer stored. Present only on
+   *  items written before that change. */
+  image_url?: string;
   extracted: ExtractedItem[];
   error?: string;
 }
@@ -64,6 +66,8 @@ export interface CaptureSubmitResponse {
   ok: true;
   item_id: string;
   extracted: ExtractedItem[];
-  image_url: string;
+  /** @deprecated Capture photos are no longer stored. Present only on
+   *  items written before that change. */
+  image_url?: string;
   error?: string;
 }
