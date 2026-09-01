@@ -4,6 +4,9 @@ import { fileToBase64, submitCapture } from '@/lib/captureApi';
 
 type Screen = 'welcome' | 'camera' | 'preview' | 'done';
 
+// Validity of the capture link itself, checked once on mount.
+type LinkState = 'checking' | 'ok' | 'expired' | 'unknown';
+
 interface SentItem {
   id: string;
   preview: string;
@@ -21,6 +24,7 @@ export function CaptureApp() {
   const [processingState, setProcessingState] = useState<'idle' | 'uploading' | 'extracting' | 'ready' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [sentItems, setSentItems] = useState<SentItem[]>([]);
+  const [linkState, setLinkState] = useState<LinkState>('checking');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -29,6 +33,39 @@ export function CaptureApp() {
     };
   }, [previewUrl]);
 
+  // Check the link before showing the camera. This page used to render the
+  // whole flow for any token, valid or not, and only called the server on
+  // Send — so a client on an expired 48-hour link could photograph every
+  // bottle in the house before finding out it was pointless.
+  // capture-poll is read-only, so asking is free.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const resp = await fetch(`/api/capture-poll?token=${encodeURIComponent(token)}`);
+        if (cancelled) return;
+        if (resp.status === 404) {
+          setLinkState('unknown');
+          return;
+        }
+        if (!resp.ok) {
+          // Transient blip — don't strand someone who has a good link.
+          setLinkState('ok');
+          return;
+        }
+        const body = (await resp.json()) as { status?: string };
+        if (cancelled) return;
+        setLinkState(body?.status === 'expired' ? 'expired' : 'ok');
+      } catch {
+        if (!cancelled) setLinkState('ok');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
   if (!token) {
     return (
       <Shell>
@@ -36,6 +73,30 @@ export function CaptureApp() {
           <h1 style={headerStyle}>Missing capture link</h1>
           <p style={{ color: 'var(--i2)' }}>
             This link looks incomplete. Please ask Rob to text you a new one.
+          </p>
+        </div>
+      </Shell>
+    );
+  }
+
+  if (linkState === 'checking') {
+    return (
+      <Shell>
+        <div style={{ padding: 24, textAlign: 'center' }}>
+          <p style={{ color: 'var(--i2)' }}>Checking your link…</p>
+        </div>
+      </Shell>
+    );
+  }
+
+  if (linkState === 'expired' || linkState === 'unknown') {
+    return (
+      <Shell>
+        <div style={{ padding: 24, textAlign: 'center' }}>
+          <h1 style={headerStyle}>This link has expired</h1>
+          <p style={{ color: 'var(--i2)' }}>
+            Capture links last 48 hours. Text Rob and he'll send you a fresh
+            one — nothing you already sent is lost.
           </p>
         </div>
       </Shell>
@@ -77,7 +138,7 @@ export function CaptureApp() {
       setProcessingState('ready');
       setScreen('done');
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err));
+      setErrorMessage(friendlyError(err));
       setProcessingState('error');
     }
   }
@@ -486,6 +547,32 @@ function ExtractedBlock({ item }: { item: ExtractedItem }) {
       Couldn't read this label clearly — try another angle or retake the photo.
     </div>
   );
+}
+
+// submitCapture throws with the raw response body, so an expired link put
+// the literal string {"error":"Capture session not found"} on screen in
+// front of the client. Map what we recognise to plain English and never
+// surface the server's wording.
+function friendlyError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? '');
+  let detail = raw;
+  try {
+    const parsed = JSON.parse(raw) as { error?: string };
+    if (parsed && typeof parsed.error === 'string') detail = parsed.error;
+  } catch {
+    // Not JSON — keep the raw text for matching, never for display.
+  }
+  const lower = detail.toLowerCase();
+  if (lower.includes('not found') || lower.includes('expired')) {
+    return 'This link has expired. Text Rob and he will send you a new one.';
+  }
+  if (lower.includes('token')) {
+    return 'This link is not valid. Text Rob and he will send you a new one.';
+  }
+  if (lower.includes('failed to fetch') || lower.includes('network')) {
+    return "That didn't send — check your signal and tap Send to Rob again.";
+  }
+  return "That photo didn't send. Tap Send to Rob to try again, or retake it.";
 }
 
 function readTokenFromPath(): string | null {
