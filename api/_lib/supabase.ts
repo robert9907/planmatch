@@ -18,7 +18,9 @@ export function supabase(): SupabaseClient {
 export interface CaptureItem {
   id: string;
   created_at: string;
-  image_url: string;
+  /** @deprecated Capture photos are no longer stored — see capture-submit.
+   *  Present only on rows written before that change. */
+  image_url?: string;
   extracted: ExtractedItem[];
   raw_response?: string;
   error?: string;
