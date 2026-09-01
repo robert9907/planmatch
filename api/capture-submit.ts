@@ -2,7 +2,6 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomUUID } from 'node:crypto';
 import { supabase, type CaptureItem, type CaptureSessionRow, type ExtractedItem } from './_lib/supabase.js';
 import { extractFromImage } from './_lib/vision.js';
-import { storeCaptureImage } from './_lib/blob.js';
 import { badRequest, cors, notFound, sendJson, serverError } from './_lib/http.js';
 import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
 import {
@@ -53,16 +52,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const itemId = `item_${randomUUID()}`;
-    const buffer = Buffer.from(imageBase64, 'base64');
 
-    let imageUrl = '';
-    try {
-      const stored = await storeCaptureImage({ token, itemId, data: buffer, mimeType });
-      imageUrl = stored.url;
-    } catch (err) {
-      imageUrl = '';
-      console.error('Blob storage failed', err);
-    }
+    // The photo is never persisted. It is a picture of a prescription label —
+    // patient name, drug, prescriber, Rx number — and once the vision call has
+    // read it there is nothing left we need it for. It lives in this request's
+    // memory, goes to the model, and is dropped when the request ends. The
+    // client keeps its own local preview, so nobody loses anything visible.
 
     let extracted: CaptureItem['extracted'] = [];
     let rawResponse: string | undefined;
@@ -78,7 +73,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const item: CaptureItem = {
       id: itemId,
       created_at: new Date().toISOString(),
-      image_url: imageUrl,
       extracted,
       raw_response: rawResponse,
       error: extractError,
@@ -135,7 +129,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ok: true,
       item_id: itemId,
       extracted: item.extracted,
-      image_url: imageUrl,
       error: extractError,
       writeback,
     });
