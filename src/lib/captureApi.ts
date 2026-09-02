@@ -61,6 +61,45 @@ export async function fileToBase64(file: File): Promise<{ base64: string; mimeTy
   return { base64: btoa(binary), mimeType: file.type || 'image/jpeg' };
 }
 
+/** Long edge cap for uploads. A current phone shoots 4000px+; past ~1600
+ *  the vision model gains nothing and the base64 payload triples. */
+const MAX_UPLOAD_EDGE = 1600;
+
+/** Re-encode whatever the phone handed over as a JPEG the vision API can
+ *  actually read.
+ *
+ *  Two problems. iPhones set to High Efficiency hand back image/heic, and
+ *  the server's normalizeMimeType() relabels any unknown type as
+ *  image/jpeg — so HEIC bytes went up claiming to be a JPEG and the model
+ *  could not decode them. Separately, a full-resolution photo is several
+ *  megabytes of base64 over cellular for no accuracy gain.
+ *
+ *  Safari decodes HEIC natively, which is where these files come from. If
+ *  anything in the decode fails, fall back to the raw bytes — no worse
+ *  than the previous behaviour. */
+export async function fileToJpegBase64(
+  file: File,
+): Promise<{ base64: string; mimeType: string }> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const longEdge = Math.max(bitmap.width, bitmap.height);
+    if (!longEdge) throw new Error('empty image');
+    const scale = Math.min(1, MAX_UPLOAD_EDGE / longEdge);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('no 2d context');
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const base64 = canvas.toDataURL('image/jpeg', 0.82).split(',')[1] ?? '';
+    if (!base64) throw new Error('encode produced nothing');
+    return { base64, mimeType: 'image/jpeg' };
+  } catch {
+    return fileToBase64(file);
+  }
+}
+
 export function itemLabel(item: CaptureItem): string {
   if (item.extracted.length === 0) return 'Unreadable label';
   const first = item.extracted[0];
