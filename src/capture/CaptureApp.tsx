@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ExtractedItem } from '@/types/capture';
-import { fileToBase64, submitCapture } from '@/lib/captureApi';
+import { fileToJpegBase64, submitCapture } from '@/lib/captureApi';
 
 type Screen = 'welcome' | 'camera' | 'preview' | 'done';
 
@@ -121,7 +121,7 @@ export function CaptureApp() {
     setProcessingState('uploading');
     setErrorMessage(null);
     try {
-      const { base64, mimeType } = await fileToBase64(capturedFile);
+      const { base64, mimeType } = await fileToJpegBase64(capturedFile);
       setProcessingState('extracting');
       const resp = await submitCapture({ token: token!, image_base64: base64, mime_type: mimeType });
       setExtracted(resp.extracted);
