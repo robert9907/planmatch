@@ -1698,6 +1698,7 @@ async function main() {
   if (summaries.length > 0) writeAuditSummary(summaries);
   else console.warn('No personas completed — skipping aggregate summary.');
   console.log(`\nDone. ${summaries.length}/${PERSONAS.length} personas completed.`);
+  if (summaries.reduce((n, s) => n + s.diffs_by_severity.RED, 0) > 0) process.exitCode = 1;
 }
 
 main().catch(e => { console.error(e); process.exit(1); });
