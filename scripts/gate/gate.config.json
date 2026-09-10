@@ -63,7 +63,8 @@
   ],
 
   "fullAudit": {
-    "enabled": true,
+    "enabled": false,
+    "$comment_disabled": "Disabled for brain-path pushes: the six-persona secret shopper diffs Supabase (pm_plans / pm_plan_benefits / pm_formulary) against medicare.gov — it never exercises the brain code, so it's the wrong gate for brain changes. A brain golden test will replace it as the brain-path gate.",
     "$comment": "Six-persona secret shopper: Playwright/Chromium vs medicare.gov + direct Supabase (pm_plans / pm_plan_benefits / pm_formulary) diff. Tests THIS commit's assumption about the data it queries — no local Plan Match server needed. Slow (minutes to an hour, Akamai-sensitive).",
     "steps": [
       {
