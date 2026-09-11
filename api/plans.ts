@@ -310,6 +310,16 @@ export interface BenefitRow {
   /** Which source filed `alt_copay` / `alt_coinsurance`. 'landscape'
    *  means the pm_plan_benefits row that lost the synth merge. */
   alt_source?: string | null;
+  /** Same-benefit display range from the CMS PBP filing (cms_pbp
+   *  source): copay (low) / copay_max (high), coinsurance (low) /
+   *  coinsurance_max (high). Captured before the source-priority dedup
+   *  drops the cms_pbp row, and stamped onto whichever row survives the
+   *  merge, so the range is shown even when a different source (e.g. a
+   *  landscape flat copay) wins the numeric field. NEVER from alt_*. */
+  cms_copay_low?: number | null;
+  cms_copay_high?: number | null;
+  cms_coins_low?: number | null;
+  cms_coins_high?: number | null;
 }
 
 interface PbpBenefitRow {
@@ -330,6 +340,7 @@ interface PbpBenefitRow {
 // consumer's plans-with-extras endpoint.
 interface PbpRichRow extends PbpBenefitRow {
   copay_max: number | null;
+  coinsurance_max: number | null;
   source: string | null;
 }
 
@@ -1127,7 +1138,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await sb
         .from('pbp_benefits')
         .select(
-          'plan_id, benefit_type, copay, copay_max, coinsurance, tier_id, description, source',
+          'plan_id, benefit_type, copay, copay_max, coinsurance, coinsurance_max, tier_id, description, source',
         )
         .in('plan_id', [...pbpKeyVariants])
         .in('source', ['medicare_gov', 'sb_ocr', 'cms_pbp', 'manual'])
@@ -1193,6 +1204,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         contract_id: parts[0],
         plan_id: parts[1],
         segment_id: parts[2] || '000',
+      });
+    }
+
+    // ROB'S DECISION: the display range comes from the CMS PBP filing
+    // (source='cms_pbp') for the same benefit — copay (low)/copay_max
+    // (high) and coinsurance (low)/coinsurance_max (high) — NOT from the
+    // winning numeric source and NOT from alt_*. The source-priority
+    // dedup below can drop the cms_pbp row (e.g. a landscape flat ASC
+    // copay wins), so capture the cms_pbp range here, keyed by (triple,
+    // category), and stamp it onto whichever row survives the merge.
+    // Aggregated across tier rows: low = min filed, high = max of
+    // (copay_max, copay). Allowance categories are skipped because their
+    // copay_max is an annual $ cap, not a copay ceiling.
+    const cmsRangeByTripleCat = new Map<
+      string,
+      { cLow: number | null; cHigh: number | null; iLow: number | null; iHigh: number | null }
+    >();
+    for (const row of broadPbpRows) {
+      if (row.source !== 'cms_pbp') continue;
+      const category = PBP_TYPE_TO_CATEGORY[row.benefit_type];
+      if (!category || COPAY_RANGE_SKIP_CATEGORIES.has(category)) continue;
+      const plan = planByCanonical.get(normalizePbpKey(row.plan_id));
+      if (!plan) continue;
+      const key = `${plan.contract_id}-${plan.plan_id}-${plan.segment_id}|${category}`;
+      const copay = toNum(row.copay);
+      const copayMax = toNum(row.copay_max);
+      const coins = toNum(row.coinsurance);
+      const coinsMax = toNum(row.coinsurance_max);
+      const prior = cmsRangeByTripleCat.get(key) ?? { cLow: null, cHigh: null, iLow: null, iHigh: null };
+      const min = (a: number | null, b: number | null) => (a == null ? b : b == null ? a : Math.min(a, b));
+      const max = (a: number | null, b: number | null) => (a == null ? b : b == null ? a : Math.max(a, b));
+      cmsRangeByTripleCat.set(key, {
+        cLow: min(prior.cLow, copay),
+        cHigh: max(prior.cHigh, max(copayMax, copay)),
+        iLow: min(prior.iLow, coins),
+        iHigh: max(prior.iHigh, max(coinsMax, coins)),
       });
     }
 
@@ -1430,6 +1477,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const mergedBenefitsByTriple = new Map<string, BenefitRow[]>();
     for (const b of mergedRows) {
       const triple = `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}`;
+      // Stamp the CMS PBP range onto whichever row survived the merge for
+      // this (triple, category) so costShareFor can surface "$low–$high"
+      // even when a non-cms_pbp source won the numeric field.
+      const cms = cmsRangeByTripleCat.get(`${triple}|${b.benefit_category}`);
+      if (cms) {
+        b.cms_copay_low = cms.cLow;
+        b.cms_copay_high = cms.cHigh;
+        b.cms_coins_low = cms.iLow;
+        b.cms_coins_high = cms.iHigh;
+      }
       const list = mergedBenefitsByTriple.get(triple) ?? [];
       list.push(b);
       mergedBenefitsByTriple.set(triple, list);
@@ -1620,7 +1677,19 @@ export function costShareFor(
     const rawCopay = toNum(hit.copay);
     const maxCoverage = toNum(hit.max_coverage);
     const rawCoins = toNum(hit.coinsurance);
-    const hasCopayRange =
+    // Display range: prefer the CMS PBP filing stamped onto the row
+    // (cms_copay_low/high, cms_coins_low/high) even when a different
+    // source won the numeric — that's ROB'S DECISION. Fall back to this
+    // row's own copay/copay_max when cms_pbp filed no range for the
+    // category. Never from alt_*. Skip allowance categories (copay_max
+    // is an annual $ cap there, not a copay ceiling).
+    const cmsCLow = toNum(hit.cms_copay_low);
+    const cmsCHigh = toNum(hit.cms_copay_high);
+    const cmsILow = toNum(hit.cms_coins_low);
+    const cmsIHigh = toNum(hit.cms_coins_high);
+    const hasCmsCopay = cmsCLow != null || cmsCHigh != null;
+    const hasCmsCoins = cmsILow != null || cmsIHigh != null;
+    const fallbackHasRange =
       !COPAY_RANGE_SKIP_CATEGORIES.has(hit.benefit_category) &&
       maxCoverage != null &&
       maxCoverage > 0 &&
@@ -1629,14 +1698,10 @@ export function costShareFor(
       copay: rawCopay,
       coinsurance: rawCoins,
       description: hit.benefit_description ?? null,
-      // Display-only same-benefit range (low = filed copay, high =
-      // copay_max). Single value when no distinct max exists. Never from
-      // alt_copay. BenefitRow carries no coinsurance_max, so coinsurance
-      // has no high end today → low === high (single value).
-      copay_low: rawCopay,
-      copay_high: hasCopayRange ? maxCoverage : rawCopay,
-      coinsurance_low: rawCoins,
-      coinsurance_high: rawCoins,
+      copay_low: hasCmsCopay ? (cmsCLow ?? cmsCHigh) : rawCopay,
+      copay_high: hasCmsCopay ? (cmsCHigh ?? cmsCLow) : (fallbackHasRange ? maxCoverage : rawCopay),
+      coinsurance_low: hasCmsCoins ? (cmsILow ?? cmsIHigh) : rawCoins,
+      coinsurance_high: hasCmsCoins ? (cmsIHigh ?? cmsILow) : rawCoins,
       // Pass the displaced filing straight through — no range-collapse
       // promotion, no coercion. It is the raw value the losing source
       // filed, and the brain compares it against the winner above.
