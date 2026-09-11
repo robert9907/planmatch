@@ -153,6 +153,18 @@ export interface CostShare {
   copay: number | null;
   coinsurance: number | null;
   description: string | null;
+  /** Display-only range for the SAME in-network benefit, from the CMS
+   *  PBP filing: copay (low) / copay_max (high), coinsurance (low) /
+   *  coinsurance_max (high). The UI shows "$low–$high" (or "low%–high%")
+   *  when low and high differ, and the single value otherwise. These are
+   *  NEVER built from alt_copay/alt_coinsurance (a losing source's value,
+   *  not a range). The numeric `copay`/`coinsurance` above stay the
+   *  low/filed value the brain reads and the ground-truth validator
+   *  grades — the range is additive and does not feed either. */
+  copay_low: number | null;
+  copay_high: number | null;
+  coinsurance_low: number | null;
+  coinsurance_high: number | null;
   /** ── The other filed cost-share, when the sources disagreed ─────
    *  api/plans.ts merges pm_plan_benefits with pbp_benefits and has to
    *  pick ONE copay/coinsurance per category. For medical cost-sharing
@@ -443,7 +455,13 @@ const PBP_TYPE_TO_CATEGORY: Record<string, string> = {
   urgent_care: 'urgent_care',
   specialist_visit: 'specialist',
   lab_diagnostic: 'lab',
-  imaging: 'imaging',
+  // 'imaging' intentionally NOT mapped: the Aug-1 medicare_gov "imaging"
+  // rows (inserted outside any repo; copay is the range HIGH, and
+  // medicare_gov files 0 as a presence marker) do not correspond to a
+  // pm medical category the UI/brain reads. Dropping them here stops
+  // them leaking into advanced_imaging or any other field until their
+  // source is reconciled. advanced_imaging comes from the cms_pbp
+  // diagnostic_radiology filing on the pm_plan_benefits row instead.
   outpatient_surgery: 'outpatient_surgery',
   ambulance: 'ambulance',
   dental_comprehensive: 'dental',
@@ -555,17 +573,12 @@ function transformPbpRow(
 
   const isAllowance = PBP_ALLOWANCE_TYPES.has(row.benefit_type);
   let coverage_amount = isAllowance ? row.copay : null;
-  // Range collapse — cms_pbp files (copay=$0, copay_max=$X) for
-  // benefits that vary by service (specialist $0–$35, urgent_care
-  // $0–$65, outpatient_surgery $0–$455). copay_max is the consumer-
-  // facing headline; leaving copay=$0 through means synth carries $0
-  // and the stale-zero override below can't tell there's a real
-  // number to lift. Mirrors consumer plan-benefits.ts's collapsedCopay.
-  const collapsedCopay =
-    row.copay === 0 && row.copay_max != null && row.copay_max > 0
-      ? row.copay_max
-      : row.copay;
-  const copay = isAllowance ? null : collapsedCopay;
+  // Reverted d4c7d9a's range-collapse: the numeric copay is the raw
+  // filed low value (July 228/228 behavior). The high end (copay_max)
+  // rides along on max_coverage and is surfaced as a display-only range
+  // by costShareFor — never folded into the number the brain/validator
+  // read. Mirrors ROB'S DECISION (range shown, not collapsed).
+  const copay = isAllowance ? null : row.copay;
   let max_coverage = row.copay_max;
 
   // OTC normalization: pbp_benefits.copay arrives in mixed units
@@ -1361,22 +1374,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return land.coverage_amount == null;
       }
       // Landscape has a real segment-tagged cost-share — keep it.
-      // Stale-zero override: for range benefits (specialist $0–$35,
-      // urgent_care $0–$65, etc.) landscape files copay=$0 from the
-      // importer's floor-collapse, but transformPbpRow now surfaces
-      // the copay_max headline on synth. Treat landscape copay=0 (with
-      // no coinsurance) as "no real cost-share filed" when synth has
-      // a real value so the override reaches the wire.
-      const landHasReal =
-        (land.copay != null && land.copay > 0) ||
-        (land.coinsurance != null && land.coinsurance > 0);
-      const synthHasReal =
-        (b.copay != null && b.copay > 0) ||
-        (b.coinsurance != null && b.coinsurance > 0);
-      if (landHasReal) return false;
-      if (synthHasReal) return true;
-      // Neither side carries a real cost-share — fall back to legacy
-      // behavior (keep landscape when it filed anything, even $0).
+      // Reverted d4c7d9a's stale-zero override: it treated a landscape
+      // copay=$0 as "no real cost-share" so a synth copay_max headline
+      // could win, which changed WHICH value lands in the numeric field.
+      // Restoring the July rule — landscape wins whenever it filed
+      // anything (even $0) — keeps the numeric field at the filed low
+      // value; the range high is surfaced separately by costShareFor.
       if (land.copay != null || land.coinsurance != null) return false;
       return true;
     });
@@ -1608,17 +1611,32 @@ export function costShareFor(
     // is the consumer-facing headline. Promote when copay is 0/null
     // and max_coverage is a real dollar. Skip allowance categories
     // where max_coverage means an annual $ cap, not a copay ceiling.
+    // Reverted d4c7d9a: the numeric copay is the raw filed (low) value —
+    // no max_coverage promotion — so the brain and the ground-truth
+    // validator see the July 228/228 number. The high end rides along as
+    // a display-only range below. max_coverage is a copay ceiling only
+    // for medical categories; for allowance categories it is an annual $
+    // cap, so those get no copay range.
     const rawCopay = toNum(hit.copay);
     const maxCoverage = toNum(hit.max_coverage);
-    const useMaxAsCopay =
+    const rawCoins = toNum(hit.coinsurance);
+    const hasCopayRange =
       !COPAY_RANGE_SKIP_CATEGORIES.has(hit.benefit_category) &&
-      (rawCopay == null || rawCopay === 0) &&
       maxCoverage != null &&
-      maxCoverage > 0;
+      maxCoverage > 0 &&
+      maxCoverage !== rawCopay;
     return {
-      copay: useMaxAsCopay ? maxCoverage : rawCopay,
-      coinsurance: toNum(hit.coinsurance),
+      copay: rawCopay,
+      coinsurance: rawCoins,
       description: hit.benefit_description ?? null,
+      // Display-only same-benefit range (low = filed copay, high =
+      // copay_max). Single value when no distinct max exists. Never from
+      // alt_copay. BenefitRow carries no coinsurance_max, so coinsurance
+      // has no high end today → low === high (single value).
+      copay_low: rawCopay,
+      copay_high: hasCopayRange ? maxCoverage : rawCopay,
+      coinsurance_low: rawCoins,
+      coinsurance_high: rawCoins,
       // Pass the displaced filing straight through — no range-collapse
       // promotion, no coercion. It is the raw value the losing source
       // filed, and the brain compares it against the winner above.
@@ -1634,7 +1652,11 @@ export function costShareFor(
     const cs = pbpFallback.costShares[category as PbpFallbackType];
     if (cs) return cs;
   }
-  return { copay: null, coinsurance: null, description: null };
+  return {
+    copay: null, coinsurance: null, description: null,
+    copay_low: null, copay_high: null,
+    coinsurance_low: null, coinsurance_high: null,
+  };
 }
 
 // pbp_benefits files mental_health_individual at tier_id "min"/"max"
@@ -1740,7 +1762,12 @@ function buildPbpFallback(rows: PbpBenefitRow[]): PbpFallbackMap {
           max && minCopay != null && maxCopay != null && minCopay !== maxCopay
             ? `$${minCopay}–$${maxCopay} copay`
             : null;
-        costShares[bt] = { copay: minCopay, coinsurance: minCoins, description };
+        costShares[bt] = {
+          copay: minCopay, coinsurance: minCoins, description,
+          copay_low: minCopay,
+          copay_high: maxCopay != null && maxCopay !== minCopay ? maxCopay : minCopay,
+          coinsurance_low: minCoins, coinsurance_high: minCoins,
+        };
       }
     }
     out.set(planId, {
