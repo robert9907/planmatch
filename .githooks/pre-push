@@ -1,0 +1,6 @@
+#!/bin/sh
+# Plan Match ship gate. Blocks the push (and therefore the Vercel deploy) unless every check passes.
+# Installed via: git config core.hooksPath .githooks  (the Claude Code session-start hook keeps this set)
+ROOT="$(git rev-parse --show-toplevel)" || exit 1
+command -v node >/dev/null 2>&1 || { echo "✗ Plan Match gate: node not found — push blocked." >&2; exit 1; }
+exec node "$ROOT/scripts/gate/ship-gate.mjs" pre-push "$@"

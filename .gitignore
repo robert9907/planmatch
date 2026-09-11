@@ -50,7 +50,9 @@ data/
 !scripts/captures/*.csv
 _scrape-debug/
 .env.local.bak*
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 _tmp/
 vercel.dev.json
 src/_apilibrary_dev

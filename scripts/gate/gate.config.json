@@ -1,0 +1,85 @@
+{
+  "$comment": "Plan Match gate config — agent-v3 (~/planmatch/planmatch). The gate refuses to pass while any TODO remains. Commands run from the repo root.",
+
+  "typecheck": {
+    "name": "TypeScript",
+    "command": "npm run typecheck",
+    "timeoutSec": 240
+  },
+
+  "pushChecks": [
+    {
+      "name": "TypeScript",
+      "command": "npm run typecheck",
+      "timeoutSec": 240
+    }
+  ],
+
+  "requireCleanTree": true,
+
+  "$comment_brainPaths": "Files whose changes require a fresh full audit before shipping: gate logic, ranker, cost math, eligibility/SNP routing, formulary and provider matching. Enumerated (not `src/lib/` prefix) because src/lib/ also contains non-brain UI/session/theme helpers.",
+  "brainPaths": [
+    "src/lib/plan-brain.ts",
+    "src/lib/plan-brain-explanations.ts",
+    "src/lib/plan-brain-ribbons.ts",
+    "src/lib/plan-brain-types.ts",
+    "src/lib/plan-brain-utils.ts",
+    "src/lib/plan-brain-weights.ts",
+    "src/lib/planFilter.ts",
+    "src/lib/planCatalog.ts",
+    "src/lib/planMatchWizard.ts",
+    "src/lib/formularyLookup.ts",
+    "src/lib/drugCosts.ts",
+    "src/lib/resolveAgentBaseDrugs.ts",
+    "src/lib/parseDrugName.ts",
+    "src/lib/rxnorm.ts",
+    "src/lib/networkCheck.ts",
+    "src/lib/fhir.ts",
+    "src/lib/npi.ts",
+    "src/lib/dual-eligible.ts",
+    "src/lib/lis-cap-agent-v3.ts",
+    "src/lib/condition-detector.ts",
+    "src/lib/condition-profiles.ts",
+    "src/lib/utilization-model.ts",
+    "src/lib/extractBenefitValue.ts",
+    "src/lib/cmsPlans.ts",
+    "src/lib/inpatient-format.ts",
+    "src/lib/broker-rules.ts",
+    "src/lib/broker-playbook.ts",
+    "src/lib/compliance.ts",
+    "src/lib/classify-explanation.ts",
+    "api/plans.ts",
+    "api/plans-with-extras.ts",
+    "api/plan-brain-data.ts",
+    "api/formulary.ts",
+    "api/network-check.ts",
+    "api/provider-network-status.ts"
+  ],
+
+  "fullAudit": {
+    "enabled": false,
+    "$comment_disabled": "Disabled for brain-path pushes: the six-persona secret shopper diffs Supabase (pm_plans / pm_plan_benefits / pm_formulary) against medicare.gov — it never exercises the brain code, so it's the wrong gate for brain changes. A brain golden test will replace it as the brain-path gate.",
+    "$comment": "Six-persona secret shopper: Playwright/Chromium vs medicare.gov + direct Supabase (pm_plans / pm_plan_benefits / pm_formulary) diff. Tests THIS commit's assumption about the data it queries — no local Plan Match server needed. Slow (minutes to an hour, Akamai-sensitive).",
+    "steps": [
+      {
+        "name": "Six-persona secret shopper",
+        "command": "npm run test:persona-audit",
+        "timeoutSec": 3600,
+        "failPattern": "\\b[1-9]\\d*\\s+REDs?\\b"
+      }
+    ]
+  },
+
+  "$comment_protectedPaths": "Edits here trigger an approval prompt for Rob. Validators are protected so a failing check can't be 'fixed' by loosening it.",
+  "protectedPaths": [
+    ".claude/settings.json",
+    ".claude/settings.local.json",
+    ".claude/hooks/",
+    ".githooks/",
+    "scripts/gate/",
+    "CLAUDE.md",
+    "scripts/cms-ground-truth-validate.ts",
+    "scripts/cms-ground-truth-fixtures.json",
+    "scripts/cms-secret-shopper.ts"
+  ]
+}
