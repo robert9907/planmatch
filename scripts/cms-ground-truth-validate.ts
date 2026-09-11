@@ -161,7 +161,7 @@ interface CliArgs {
 
 function parseArgs(argv: string[]): CliArgs {
   const out: CliArgs = {
-    base: 'https://planmatch.vercel.app',
+    base: (process.env.PLAN_MATCH_BASE_URL ?? 'https://planmatch.vercel.app').replace(/\/+$/, ''),
     verbose: false,
     snapshot: false,
     fixturePath: resolve(

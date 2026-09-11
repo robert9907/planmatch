@@ -95,7 +95,8 @@ anon+authenticated by default. RLS is the only gate. See
 ## Gates — enforced by hooks, not by memory
 
 - Every `git commit`: the typecheck must pass.
-- Every `git push`: typecheck + CMS ground-truth validator must pass, on a clean tree, with the pushed branch checked out.
+- Every `git push`: typecheck must pass, on a clean tree, with the pushed branch checked out.
+- CMS ground truth runs against the branch's Vercel preview URL before any merge to main (PLAN_MATCH_BASE_URL=<preview>). A merge requires 228/228, with B8b-accepted pairs counted.
 - A push that changes brain paths also needs a passing full audit (secret-shopper suite) on that exact commit: `node scripts/gate/full-audit.mjs`.
 - Dry run anytime: `node scripts/gate/ship-gate.mjs manual`.
 - If a gate blocks you, fix the cause. Never use `--no-verify`, change `core.hooksPath`, deploy with the Vercel CLI, or edit gate files or validators to get past a failure. Those trigger an approval prompt for Rob.

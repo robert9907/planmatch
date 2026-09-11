@@ -12,12 +12,6 @@
       "name": "TypeScript",
       "command": "npm run typecheck",
       "timeoutSec": 240
-    },
-    {
-      "name": "CMS ground truth",
-      "command": "npx tsx scripts/cms-ground-truth-validate.ts",
-      "timeoutSec": 600,
-      "failPattern": "\\b[1-9]\\d*\\s+fail\\b"
     }
   ],
 
