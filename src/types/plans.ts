@@ -64,6 +64,15 @@ export interface CostShare {
   copay: number | null;
   coinsurance: number | null;
   description: string | null;
+  /** Display-only same-benefit range from the CMS PBP filing: copay
+   *  (low) / copay_max (high), coinsurance (low) / coinsurance_max
+   *  (high). The UI shows "$low–$high" (or "low%–high%") when they
+   *  differ, else the single value. Never built from alt_copay/
+   *  alt_coinsurance. Optional so older cached payloads still type-check. */
+  copay_low?: number | null;
+  copay_high?: number | null;
+  coinsurance_low?: number | null;
+  coinsurance_high?: number | null;
   /** ── The other filed cost-share, when the sources disagreed ─────
    *  api/plans.ts merges pm_plan_benefits with pbp_benefits and has to
    *  pick ONE copay/coinsurance per category. For medical cost-sharing

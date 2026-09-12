@@ -204,6 +204,10 @@ export function formatCostShareWithRange(
         copay: number | null;
         coinsurance: number | null;
         description: string | null;
+        copay_low?: number | null;
+        copay_high?: number | null;
+        coinsurance_low?: number | null;
+        coinsurance_high?: number | null;
       }
     | undefined
     | null,
@@ -211,6 +215,19 @@ export function formatCostShareWithRange(
 ): string {
   if (opts?.isPdp) return 'N/A — Part D only';
   if (!cs) return '—';
+  // Prefer the structured same-benefit range (copay_low/copay_high from
+  // the CMS PBP filing's copay/copay_max) over parsing the description.
+  // Show "$low–$high" when they differ, single value otherwise.
+  if (cs.copay_low != null && cs.copay_high != null && cs.copay_high > cs.copay_low) {
+    return `$${cs.copay_low}–$${cs.copay_high}`;
+  }
+  if (
+    cs.coinsurance_low != null &&
+    cs.coinsurance_high != null &&
+    cs.coinsurance_high > cs.coinsurance_low
+  ) {
+    return `${cs.coinsurance_low}%–${cs.coinsurance_high}%`;
+  }
   if (cs.copay != null) {
     if (cs.description) {
       const m = cs.description.match(COST_RANGE_RE);
