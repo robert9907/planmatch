@@ -1663,6 +1663,24 @@ const COPAY_RANGE_SKIP_CATEGORIES: ReadonlySet<string> = new Set([
 // Category-level, never per-plan.
 const HIGH_END_COPAY_CATEGORIES: ReadonlySet<string> = new Set(['asc']);
 
+// Categories where Plan Finder publishes the copay as a range and
+// headlines the LOW end ("Specialist: $0–$55 copay"), so the graded
+// numeric is the cms_pbp copay LOW. The pm/landscape row that currently
+// wins the merge carries a flat high value (the range max), which is not
+// what Plan Finder shows. Category-level, never per-plan. When cms_pbp
+// filed a flat value the low equals the high, so the result is unchanged.
+const LOW_END_COPAY_CATEGORIES: ReadonlySet<string> = new Set([
+  'specialist', 'urgent_care',
+]);
+
+// Categories where Plan Finder publishes the coinsurance as a range and
+// headlines the LOW end (0%): cms_pbp files 0% (the range low) while the
+// medicare_gov / landscape row files the high (20/30/45%). Grade on the
+// cms_pbp coinsurance LOW. Category-level, never per-plan.
+const LOW_END_COINSURANCE_CATEGORIES: ReadonlySet<string> = new Set([
+  'asc', 'urgent_care', 'ambulance',
+]);
+
 export function costShareFor(
   rows: BenefitRow[],
   category: string,
@@ -1705,17 +1723,28 @@ export function costShareFor(
       maxCoverage != null &&
       maxCoverage > 0 &&
       maxCoverage !== rawCopay;
-    // For HIGH_END categories (e.g. ASC), Plan Finder headlines the CMS
-    // PBP high, so grade on the cms_pbp copay_max when it's on file;
-    // otherwise fall back to the filed value. All other categories keep
-    // the July filed-low behavior.
+    // Graded copay, per Plan Finder's per-benefit display convention:
+    //  • HIGH_END (ASC): the cms_pbp copay_max.
+    //  • LOW_END (specialist, urgent_care): the cms_pbp copay low.
+    //  • everything else: the July filed value on the winning row.
+    // Fall back to the filed value whenever cms_pbp filed nothing.
     const gradedCopay =
       HIGH_END_COPAY_CATEGORIES.has(hit.benefit_category) && cmsCHigh != null
         ? cmsCHigh
-        : rawCopay;
+        : LOW_END_COPAY_CATEGORIES.has(hit.benefit_category) && cmsCLow != null
+          ? cmsCLow
+          : rawCopay;
+    // Graded coinsurance: LOW_END categories (asc, urgent_care, ambulance)
+    // take the cms_pbp coinsurance low (0%), which is what Plan Finder
+    // shows; the medicare_gov/landscape row files the high. Everything
+    // else keeps the filed value.
+    const gradedCoins =
+      LOW_END_COINSURANCE_CATEGORIES.has(hit.benefit_category) && cmsILow != null
+        ? cmsILow
+        : rawCoins;
     return {
       copay: gradedCopay,
-      coinsurance: rawCoins,
+      coinsurance: gradedCoins,
       description: hit.benefit_description ?? null,
       copay_low: hasCmsCopay ? (cmsCLow ?? cmsCHigh) : rawCopay,
       copay_high: hasCmsCopay ? (cmsCHigh ?? cmsCLow) : (fallbackHasRange ? maxCoverage : rawCopay),

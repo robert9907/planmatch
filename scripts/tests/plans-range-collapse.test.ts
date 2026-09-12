@@ -133,6 +133,44 @@ test('specialist with cms range 0–55 → numeric stays 0 (low), range shown', 
   assert.equal(cs.copay_high, 55);
 });
 
+// LOW_END copay rule: specialist/urgent_care grade on the cms_pbp low even
+// when the winning (pm) row filed a flat high value.
+test('specialist: winning row 45 but cms low 0 → numeric 0 (Plan Finder low)', () => {
+  const rows = [row({ benefit_category: 'specialist', copay: 45, cms_copay_low: 0, cms_copay_high: 45 })];
+  const cs = costShareFor(rows, 'specialist');
+  assert.equal(cs.copay, 0, 'grades on cms_pbp copay low, not the flat winning copay');
+  assert.equal(cs.copay_high, 45);
+});
+
+test('urgent_care: winning row 65 but cms low 0 → numeric 0, range $0–$65', () => {
+  const rows = [row({ benefit_category: 'urgent_care', copay: 65, cms_copay_low: 0, cms_copay_high: 65 })];
+  const cs = costShareFor(rows, 'urgent_care');
+  assert.equal(cs.copay, 0);
+  assert.equal(cs.copay_high, 65);
+});
+
+// LOW_END coinsurance rule: asc/urgent_care/ambulance grade on cms_pbp
+// coinsurance low (0%) even when the winning row filed the high.
+test('asc coinsurance: winning row 20% but cms low 0 → numeric 0%', () => {
+  const rows = [row({ benefit_category: 'asc', coinsurance: 20, cms_coins_low: 0, cms_coins_high: 0 })];
+  const cs = costShareFor(rows, 'outpatient_surgery_asc');
+  assert.equal(cs.coinsurance, 0, 'grades on cms_pbp coinsurance low');
+});
+
+test('ambulance coinsurance: winning row 45% but cms low 0 → numeric 0%, range 0–45%', () => {
+  const rows = [row({ benefit_category: 'ambulance', coinsurance: 45, cms_coins_low: 0, cms_coins_high: 45 })];
+  const cs = costShareFor(rows, 'ambulance');
+  assert.equal(cs.coinsurance, 0);
+  assert.equal(cs.coinsurance_high, 45);
+});
+
+// A LOW_END category with no cms filing keeps the winning row's value.
+test('urgent_care with no cms range → numeric stays the filed value', () => {
+  const rows = [row({ benefit_category: 'urgent_care', copay: 30 })];
+  const cs = costShareFor(rows, 'urgent_care');
+  assert.equal(cs.copay, 30);
+});
+
 // ─── H5253-117 canonical rows: numeric is the low, range carries high ─
 
 test('H5253-117 specialist: numeric 0, range high 35', () => {
