@@ -125,46 +125,65 @@ test('asc with flat cms value 150 → numeric 150, single value', () => {
   assert.equal(cs.copay_high, 150);
 });
 
-// Non-HIGH_END category keeps the filed-low behavior even with a cms range.
-test('specialist with cms range 0–55 → numeric stays 0 (low), range shown', () => {
+// Specialist keeps the real filed copay even with a cms range: the copay
+// stays the filed value (here 0), and the range high rides along display-only.
+test('specialist with cms range 0–55 → numeric stays the filed 0, range shown', () => {
   const rows = [row({ benefit_category: 'specialist', copay: 0, cms_copay_low: 0, cms_copay_high: 55 })];
   const cs = costShareFor(rows, 'specialist');
-  assert.equal(cs.copay, 0, 'specialist headlines the low, unchanged');
+  assert.equal(cs.copay, 0, 'the filed copay is 0 here — the range floor is not what wins');
   assert.equal(cs.copay_high, 55);
 });
 
-// LOW_END copay rule: specialist/urgent_care grade on the cms_pbp low even
-// when the winning (pm) row filed a flat high value.
-test('specialist: winning row 45 but cms low 0 → numeric 0 (Plan Finder low)', () => {
+// ROB'S DECISION: specialist/urgent_care copay is the REAL filed value on
+// the winning row, NOT the cms_pbp low (that low is a published range floor,
+// not the visit price). The $0–$high range is still shown display-only.
+test('specialist: winning row 45, cms low 0 → numeric 45 (real filed), range $0–$45', () => {
   const rows = [row({ benefit_category: 'specialist', copay: 45, cms_copay_low: 0, cms_copay_high: 45 })];
   const cs = costShareFor(rows, 'specialist');
-  assert.equal(cs.copay, 0, 'grades on cms_pbp copay low, not the flat winning copay');
+  assert.equal(cs.copay, 45, 'real filed copay wins, not the cms_pbp range floor');
+  assert.equal(cs.copay_low, 0, 'range floor is display-only');
   assert.equal(cs.copay_high, 45);
 });
 
-test('urgent_care: winning row 65 but cms low 0 → numeric 0, range $0–$65', () => {
+test('urgent_care: winning row 65, cms low 0 → numeric 65 (real filed), range $0–$65', () => {
   const rows = [row({ benefit_category: 'urgent_care', copay: 65, cms_copay_low: 0, cms_copay_high: 65 })];
   const cs = costShareFor(rows, 'urgent_care');
-  assert.equal(cs.copay, 0);
+  assert.equal(cs.copay, 65, 'real filed copay wins, not the cms_pbp range floor');
+  assert.equal(cs.copay_low, 0);
   assert.equal(cs.copay_high, 65);
 });
 
-// LOW_END coinsurance rule: asc/urgent_care/ambulance grade on cms_pbp
-// coinsurance low (0%) even when the winning row filed the high.
-test('asc coinsurance: winning row 20% but cms low 0 → numeric 0%', () => {
+// asc coinsurance is KEPT on the cms_pbp low: cms_pbp never files a
+// coinsurance_max for asc, so its coinsurance is a flat real value — a 0%
+// means the plan charges a copay instead (a genuine $0 coinsurance).
+test('asc coinsurance: cms low 0 → numeric 0% (real flat $0, plan is copay-based)', () => {
   const rows = [row({ benefit_category: 'asc', coinsurance: 20, cms_coins_low: 0, cms_coins_high: 0 })];
   const cs = costShareFor(rows, 'outpatient_surgery_asc');
-  assert.equal(cs.coinsurance, 0, 'grades on cms_pbp coinsurance low');
+  assert.equal(cs.coinsurance, 0, 'asc stays LOW_END: cms_pbp files no coinsurance_max, so 0 is real');
 });
 
-test('ambulance coinsurance: winning row 45% but cms low 0 → numeric 0%, range 0–45%', () => {
+// ambulance coinsurance is DROPPED from LOW_END: cms_pbp DOES file a
+// coinsurance_max and ground/air split with different cost-shares, so the
+// aggregate low is a range floor. Keep the real filed coinsurance; show range.
+test('ambulance coinsurance: winning row 45%, cms low 0 → numeric 45% (real filed), range 0–45%', () => {
   const rows = [row({ benefit_category: 'ambulance', coinsurance: 45, cms_coins_low: 0, cms_coins_high: 45 })];
   const cs = costShareFor(rows, 'ambulance');
-  assert.equal(cs.coinsurance, 0);
+  assert.equal(cs.coinsurance, 45, 'real filed coinsurance wins, not the aggregate 0% floor');
+  assert.equal(cs.coinsurance_low, 0, 'range floor is display-only');
   assert.equal(cs.coinsurance_high, 45);
 });
 
-// A LOW_END category with no cms filing keeps the winning row's value.
+// urgent_care coinsurance is DROPPED from LOW_END: cms_pbp files a
+// coinsurance_max (0–20/30% range on some plans), so 0 is a range floor.
+test('urgent_care coinsurance: winning row 20%, cms low 0 → numeric 20% (real filed), range 0–20%', () => {
+  const rows = [row({ benefit_category: 'urgent_care', coinsurance: 20, cms_coins_low: 0, cms_coins_high: 20 })];
+  const cs = costShareFor(rows, 'urgent_care');
+  assert.equal(cs.coinsurance, 20, 'real filed coinsurance wins, not the range floor');
+  assert.equal(cs.coinsurance_low, 0);
+  assert.equal(cs.coinsurance_high, 20);
+});
+
+// A category with no cms filing keeps the winning row's value.
 test('urgent_care with no cms range → numeric stays the filed value', () => {
   const rows = [row({ benefit_category: 'urgent_care', copay: 30 })];
   const cs = costShareFor(rows, 'urgent_care');

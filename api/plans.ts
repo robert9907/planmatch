@@ -1663,22 +1663,33 @@ const COPAY_RANGE_SKIP_CATEGORIES: ReadonlySet<string> = new Set([
 // Category-level, never per-plan.
 const HIGH_END_COPAY_CATEGORIES: ReadonlySet<string> = new Set(['asc']);
 
-// Categories where Plan Finder publishes the copay as a range and
-// headlines the LOW end ("Specialist: $0–$55 copay"), so the graded
-// numeric is the cms_pbp copay LOW. The pm/landscape row that currently
-// wins the merge carries a flat high value (the range max), which is not
-// what Plan Finder shows. Category-level, never per-plan. When cms_pbp
-// filed a flat value the low equals the high, so the result is unchanged.
-const LOW_END_COPAY_CATEGORIES: ReadonlySet<string> = new Set([
-  'specialist', 'urgent_care',
-]);
+// ROB'S DECISION (reverses the earlier fix/remaining-nine attempt): do
+// NOT grade specialist/urgent_care copay on the cms_pbp low. Plan
+// Finder's "$0–$45" low end is the FLOOR of a published range, not the
+// price of a specialist visit. Grading the numeric on the low would feed
+// $0 into Gate 4 for a visit that actually costs $45. The real filed
+// copay (the value on the winning row) wins over the validator score, so
+// there is no LOW_END_COPAY_CATEGORIES set — those copays fall through to
+// rawCopay, which is the main-branch behavior. The $0–$45 range is still
+// surfaced as display-only via copay_low/copay_high below.
 
-// Categories where Plan Finder publishes the coinsurance as a range and
-// headlines the LOW end (0%): cms_pbp files 0% (the range low) while the
-// medicare_gov / landscape row files the high (20/30/45%). Grade on the
-// cms_pbp coinsurance LOW. Category-level, never per-plan.
+// Coinsurance categories where the cms_pbp 0% is a REAL flat $0 cost-
+// share, not the floor of a range, so grading on the cms_pbp coinsurance
+// low is correct. Only `asc` qualifies: cms_pbp never files a
+// coinsurance_max for outpatient_surgery_asc (0 of 5,777 rows), so its
+// coinsurance is always a single filed value — a 0% means the plan
+// charges a copay instead, a genuine $0 coinsurance. urgent_care and
+// ambulance were dropped after the step-4 audit: both DO file a
+// coinsurance_max (urgent_care 216 rows, ambulance 9,203 rows), and
+// each has plans filing 0% as the low of a 0–20/30% range (urgent_care
+// 13 plans, ambulance-ground 93 plans). Ambulance additionally splits
+// ground/air with different cost-shares on 2,079 plans (ground a flat
+// copay, air 20% coinsurance), so an aggregate "low" understates one
+// mode. For those two the 0% is a range floor — same as the specialist
+// copay case — so they keep the real filed coinsurance (rawCoins).
+// Category-level, never per-plan.
 const LOW_END_COINSURANCE_CATEGORIES: ReadonlySet<string> = new Set([
-  'asc', 'urgent_care', 'ambulance',
+  'asc',
 ]);
 
 export function costShareFor(
@@ -1725,19 +1736,17 @@ export function costShareFor(
       maxCoverage !== rawCopay;
     // Graded copay, per Plan Finder's per-benefit display convention:
     //  • HIGH_END (ASC): the cms_pbp copay_max.
-    //  • LOW_END (specialist, urgent_care): the cms_pbp copay low.
-    //  • everything else: the July filed value on the winning row.
+    //  • everything else (incl. specialist, urgent_care): the real filed
+    //    value on the winning row. The cms_pbp low is a range floor, not
+    //    the visit price, so it is display-only (copay_low below).
     // Fall back to the filed value whenever cms_pbp filed nothing.
     const gradedCopay =
       HIGH_END_COPAY_CATEGORIES.has(hit.benefit_category) && cmsCHigh != null
         ? cmsCHigh
-        : LOW_END_COPAY_CATEGORIES.has(hit.benefit_category) && cmsCLow != null
-          ? cmsCLow
-          : rawCopay;
-    // Graded coinsurance: LOW_END categories (asc, urgent_care, ambulance)
-    // take the cms_pbp coinsurance low (0%), which is what Plan Finder
-    // shows; the medicare_gov/landscape row files the high. Everything
-    // else keeps the filed value.
+        : rawCopay;
+    // Graded coinsurance: LOW_END_COINSURANCE (asc only) takes the
+    // cms_pbp coinsurance low, which for asc is a real flat $0 (the plan
+    // charges a copay). Everything else keeps the real filed coinsurance.
     const gradedCoins =
       LOW_END_COINSURANCE_CATEGORIES.has(hit.benefit_category) && cmsILow != null
         ? cmsILow
