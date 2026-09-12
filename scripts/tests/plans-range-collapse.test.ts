@@ -100,11 +100,37 @@ test('lab_services alias → lab: copay=0, max=20 → numeric 0, range 0–20', 
   assert.equal(cs.copay_high, 20);
 });
 
-test('outpatient_surgery_asc alias → asc: copay=0, max=325 → numeric 0, range 0–325', () => {
+test('outpatient_surgery_asc alias → asc: copay=0, max=325, no cms range → numeric 0, range 0–325', () => {
   const rows = [row({ benefit_category: 'asc', copay: 0, max_coverage: 325 })];
   const cs = costShareFor(rows, 'outpatient_surgery_asc');
   assert.equal(cs.copay, 0);
   assert.equal(cs.copay_high, 325);
+});
+
+// HIGH_END rule: ASC is graded on the cms_pbp copay_max (Plan Finder
+// headlines the high). With the cms range stamped, the numeric is the
+// high, and the range still spans low→high.
+test('asc with cms range 0–375 → numeric 375 (high), range $0–$375', () => {
+  const rows = [row({ benefit_category: 'asc', copay: 35, cms_copay_low: 0, cms_copay_high: 375 })];
+  const cs = costShareFor(rows, 'outpatient_surgery_asc');
+  assert.equal(cs.copay, 375, 'ASC grades on cms_pbp copay_max, not the filed flat copay');
+  assert.equal(cs.copay_low, 0);
+  assert.equal(cs.copay_high, 375);
+});
+
+test('asc with flat cms value 150 → numeric 150, single value', () => {
+  const rows = [row({ benefit_category: 'asc', copay: 25, cms_copay_low: 150, cms_copay_high: 150 })];
+  const cs = costShareFor(rows, 'outpatient_surgery_asc');
+  assert.equal(cs.copay, 150);
+  assert.equal(cs.copay_high, 150);
+});
+
+// Non-HIGH_END category keeps the filed-low behavior even with a cms range.
+test('specialist with cms range 0–55 → numeric stays 0 (low), range shown', () => {
+  const rows = [row({ benefit_category: 'specialist', copay: 0, cms_copay_low: 0, cms_copay_high: 55 })];
+  const cs = costShareFor(rows, 'specialist');
+  assert.equal(cs.copay, 0, 'specialist headlines the low, unchanged');
+  assert.equal(cs.copay_high, 55);
 });
 
 // ─── H5253-117 canonical rows: numeric is the low, range carries high ─

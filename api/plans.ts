@@ -1652,6 +1652,17 @@ const COPAY_RANGE_SKIP_CATEGORIES: ReadonlySet<string> = new Set([
   'transportation', 'rx_deductible', 'partb_giveback',
 ]);
 
+// Categories where Medicare Plan Finder headlines the HIGH end of the
+// CMS PBP copay range as the member-facing number, so the graded numeric
+// must be the cms_pbp copay_max, not the filed low. Per Rob's standing
+// rule "match what Plan Finder displays for that specific benefit" —
+// there is no global always-low/always-high rule. Ambulatory surgical
+// center (pm category 'asc') files $0–$max but Plan Finder shows the max;
+// contrast specialist/urgent_care, which show the low. When cms_pbp filed
+// a flat value the max equals the low, so the result is unchanged.
+// Category-level, never per-plan.
+const HIGH_END_COPAY_CATEGORIES: ReadonlySet<string> = new Set(['asc']);
+
 export function costShareFor(
   rows: BenefitRow[],
   category: string,
@@ -1694,8 +1705,16 @@ export function costShareFor(
       maxCoverage != null &&
       maxCoverage > 0 &&
       maxCoverage !== rawCopay;
+    // For HIGH_END categories (e.g. ASC), Plan Finder headlines the CMS
+    // PBP high, so grade on the cms_pbp copay_max when it's on file;
+    // otherwise fall back to the filed value. All other categories keep
+    // the July filed-low behavior.
+    const gradedCopay =
+      HIGH_END_COPAY_CATEGORIES.has(hit.benefit_category) && cmsCHigh != null
+        ? cmsCHigh
+        : rawCopay;
     return {
-      copay: rawCopay,
+      copay: gradedCopay,
       coinsurance: rawCoins,
       description: hit.benefit_description ?? null,
       copay_low: hasCmsCopay ? (cmsCLow ?? cmsCHigh) : rawCopay,
