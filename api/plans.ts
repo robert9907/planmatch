@@ -1673,24 +1673,19 @@ const HIGH_END_COPAY_CATEGORIES: ReadonlySet<string> = new Set(['asc']);
 // rawCopay, which is the main-branch behavior. The $0–$45 range is still
 // surfaced as display-only via copay_low/copay_high below.
 
-// Coinsurance categories where the cms_pbp 0% is a REAL flat $0 cost-
-// share, not the floor of a range, so grading on the cms_pbp coinsurance
-// low is correct. Only `asc` qualifies: cms_pbp never files a
-// coinsurance_max for outpatient_surgery_asc (0 of 5,777 rows), so its
-// coinsurance is always a single filed value — a 0% means the plan
-// charges a copay instead, a genuine $0 coinsurance. urgent_care and
-// ambulance were dropped after the step-4 audit: both DO file a
-// coinsurance_max (urgent_care 216 rows, ambulance 9,203 rows), and
-// each has plans filing 0% as the low of a 0–20/30% range (urgent_care
-// 13 plans, ambulance-ground 93 plans). Ambulance additionally splits
-// ground/air with different cost-shares on 2,079 plans (ground a flat
-// copay, air 20% coinsurance), so an aggregate "low" understates one
-// mode. For those two the 0% is a range floor — same as the specialist
-// copay case — so they keep the real filed coinsurance (rawCoins).
-// Category-level, never per-plan.
-const LOW_END_COINSURANCE_CATEGORIES: ReadonlySet<string> = new Set([
-  'asc',
-]);
+// No category grades coinsurance on the cms_pbp low. The step-4 audit
+// dropped urgent_care and ambulance (both file a coinsurance_max, so a
+// 0% is the floor of a 0–20/30% range — urgent_care 13 plans, ambulance
+// 93 ground plans; ambulance also splits ground/air on 2,079 plans). asc
+// looked safe because cms_pbp never files a coinsurance_max for it — but
+// the per-plan check (step 1) showed cms_pbp files asc as a BARE 0%
+// (copay=null, copay_max=null, coinsurance_max=null) on the very plans
+// where the landscape row files the real 20%/30% (H5253-041 → 20%,
+// H5453-016 → 30%). That 0% is not a real cost-share — it is not backed
+// by any copay — so grading on it would show $0 for an ASC procedure that
+// costs 20/30% coinsurance and feed $0 into Gate 4. Every category now
+// keeps the real filed coinsurance (rawCoins); the cms_pbp span is still
+// surfaced display-only via coinsurance_low/coinsurance_high below.
 
 export function costShareFor(
   rows: BenefitRow[],
@@ -1744,13 +1739,10 @@ export function costShareFor(
       HIGH_END_COPAY_CATEGORIES.has(hit.benefit_category) && cmsCHigh != null
         ? cmsCHigh
         : rawCopay;
-    // Graded coinsurance: LOW_END_COINSURANCE (asc only) takes the
-    // cms_pbp coinsurance low, which for asc is a real flat $0 (the plan
-    // charges a copay). Everything else keeps the real filed coinsurance.
-    const gradedCoins =
-      LOW_END_COINSURANCE_CATEGORIES.has(hit.benefit_category) && cmsILow != null
-        ? cmsILow
-        : rawCoins;
+    // Graded coinsurance: the real filed value on the winning row. No
+    // category takes the cms_pbp low (see the note above); the cms_pbp
+    // span rides along display-only via coinsurance_low/high below.
+    const gradedCoins = rawCoins;
     return {
       copay: gradedCopay,
       coinsurance: gradedCoins,

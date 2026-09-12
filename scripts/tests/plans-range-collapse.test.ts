@@ -153,13 +153,16 @@ test('urgent_care: winning row 65, cms low 0 → numeric 65 (real filed), range 
   assert.equal(cs.copay_high, 65);
 });
 
-// asc coinsurance is KEPT on the cms_pbp low: cms_pbp never files a
-// coinsurance_max for asc, so its coinsurance is a flat real value — a 0%
-// means the plan charges a copay instead (a genuine $0 coinsurance).
-test('asc coinsurance: cms low 0 → numeric 0% (real flat $0, plan is copay-based)', () => {
+// asc coinsurance is DROPPED from LOW_END too (step-1 finding): cms_pbp
+// files asc as a BARE 0% (no copay, no coinsurance_max) on the plans where
+// the landscape row files the real 20%/30% (H5253-041 20%, H5453-016 30%).
+// That 0% is not backed by any copay, so it is not a real cost-share —
+// keep the real filed coinsurance; show the cms span display-only.
+test('asc coinsurance: winning row 20%, cms bare low 0 → numeric 20% (real filed), range low 0', () => {
   const rows = [row({ benefit_category: 'asc', coinsurance: 20, cms_coins_low: 0, cms_coins_high: 0 })];
   const cs = costShareFor(rows, 'outpatient_surgery_asc');
-  assert.equal(cs.coinsurance, 0, 'asc stays LOW_END: cms_pbp files no coinsurance_max, so 0 is real');
+  assert.equal(cs.coinsurance, 20, 'real filed coinsurance wins, not the bare cms 0%');
+  assert.equal(cs.coinsurance_low, 0, 'cms low is display-only');
 });
 
 // ambulance coinsurance is DROPPED from LOW_END: cms_pbp DOES file a
