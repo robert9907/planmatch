@@ -38,6 +38,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
+import type { ClassifiedPriorityKey } from '@/lib/plan-brain';
 import { usePlanBrain } from '@/hooks/usePlanBrain';
 import { useRankedPlans } from '@/hooks/useRankedPlans';
 import { normalizePlanId } from '@/lib/library-client';
@@ -159,9 +160,10 @@ type HydrationState =
   | { kind: 'error'; clientId: string; message: string };
 
 // Priority keys that map directly to extras-axis benefit_type strings.
-// All PriorityKey values map 1:1 today; the Partial<Record> shape is
-// kept so future non-extras toggles can be added without breaking the
-// extras-derivation below.
+// All nine map 1:1 HERE, but only seven are read by Gate 3 (see
+// EXTRAS_GATE_KEYS in src/lib/plan-brain.ts). Presence in this map does
+// not make a toggle do anything: healthy_foods and partb_giveback take
+// effect only through CompareScreen's bench-filter seeding.
 const PRIORITY_TO_EXTRAS: Partial<Record<PriorityKey, string>> = {
   dental: 'dental',
   vision: 'vision',
@@ -173,6 +175,29 @@ const PRIORITY_TO_EXTRAS: Partial<Record<PriorityKey, string>> = {
   healthy_foods: 'healthy_foods',
   partb_giveback: 'partb_giveback',
 };
+
+// Compile-time guard for the Gate 3 classification invariant: every key
+// the picker offers must be either gated (EXTRAS_GATE_KEYS) or
+// explicitly excused (NON_GATE_PRIORITY_KEYS), both in
+// src/lib/plan-brain.ts.
+//
+// Add a tenth toggle to PriorityKey and forget to classify it, and this
+// stops compiling with the offending key named in the error, instead of
+// the key riding into applyExtrasGate, matching nothing, and silently
+// doing nothing while the explanation panel still renders
+// "<label> not offered" on the plans it just kept.
+//
+// No list is duplicated here — the check is derived from the two
+// sources of truth, so it cannot itself go stale.
+type UnclassifiedPriorityKeys = Exclude<PriorityKey, ClassifiedPriorityKey>;
+type PriorityKeyClassificationCheck = [UnclassifiedPriorityKeys] extends [never]
+  ? true
+  : {
+      ERROR: 'PriorityKey is not classified for Gate 3 — add it to EXTRAS_GATE_KEYS or NON_GATE_PRIORITY_KEYS in src/lib/plan-brain.ts';
+      unclassified: UnclassifiedPriorityKeys;
+    };
+const _priorityKeysAreClassified: PriorityKeyClassificationCheck = true;
+void _priorityKeysAreClassified;
 
 // Default = nothing pre-toggled. With Gate 3's strict "must offer"
 // elimination, a default-on dental + vision was eliminating every plan

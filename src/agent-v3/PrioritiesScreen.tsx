@@ -1,11 +1,28 @@
 // PrioritiesScreen — agent-v3 screen 4.
 //
-// Ranked pick-3 for extras. The selected keys ride to the consumer
-// brain's Gate 3 (see ~/Code/plan-match/packages/brain/src/plan-brain.ts
-// — post-2026-07 semantics): P1 hard-eliminates, P2 and P3 contribute
-// to gate3Score. Insertion order determines slot: first tap = P1.
-// Reorder buttons on the priority-order panel let the broker adjust
-// after the fact.
+// Ranked pick-3 for extras. Insertion order determines slot: first tap
+// = P1. Reorder buttons on the priority-order panel let the broker
+// adjust after the fact.
+//
+// The selected keys ride to TWO Gate 3 implementations with different
+// semantics, because AgentV3App runs both rankers side by side:
+//
+//   useRankedPlans → the consumer API
+//     (~/Code/plan-match/packages/brain/src/plan-brain.ts, post-2026-07)
+//     P1 hard-eliminates, P2/P3 contribute to gate3Score, cap 3. This
+//     is the path the RANK ORDER actually matters on.
+//
+//   usePlanBrain → the local brain (src/lib/plan-brain.ts)
+//     applyExtrasGate takes a Set, so rank order is discarded. EVERY
+//     selected key that is in EXTRAS_GATE_KEYS hard-eliminates, equally;
+//     there is no gate3Score in this repo at all. Keys listed in
+//     NON_GATE_PRIORITY_KEYS (healthy_foods, partb_giveback) do not
+//     eliminate here — they take effect through CompareScreen's bench
+//     filters instead.
+//
+// So reordering changes the consumer ranking and the order of the
+// per-plan explanation lines; it does not change which plans the local
+// brain eliminates.
 
 import { useEffect, useRef, useState } from 'react';
 import { Container, Header, Nav } from './atoms';
@@ -23,34 +40,15 @@ const PRIORITY_BG: Record<number, string> = {
   2: '#d1faff',
 };
 
-export interface PriorityToggle {
-  key: PriorityKey;
-  label: string;
-  icon: string;
-}
+// PriorityKey / PRIORITY_OPTIONS moved to ./priority-keys (no React
+// import) so scripts/tests/priority-key-classification.test.ts can load
+// the toggle list under `tsx --test`. Re-exported here so existing
+// `from './PrioritiesScreen'` imports are unaffected.
+export type { PriorityKey, PriorityToggle } from './priority-keys';
+export { PRIORITY_OPTIONS } from './priority-keys';
 
-export type PriorityKey =
-  | 'dental'
-  | 'vision'
-  | 'hearing'
-  | 'otc'
-  | 'fitness'
-  | 'transportation'
-  | 'telehealth'
-  | 'healthy_foods'
-  | 'partb_giveback';
-
-export const PRIORITY_OPTIONS: PriorityToggle[] = [
-  { key: 'dental',         label: 'Dental',           icon: '🦷' },
-  { key: 'vision',         label: 'Vision',           icon: '👁' },
-  { key: 'hearing',        label: 'Hearing aids',     icon: '👂' },
-  { key: 'otc',            label: 'OTC allowance',    icon: '🛒' },
-  { key: 'fitness',        label: 'Gym / Fitness',    icon: '🏋️' },
-  { key: 'transportation', label: 'Transportation',   icon: '🚗' },
-  { key: 'telehealth',     label: 'Telehealth',       icon: '📺' },
-  { key: 'healthy_foods',  label: 'Healthy foods',    icon: '🥦' },
-  { key: 'partb_giveback', label: 'Part B giveback',  icon: '↩️' },
-];
+import { PRIORITY_OPTIONS } from './priority-keys';
+import type { PriorityKey } from './priority-keys';
 
 interface Props {
   selected: PriorityKey[];

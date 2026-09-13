@@ -407,20 +407,75 @@ function applyMedicationGate(
 //
 // Empty priorities ⇒ all of Gates 1+2 survivors pass, cost-sorted.
 //
-// Every current PriorityKey maps to a Gate-3 benefit category. The
-// PRIORITY_TO_EXTRAS map in AgentV3App is the upstream filter — if a
-// future toggle is added that doesn't have a benefit row, mapping it
-// to `undefined` there will keep it out of this gate.
+// NOT every PriorityKey maps to a Gate-3 benefit category. Six of the
+// nine do — the EXTRAS_GATE_KEYS list below. The other three are
+// handled, or not handled, elsewhere:
+//
+//   healthy_foods   → no Gate 3 effect. CompareScreen seeds the
+//                     'has_food_card' bench filter from it instead.
+//   partb_giveback  → no Gate 3 effect. CompareScreen seeds the
+//                     'part_b_giveback' bench filter from it instead.
+//   telehealth      → backed by planHasTelehealth() below and IS a
+//                     Gate 3 key. It is a medical cost-share rather
+//                     than an extras dollar value, so it is checked
+//                     for "filed at all", the same shape as
+//                     transportation.
+//
+// If you add a toggle, decide which of those three shapes it has
+// before shipping it — mapping it in PRIORITY_TO_EXTRAS is not enough
+// to make it do anything.
 
-const EXTRAS_GATE_KEYS = [
+export const EXTRAS_GATE_KEYS = [
   'dental',
   'vision',
   'hearing',
   'otc',
   'fitness',
   'transportation',
+  'telehealth',
 ] as const;
-type ExtrasGateKey = (typeof EXTRAS_GATE_KEYS)[number];
+export type ExtrasGateKey = (typeof EXTRAS_GATE_KEYS)[number];
+
+/**
+ * Priorities the picker offers that Gate 3 deliberately does NOT
+ * eliminate on, each with the reason it is excused.
+ *
+ * This exists so "not gated" is a recorded decision instead of an
+ * absence. Before it, a key that was missing from EXTRAS_GATE_KEYS was
+ * indistinguishable from a key nobody had gotten to yet: it was passed
+ * into applyExtrasGate, matched nothing, and was dropped without a
+ * trace — while the explanation layer (plan-brain-explanations.ts)
+ * happily rendered "<label> not offered" on plans the gate had just
+ * kept. Selecting Healthy foods changed no ranking and then told you
+ * the top pick did not have it.
+ *
+ * Filing rates below are pbp_benefits_v2, plan_year 2026, measured
+ * 2026-09-13 against a universe of 7,028 plan segments.
+ */
+export const NON_GATE_PRIORITY_KEYS = {
+  healthy_foods:
+    "Filed by 205 of 7,028 segments (2.9%). As a hard 'must offer' " +
+    'eliminator it would empty the pool in most counties. Takes effect ' +
+    "instead through CompareScreen's 'has_food_card' bench filter, " +
+    'which narrows the bench without deciding the Top 4.',
+  partb_giveback:
+    'Filed by 131 of 7,028 segments (1.9%) — same blast radius as ' +
+    "healthy_foods. Seeds CompareScreen's 'part_b_giveback' bench " +
+    'filter, and separately carries a tier picker (TIER_THRESHOLDS in ' +
+    'brain-foreign-types.ts) that credits the extras axis, so it is ' +
+    'scored even though it does not eliminate.',
+} as const;
+
+export type NonGatePriorityKey = keyof typeof NON_GATE_PRIORITY_KEYS;
+
+/**
+ * Every priority key the picker may offer must be one or the other.
+ * AgentV3App asserts this at compile time against its own PriorityKey
+ * union; scripts/tests/priority-key-classification.test.ts asserts it
+ * again at runtime against PRIORITY_OPTIONS, which is what actually
+ * reaches a broker.
+ */
+export type ClassifiedPriorityKey = ExtrasGateKey | NonGatePriorityKey;
 
 function planHasTransportation(s: BrainScoredPlan): boolean {
   // Aggregated Plan.benefits.transportation.rides_per_year > 0 is the
@@ -436,8 +491,59 @@ function planHasTransportation(s: BrainScoredPlan): boolean {
   return s.benefits.some((b) => b.benefit_category === 'transportation');
 }
 
+// Telehealth is a medical cost-share, not an extras-axis dollar
+// benefit, so it has no annual value to extract — "offers it" means the
+// plan filed a telehealth cost-share at all. Mirrors
+// planHasTransportation: a filed copay, a filed coinsurance, or a
+// non-empty description all count as evidence the benefit exists.
+//
+// Scale, re-measured against pbp_benefits_v2 plan_year 2026 on
+// 2026-09-13 (plan segment = contract-plan-segment, leading zeros
+// stripped; universe 7,028 segments with any benefit row):
+//
+//   benefit_type 'telehealth'        1,851 segments  (26.3%)
+//   benefit_type 'telehealth_visit'    401 segments
+//   segments filing BOTH               401
+//   union                            1,851
+//
+// 'telehealth_visit' is a STRICT SUBSET of 'telehealth' — every segment
+// that files one files the other — so reading only the 'telehealth'
+// category loses nothing. (An earlier draft of this comment read the
+// two counts as additive and implied a 367-plan blind spot. There is
+// none.)
+//
+// So the gate is not cosmetic: selecting Telehealth eliminates ~74% of
+// the pool, because most plans file nothing under either type. That is
+// the honest reading of the data we have; absence of a filed row is not
+// proof the plan has no telehealth coverage. This is the same "must
+// offer" bargain the other six gate keys already make, and Gate 4
+// degrades the same way — fewer than four survivors yields fewer than
+// four picks, and zero survivors yields a null liveTop3.
+//
+// Note the sources disagree in shape: the 1,243 cms_pbp rows carry
+// coinsurance only (no copay, no description), while medicare_gov
+// carries copay and description. Checking all three fields is what
+// makes both sources count.
+//
+// If "telehealth" should instead mean "$0 telehealth to the member",
+// tighten the copay/coinsurance branches below to === 0 — that is a
+// narrower promise and a smaller pool, and it is Rob's call, not a
+// refactor.
+function planHasTelehealth(s: BrainScoredPlan): boolean {
+  if (s.plan) {
+    const cs = s.plan.benefits.medical?.telehealth;
+    if (!cs) return false;
+    if (cs.copay !== null && cs.copay !== undefined) return true;
+    if (cs.coinsurance !== null && cs.coinsurance !== undefined) return true;
+    const desc = cs.description;
+    return typeof desc === 'string' && desc.trim().length > 0;
+  }
+  return s.benefits.some((b) => b.benefit_category === 'telehealth');
+}
+
 function planOffersExtra(s: BrainScoredPlan, key: ExtrasGateKey): boolean {
   if (key === 'transportation') return planHasTransportation(s);
+  if (key === 'telehealth') return planHasTelehealth(s);
   if (s.plan) {
     // Aggregated path — the broken hardcoded-null adapter is bypassed.
     // partb_giveback isn't a Gate 3 key here so planLevel isn't needed.
@@ -447,14 +553,36 @@ function planOffersExtra(s: BrainScoredPlan, key: ExtrasGateKey): boolean {
   return extractCategoryAnnualValue(s.benefits, key) > 0;
 }
 
-interface ExtrasGateResult {
+export interface ExtrasGateResult {
   fullMatch: BrainScoredPlan[];
   selectedExtras: ReadonlyArray<string>;
   /** Plans eliminated by Gate 3 — surfaced for the diagnostic log. */
   eliminated: BrainScoredPlan[];
+  /**
+   * Priorities the caller selected that this gate did NOT act on —
+   * every selected key that is not in EXTRAS_GATE_KEYS.
+   *
+   * Two populations land here and they mean different things:
+   *  • Keys in NON_GATE_PRIORITY_KEYS — excused on purpose, reason
+   *    recorded there. Expected; not a bug.
+   *  • Anything else — an unclassified key reached the brain. That is
+   *    a wiring bug (a new picker option, or a caller inventing its own
+   *    priority strings the way QuoteDeliveryV4 does), and it means the
+   *    broker ticked something that silently did nothing.
+   *
+   * Returned rather than logged-and-forgotten so the Gate 3 diagnostic
+   * can name it and the test can assert on it.
+   */
+  ignoredPriorities: ReadonlyArray<string>;
 }
 
-function applyExtrasGate(
+/**
+ * Exported for scripts/tests/gate3-extras.test.ts. Gate 3 had no test
+ * at all until 2026-09-13, which is how telehealth / healthy_foods /
+ * partb_giveback stayed un-gated and unnoticed for a month. Not
+ * intended for use outside runPlanBrain.
+ */
+export function applyExtrasGate(
   pool: ReadonlyArray<BrainScoredPlan>,
   priorities: ReadonlySet<string>,
 ): ExtrasGateResult {
@@ -462,12 +590,17 @@ function applyExtrasGate(
     priorities.has(k),
   );
   const selectedExtras: string[] = [...selectedGateKeys];
+  const gateKeySet: ReadonlySet<string> = new Set<string>(EXTRAS_GATE_KEYS);
+  const ignoredPriorities: string[] = [...priorities].filter(
+    (k) => !gateKeySet.has(k),
+  );
 
   if (selectedGateKeys.length === 0) {
     return {
       fullMatch: [...pool].sort(compareByCostThenTiebreakers),
       selectedExtras,
       eliminated: [],
+      ignoredPriorities,
     };
   }
 
@@ -489,6 +622,7 @@ function applyExtrasGate(
     fullMatch: [...survivors].sort(compareByCostThenTiebreakers),
     selectedExtras,
     eliminated,
+    ignoredPriorities,
   };
 }
 
@@ -1146,7 +1280,11 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   for (const s of extrasGate.fullMatch) s.score.gate3Passed = true;
   debugLog(
     `Gate 3: ${extrasGate.fullMatch.length}/${gate2Sorted.length} survived ` +
-    `(eliminated: ${extrasGate.eliminated.length}, selected=[${extrasGate.selectedExtras.join(',')}])`,
+    `(eliminated: ${extrasGate.eliminated.length}, selected=[${extrasGate.selectedExtras.join(',')}]` +
+    (extrasGate.ignoredPriorities.length > 0
+      ? `, not gated=[${extrasGate.ignoredPriorities.join(',')}]`
+      : '') +
+    ')',
   );
   console.log('Gate 3:', extrasGate.fullMatch.length, 'survived');
 
