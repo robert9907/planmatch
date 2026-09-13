@@ -39,10 +39,38 @@ export interface OtcBenefit {
   description?: string | null;
 }
 
+/**
+ * The food-classifier tier carried on Plan.benefits.food_card, read
+ * from pm_plan_benefits.food_category (written by
+ * runFoodClassifierPass in the consumer's
+ * scripts/merge-pbp-into-pm-plan-benefits.ts).
+ *
+ * These are the four values that appear on benefit_category 'meals',
+ * which is the only row api/plans.ts reads the tier from. The
+ * classifier emits other values on other categories — notably
+ * 'meals_post_discharge' on benefit_category 'meal_benefit' — and
+ * those deliberately never reach here: post-discharge meal delivery is
+ * not a grocery card and must not satisfy a healthy-food filter.
+ *
+ * Live distribution on 'meals' rows, 2026-09-13:
+ *   none                  495
+ *   flex_card_food        164
+ *   food_card_unverified   94
+ *   food_card              38
+ *
+ * null when the classifier has not reached this plan-segment.
+ */
+export type FoodCategoryTier =
+  | 'food_card'
+  | 'flex_card_food'
+  | 'food_card_unverified'
+  | 'none';
+
 export interface FoodCardBenefit {
   allowance_per_month: number;
   restricted_to_medicaid_eligible: boolean;
   description?: string | null;
+  food_category?: FoodCategoryTier | string | null;
 }
 
 export interface DiabeticBenefit {

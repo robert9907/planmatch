@@ -18,6 +18,8 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { Plan } from '@/types/plans';
 
+import { planHasFoodCard, type FoodTier } from '../food-tier';
+
 // ── Network shape lookup ───────────────────────────────────────────
 // pm_plans.plan_shape carries the raw landscape plan_type string. The
 // brain's plan_type column is the app-level bucket (MA / MAPD / DSNP /
@@ -83,7 +85,8 @@ export interface CostQualityDef {
   show?: boolean;
 }
 
-function buildCostQualityDefs(selectedProviderCount: number): CostQualityDef[] {
+/** Exported for scripts/tests/food-card-tier.test.ts. */
+export function buildCostQualityDefs(selectedProviderCount: number): CostQualityDef[] {
   return [
     { key: 'zero_premium', label: '$0 Premium', predicate: (p) => p.consumerPremium === 0 },
     {
@@ -100,7 +103,28 @@ function buildCostQualityDefs(selectedProviderCount: number): CostQualityDef[] {
     {
       key: 'has_food_card',
       label: 'Has Food Card',
-      predicate: (p) => p.foodCardMonthly > 0,
+      // Reads the pm_plan_benefits.food_category classifier, the same
+      // taxonomy packages/brain gates healthy_foods on, so the agent
+      // bench and the consumer Top 4 agree on what a food card is.
+      // Passing tiers: food_card (verified, $ known), flex_card_food
+      // (food + OTC/utility pool, $ known), food_card_unverified
+      // (chronic-condition eligibility may apply). 'none' fails.
+      //
+      // Falls back to the old allowance > 0 rule only when the
+      // classifier has not reached the plan-seg (food_category null).
+      //
+      // Post-discharge meals cannot leak in through either path.
+      // api/plans.ts reads food_category from the 'meals' row ONLY, so
+      // the 'meal_benefit' row's 'meals_post_discharge' never reaches
+      // foodTier; and that row carries no coverage_amount, so it never
+      // reaches foodCardMonthly either.
+      //
+      // Scale of the change, measured 2026-09-13: the tier rule passes
+      // 296 plan-segments where allowance > 0 passed 202. All 94 of the
+      // newly-passing plans are food_card_unverified — real cards with
+      // no filed dollar, which the old rule hid. No plan passes the old
+      // rule and fails this one.
+      predicate: (p) => planHasFoodCard(p.foodTier, p.foodCardMonthly),
     },
     {
       key: 'has_docs_in_net',
@@ -234,6 +258,8 @@ export interface NormalizedPlan {
   partBGiveback: number;
   hasDrugCoverage: boolean;
   foodCardMonthly: number;
+  /** null when the classifier has not reached this plan-seg. */
+  foodTier: FoodTier | null;
   dentalComprehensive: boolean;
   inNetworkNpiCount: number;
   /** consumer_premium * 12 + brain-scored annual drug cost. Null when
@@ -312,6 +338,7 @@ function normalizePlan(
     partBGiveback: plan.part_b_giveback ?? 0,
     hasDrugCoverage: plan.has_drug_coverage === true,
     foodCardMonthly: plan.benefits?.food_card?.allowance_per_month ?? 0,
+    foodTier: (plan.benefits?.food_card?.food_category as FoodTier | undefined) ?? null,
     dentalComprehensive: plan.benefits?.dental?.comprehensive === true,
     inNetworkNpiCount,
     annualCostEstimate,

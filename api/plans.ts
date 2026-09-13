@@ -193,7 +193,7 @@ interface PlanBenefits {
   hearing: { aid_allowance_year: number; exam: boolean; description: string | null };
   transportation: { rides_per_year: number; distance_miles: number; description: string | null };
   otc: { allowance_per_quarter: number; description: string | null };
-  food_card: { allowance_per_month: number; restricted_to_medicaid_eligible: boolean; description: string | null };
+  food_card: { allowance_per_month: number; restricted_to_medicaid_eligible: boolean; description: string | null; food_category: string | null };
   diabetic: { covered: boolean; preferred_brands: string[] };
   fitness: { enabled: boolean; program: string | null };
   medical: {
@@ -285,6 +285,18 @@ export interface BenefitRow {
   copay: number | null;
   coinsurance: number | null;
   max_coverage: number | null;
+  /**
+   * Six-way food classifier written by
+   * scripts/merge-pbp-into-pm-plan-benefits.ts (runFoodClassifierPass)
+   * onto pm_plan_benefits.food_category. Present only on the two
+   * categories the classifier owns:
+   *   benefit_category 'meals'        → food_card | flex_card_food |
+   *                                     food_card_unverified | none
+   *   benefit_category 'meal_benefit' → meals_post_discharge
+   * Null/absent on every other category, and on plan-segments the
+   * classifier has not reached.
+   */
+  food_category?: string | null;
   // ── Displaced cost-share (the "other" filing) ───────────────────
   // Two independent merges below pick ONE cost-share per (triple,
   // category): the pbp source-priority dedup (medicare_gov 5 >
@@ -1055,7 +1067,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await sb
         .from('pm_plan_benefits')
         .select(
-          'id, contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage',
+          'id, contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage, food_category',
         )
         .in('contract_id', contractIds)
         .in('plan_id', planIds)
@@ -1946,6 +1958,12 @@ function buildBenefits(
   const foodCardMonthly = pmFoodCardMonthly > 0
     ? pmFoodCardMonthly
     : (pbpFallback?.foodCardMonthly ?? 0);
+  // The classifier tier lives on the 'meals' row. Deliberately NOT
+  // falling back to the 'meal_benefit' row: that one is always
+  // 'meals_post_discharge', which is a hospital-discharge meal
+  // delivery, not a grocery card, and must never satisfy a
+  // healthy-food filter.
+  const foodTier = rows.find((r) => r.benefit_category === 'meals')?.food_category ?? null;
 
   // b10b → transportation. coverage_amount is either a dollar cap OR
   // the presence marker (1). The schema's transportation.rides_per_year
@@ -2021,6 +2039,19 @@ function buildBenefits(
     },
     food_card: {
       allowance_per_month: foodCardMonthly,
+      // Which KIND of food benefit this is, straight from the
+      // classifier. Read off the 'meals' row, which is where
+      // runFoodClassifierPass writes it — NOT off `foodCard` above,
+      // which resolves benefit_category 'food_card' (the synthetic row
+      // built from pbp benefit_type) and never carries the column.
+      //
+      // Why the agent bench needs it: the old "has a food card" test
+      // was allowance_per_month > 0, which silently hid every plan
+      // whose card has no filed dollar. Measured 2026-09-13 against
+      // pm_plan_benefits: 296 plan-segments carry a passing tier while
+      // only 202 have allowance > 0 — a 94-plan gap, all of them
+      // food_card_unverified. Zero plans move the other way.
+      food_category: foodTier,
       restricted_to_medicaid_eligible: false,
       description:
         foodCard?.benefit_description ??
