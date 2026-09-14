@@ -126,3 +126,56 @@ These 9 fixtures fail on purpose. The value we serve is correct; the fixture hol
 - No category grades coinsurance on a cms_pbp low: `LOW_END_COINSURANCE_CATEGORIES` is intentionally empty.
 
 **The only legitimate way these turn green:** the fixtures were captured 2026-06-27. Re-capture them from Medicare Plan Finder. Do not adjust the fixtures to match the code, and do not change the code to match the fixtures.
+
+---
+
+## Worktrees and `node_modules`
+
+A fresh `git worktree` of this repo has **no** `node_modules`, and the
+pre-push gate (`.githooks/pre-push` → `scripts/gate/ship-gate.mjs`)
+typechecks HEAD. Without a complete install it fails on unresolvable
+`react` / `@types/node` / `vite` imports that your branch never touched.
+
+**On the Mac, symlink to the parent install** — deps are identical
+between worktrees, only the `scripts` entries differ:
+
+```
+ln -s ../planmatch/node_modules node_modules
+```
+
+**Do NOT leave a partial `node_modules` behind.** Copying a couple of
+packages in to run one script (say `pg` + `xlsx`) leaves a directory that
+looks installed and silently breaks the next push from that worktree.
+
+### The cross-machine caveat
+
+This install is **darwin-arm64**. A cloud/Linux session sharing these
+folders cannot use it: `npm run test:*` and any `npx tsx` that resolves
+the local `node_modules` die with
+
+```
+You installed esbuild for another platform than the one you're currently using.
+Specifically the "@esbuild/darwin-arm64" package is present but this
+platform needs the "@esbuild/linux-arm64" package instead.
+```
+
+So the symlink is right for Mac-side work and wrong for Linux-side work.
+From a Linux session, move it aside for the duration of a test run:
+
+```
+mv node_modules ../_nm_link && npx tsx --test scripts/tests/<file>.test.ts
+mv ../_nm_link node_modules
+```
+
+`npx tsx` with **no** local `node_modules` fetches a platform-correct
+`tsx` and works. Note that `npm install` of `xlsx` fails from the Linux
+side regardless — it ships from `cdn.sheetjs.com`, which the egress
+allowlist blocks.
+
+### Worktree paths across machines
+
+A worktree's `.git` file holds one absolute gitdir path, so a worktree
+created on one machine reads as `fatal: not a git repository` on the
+other. Fix with `git worktree repair <path>` on the machine you are on —
+never `git worktree prune`, which deregisters every worktree belonging to
+the *other* machine and orphans any uncommitted work in it.
