@@ -22,9 +22,10 @@
 //       tier_specialty,        // per-plan-tier CMS flag
 //       deductible_applies,    // whether the tier gets the Part D deductible
 //       phases: {
-//         deductible?:   { cost_type, cost_amount, cost_min, cost_max },
-//         initial?:      { cost_type, cost_amount, cost_min, cost_max },
-//         catastrophic?: { cost_type, cost_amount, cost_min, cost_max },
+//         deductible?:   { cost_type, cost_amount, cost_min, cost_max,
+//                          cost_pharmacy_type },
+//         initial?:      { ...same },
+//         catastrophic?: { ...same },
 //       },
 //     }],
 //     missing: [{ contract_id, plan_id, segment_id, rxcui }],
@@ -32,9 +33,19 @@
 //   }
 //
 // cost_type semantics (from CMS SPUF beneficiary_cost):
-//   0 = not applicable
+//   0 = not applicable — the plan filed NO cost share in this bucket.
+//       cost_amount is 0 but the member does not pay $0; callers must
+//       never render it as a dollar figure.
 //   1 = flat copay      → cost_amount is dollars
 //   2 = coinsurance     → cost_amount is fraction 0..1
+//
+// Preferred-pharmacy fallback: a plan that files no separate preferred
+// cost share leaves pharmacy_type 'pref' / 'mail_pref' at cost_type=0
+// and puts the real dollars in 'nonpref' / 'mail_nonpref'. For the 2026
+// release that is 56.4% of (plan, tier) rows at 'pref'. When the
+// requested bucket is cost_type=0 this endpoint serves the standard
+// bucket instead and reports which one it used in
+// phases[phase].cost_pharmacy_type.
 //
 // Coverage phase semantics (pm_beneficiary_cost_v2.coverage_level):
 //   0 = deductible phase (annual Part D deductible not yet met)
@@ -68,6 +79,29 @@ const PHASE_BY_COVERAGE_LEVEL: Record<number, PhaseKey> = {
   3: 'catastrophic',
 };
 
+// CMS PBP files a separate preferred-pharmacy cost share only when the
+// plan actually offers one. A plan with no preferred network (or one
+// that charges the same at both) files the preferred bucket as
+// cost_type=0 (NOT APPLICABLE) with cost_amount 0 and puts the real
+// dollars in the standard bucket. As of the 2026 release that is 56.4%
+// of (plan, tier) combos at pharmacy_type='pref' and 53.7% at
+// 'mail_pref'; 'nonpref' is 0%. Reading 'pref' alone therefore returned
+// a cost_type=0 / $0 cell for the majority of plans, which the Compare
+// card rendered as $0 cost sharing. When the requested bucket is not
+// applicable we fall back to the standard bucket for the same
+// (plan, tier, coverage_level, days_supply) — that IS what the member
+// pays — and report the substitution via PhaseCell.cost_pharmacy_type.
+const STANDARD_FALLBACK: Partial<Record<PharmacyType, PharmacyType>> = {
+  pref: 'nonpref',
+  mail_pref: 'mail_nonpref',
+};
+
+/** cost_type 1 = flat copay, 2 = coinsurance. Anything else (0 =
+ *  not applicable) carries no usable dollar value. */
+function hasUsableCostShare(row: { cost_type: number } | undefined): boolean {
+  return row != null && (row.cost_type === 1 || row.cost_type === 2);
+}
+
 interface PlanInput {
   contract_id: string;
   plan_id: string;
@@ -99,6 +133,7 @@ interface BeneficiaryCostRow {
   plan_year: number;
   tier: number;
   coverage_level: number;
+  pharmacy_type: PharmacyType;
   cost_type: number;
   cost_amount: number | null;
   cost_min: number | null;
@@ -112,6 +147,11 @@ interface PhaseCell {
   cost_amount: number | null;
   cost_min: number | null;
   cost_max: number | null;
+  /** Which pharmacy_type bucket this cell's dollars actually came from.
+   *  Equals the requested pharmacy_type unless that bucket was filed
+   *  cost_type=0 (not applicable) and we fell back to standard retail /
+   *  standard mail — see STANDARD_FALLBACK below. */
+  cost_pharmacy_type: PharmacyType;
 }
 
 interface ResultRow {
@@ -277,7 +317,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const allTiers = new Set<number>();
     for (const s of tiersByPlanTuple.values()) for (const t of s) allTiers.add(t);
 
+    // Requested bucket plus its standard-pharmacy fallback, fetched in
+    // the same round trip. `bcRowsByKey` holds the requested bucket;
+    // `fallbackRowsByKey` holds the standard bucket and is consulted
+    // only where the requested one is cost_type=0.
+    const fallbackPharmacyType = STANDARD_FALLBACK[pharmacy_type];
+    const pharmacyTypesToFetch: PharmacyType[] = fallbackPharmacyType
+      ? [pharmacy_type, fallbackPharmacyType]
+      : [pharmacy_type];
+
     const bcRowsByKey = new Map<string, Partial<Record<PhaseKey, BeneficiaryCostRow>>>();
+    const fallbackRowsByKey = new Map<
+      string,
+      Partial<Record<PhaseKey, BeneficiaryCostRow>>
+    >();
     let anyDeductibleApplies = new Map<string, boolean>();
     let anyTierSpecialty = new Map<string, boolean>();
 
@@ -287,7 +340,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const { data, error } = await sb
           .from('pm_beneficiary_cost_v2')
           .select(
-            'contract_id, plan_id, segment_id, plan_year, tier, coverage_level, cost_type, cost_amount, cost_min, cost_max, tier_specialty, deductible_applies',
+            'contract_id, plan_id, segment_id, plan_year, tier, coverage_level, pharmacy_type, cost_type, cost_amount, cost_min, cost_max, tier_specialty, deductible_applies',
           )
           .in('contract_id', contractIds)
           .in('plan_id', planIds)
@@ -296,7 +349,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .in('coverage_level', [0, 1, 3])
           .eq('plan_year', plan_year)
           .eq('days_supply_code', days_supply_code)
-          .eq('pharmacy_type', pharmacy_type)
+          .in('pharmacy_type', pharmacyTypesToFetch)
           .range(from, to);
         if (error) throw new Error(`pm_beneficiary_cost_v2: ${error.message}`);
         return (data ?? []) as BeneficiaryCostRow[];
@@ -310,12 +363,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const phase = PHASE_BY_COVERAGE_LEVEL[r.coverage_level];
         if (!phase) continue;
         const key = `${planKey}::${r.tier}`;
-        let cell = bcRowsByKey.get(key);
+        const target =
+          r.pharmacy_type === pharmacy_type ? bcRowsByKey : fallbackRowsByKey;
+        let cell = target.get(key);
         if (!cell) {
           cell = {};
-          bcRowsByKey.set(key, cell);
+          target.set(key, cell);
         }
         cell[phase] = r;
+        // tier_specialty / deductible_applies are tier attributes, not
+        // pharmacy attributes — take them from whichever bucket files
+        // them so the preferred bucket's blank rows don't erase the
+        // tier's specialty flag or its deductible applicability.
         if (r.deductible_applies) anyDeductibleApplies.set(key, true);
         if (r.tier_specialty) anyTierSpecialty.set(key, true);
       }
@@ -340,18 +399,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         const bcKey = fr.tier != null ? `${planKey}::${fr.tier}` : null;
         const cell = bcKey ? bcRowsByKey.get(bcKey) : undefined;
+        const fallbackCell = bcKey ? fallbackRowsByKey.get(bcKey) : undefined;
         const phases: Partial<Record<PhaseKey, PhaseCell>> = {};
-        if (cell) {
-          for (const phase of ['deductible', 'initial', 'catastrophic'] as const) {
-            const row = cell[phase];
-            if (!row) continue;
-            phases[phase] = {
-              cost_type: row.cost_type,
-              cost_amount: row.cost_amount,
-              cost_min: row.cost_min,
-              cost_max: row.cost_max,
-            };
-          }
+        for (const phase of ['deductible', 'initial', 'catastrophic'] as const) {
+          const requested = cell?.[phase];
+          // Prefer the requested bucket whenever it carries a real
+          // cost share. Otherwise use the standard bucket, which is
+          // where CMS puts the dollars when the plan files no separate
+          // preferred cost share. Emitting the cost_type=0 row would
+          // hand the caller a $0 cost share that the member does not
+          // actually get.
+          const fallback = fallbackCell?.[phase];
+          const row = hasUsableCostShare(requested)
+            ? requested
+            : hasUsableCostShare(fallback)
+              ? fallback
+              : requested ?? fallback;
+          if (!row) continue;
+          phases[phase] = {
+            cost_type: row.cost_type,
+            cost_amount: row.cost_amount,
+            cost_min: row.cost_min,
+            cost_max: row.cost_max,
+            cost_pharmacy_type: row.pharmacy_type,
+          };
         }
         results.push({
           contract_id: plan.contract_id,

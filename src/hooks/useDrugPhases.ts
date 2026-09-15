@@ -24,7 +24,7 @@ export type DrugPhaseKey = 'deductible' | 'initial' | 'catastrophic';
 export type DrugPhaseType = 'generic' | 'brand' | 'specialty';
 
 /** cost_type semantics (CMS SPUF beneficiary_cost):
- *    0 = not applicable
+ *    0 = not applicable — NO cost share filed. Never treat as $0 or 0%.
  *    1 = flat copay      → cost_amount is dollars
  *    2 = coinsurance     → cost_amount is fraction 0..1 */
 export interface DrugPhaseCell {
@@ -32,6 +32,11 @@ export interface DrugPhaseCell {
   cost_amount: number | null;
   cost_min: number | null;
   cost_max: number | null;
+  /** Which pharmacy bucket these dollars came from. Differs from the
+   *  requested pharmacy_type when the plan filed no separate preferred
+   *  cost share (cost_type=0) and the API substituted standard retail /
+   *  standard mail — which is what the member actually pays. */
+  cost_pharmacy_type?: PharmacyType;
 }
 
 export interface DrugPhaseHit {
