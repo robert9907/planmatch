@@ -34,6 +34,24 @@ function fmtUSD(n: number): string {
 const CREDENTIAL_SUFFIX_RE =
   /,?\s+(?:M\.?D\.?|D\.?O\.?|N\.?P\.?|P\.?A\.?-?C?|D\.?D\.?S\.?|D\.?M\.?D\.?|D\.?P\.?M\.?|D\.?C\.?|O\.?D\.?|Ph\.?D\.?|Psy\.?D\.?|R\.?N\.?|F\.?N\.?P\.?|A\.?P\.?R\.?N\.?|C\.?N\.?M\.?|MBBS|MBChB)\.?$/i;
 
+// Credentials that earn the "Dr." honorific. MIRROR of
+// DOCTORAL_CREDENTIALS in the consumer monorepo at
+// packages/shared/src/providerName.ts. This repo has no packages/ dir
+// and does not depend on @plan-match/shared, so the rule cannot be
+// imported — it is duplicated here deliberately. Keep the two sets
+// identical; scripts/check-provider-honorific.mjs fails the build if
+// this file reintroduces an unconditional "Dr.".
+const DOCTORAL_CREDENTIALS = new Set([
+  'MD', 'DO', 'MBBS', 'MBCHB', 'DDS', 'DMD', 'DPM', 'OD', 'DC', 'PHD', 'PSYD',
+]);
+
+/** The trailing credential on a name, normalized: "Jane Smith, PA-C" → "PAC". */
+function providerCredential(raw: string): string | null {
+  const m = (raw ?? '').trim().match(CREDENTIAL_SUFFIX_RE);
+  if (!m) return null;
+  return m[0].replace(/[^A-Za-z]/g, '').toUpperCase() || null;
+}
+
 function providerLastName(raw: string): string {
   const trimmed = (raw ?? '').trim();
   if (!trimmed) return '';
@@ -43,6 +61,30 @@ function providerLastName(raw: string): string {
   if (tokens.length === 0) return '';
   const last = tokens[tokens.length - 1];
   return last.charAt(0).toUpperCase() + last.slice(1).toLowerCase();
+}
+
+/**
+ * Label for a provider in a gate-1 explanation.
+ *
+ * The bug this replaces: providerLastName STRIPS the credential —
+ * CREDENTIAL_SUFFIX_RE matches NP, PA-C, RN, FNP, APRN, CNM among
+ * others — and the caller then prefixed "Dr." unconditionally. So
+ * "Jane Smith, NP" rendered as "Dr. Smith": the credential proving she
+ * is not a physician was removed, and then the claim she is one was
+ * added. Same defect as the consumer Top 4 screen, fixed separately.
+ *
+ * Rule, matching the consumer repo: prefix "Dr." only when the filed
+ * credential is doctoral. No credential on file earns no honorific —
+ * a missing credential is not evidence of a doctorate.
+ */
+function providerLabel(raw: string): string {
+  const last = providerLastName(raw);
+  if (!last) return '';
+  const credential = providerCredential(raw);
+  if (credential != null && DOCTORAL_CREDENTIALS.has(credential)) {
+    return `Dr. ${last}`;
+  }
+  return last;
 }
 
 // Trim trailing "(generic name)" suffix some drug names carry from
@@ -276,10 +318,13 @@ function evaluatePriorityChecks(args: {
 /**
  * Gate 1 — providers. One string per user-supplied provider.
  *
- *   "Dr. Klein is in-network"
- *   "Dr. Smith is out-of-network on this plan"
- *   "Dr. Doe — network status unverified"
- *   "Dr. Doe — no NPI on file, network status unverified"
+ *   "Dr. Klein is in-network"                (credential MD/DO/...)
+ *   "Smith is out-of-network on this plan"   (credential NP/PA/none)
+ *   "Doe — network status unverified"
+ *   "Doe — no NPI on file, network status unverified"
+ *
+ * The honorific is earned from the filed credential, never assumed —
+ * see providerLabel.
  *
  * Falls back to the contract-level `verifiedInNetworkContracts` set
  * when the per-NPI cache isn't available (mirrors the consumer brain).
@@ -293,7 +338,7 @@ export function buildGate1Explanations(
   if (providers.length === 0) return [];
   const verified = verifiedInNetworkContracts?.has(contractId) === true;
   return providers.map((p) => {
-    const label = `Dr. ${providerLastName(p.name)}`;
+    const label = providerLabel(p.name);
     if (!p.npi) return `${label} — no NPI on file, network status unverified`;
     if (providerCache) {
       const c = providerCache.get(p.npi);
