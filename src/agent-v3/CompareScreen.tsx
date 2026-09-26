@@ -3174,15 +3174,30 @@ function SlotCell({
   // priority order (gate 3 = benefits, gate 2 = drug coverage, gate 1 =
   // provider match). Falls back to a neutral summary when the brain
   // hasn't scored the plan yet.
-  const whyText: { text: string; tone: 'good' | 'warn' } = (() => {
+  // Tone comes from classifyExplanation, never from the fact that we
+  // picked the line. This strip used to hardcode tone:'good' on every
+  // branch, so "Smith is out-of-network on this plan" and "Synthroid is
+  // not covered on this plan" rendered mint green as the headline
+  // reason to choose the plan — while the SAME string, expanded one
+  // click later, rendered a red ✗ through classifyExplanation at
+  // renderRow. One component contradicting itself.
+  const toneForText = (text: string): 'good' | 'warn' | 'bad' => {
+    const state = classifyExplanation(text);
+    if (state === 'fail') return 'bad';
+    if (state === 'unverified') return 'warn';
+    return 'good';
+  };
+  const whyText: { text: string; tone: 'good' | 'warn' | 'bad' } = (() => {
     if (drugCoverageUnknown) {
       return { text: 'Drug coverage pending formulary verification', tone: 'warn' };
     }
     if (explanations) {
-      if (explanations.gate3?.[0]) return { text: explanations.gate3[0], tone: 'good' };
-      if (explanations.gate2?.[0]) return { text: explanations.gate2[0], tone: 'good' };
-      if (explanations.gate1?.[0]) return { text: explanations.gate1[0], tone: 'good' };
-      if (explanations.gate4) return { text: explanations.gate4, tone: 'good' };
+      const first =
+        explanations.gate3?.[0] ??
+        explanations.gate2?.[0] ??
+        explanations.gate1?.[0] ??
+        (explanations.gate4 || undefined);
+      if (first != null) return { text: first, tone: toneForText(first) };
     }
     return { text: 'Ranked by brain score', tone: 'good' };
   })();
@@ -3468,8 +3483,18 @@ function SlotCell({
             padding: '7px 10px',
             borderRadius: 7,
             lineHeight: 1.4,
-            background: whyText.tone === 'good' ? T.mint100 : T.amber100,
-            color: whyText.tone === 'good' ? T.mint700 : T.amber700,
+            background:
+              whyText.tone === 'good'
+                ? T.mint100
+                : whyText.tone === 'bad'
+                  ? 'rgba(239,68,68,0.12)'
+                  : T.amber100,
+            color:
+              whyText.tone === 'good'
+                ? T.mint700
+                : whyText.tone === 'bad'
+                  ? CORAL
+                  : T.amber700,
             cursor: 'default',
           }}
         >
