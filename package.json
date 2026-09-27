@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:full": "vercel dev",
-    "build": "npm run lint && tsc -b && vite build",
+    "build": "node scripts/check-provider-honorific.mjs && npm run lint && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
