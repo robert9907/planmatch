@@ -21,6 +21,7 @@ import {
   extractExtraAnnualFromAggregated,
   extractOtcQuarterly,
 } from './plan-brain-utils';
+import { foodTierPasses, normalizeFoodTier, type FoodTier } from '../../api/library/food-tier';
 
 // ─── Local helpers ──────────────────────────────────────────────────
 
@@ -103,6 +104,7 @@ function evaluatePriorityChecks(args: {
     benefit_category: string;
     coverage_amount: number | null;
     max_coverage: number | null;
+    food_category?: string | null;
   }>;
   moop: number | null;
   partBGivebackAnnual: number;
@@ -249,15 +251,52 @@ function evaluatePriorityChecks(args: {
                 ? 'telehealth'
                 : null;
       const filed = cat ? readAnnual(cat) : 0;
-      // Healthy-foods fallback: aggregated Plan has food_card.
-      // allowance_per_month; raw path checks for a 'meals' row.
-      const fallback =
-        pri === 'healthy_foods'
-          ? pb
-            ? (pb.food_card?.allowance_per_month ?? 0) > 0
-            : args.benefits.some((b) => b.benefit_category === 'meals')
-          : false;
-      const meets = filed > 0 || fallback;
+
+      // Healthy foods is decided by the six-way classifier, not by a
+      // dollar figure and not by the mere existence of a 'meals' row.
+      // Both old tests were wrong, in opposite directions: the
+      // aggregated path read food_card.allowance_per_month, which comes
+      // entirely from the medicare.gov scraper, and the raw path passed
+      // on ANY meals row at all — including the ones the classifier
+      // scores 'none'. Direct port of the consumer brain's
+      // healthy_foods branch (packages/brain/src/plan-brain.ts:707-735).
+      if (pri === 'healthy_foods') {
+        const tier: FoodTier = pb
+          ? normalizeFoodTier(pb.food_card?.food_category)
+          : normalizeFoodTier(
+              args.benefits.find((b) => b.benefit_category === 'meals')?.food_category,
+            );
+        const meetsFood = foodTierPasses(tier);
+        const mealsRow = args.benefits.find((b) => b.benefit_category === 'meals');
+        const monthly = mealsRow?.coverage_amount ?? null;
+        let foodLabel: string;
+        if (tier === 'food_card') {
+          foodLabel = monthly != null && monthly > 0
+            ? `Healthy food card $${Math.round(monthly)}/mo`
+            : `Healthy food card`;
+        } else if (tier === 'flex_card_food') {
+          foodLabel = monthly != null && monthly > 0
+            ? `Healthy food card / OTC / utilities benefit $${Math.round(monthly)}/mo`
+            : `Healthy food card / OTC / utilities benefit`;
+        } else if (tier === 'food_card_unverified') {
+          // Passes the gate, but the broker must see that eligibility is
+          // conditional. classify-explanation.ts gives this exact string
+          // a 'caveat' tone so it does not render as a plain green tick.
+          foodLabel = `Food benefit — not available to everyone on this plan. Health conditions apply.`;
+        } else {
+          foodLabel = `${TOGGLE_LABEL_BY_KEY.healthy_foods} not offered`;
+        }
+        out.push({
+          priority: pri,
+          label: foodLabel,
+          meets: meetsFood,
+          partial: false,
+          score: meetsFood ? 1 : 0,
+        });
+        continue;
+      }
+
+      const meets = filed > 0;
       const label = TOGGLE_LABEL_BY_KEY[pri] ?? pri;
       out.push({
         priority: pri,
@@ -356,6 +395,7 @@ export function buildGate3Explanations(
     coverage_amount: number | null;
     max_coverage: number | null;
     copay: number | null;
+    food_category?: string | null;
   }>,
   moop: number | null,
   partBGivebackAnnual: number,

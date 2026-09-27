@@ -26,8 +26,20 @@ export type ExplanationState = 'pass' | 'fail' | 'unverified';
  *     `Metformin — Tier 2, $4/mo`, `Dental $1,500 (your pick: $1,000+)`,
  *     `Fitness included`, the Gate 4 cost-rank line, etc).
  */
+// The healthy-foods caveat the brain emits for tier
+// 'food_card_unverified'. That tier PASSES the gate — the plan does
+// file a food benefit — but eligibility is conditional on health
+// status, so it must not read as a plain green tick. The consumer repo
+// gives this a dedicated 'caveat' tone (toneForExplanation in
+// apps/web/src/lib/classify-explanation.ts); this surface has three
+// states rather than four, so it maps to the amber one.
+const FOOD_CAVEAT = /Food benefit — not available to everyone/i;
+
 export function classifyExplanation(text: string): ExplanationState {
   const t = text.toLowerCase();
+
+  // 0. Conditional-eligibility food benefit — amber, never green.
+  if (FOOD_CAVEAT.test(text)) return 'unverified';
 
   // 1. Unverified / unknown / estimated.
   if (t.includes('unverified')) return 'unverified';
