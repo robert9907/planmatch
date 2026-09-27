@@ -35,6 +35,9 @@ import {
   getNonCommissionableSets,
 } from './_lib/non-commissionable.js';
 import { supabase } from './_lib/supabase.js';
+import { normalizeFoodTier, type FoodTier } from './library/food-tier.js';
+
+
 
 type AppPlanType = 'MA' | 'MAPD' | 'DSNP' | 'CSNP' | 'ISNP' | 'PDP' | 'MEDSUPP';
 
@@ -193,7 +196,7 @@ interface PlanBenefits {
   hearing: { aid_allowance_year: number; exam: boolean; description: string | null };
   transportation: { rides_per_year: number; distance_miles: number; description: string | null };
   otc: { allowance_per_quarter: number; description: string | null };
-  food_card: { allowance_per_month: number; restricted_to_medicaid_eligible: boolean; description: string | null };
+  food_card: { allowance_per_month: number; food_category: FoodTier; restricted_to_medicaid_eligible: boolean; description: string | null };
   diabetic: { covered: boolean; preferred_brands: string[] };
   fitness: { enabled: boolean; program: string | null };
   medical: {
@@ -285,6 +288,10 @@ export interface BenefitRow {
   copay: number | null;
   coinsurance: number | null;
   max_coverage: number | null;
+  /** Six-way healthy-food classifier, on the benefit_category='meals'
+   *  row only. Mirrors pm_plan_benefits.food_category. See
+   *  FOOD_TIER_PASSES below. */
+  food_category?: string | null;
   // ── Displaced cost-share (the "other" filing) ───────────────────
   // Two independent merges below pick ONE cost-share per (triple,
   // category): the pbp source-priority dedup (medicare_gov 5 >
@@ -1055,7 +1062,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await sb
         .from('pm_plan_benefits')
         .select(
-          'id, contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage',
+          'id, contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage, food_category',
         )
         .in('contract_id', contractIds)
         .in('plan_id', planIds)
@@ -1947,6 +1954,21 @@ function buildBenefits(
     ? pmFoodCardMonthly
     : (pbpFallback?.foodCardMonthly ?? 0);
 
+  // Healthy-food tier, read from the six-way classifier on the 'meals'
+  // row. This is a SEPARATE and more authoritative signal than
+  // foodCardMonthly above: pm_plan_benefits carries no 'food_card'
+  // rows at all, so foodCardMonthly comes entirely from the
+  // medicare.gov scraper fallback, and the scraper disagrees with the
+  // classifier in both directions.
+  //
+  // Mirrors readFoodCategoryFromBenefits + foodTierPasses in the
+  // consumer monorepo (packages/brain/src/plan-brain.ts:589-607). This
+  // repo cannot import @plan-match/shared, so the rule is duplicated;
+  // keep the passing set identical. The brain's comment is explicit:
+  // "Verified + unverified pass; 'none' / 'unknown' do not."
+  const mealsRow = rows.find((r) => r.benefit_category === 'meals');
+  const foodCategory: FoodTier = normalizeFoodTier(mealsRow?.food_category);
+
   // b10b → transportation. coverage_amount is either a dollar cap OR
   // the presence marker (1). The schema's transportation.rides_per_year
   // doesn't fit a dollar cap cleanly, so we surface rides_per_year as
@@ -2021,6 +2043,7 @@ function buildBenefits(
     },
     food_card: {
       allowance_per_month: foodCardMonthly,
+      food_category: foodCategory,
       restricted_to_medicaid_eligible: false,
       description:
         foodCard?.benefit_description ??

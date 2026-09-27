@@ -1,4 +1,5 @@
 import type { PlanType, StateCode } from './session';
+import type { FoodTier } from '../../api/library/food-tier';
 
 export type FormularyTier = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 'excluded';
 
@@ -41,6 +42,13 @@ export interface OtcBenefit {
 
 export interface FoodCardBenefit {
   allowance_per_month: number;
+  /** Six-way healthy-food classifier tier from
+   *  pm_plan_benefits.food_category on the 'meals' row. The
+   *  authoritative "does this plan have a food benefit" signal —
+   *  allowance_per_month comes from the medicare.gov scraper and
+   *  disagrees with it in both directions. See
+   *  api/library/food-tier.ts. */
+  food_category?: FoodTier;
   restricted_to_medicaid_eligible: boolean;
   description?: string | null;
 }

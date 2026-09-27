@@ -17,6 +17,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import type { Plan } from '@/types/plans';
+import { foodTierPasses, type FoodTier } from '../../../api/library/food-tier';
 
 // ── Network shape lookup ───────────────────────────────────────────
 // pm_plans.plan_shape carries the raw landscape plan_type string. The
@@ -100,7 +101,19 @@ function buildCostQualityDefs(selectedProviderCount: number): CostQualityDef[] {
     {
       key: 'has_food_card',
       label: 'Has Food Card',
-      predicate: (p) => p.foodCardMonthly > 0,
+      // Reads the six-way classifier, not the dollar figure. The old
+      // test was `foodCardMonthly > 0`, and foodCardMonthly comes
+      // entirely from the medicare.gov scraper fallback because
+      // pm_plan_benefits carries no 'food_card' rows at all. Measured
+      // 2026-09-26 across NC/TX/GA: that test passed 193 plans while
+      // the classifier finds 283. Every one of the 90 it missed was
+      // tier 'food_card_unverified', which the consumer brain's
+      // foodTierPasses explicitly PASSES ("verified + unverified
+      // pass"). It also passed one plan the classifier calls 'none'.
+      // So the chip hid a third of the healthy-food bench from a
+      // broker filtering on the benefit a dual-eligible cares most
+      // about.
+      predicate: (p) => foodTierPasses(p.foodCategory),
     },
     {
       key: 'has_docs_in_net',
@@ -234,6 +247,8 @@ export interface NormalizedPlan {
   partBGiveback: number;
   hasDrugCoverage: boolean;
   foodCardMonthly: number;
+  /** Six-way healthy-food classifier tier. See foodTierPasses. */
+  foodCategory: FoodTier;
   dentalComprehensive: boolean;
   inNetworkNpiCount: number;
   /** consumer_premium * 12 + brain-scored annual drug cost. Null when
@@ -312,6 +327,7 @@ function normalizePlan(
     partBGiveback: plan.part_b_giveback ?? 0,
     hasDrugCoverage: plan.has_drug_coverage === true,
     foodCardMonthly: plan.benefits?.food_card?.allowance_per_month ?? 0,
+    foodCategory: (plan.benefits?.food_card?.food_category ?? 'unknown') as FoodTier,
     dentalComprehensive: plan.benefits?.dental?.comprehensive === true,
     inNetworkNpiCount,
     annualCostEstimate,
