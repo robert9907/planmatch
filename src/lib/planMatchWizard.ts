@@ -16,6 +16,7 @@
 //     don't have on this side).
 //   - We don't have `ssn` or `homeStreet` on the AgentBase side — the
 //     broker captures those during the enrollment call.
+//   - SSN/MBI never go in the URL; see openPlanMatchWizard().
 
 import type { Client } from '@/types/session';
 
@@ -35,10 +36,36 @@ export function buildPlanMatchWizardUrl(client: Client): string {
   if (client.state) params.homeState = client.state;
   if (client.phone) params.phone = client.phone.replace(/\D/g, '').slice(-10);
   if (client.email) params.email = client.email;
-  if (client.mbi) params.medicareNumber = client.mbi.replace(/[\s-]/g, '').toUpperCase();
+  // MBI deliberately NOT in the URL (browser history, Vercel logs, copied
+  // links) — openPlanMatchWizard() hands it over with postMessage.
 
   const qs = new URLSearchParams(params).toString();
   return qs ? `${BASE_URL}?${qs}` : BASE_URL;
+}
+
+/**
+ * Open the wizard in a new tab and, once it posts "gh-enroll-prefill-ready",
+ * send the MBI to it — addressed only to the wizard's origin. Opened without
+ * "noopener" so the wizard can reach its opener for the handshake.
+ */
+export function openPlanMatchWizard(client: Client): void {
+  const url = buildPlanMatchWizardUrl(client);
+  const origin = new URL(url).origin;
+  const w = window.open(url, '_blank');
+  const mbi = (client.mbi ?? '').replace(/[\s-]/g, '').toUpperCase();
+  if (!w || !mbi) return;
+  const onMessage = (e: MessageEvent): void => {
+    if (e.origin !== origin || e.source !== w) return;
+    if ((e.data as { type?: string } | null)?.type !== 'gh-enroll-prefill-ready') return;
+    w.postMessage({ type: 'gh-enroll-prefill', medicareNumber: mbi }, origin);
+    cleanup();
+  };
+  const cleanup = (): void => {
+    window.removeEventListener('message', onMessage);
+    clearTimeout(timer);
+  };
+  const timer = setTimeout(cleanup, 120_000);
+  window.addEventListener('message', onMessage);
 }
 
 function splitName(full: string): { firstName: string; lastName: string } {

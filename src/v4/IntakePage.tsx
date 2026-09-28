@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSession } from '@/hooks/useSession';
 import { CurrentPlanPicker } from '@/components/picker/CurrentPlanPicker';
-import { buildPlanMatchWizardUrl } from '@/lib/planMatchWizard';
+import { openPlanMatchWizard } from '@/lib/planMatchWizard';
 import type { PlanType, StateCode } from '@/types/session';
 
 const STATE_OPTIONS: StateCode[] = ['NC', 'TX', 'GA'];
@@ -225,7 +225,7 @@ export function IntakePage({ onContinue, onBack }: Props) {
             type="button"
             className="btn out"
             disabled={!client.name || !client.phone}
-            onClick={() => window.open(buildPlanMatchWizardUrl(client), '_blank', 'noopener')}
+            onClick={() => openPlanMatchWizard(client)}
             title="Opens the Plan Match enrollment wizard in a new tab, pre-filled with this client's data."
           >
             Plan Match enrollment ↗
