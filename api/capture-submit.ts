@@ -10,6 +10,7 @@ import {
   type IncomingMedication,
   type IncomingProvider,
 } from './_lib/agentbaseDedup.js';
+import { resolveSnapRxcui } from './_lib/snapRxcui.js';
 
 export const config = {
   api: {
@@ -99,6 +100,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (session.agentbase_client_id && item.extracted.length > 0) {
       try {
         const { meds, providers } = mapExtractedToUpsertInputs(item.extracted);
+        // Attach an RxCUI when the label maps to exactly one drug, so the
+        // client card doesn't land on "NO CODE · PICK DRUG". Uncertain
+        // labels stay null for the broker to pick; rows stay UNVERIFIED.
+        await Promise.all(
+          meds.map(async (m) => {
+            m.rxcui = await resolveSnapRxcui(supabase(), {
+              name: m.name,
+              dose: m.dose ?? null,
+              form: m.form ?? null,
+            });
+          }),
+        );
         const ab = agentbaseSupabase();
         const [medRes, provRes] = await Promise.all([
           meds.length
@@ -144,11 +157,10 @@ function stripDataUrl(s: string): string {
 }
 
 // Translate Claude Vision's ExtractedItem shape to the neutral
-// {meds, providers} shape agentbaseDedup expects. Fields that are
-// specific to the quoting flow (rxcui, tier_on_recommended_plan,
-// refill_days as a supply-days number) are left off — Snap captures
-// only give us the free-text label surface, so the broker will
-// enrich those during the tap-to-confirm step.
+// {meds, providers} shape agentbaseDedup expects. rxcui is filled in
+// afterwards by resolveSnapRxcui (only when unambiguous); the other
+// quoting-flow fields (tier_on_recommended_plan, refill_days) are left
+// off for the broker to enrich during the tap-to-confirm step.
 function mapExtractedToUpsertInputs(items: ExtractedItem[]): {
   meds: IncomingMedication[];
   providers: IncomingProvider[];
