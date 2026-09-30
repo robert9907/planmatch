@@ -11,6 +11,8 @@ import {
   type IncomingProvider,
 } from './_lib/agentbaseDedup.js';
 import { resolveSnapRxcui } from './_lib/snapRxcui.js';
+import { daysSupply, nextRefillDate, quantityText } from './_lib/snapRefill.js';
+import { lookupTier } from './_lib/snapTier.js';
 
 export const config = {
   api: {
@@ -103,6 +105,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Attach an RxCUI when the label maps to exactly one drug, so the
         // client card doesn't land on "NO CODE · PICK DRUG". Uncertain
         // labels stay null for the broker to pick; rows stay UNVERIFIED.
+        const ab = agentbaseSupabase();
+        // Client's current plan, for the Tier column.
+        const { data: clientRow } = await ab
+          .from('clients')
+          .select('plan_id')
+          .eq('id', session.agentbase_client_id)
+          .maybeSingle();
+        const planId = (clientRow?.plan_id as string | null | undefined) ?? null;
         await Promise.all(
           meds.map(async (m) => {
             m.rxcui = await resolveSnapRxcui(supabase(), {
@@ -110,9 +120,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               dose: m.dose ?? null,
               form: m.form ?? null,
             });
+            // Tier on the client's current plan (blank without a code or plan).
+            m.tier_on_recommended_plan = await lookupTier(supabase(), planId, m.rxcui);
           }),
         );
-        const ab = agentbaseSupabase();
         const [medRes, provRes] = await Promise.all([
           meds.length
             ? upsertMedicationsForClient(ab, session.agentbase_client_id, meds, {
@@ -157,10 +168,9 @@ function stripDataUrl(s: string): string {
 }
 
 // Translate Claude Vision's ExtractedItem shape to the neutral
-// {meds, providers} shape agentbaseDedup expects. rxcui is filled in
-// afterwards by resolveSnapRxcui (only when unambiguous); the other
-// quoting-flow fields (tier_on_recommended_plan, refill_days) are left
-// off for the broker to enrich during the tap-to-confirm step.
+// {meds, providers} shape agentbaseDedup expects. rxcui and tier are
+// filled in afterwards (resolveSnapRxcui / lookupTier, only when
+// certain); quantity, days' supply and next refill come off the label.
 function mapExtractedToUpsertInputs(items: ExtractedItem[]): {
   meds: IncomingMedication[];
   providers: IncomingProvider[];
@@ -169,11 +179,22 @@ function mapExtractedToUpsertInputs(items: ExtractedItem[]): {
   const providers: IncomingProvider[] = [];
   for (const it of items) {
     if (it.type === 'medication' && it.drug_name) {
+      // Quantity, days' supply and next refill come straight off the
+      // label; anything the label doesn't make certain stays null.
+      const days = daysSupply({
+        printedDaysSupply: it.days_supply,
+        quantity: it.quantity,
+        instructions: it.dosage_instructions,
+        form: it.form,
+      });
       meds.push({
         name: it.drug_name,
         dose: it.strength,
         form: it.form,
         frequency: it.dosage_instructions,
+        quantity: quantityText(it.quantity),
+        refill_days: days != null ? String(days) : null,
+        refill_date: nextRefillDate(it.last_filled, days),
       });
     } else if (it.type === 'provider' && it.provider_name) {
       providers.push({
