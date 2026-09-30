@@ -14,7 +14,9 @@ Extract the following fields and return ONLY valid JSON, no markdown, no explana
   "pharmacy_name": "pharmacy name if present",
   "pharmacy_phone": "pharmacy phone if present",
   "refills_remaining": "number or null",
-  "last_filled": "date string or null",
+  "last_filled": "date the prescription was filled/dispensed, as YYYY-MM-DD, or null",
+  "quantity": "quantity dispensed (the QTY number) as a number, or null",
+  "days_supply": "days supply if printed (e.g. DS, DAYS SUPPLY), as a number, or null",
   "ndc_code": "NDC code if present or null",
   "confidence": "high|medium|low"
 }
@@ -137,6 +139,8 @@ function normalizeItem(raw: unknown): ExtractedItem {
       pharmacy_phone: nullable(obj.pharmacy_phone),
       refills_remaining: obj.refills_remaining == null ? null : (obj.refills_remaining as number | string),
       last_filled: nullable(obj.last_filled),
+      quantity: obj.quantity == null ? null : (obj.quantity as number | string),
+      days_supply: obj.days_supply == null ? null : (obj.days_supply as number | string),
       ndc_code: nullable(obj.ndc_code),
       confidence: (obj.confidence as 'high' | 'medium' | 'low') ?? 'medium',
     };

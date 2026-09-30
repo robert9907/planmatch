@@ -25,6 +25,9 @@ export interface IncomingMedication {
   frequency?: string | null;
   rxcui?: string | null;
   refill_days?: number | string | null;
+  quantity?: string | null;
+  /** Next refill date, YYYY-MM-DD. */
+  refill_date?: string | null;
   tier_on_recommended_plan?: number | null;
 }
 
@@ -109,7 +112,7 @@ export async function upsertMedicationsForClient(
   // Fields the helper is authorized to write on client_medications.
   // Snap-on-verified rows only allow the subset whose existing value
   // is null (see MED_MATCH branch below).
-  const MED_WRITE_COLS = ['name', 'dose', 'form', 'frequency', 'rxcui', 'refill_days', 'tier'] as const;
+  const MED_WRITE_COLS = ['name', 'dose', 'form', 'frequency', 'rxcui', 'refill_days', 'tier', 'quantity', 'refill_date'] as const;
   const MED_SELECT = `id, verified_at, ${MED_WRITE_COLS.join(', ')}`;
   type ExistingMed = {
     id: number;
@@ -142,8 +145,13 @@ export async function upsertMedicationsForClient(
         existing = (data ?? null) as unknown as ExistingMed | null;
       }
 
-      const tierStr = typeof m.tier_on_recommended_plan === 'number'
-        ? `Tier ${m.tier_on_recommended_plan}`
+      // client_medications.tier is smallint (AgentBase migration 031) —
+      // the old "Tier N" string failed the write for every row that
+      // carried a tier.
+      const tierNum = typeof m.tier_on_recommended_plan === 'number'
+        && Number.isInteger(m.tier_on_recommended_plan)
+        && m.tier_on_recommended_plan >= 1 && m.tier_on_recommended_plan <= 6
+        ? m.tier_on_recommended_plan
         : null;
       // The full set of values this incoming row proposes to write.
       // The per-branch logic below decides how many of them actually
@@ -155,7 +163,9 @@ export async function upsertMedicationsForClient(
         frequency: m.frequency ?? null,
         rxcui: m.rxcui ?? null,
         refill_days: m.refill_days ?? null,
-        tier: tierStr,
+        tier: tierNum,
+        quantity: m.quantity ?? null,
+        refill_date: m.refill_date ?? null,
       };
 
       if (existing) {
@@ -173,6 +183,10 @@ export async function upsertMedicationsForClient(
         const snapProtect = opts.source === 'snap' && existing.verified_at != null;
         for (const col of MED_WRITE_COLS) {
           const v = proposed[col];
+          // quantity / refill_date only ever fill in — a caller that
+          // doesn't know them (the quoting flow, a label without a QTY)
+          // must not blank what the broker already has.
+          if (v == null && (col === 'quantity' || col === 'refill_date')) continue;
           if (snapProtect) {
             if (v != null && existing[col] == null) patch[col] = v;
           } else {

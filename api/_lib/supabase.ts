@@ -39,6 +39,10 @@ export interface ExtractedMedication {
   pharmacy_phone: string | null;
   refills_remaining: number | string | null;
   last_filled: string | null;
+  /** QTY printed on the label. Optional: rows written before it existed lack it. */
+  quantity?: number | string | null;
+  /** Days' supply printed on the label, when present. */
+  days_supply?: number | string | null;
   ndc_code: string | null;
   confidence: 'high' | 'medium' | 'low';
 }
