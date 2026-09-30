@@ -186,6 +186,7 @@ function mapExtractedToUpsertInputs(items: ExtractedItem[]): {
         quantity: it.quantity,
         instructions: it.dosage_instructions,
         form: it.form,
+        ndc: it.ndc_code,
       });
       meds.push({
         name: it.drug_name,

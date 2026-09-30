@@ -26,6 +26,10 @@ export function unitsPerDay(instructions: string | null | undefined): number | n
   if (/\b(then|increase|decrease|taper|as needed|prn|if needed|when needed|alternate|every other|weekly|week|month|sliding)\b/.test(s)) {
     return null;
   }
+  return phaseRate(s);
+}
+
+function phaseRate(s: string): number | null {
 
   let perDose = 1;
   const dose = s.match(/\b(take|give|use)\s+(\d+(?:\.\d+)?|one|two|three|four|five|six|a|an|half)\s*(?:\(\d+\)\s*)?(tablet|tab|capsule|cap|pill|softgel)s?\b/);
@@ -48,23 +52,62 @@ export function unitsPerDay(instructions: string | null | undefined): number | n
   return total > 0 ? total : null;
 }
 
+/**
+ * Days a quantity lasts under a two-step titration label, e.g.
+ * "1 capsule two times a day for 14 days, then increase to 1 capsule
+ * 3 times a day": first 14 days at 2/day, the rest at 3/day.
+ * Only the exact "<rate> for N days, then <rate>" shape is handled.
+ */
+export function titrationDays(instructions: string | null | undefined, quantity: number): number | null {
+  const s = (instructions ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const parts = s.split(/,?\s*\bthen\b\s*/);
+  if (parts.length !== 2) return null;
+  const [first, second] = parts;
+  if (/\b(as needed|prn|taper|decrease|every other|weekly|week|month)\b/.test(s)) return null;
+  const forDays = first.match(/\bfor (\d+) days?\b/);
+  if (!forDays) return null;
+  const phase1Days = Number(forDays[1]);
+  const r1 = phaseRate(first.replace(forDays[0], ''));
+  // Second phase usually reads "increase to 1 capsule 3 times a day".
+  const r2 = phaseRate(second.replace(/^(increase|decrease) to /, 'take '));
+  if (r1 == null || r2 == null || /\bfor \d+ days?\b/.test(second)) return null;
+  const used1 = r1 * phase1Days;
+  if (quantity <= used1) return Math.floor(quantity / r1);
+  return phase1Days + Math.floor((quantity - used1) / r2);
+}
+
 /** Days' supply: printed value first, else quantity ÷ daily units (solid oral forms only). */
 export function daysSupply(opts: {
   printedDaysSupply?: unknown;
   quantity?: unknown;
   instructions?: string | null;
   form?: string | null;
+  ndc?: string | null;
 }): number | null {
-  const printed = toNumber(opts.printedDaysSupply);
-  if (printed != null && printed <= 365) return Math.round(printed);
+  let printed = toNumber(opts.printedDaysSupply);
+  // Vision sometimes lifts a number off the NDC ("65162-102-50" → 50).
+  // A days' supply equal to an NDC segment is not trusted.
+  if (printed != null && opts.ndc) {
+    const segs = String(opts.ndc).split(/\D+/).filter(Boolean).map(Number);
+    if (segs.includes(printed)) printed = null;
+  }
+  if (printed != null && (printed > 365 || printed < 1)) printed = null;
+
+  let computed: number | null = null;
   const qty = toNumber(opts.quantity);
-  if (qty == null) return null;
   const form = (opts.form ?? '').toLowerCase();
-  if (form && !/tablet|capsule|tab|cap|pill|softgel/.test(form)) return null;
-  const perDay = unitsPerDay(opts.instructions);
-  if (perDay == null) return null;
-  const days = Math.floor(qty / perDay);
-  return days >= 1 && days <= 365 ? days : null;
+  const solid = !form || /tablet|capsule|tab|cap|pill|softgel/.test(form);
+  if (qty != null && solid) {
+    const perDay = unitsPerDay(opts.instructions);
+    computed = perDay != null ? Math.floor(qty / perDay) : titrationDays(opts.instructions, qty);
+    if (computed != null && (computed < 1 || computed > 365)) computed = null;
+  }
+
+  // Both known and far apart → the printed number was probably misread.
+  if (printed != null && computed != null) {
+    return Math.abs(printed - computed) / computed > 0.25 ? computed : Math.round(printed);
+  }
+  return printed != null ? Math.round(printed) : computed;
 }
 
 /** Parse a label date (YYYY-MM-DD, MM/DD/YYYY, MM/DD/YY, MM-DD-YYYY) to a UTC Date. */
