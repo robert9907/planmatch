@@ -16,7 +16,7 @@ Extract the following fields and return ONLY valid JSON, no markdown, no explana
   "refills_remaining": "number or null",
   "last_filled": "date the prescription was filled/dispensed, as YYYY-MM-DD, or null",
   "quantity": "quantity dispensed (the QTY number) as a number, or null",
-  "days_supply": "days supply if printed (e.g. DS, DAYS SUPPLY), as a number, or null",
+  "days_supply": "only if the label has a field explicitly labeled DS or DAYS SUPPLY, that number; never a number taken from the NDC, Rx number, or quantity; otherwise null",
   "ndc_code": "NDC code if present or null",
   "confidence": "high|medium|low"
 }
