@@ -1080,6 +1080,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .select(
           'id, contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage',
         )
+        // Federal base layer is year-aware (pm_plan_benefits has plan_year, and
+        // is 2026-only today). Scope to the catalog year so a 2027 plan doesn't
+        // inherit its 2026 twin's cost-shares via the shared CMS triple.
+        .eq('plan_year', catalogYear)
         .in('contract_id', contractIds)
         .in('plan_id', planIds)
         .order('id', { ascending: true })

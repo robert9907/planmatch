@@ -136,6 +136,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { data: pmRows, error: pmErr } = await sb
       .from('pm_plan_benefits')
       .select('contract_id, plan_id, segment_id, benefit_category, benefit_description, copay, coinsurance')
+      // Federal base is year-aware; scope to the catalog year so a 2027 plan
+      // doesn't inherit its 2026 twin's federal cost-shares (same contract/plan
+      // key carries across years). Matches the pbp overlay filter above.
+      .eq('plan_year', catalogYear)
       .in('contract_id', contractIds)
       .in('plan_id', planIds);
     if (pmErr) throw pmErr;
