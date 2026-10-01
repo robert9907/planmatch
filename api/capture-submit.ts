@@ -99,10 +99,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Client's current plan, for the Tier column.
         const { data: clientRow } = await ab
           .from('clients')
-          .select('plan_id')
+          .select('plan_id, deleted_at')
           .eq('id', session.agentbase_client_id)
           .maybeSingle();
-        const planId = (clientRow?.plan_id as string | null | undefined) ?? null;
+        // A client deleted after the link went out gets nothing written.
+        if (!clientRow || clientRow.deleted_at) throw new Error('client_deleted');
+        const planId = (clientRow.plan_id as string | null | undefined) ?? null;
         await Promise.all(
           meds.map(async (m) => {
             m.rxcui = await resolveSnapRxcui(supabase(), {
