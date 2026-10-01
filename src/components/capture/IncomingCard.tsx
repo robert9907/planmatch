@@ -170,6 +170,13 @@ function ExtractedSummary({ item }: { item: ExtractedItem | undefined }) {
       </div>
     );
   }
+  if (item.type === 'medicare_card') {
+    return (
+      <div style={{ marginTop: 4, fontSize: 12, color: 'var(--i2)' }}>
+        Medicare card{item.medicare_number ? ` · ${item.medicare_number}` : ''}
+      </div>
+    );
+  }
   return (
     <div style={{ marginTop: 4, fontSize: 12, color: 'var(--i2)' }}>
       {item.note || 'Could not read this label.'}

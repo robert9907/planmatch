@@ -105,5 +105,6 @@ export function itemLabel(item: CaptureItem): string {
   const first = item.extracted[0];
   if (first.type === 'medication') return first.drug_name || 'Medication';
   if (first.type === 'provider') return first.provider_name || 'Provider';
+  if (first.type === 'medicare_card') return 'Medicare card';
   return 'Unknown';
 }

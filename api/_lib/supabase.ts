@@ -24,9 +24,22 @@ export interface CaptureItem {
   extracted: ExtractedItem[];
   raw_response?: string;
   error?: string;
+  /** AgentBase sessions: what was written to the CRM. When present the
+   *  extracted details have been removed — the CRM is the only copy. */
+  synced?: { medications: number; providers: number; medicare_card: string | null };
 }
 
-export type ExtractedItem = ExtractedMedication | ExtractedProvider | ExtractedUnknown;
+export interface ExtractedMedicareCard {
+  type: 'medicare_card';
+  member_name: string | null;
+  /** Full MBI only in memory during capture-submit. Anything stored or
+   *  returned to the browser carries the masked form ("•••• MK72"). */
+  medicare_number: string | null;
+  part_a_effective: string | null;
+  part_b_effective: string | null;
+}
+
+export type ExtractedItem = ExtractedMedication | ExtractedProvider | ExtractedMedicareCard | ExtractedUnknown;
 
 export interface ExtractedMedication {
   type: 'medication';

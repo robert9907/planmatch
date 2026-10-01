@@ -22,6 +22,15 @@ Extract the following fields and return ONLY valid JSON, no markdown, no explana
 }
 
 If multiple labels are visible, return an array of these objects.
+If this is a red, white and blue Medicare card ("MEDICARE HEALTH INSURANCE"), return:
+{
+  "type": "medicare_card",
+  "member_name": "name exactly as printed",
+  "medicare_number": "the Medicare Number (MBI) exactly as printed",
+  "part_a_effective": "Hospital (Part A) coverage start as YYYY-MM-DD, or null",
+  "part_b_effective": "Medical (Part B) coverage start as YYYY-MM-DD, or null"
+}
+
 If this is a provider business card instead of a medication label, return:
 {
   "type": "provider",
@@ -157,7 +166,18 @@ function normalizeItem(raw: unknown): ExtractedItem {
       accepting_new_patients: obj.accepting_new_patients == null ? null : Boolean(obj.accepting_new_patients),
     };
   }
-  return { type: 'unknown', note: JSON.stringify(raw).slice(0, 200) };
+  if (t === 'medicare_card') {
+    return {
+      type: 'medicare_card',
+      member_name: nullable(obj.member_name),
+      medicare_number: nullable(obj.medicare_number),
+      part_a_effective: nullable(obj.part_a_effective),
+      part_b_effective: nullable(obj.part_b_effective),
+    };
+  }
+  // Never copy the raw object into the note — an unrecognised card or
+  // document can carry an ID number, and notes are stored.
+  return { type: 'unknown', note: `Unrecognized item type: ${String(t ?? 'none').slice(0, 40)}` };
 }
 
 function nullable(v: unknown): string | null {
