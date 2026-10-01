@@ -110,9 +110,16 @@ export function pickUnambiguous(label: LabelDrug, candidates: Candidate[]): Cand
   });
   if (survivors.length === 0) return null;
 
+  // A label that names the generic AND the brand ("Celecoxib (Celebrex)",
+  // "generic for Celebrex") is a generic fill — the brand is only a
+  // reference. Brand wins only when the generic name isn't on the label.
+  const genericOnLabel = (c: Candidate) => {
+    const ing = ingredientWords(c.drug_name);
+    return ing.length > 0 && ing.every((w) => labelWords.has(w));
+  };
   const brandMatches = survivors.filter((c) => {
     const b = brandOf(c.drug_name);
-    return c.is_brand && !!b && words(b).every((w) => labelWords.has(w));
+    return c.is_brand && !!b && words(b).every((w) => labelWords.has(w)) && !genericOnLabel(c);
   });
   if (brandMatches.length > 0) return brandMatches.length === 1 ? brandMatches[0] : null;
 
