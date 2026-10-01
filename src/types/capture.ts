@@ -71,10 +71,21 @@ export interface CapturePollResponse {
   client_name: string | null;
 }
 
+export interface CaptureGuidance {
+  /** Medication bottles read in this photo. */
+  bottle_count: number;
+  /** One bottle, one photo, quantity or fill date missing → ask for one
+   *  more picture of the same bottle. */
+  needs_more: boolean;
+  /** False when nothing usable came off the photo (blurry, too far). */
+  readable: boolean;
+}
+
 export interface CaptureSubmitResponse {
   ok: true;
   item_id: string;
   extracted: ExtractedItem[];
+  guidance?: CaptureGuidance;
   /** @deprecated Capture photos are no longer stored. Present only on
    *  items written before that change. */
   image_url?: string;

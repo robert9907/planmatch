@@ -2,42 +2,49 @@ import { useEffect, useRef, useState } from 'react';
 import type { ExtractedItem } from '@/types/capture';
 import { fileToJpegBase64, submitCapture } from '@/lib/captureApi';
 
-type Screen = 'welcome' | 'camera' | 'preview' | 'done';
+// The Snap Link page. Built for a 67-year-old on an old phone: one
+// instruction per screen, big type, big buttons, no jargon ("label",
+// "upload", "submit", "error" never appear). The page decides when a
+// second photo of the same bottle is needed — the client never has to.
+
+type Step =
+  | 'start' // take a picture of one pill bottle
+  | 'reading' // waiting on the reader
+  | 'got' // "Got it: Gabapentin 300 mg" → next bottle / all done
+  | 'more' // turn the bottle, one more picture of the same bottle
+  | 'many' // several bottles in one photo → one at a time
+  | 'blurry' // nothing readable → try again
+  | 'failed' // didn't send (signal) → try again
+  | 'card-ask' // last thing: Medicare card?
+  | 'card-got'
+  | 'finish';
+
+type Photo = { base64: string; mimeType: string };
+type CameraFor = 'bottle' | 'more' | 'card';
 
 // Validity of the capture link itself, checked once on mount.
 type LinkState = 'checking' | 'ok' | 'expired' | 'unknown';
 
-interface SentItem {
-  id: string;
-  preview: string;
-  extracted: ExtractedItem[];
-  error?: string;
-  sentAt: number;
-}
-
 export function CaptureApp() {
   const token = readTokenFromPath();
-  const [screen, setScreen] = useState<Screen>('welcome');
-  const [capturedFile, setCapturedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [extracted, setExtracted] = useState<ExtractedItem[]>([]);
-  const [processingState, setProcessingState] = useState<'idle' | 'uploading' | 'extracting' | 'ready' | 'error'>('idle');
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [sentItems, setSentItems] = useState<SentItem[]>([]);
   const [linkState, setLinkState] = useState<LinkState>('checking');
+  const [firstName, setFirstName] = useState<string | null>(null);
+  const [step, setStep] = useState<Step>('start');
+  const [label, setLabel] = useState<string>('');
+  const [bottleCount, setBottleCount] = useState(0);
+  const [savedCount, setSavedCount] = useState(0);
+  const [cardDone, setCardDone] = useState(false);
+  const [failMessage, setFailMessage] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraFor = useRef<CameraFor>('bottle');
+  // The first photo of a bottle is held in memory (never stored) in case
+  // a second picture of the same bottle is needed.
+  const firstPhoto = useRef<Photo | null>(null);
+  // What to resend if the connection drops.
+  const pending = useRef<{ photos: Photo[]; kind: CameraFor } | null>(null);
 
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    };
-  }, [previewUrl]);
-
-  // Check the link before showing the camera. This page used to render the
-  // whole flow for any token, valid or not, and only called the server on
-  // Send — so a client on an expired 48-hour link could photograph every
-  // bottle in the house before finding out it was pointless.
-  // capture-poll is read-only, so asking is free.
+  // Check the link before showing the camera, and pick up the client's
+  // first name for the greeting. capture-poll is read-only.
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
@@ -50,12 +57,13 @@ export function CaptureApp() {
           return;
         }
         if (!resp.ok) {
-          // Transient blip — don't strand someone who has a good link.
-          setLinkState('ok');
+          setLinkState('ok'); // transient blip — don't strand a good link
           return;
         }
-        const body = (await resp.json()) as { status?: string };
+        const body = (await resp.json()) as { status?: string; client_name?: string | null };
         if (cancelled) return;
+        const first = (body?.client_name ?? '').trim().split(/\s+/)[0] ?? '';
+        if (first) setFirstName(first.charAt(0).toUpperCase() + first.slice(1).toLowerCase());
         setLinkState(body?.status === 'expired' ? 'expired' : 'ok');
       } catch {
         if (!cancelled) setLinkState('ok');
@@ -69,12 +77,10 @@ export function CaptureApp() {
   if (!token) {
     return (
       <Shell>
-        <div style={{ padding: 24, textAlign: 'center' }}>
-          <h1 style={headerStyle}>Missing capture link</h1>
-          <p style={{ color: 'var(--i2)' }}>
-            This link looks incomplete. Please ask Rob to text you a new one.
-          </p>
-        </div>
+        <Center>
+          <h1 style={h1}>This link isn't complete</h1>
+          <p style={para}>Please text Rob and he'll send you a new one.</p>
+        </Center>
       </Shell>
     );
   }
@@ -82,9 +88,9 @@ export function CaptureApp() {
   if (linkState === 'checking') {
     return (
       <Shell>
-        <div style={{ padding: 24, textAlign: 'center' }}>
-          <p style={{ color: 'var(--i2)' }}>Checking your link…</p>
-        </div>
+        <Center>
+          <p style={para}>One moment…</p>
+        </Center>
       </Shell>
     );
   }
@@ -92,77 +98,110 @@ export function CaptureApp() {
   if (linkState === 'expired' || linkState === 'unknown') {
     return (
       <Shell>
-        <div style={{ padding: 24, textAlign: 'center' }}>
-          <h1 style={headerStyle}>This link has expired</h1>
-          <p style={{ color: 'var(--i2)' }}>
-            Capture links last 48 hours. Text Rob and he'll send you a fresh
-            one — nothing you already sent is lost.
+        <Center>
+          <h1 style={h1}>This link has expired</h1>
+          <p style={para}>
+            Please text Rob and he'll send you a new one. Anything you already sent is safe.
           </p>
-        </div>
+        </Center>
       </Shell>
     );
   }
 
-  function handleFilePick(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    const url = URL.createObjectURL(file);
-    setCapturedFile(file);
-    setPreviewUrl(url);
-    setExtracted([]);
-    setErrorMessage(null);
-    setProcessingState('idle');
-    setScreen('preview');
+  function openCamera(forWhat: CameraFor) {
+    cameraFor.current = forWhat;
+    const input = fileInputRef.current;
+    if (!input) return;
+    input.value = ''; // same file twice must still fire onChange
+    input.click();
   }
 
-  async function handleSend() {
-    if (!capturedFile) return;
-    setProcessingState('uploading');
-    setErrorMessage(null);
+  async function handleFilePick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const kind = cameraFor.current;
+    setStep('reading');
+    const photo = await fileToJpegBase64(file);
+    const photos = kind === 'more' && firstPhoto.current ? [firstPhoto.current, photo] : [photo];
+    await send(photos, kind);
+  }
+
+  async function send(photos: Photo[], kind: CameraFor) {
+    pending.current = { photos, kind };
+    setStep('reading');
     try {
-      const { base64, mimeType } = await fileToJpegBase64(capturedFile);
-      setProcessingState('extracting');
-      const resp = await submitCapture({ token: token!, image_base64: base64, mime_type: mimeType });
-      setExtracted(resp.extracted);
-      setSentItems((prev) => [
-        ...prev,
-        {
-          id: resp.item_id,
-          preview: previewUrl ?? '',
-          extracted: resp.extracted,
-          error: resp.error,
-          sentAt: Date.now(),
-        },
-      ]);
-      setProcessingState('ready');
-      setScreen('done');
+      const resp = await submitCapture(
+        photos.length === 1
+          ? { token: token!, image_base64: photos[0].base64, mime_type: photos[0].mimeType }
+          : {
+              token: token!,
+              images: photos.map((ph) => ({ image_base64: ph.base64, mime_type: ph.mimeType })),
+            },
+      );
+      pending.current = null;
+      const g = resp.guidance;
+      const readable = g ? g.readable : resp.extracted.some((x) => x.type !== 'unknown');
+
+      if (kind === 'card') {
+        if (resp.extracted.some((x) => x.type === 'medicare_card')) {
+          setCardDone(true);
+          setStep('card-got');
+        } else {
+          setStep('blurry');
+          cameraFor.current = 'card';
+        }
+        return;
+      }
+
+      if (!readable) {
+        // A second picture that adds nothing still keeps the first read.
+        if (kind === 'more') {
+          firstPhoto.current = null;
+          setStep('got');
+        } else {
+          setStep('blurry');
+        }
+        return;
+      }
+
+      const meds = resp.extracted.filter((x) => x.type === 'medication');
+      setLabel(describe(resp.extracted));
+
+      if (kind === 'bottle' && g?.needs_more) {
+        firstPhoto.current = photos[0];
+        setSavedCount((n) => n + 1);
+        setStep('more');
+        return;
+      }
+
+      firstPhoto.current = null;
+      if (kind === 'bottle') setSavedCount((n) => n + Math.max(1, meds.length));
+      if (kind === 'bottle' && (g?.bottle_count ?? meds.length) > 1) {
+        setBottleCount(g?.bottle_count ?? meds.length);
+        setStep('many');
+        return;
+      }
+      setStep('got');
     } catch (err) {
-      setErrorMessage(friendlyError(err));
-      setProcessingState('error');
+      const msg = friendlyError(err);
+      if (msg === EXPIRED) {
+        setLinkState('expired');
+        return;
+      }
+      setFailMessage(msg);
+      setStep('failed');
     }
   }
 
-  function handleRetake() {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setCapturedFile(null);
-    setPreviewUrl(null);
-    setExtracted([]);
-    setErrorMessage(null);
-    setProcessingState('idle');
-    setScreen('camera');
-    requestAnimationFrame(() => fileInputRef.current?.click());
+  function retrySend() {
+    const p = pending.current;
+    if (p) void send(p.photos, p.kind);
+    else setStep('start');
   }
 
-  function handleAnother() {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setCapturedFile(null);
-    setPreviewUrl(null);
-    setExtracted([]);
-    setErrorMessage(null);
-    setProcessingState('idle');
-    setScreen('camera');
-    requestAnimationFrame(() => fileInputRef.current?.click());
+  function allDone() {
+    firstPhoto.current = null;
+    setStep(cardDone ? 'finish' : 'card-ask');
   }
 
   return (
@@ -172,34 +211,151 @@ export function CaptureApp() {
         type="file"
         accept="image/*"
         capture="environment"
-        onChange={handleFilePick}
+        onChange={(e) => void handleFilePick(e)}
         style={{ display: 'none' }}
       />
 
-      {screen === 'welcome' && (
-        <WelcomeScreen onOpenCamera={() => fileInputRef.current?.click()} />
+      {step === 'start' && (
+        <div>
+          <h1 style={h1}>{firstName ? `Hi ${firstName}!` : 'Hi there!'}</h1>
+          <p style={para}>Let's take a picture of your pill bottles, one bottle at a time.</p>
+          <p style={para}>Hold the bottle close so the words fill the screen.</p>
+          <BigButton onClick={() => openCamera('bottle')}>Take a picture of a pill bottle</BigButton>
+          {savedCount > 0 && (
+            <QuietButton onClick={allDone}>I'm all done</QuietButton>
+          )}
+        </div>
       )}
 
-      {screen === 'camera' && (
-        <CameraScreen onOpenCamera={() => fileInputRef.current?.click()} />
+      {step === 'reading' && (
+        <Center>
+          <Spinner />
+          <h1 style={{ ...h1, marginTop: 24 }}>Reading your picture…</h1>
+          <p style={para}>This takes a few seconds.</p>
+        </Center>
       )}
 
-      {screen === 'preview' && previewUrl && (
-        <PreviewScreen
-          previewUrl={previewUrl}
-          extracted={extracted}
-          processingState={processingState}
-          errorMessage={errorMessage}
-          onRetake={handleRetake}
-          onSend={handleSend}
-        />
+      {step === 'got' && (
+        <div>
+          <Check />
+          <h1 style={{ ...h1, textAlign: 'center' }}>Got it!</h1>
+          {label && <p style={{ ...big, textAlign: 'center' }}>{label}</p>}
+          <BigButton onClick={() => openCamera('bottle')}>Next bottle</BigButton>
+          <SecondButton onClick={allDone}>I'm all done</SecondButton>
+        </div>
       )}
 
-      {screen === 'done' && (
-        <DoneScreen sentItems={sentItems} onAnother={handleAnother} />
+      {step === 'more' && (
+        <div>
+          <h1 style={h1}>Almost done</h1>
+          {label && <p style={big}>{label}</p>}
+          <p style={para}>
+            Turn the bottle a little and take one more picture of the <strong>same bottle</strong>.
+          </p>
+          <TurnBottle />
+          <BigButton onClick={() => openCamera('more')}>Take one more picture</BigButton>
+          <QuietButton
+            onClick={() => {
+              firstPhoto.current = null;
+              setStep('got');
+            }}
+          >
+            Skip
+          </QuietButton>
+        </div>
+      )}
+
+      {step === 'many' && (
+        <div>
+          <Check />
+          <h1 style={{ ...h1, textAlign: 'center' }}>I see {bottleCount} bottles</h1>
+          <p style={para}>
+            I saved what I could read. For the best results, let's do them one at a time.
+          </p>
+          <BigButton onClick={() => openCamera('bottle')}>Next bottle</BigButton>
+          <SecondButton onClick={allDone}>I'm all done</SecondButton>
+        </div>
+      )}
+
+      {step === 'blurry' && (
+        <div>
+          <h1 style={h1}>That one came out blurry</h1>
+          <p style={para}>Let's try again. Hold the phone still and close to the words.</p>
+          <BigButton onClick={() => openCamera(cameraFor.current === 'card' ? 'card' : 'bottle')}>
+            Try again
+          </BigButton>
+          <QuietButton
+            onClick={() => {
+              if (cameraFor.current === 'card') setStep('finish');
+              else setStep(savedCount > 0 ? 'got' : 'start');
+              setLabel('');
+            }}
+          >
+            Skip this one
+          </QuietButton>
+        </div>
+      )}
+
+      {step === 'failed' && (
+        <div>
+          <h1 style={h1}>That didn't go through</h1>
+          <p style={para}>{failMessage}</p>
+          <BigButton onClick={retrySend}>Try again</BigButton>
+        </div>
+      )}
+
+      {step === 'card-ask' && (
+        <div>
+          <h1 style={h1}>One last thing</h1>
+          <p style={para}>Do you have your red, white and blue Medicare card handy?</p>
+          <MedicareCardPicture />
+          <BigButton onClick={() => openCamera('card')}>Take a picture of my Medicare card</BigButton>
+          <SecondButton onClick={() => setStep('finish')}>Not right now</SecondButton>
+        </div>
+      )}
+
+      {step === 'card-got' && (
+        <div>
+          <Check />
+          <h1 style={{ ...h1, textAlign: 'center' }}>Got your Medicare card!</h1>
+          <BigButton onClick={() => setStep('finish')}>I'm all done</BigButton>
+        </div>
+      )}
+
+      {step === 'finish' && (
+        <Center>
+          <Check />
+          <h1 style={h1}>{firstName ? `Thank you, ${firstName}!` : 'Thank you!'}</h1>
+          <p style={para}>Rob has everything you sent. You can close this page now.</p>
+          <QuietButton onClick={() => setStep('start')}>I have another bottle</QuietButton>
+        </Center>
       )}
     </Shell>
   );
+}
+
+function describe(items: ExtractedItem[]): string {
+  const meds = items.filter((x) => x.type === 'medication');
+  if (meds.length === 1 && meds[0].type === 'medication') {
+    const m = meds[0];
+    return [titleCase(m.drug_name), m.strength ? prettyStrength(m.strength) : '']
+      .filter(Boolean)
+      .join(' ');
+  }
+  if (meds.length > 1) return `${meds.length} medications`;
+  if (items.some((x) => x.type === 'medicare_card')) return 'Medicare card';
+  return '';
+}
+
+function titleCase(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\b([a-z])/g, (c) => c.toUpperCase())
+    .trim();
+}
+
+function prettyStrength(s: string): string {
+  return s.replace(/\s*(mg|mcg|ml|g)\b/i, (_m, u: string) => ` ${u.toLowerCase()}`).trim();
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
@@ -254,8 +410,9 @@ function Shell({ children }: { children: React.ReactNode }) {
         style={{
           padding: '12px 20px',
           textAlign: 'center',
-          color: 'var(--i3)',
-          fontSize: 11,
+          color: 'var(--i2)',
+          fontSize: 15,
+          lineHeight: 1.4,
           borderTop: '1px solid var(--w2)',
         }}
       >
@@ -265,315 +422,110 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function WelcomeScreen({ onOpenCamera }: { onOpenCamera: () => void }) {
+function Center({ children }: { children: React.ReactNode }) {
+  return <div style={{ textAlign: 'center', paddingTop: 24 }}>{children}</div>;
+}
+
+function BigButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
   return (
-    <div style={{ paddingTop: 12 }}>
-      <h1 style={headerStyle}>Hi! Let's photograph your medications.</h1>
-      <p style={paragraphStyle}>
-        Rob asked you to take a few quick photos of your medication bottles so he can help
-        find the best Medicare plan for you. It's OK to take one bottle at a time, or line
-        them up in a bowl and photograph them together.
-      </p>
-      <ol style={{ ...paragraphStyle, paddingLeft: 20 }}>
-        <li>Tap the green button below.</li>
-        <li>Your camera will open — aim at the label, then press the shutter.</li>
-        <li>Review what was read and tap <strong>Send to Rob</strong>.</li>
-      </ol>
-      <button type="button" onClick={onOpenCamera} style={primaryBtn}>
-        Open camera
-      </button>
-      <div style={{ marginTop: 16, textAlign: 'center', color: 'var(--i3)', fontSize: 12 }}>
-        No login needed. Just the link Rob texted you.
-      </div>
-    </div>
+    <button type="button" onClick={onClick} style={bigBtn}>
+      {children}
+    </button>
   );
 }
 
-function CameraScreen({ onOpenCamera }: { onOpenCamera: () => void }) {
+function SecondButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
   return (
-    <div style={{ paddingTop: 20 }}>
-      <h1 style={headerStyle}>Opening your camera…</h1>
-      <p style={paragraphStyle}>
-        If the camera didn't pop up automatically, tap the button below and choose
-        <strong> Take photo</strong>.
-      </p>
-      <button type="button" onClick={onOpenCamera} style={primaryBtn}>
-        Open camera
-      </button>
-    </div>
+    <button type="button" onClick={onClick} style={secondBtn}>
+      {children}
+    </button>
   );
 }
 
-function PreviewScreen({
-  previewUrl,
-  extracted,
-  processingState,
-  errorMessage,
-  onRetake,
-  onSend,
-}: {
-  previewUrl: string;
-  extracted: ExtractedItem[];
-  processingState: 'idle' | 'uploading' | 'extracting' | 'ready' | 'error';
-  errorMessage: string | null;
-  onRetake: () => void;
-  onSend: () => void;
-}) {
-  const sending = processingState === 'uploading' || processingState === 'extracting';
-
+function QuietButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
   return (
-    <div>
-      <h1 style={headerStyle}>Looks good?</h1>
-      <img
-        src={previewUrl}
-        alt="Captured label"
-        style={{
-          width: '100%',
-          borderRadius: 12,
-          border: '1px solid var(--w2)',
-          background: 'var(--w2)',
-          maxHeight: 360,
-          objectFit: 'contain',
-        }}
-      />
-
-      {extracted.length > 0 && (
-        <div style={{ marginTop: 12 }}>
-          <div
-            style={{
-              fontSize: 11,
-              textTransform: 'uppercase',
-              letterSpacing: '0.08em',
-              color: 'var(--i3)',
-              fontWeight: 600,
-              marginBottom: 4,
-            }}
-          >
-            What Rob will see
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {extracted.map((e, i) => (
-              <ExtractedBlock key={i} item={e} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {errorMessage && (
-        <div
-          style={{
-            marginTop: 12,
-            padding: 10,
-            background: 'var(--rt)',
-            color: 'var(--red)',
-            borderRadius: 8,
-            fontSize: 13,
-          }}
-        >
-          {errorMessage}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-        <button
-          type="button"
-          onClick={onRetake}
-          disabled={sending}
-          style={{ ...secondaryBtn, flex: 1 }}
-        >
-          Retake
-        </button>
-        <button
-          type="button"
-          onClick={onSend}
-          disabled={sending}
-          style={{ ...primaryBtn, flex: 1, marginTop: 0 }}
-        >
-          {processingState === 'uploading'
-            ? 'Uploading…'
-            : processingState === 'extracting'
-              ? 'Reading label…'
-              : 'Send to Rob'}
-        </button>
-      </div>
-    </div>
+    <button type="button" onClick={onClick} style={quietBtn}>
+      {children}
+    </button>
   );
 }
 
-function DoneScreen({ sentItems, onAnother }: { sentItems: SentItem[]; onAnother: () => void }) {
-  return (
-    <div>
-      <div style={{ textAlign: 'center', paddingTop: 8, paddingBottom: 16 }}>
-        <div
-          style={{
-            width: 72,
-            height: 72,
-            borderRadius: '50%',
-            background: 'var(--sage)',
-            color: '#fff',
-            display: 'grid',
-            placeItems: 'center',
-            margin: '0 auto',
-            fontSize: 36,
-          }}
-        >
-          ✓
-        </div>
-        <h1 style={{ ...headerStyle, marginTop: 12 }}>Sent to Rob!</h1>
-        <p style={paragraphStyle}>
-          Rob can see what you sent in his PlanMatch screen. You can send more bottles
-          anytime while this link is open.
-        </p>
-      </div>
-
-      {sentItems.length > 0 && (
-        <div>
-          <div
-            style={{
-              fontSize: 11,
-              textTransform: 'uppercase',
-              letterSpacing: '0.08em',
-              color: 'var(--i3)',
-              fontWeight: 600,
-              marginBottom: 6,
-            }}
-          >
-            What you've sent
-          </div>
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {sentItems.map((item) => (
-              <li
-                key={item.id}
-                style={{
-                  padding: 10,
-                  borderRadius: 10,
-                  border: '1px solid var(--w2)',
-                  background: 'var(--wh)',
-                  display: 'flex',
-                  gap: 10,
-                }}
-              >
-                {item.preview && (
-                  <img
-                    src={item.preview}
-                    alt=""
-                    style={{ width: 52, height: 52, objectFit: 'cover', borderRadius: 6 }}
-                  />
-                )}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)' }}>
-                    {item.extracted[0]?.type === 'medication'
-                      ? item.extracted[0].drug_name
-                      : item.extracted[0]?.type === 'provider'
-                        ? item.extracted[0].provider_name
-                        : item.extracted[0]?.type === 'medicare_card'
-                          ? 'Medicare card'
-                          : 'Photo sent'}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--i2)' }}>
-                    {new Date(item.sentAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <button type="button" onClick={onAnother} style={primaryBtn}>
-        Send another photo
-      </button>
-    </div>
-  );
-}
-
-function ExtractedBlock({ item }: { item: ExtractedItem }) {
-  if (item.type === 'medication') {
-    return (
-      <div
-        style={{
-          padding: 10,
-          borderRadius: 10,
-          background: 'var(--sl)',
-          border: '1px solid var(--sm)',
-        }}
-      >
-        <div style={{ fontSize: 13, fontWeight: 600 }}>
-          {item.drug_name}
-          {item.strength ? ` · ${item.strength}` : ''}
-        </div>
-        {item.dosage_instructions && (
-          <div style={{ fontSize: 12, color: 'var(--i2)', marginTop: 2 }}>
-            {item.dosage_instructions}
-          </div>
-        )}
-        {item.prescribing_physician && (
-          <div style={{ fontSize: 12, color: 'var(--i2)' }}>
-            Prescribed by {item.prescribing_physician}
-          </div>
-        )}
-      </div>
-    );
-  }
-  if (item.type === 'medicare_card') {
-    return (
-      <div
-        style={{
-          padding: 10,
-          borderRadius: 10,
-          background: 'var(--sl)',
-          border: '1px solid var(--sm)',
-        }}
-      >
-        <div style={{ fontSize: 13, fontWeight: 600 }}>
-          Medicare card{item.medicare_number ? ` · ${item.medicare_number}` : ''}
-        </div>
-        {item.member_name && (
-          <div style={{ fontSize: 12, color: 'var(--i2)', marginTop: 2 }}>{item.member_name}</div>
-        )}
-      </div>
-    );
-  }
-  if (item.type === 'provider') {
-    return (
-      <div
-        style={{
-          padding: 10,
-          borderRadius: 10,
-          background: 'var(--pt)',
-          border: '1px solid var(--pur)',
-        }}
-      >
-        <div style={{ fontSize: 13, fontWeight: 600 }}>
-          {item.provider_name}
-          {item.credentials ? `, ${item.credentials}` : ''}
-        </div>
-        {item.specialty && (
-          <div style={{ fontSize: 12, color: 'var(--i2)' }}>{item.specialty}</div>
-        )}
-      </div>
-    );
-  }
+function Check() {
   return (
     <div
+      aria-hidden
       style={{
-        padding: 10,
-        borderRadius: 10,
-        background: 'var(--at)',
-        border: '1px solid var(--amb)',
-        color: 'var(--amb)',
-        fontSize: 12,
+        width: 84,
+        height: 84,
+        borderRadius: '50%',
+        background: 'var(--sage)',
+        color: '#fff',
+        display: 'grid',
+        placeItems: 'center',
+        margin: '8px auto 16px',
+        fontSize: 44,
+        fontWeight: 700,
       }}
     >
-      Couldn't read this label clearly — try another angle or retake the photo.
+      ✓
     </div>
   );
 }
 
-// submitCapture throws with the raw response body, so an expired link put
-// the literal string {"error":"Capture session not found"} on screen in
-// front of the client. Map what we recognise to plain English and never
-// surface the server's wording.
+function Spinner() {
+  return (
+    <div
+      aria-hidden
+      style={{
+        width: 64,
+        height: 64,
+        margin: '0 auto',
+        borderRadius: '50%',
+        border: '7px solid var(--sm)',
+        borderTopColor: 'var(--sage)',
+        animation: 'snapspin 0.9s linear infinite',
+      }}
+    >
+      <style>{'@keyframes snapspin{to{transform:rotate(360deg)}}'}</style>
+    </div>
+  );
+}
+
+// A pill bottle with a curved "turn it" arrow — tells Margaret what to do
+// without the word "label".
+function TurnBottle() {
+  return (
+    <svg viewBox="0 0 220 150" role="img" aria-label="Turn the bottle a little" style={{ display: 'block', width: 220, maxWidth: '70%', margin: '8px auto 4px' }}>
+      <rect x="80" y="18" width="60" height="18" rx="4" fill="var(--i3)" />
+      <rect x="72" y="36" width="76" height="100" rx="12" fill="#E9A23B" />
+      <rect x="72" y="62" width="76" height="48" fill="#fff" />
+      <line x1="80" y1="74" x2="140" y2="74" stroke="var(--i3)" strokeWidth="3" />
+      <line x1="80" y1="86" x2="128" y2="86" stroke="var(--i3)" strokeWidth="3" />
+      <line x1="80" y1="98" x2="134" y2="98" stroke="var(--i3)" strokeWidth="3" />
+      <path d="M40 120 Q110 158 180 120" fill="none" stroke="var(--sage)" strokeWidth="6" strokeLinecap="round" />
+      <path d="M168 108 L184 118 L170 132" fill="none" stroke="var(--sage)" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function MedicareCardPicture() {
+  return (
+    <svg viewBox="0 0 240 150" role="img" aria-label="A Medicare card" style={{ display: 'block', width: 240, maxWidth: '75%', margin: '8px auto 4px' }}>
+      <rect x="2" y="2" width="236" height="146" rx="12" fill="#fff" stroke="var(--w3)" strokeWidth="2" />
+      <rect x="2" y="2" width="236" height="34" rx="12" fill="#2B5BA8" />
+      <rect x="2" y="24" width="236" height="12" fill="#2B5BA8" />
+      <text x="120" y="25" textAnchor="middle" fontSize="13" fontWeight="700" fill="#fff" fontFamily="Arial, sans-serif">MEDICARE</text>
+      <line x1="18" y1="60" x2="130" y2="60" stroke="var(--i3)" strokeWidth="5" />
+      <line x1="18" y1="84" x2="160" y2="84" stroke="var(--i3)" strokeWidth="5" />
+      <line x1="18" y1="108" x2="110" y2="108" stroke="var(--i3)" strokeWidth="5" />
+      <rect x="2" y="126" width="236" height="10" fill="#C0392B" />
+    </svg>
+  );
+}
+
+const EXPIRED = 'This link has expired. Please text Rob and he will send you a new one.';
+
+// Never show the server's wording to the client.
 function friendlyError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err ?? '');
   let detail = raw;
@@ -584,16 +536,8 @@ function friendlyError(err: unknown): string {
     // Not JSON — keep the raw text for matching, never for display.
   }
   const lower = detail.toLowerCase();
-  if (lower.includes('not found') || lower.includes('expired')) {
-    return 'This link has expired. Text Rob and he will send you a new one.';
-  }
-  if (lower.includes('token')) {
-    return 'This link is not valid. Text Rob and he will send you a new one.';
-  }
-  if (lower.includes('failed to fetch') || lower.includes('network')) {
-    return "That didn't send — check your signal and tap Send to Rob again.";
-  }
-  return "That photo didn't send. Tap Send to Rob to try again, or retake it.";
+  if (lower.includes('not found') || lower.includes('expired')) return EXPIRED;
+  return 'Check that you have signal, then tap Try again.';
 }
 
 function readTokenFromPath(): string | null {
@@ -602,45 +546,63 @@ function readTokenFromPath(): string | null {
   return m ? m[1] : null;
 }
 
-const headerStyle: React.CSSProperties = {
+const h1: React.CSSProperties = {
   fontFamily: 'Lora, serif',
-  fontSize: 22,
+  fontSize: 30,
+  lineHeight: 1.2,
   fontWeight: 600,
-  margin: '4px 0 12px',
+  margin: '8px 0 14px',
   color: 'var(--ink)',
 };
 
-const paragraphStyle: React.CSSProperties = {
-  fontSize: 15,
+const para: React.CSSProperties = {
+  fontSize: 21,
   lineHeight: 1.45,
-  color: 'var(--i2)',
+  color: 'var(--ink)',
   margin: '0 0 14px',
 };
 
-const primaryBtn: React.CSSProperties = {
+const big: React.CSSProperties = {
+  fontSize: 24,
+  fontWeight: 700,
+  lineHeight: 1.3,
+  color: 'var(--ink)',
+  margin: '0 0 14px',
+};
+
+const bigBtn: React.CSSProperties = {
   display: 'block',
   width: '100%',
-  minHeight: 52,
-  padding: '14px 16px',
-  marginTop: 20,
-  borderRadius: 10,
+  minHeight: 68,
+  padding: '18px 16px',
+  marginTop: 22,
+  borderRadius: 14,
   border: 'none',
   background: 'var(--sage)',
   color: '#fff',
-  fontSize: 17,
-  fontWeight: 600,
+  fontSize: 22,
+  fontWeight: 700,
+  lineHeight: 1.25,
   cursor: 'pointer',
 };
 
-const secondaryBtn: React.CSSProperties = {
-  display: 'inline-block',
-  minHeight: 48,
-  padding: '12px 16px',
-  borderRadius: 10,
-  border: '1px solid var(--w2)',
+const secondBtn: React.CSSProperties = {
+  ...bigBtn,
+  marginTop: 14,
   background: 'var(--wh)',
   color: 'var(--ink)',
-  fontSize: 15,
-  fontWeight: 600,
+  border: '2px solid var(--w3)',
+};
+
+const quietBtn: React.CSSProperties = {
+  display: 'block',
+  width: '100%',
+  minHeight: 56,
+  marginTop: 14,
+  background: 'none',
+  border: 'none',
+  color: 'var(--i2)',
+  fontSize: 20,
+  textDecoration: 'underline',
   cursor: 'pointer',
 };

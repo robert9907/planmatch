@@ -74,6 +74,20 @@ export async function extractFromImage(
   imageBase64: string,
   mimeType: string,
 ): Promise<VisionResult> {
+  return extractFromImages([{ base64: imageBase64, mimeType }]);
+}
+
+/** Several photos of the SAME bottle (turned to show more of the wrapped
+ *  label). Read together they give one complete reading. */
+export async function extractFromImages(
+  images: { base64: string; mimeType: string }[],
+): Promise<VisionResult> {
+  const instruction =
+    images.length > 1
+      ? `These ${images.length} photos show different sides of the SAME single medication bottle, ` +
+        'turned so more of the wrapped label is visible. Combine them into ONE reading for that one ' +
+        'bottle (do not return one object per photo). Extract the fields per the schema.'
+      : 'Extract the fields per the schema.';
   const message = await anthropic().messages.create({
     model: VISION_MODEL,
     max_tokens: 1024,
@@ -82,15 +96,15 @@ export async function extractFromImage(
       {
         role: 'user',
         content: [
-          {
-            type: 'image',
+          ...images.map((img) => ({
+            type: 'image' as const,
             source: {
-              type: 'base64',
-              media_type: normalizeMimeType(mimeType),
-              data: imageBase64,
+              type: 'base64' as const,
+              media_type: normalizeMimeType(img.mimeType),
+              data: img.base64,
             },
-          },
-          { type: 'text', text: 'Extract the fields per the schema.' },
+          })),
+          { type: 'text', text: instruction },
         ],
       },
     ],

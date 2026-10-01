@@ -7,7 +7,7 @@ import {
   type ExtractedItem,
   type ExtractedMedicareCard,
 } from './_lib/supabase.js';
-import { extractFromImage } from './_lib/vision.js';
+import { extractFromImages } from './_lib/vision.js';
 import { badRequest, cors, notFound, sendJson, serverError } from './_lib/http.js';
 import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
 import {
@@ -32,7 +32,12 @@ interface SubmitBody {
   token?: string;
   image_base64?: string;
   mime_type?: string;
+  /** Up to 3 photos of the same bottle, read together as one. When
+   *  present it replaces image_base64/mime_type. */
+  images?: { image_base64?: string; mime_type?: string }[];
 }
+
+const MAX_IMAGES = 3;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
@@ -41,11 +46,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const body = req.body as SubmitBody | undefined;
     const token = body?.token?.trim();
-    const imageBase64 = stripDataUrl(body?.image_base64 ?? '');
-    const mimeType = body?.mime_type ?? 'image/jpeg';
+    const images = (
+      Array.isArray(body?.images) && body.images.length > 0
+        ? body.images
+        : [{ image_base64: body?.image_base64, mime_type: body?.mime_type }]
+    )
+      .slice(0, MAX_IMAGES)
+      .map((img) => ({
+        base64: stripDataUrl(img?.image_base64 ?? ''),
+        mimeType: img?.mime_type ?? 'image/jpeg',
+      }));
 
     if (!token) return badRequest(res, 'token is required');
-    if (!imageBase64) return badRequest(res, 'image_base64 is required');
+    if (images.some((img) => !img.base64)) return badRequest(res, 'image_base64 is required');
 
     const { data: session, error: findErr } = await supabase()
       .from('capture_sessions')
@@ -72,7 +85,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let rawResponse: string | undefined;
     let extractError: string | undefined;
     try {
-      const result = await extractFromImage(imageBase64, mimeType);
+      const result = await extractFromImages(images);
       extracted = result.extracted;
       rawResponse = result.raw;
     } catch (err) {
@@ -190,12 +203,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // The phone that took the photo gets its own reading back for the
     // "What Rob will see" preview — with the MBI masked.
+    // Guidance for the photo page. One bottle read from a single photo
+    // but missing the quantity or fill date → ask for one more picture of
+    // the same bottle (only ever once: a multi-photo read never asks).
+    const meds = extracted.filter((e) => e.type === 'medication');
+    const bottleCount = meds.length;
+    const needsMore =
+      images.length === 1 &&
+      bottleCount === 1 &&
+      meds[0].type === 'medication' &&
+      (meds[0].quantity == null || meds[0].last_filled == null);
+    const readable = extracted.some((e) => e.type !== 'unknown');
+
     sendJson(res, 200, {
       ok: true,
       item_id: itemId,
       extracted: maskedExtracted,
       error: extractError,
       writeback,
+      guidance: {
+        bottle_count: bottleCount,
+        needs_more: needsMore,
+        readable,
+      },
     });
   } catch (err) {
     serverError(res, err);

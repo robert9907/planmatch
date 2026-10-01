@@ -45,8 +45,10 @@ export function pollCapture(token: string, since?: string): Promise<CapturePollR
 
 export function submitCapture(input: {
   token: string;
-  image_base64: string;
-  mime_type: string;
+  image_base64?: string;
+  mime_type?: string;
+  /** Several photos of the same bottle, read together as one. */
+  images?: { image_base64: string; mime_type: string }[];
 }): Promise<CaptureSubmitResponse> {
   return postJson('/api/capture-submit', input);
 }
