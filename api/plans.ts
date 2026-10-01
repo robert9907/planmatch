@@ -1301,6 +1301,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .select('contract_id, plan_id, segment_id, copay')
           .eq('benefit_type', 'medical_deductible')
           .eq('source', 'medicare_gov')
+          // Year-scope: pbp_benefits_v2 is year-aware (2026-only today). Without
+          // this a 2027 plan inherits its 2026 twin's medical deductible.
+          .eq('plan_year', catalogYear)
           .in('contract_id', tripleContracts)
           .in('plan_id', triplePlanIds)
           .not('copay', 'is', null)
