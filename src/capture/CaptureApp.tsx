@@ -466,7 +466,9 @@ function DoneScreen({ sentItems, onAnother }: { sentItems: SentItem[]; onAnother
                       ? item.extracted[0].drug_name
                       : item.extracted[0]?.type === 'provider'
                         ? item.extracted[0].provider_name
-                        : 'Photo sent'}
+                        : item.extracted[0]?.type === 'medicare_card'
+                          ? 'Medicare card'
+                          : 'Photo sent'}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--i2)' }}>
                     {new Date(item.sentAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
@@ -509,6 +511,25 @@ function ExtractedBlock({ item }: { item: ExtractedItem }) {
           <div style={{ fontSize: 12, color: 'var(--i2)' }}>
             Prescribed by {item.prescribing_physician}
           </div>
+        )}
+      </div>
+    );
+  }
+  if (item.type === 'medicare_card') {
+    return (
+      <div
+        style={{
+          padding: 10,
+          borderRadius: 10,
+          background: 'var(--sl)',
+          border: '1px solid var(--sm)',
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 600 }}>
+          Medicare card{item.medicare_number ? ` · ${item.medicare_number}` : ''}
+        </div>
+        {item.member_name && (
+          <div style={{ fontSize: 12, color: 'var(--i2)', marginTop: 2 }}>{item.member_name}</div>
         )}
       </div>
     );

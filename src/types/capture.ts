@@ -31,7 +31,16 @@ export interface ExtractedUnknown {
   note: string;
 }
 
-export type ExtractedItem = ExtractedMedication | ExtractedProvider | ExtractedUnknown;
+export interface ExtractedMedicareCard {
+  type: 'medicare_card';
+  member_name: string | null;
+  /** Always masked ("•••• MK72") by the time it reaches the browser. */
+  medicare_number: string | null;
+  part_a_effective: string | null;
+  part_b_effective: string | null;
+}
+
+export type ExtractedItem = ExtractedMedication | ExtractedProvider | ExtractedMedicareCard | ExtractedUnknown;
 
 export interface CaptureItem {
   id: string;

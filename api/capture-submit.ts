@@ -1,6 +1,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomUUID } from 'node:crypto';
-import { supabase, type CaptureItem, type CaptureSessionRow, type ExtractedItem } from './_lib/supabase.js';
+import {
+  supabase,
+  type CaptureItem,
+  type CaptureSessionRow,
+  type ExtractedItem,
+  type ExtractedMedicareCard,
+} from './_lib/supabase.js';
 import { extractFromImage } from './_lib/vision.js';
 import { badRequest, cors, notFound, sendJson, serverError } from './_lib/http.js';
 import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
@@ -73,35 +79,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       extractError = err instanceof Error ? err.message : String(err);
     }
 
-    const item: CaptureItem = {
-      id: itemId,
-      created_at: new Date().toISOString(),
-      extracted,
-      raw_response: rawResponse,
-      error: extractError,
-    };
-
-    const nextPayload = [...(session.payload ?? []), item];
-
-    const { error: updateErr } = await supabase()
-      .from('capture_sessions')
-      .update({
-        payload: nextPayload,
-        status: 'has_results',
-        last_item_at: item.created_at,
-      })
-      .eq('token', token);
-    if (updateErr) return serverError(res, updateErr);
-
     // AgentBase write-back — only when the session was launched by an
     // AgentBase-side "Send Snap Link" click. Runs per submitted item
     // rather than at final "Done" so the meds/providers show up on
     // the client card as each photo lands. Idempotent across resubmits
     // via the dedup key logic in agentbaseDedup.
-    let writeback: { meds?: unknown; providers?: unknown; error?: string } | undefined;
-    if (session.agentbase_client_id && item.extracted.length > 0) {
+    let writeback:
+      | { meds?: unknown; providers?: unknown; medicare_card?: string; error?: string }
+      | undefined;
+    let medsWritten = 0;
+    let providersWritten = 0;
+    if (session.agentbase_client_id && extracted.length > 0) {
       try {
-        const { meds, providers } = mapExtractedToUpsertInputs(item.extracted);
+        const { meds, providers } = mapExtractedToUpsertInputs(extracted);
         // Attach an RxCUI when the label maps to exactly one drug, so the
         // client card doesn't land on "NO CODE · PICK DRUG". Uncertain
         // labels stay null for the broker to pick; rows stay UNVERIFIED.
@@ -124,7 +114,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             m.tier_on_recommended_plan = await lookupTier(supabase(), planId, m.rxcui);
           }),
         );
-        const [medRes, provRes] = await Promise.all([
+        const card = extracted.find((e): e is ExtractedMedicareCard => e.type === 'medicare_card');
+        const [medRes, provRes, cardRes] = await Promise.all([
           meds.length
             ? upsertMedicationsForClient(ab, session.agentbase_client_id, meds, {
                 source: 'snap',
@@ -137,8 +128,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 verifiedAt: null,
               })
             : Promise.resolve(null),
+          card ? sendMedicareCard(session.agentbase_client_id, card) : Promise.resolve(undefined),
         ]);
-        writeback = { meds: medRes, providers: provRes };
+        writeback = { meds: medRes, providers: provRes, medicare_card: cardRes };
+        medsWritten = medRes ? medRes.inserted + medRes.updated : 0;
+        providersWritten = provRes ? provRes.links_inserted + provRes.links_skipped_dup : 0;
+        const failed =
+          (medRes?.failed ?? 0) > 0 ||
+          (provRes?.failed ?? 0) > 0 ||
+          (card != null && !CARD_STORED.has(cardRes ?? ''));
+        if (failed) writeback.error = 'partial';
       } catch (err) {
         writeback = { error: err instanceof Error ? err.message : String(err) };
         console.error('[capture-submit] agentbase writeback failed', {
@@ -149,10 +148,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // What Plan Match keeps. For an AgentBase session that synced cleanly
+    // the CRM is the only copy: no extracted details, no raw model text.
+    // If anything failed the details stay (minus the MBI, which is never
+    // stored) so the broker can recover them; the 24h purge removes them.
+    const isAgentbase = session.agentbase_client_id != null;
+    const syncedCleanly = isAgentbase && extracted.length > 0 && writeback != null && !writeback.error;
+    const maskedExtracted = extracted.map(maskCard);
+    const item: CaptureItem = syncedCleanly
+      ? {
+          id: itemId,
+          created_at: new Date().toISOString(),
+          extracted: [],
+          synced: {
+            medications: medsWritten,
+            providers: providersWritten,
+            medicare_card: writeback?.medicare_card ?? null,
+          },
+        }
+      : {
+          id: itemId,
+          created_at: new Date().toISOString(),
+          extracted: maskedExtracted,
+          raw_response: isAgentbase ? undefined : rawResponse,
+          error: extractError ?? (writeback?.error ? `writeback: ${writeback.error}` : undefined),
+        };
+
+    const nextPayload = [...(session.payload ?? []), item];
+
+    const { error: updateErr } = await supabase()
+      .from('capture_sessions')
+      .update({
+        payload: nextPayload,
+        status: 'has_results',
+        last_item_at: item.created_at,
+      })
+      .eq('token', token);
+    if (updateErr) return serverError(res, updateErr);
+
+    // The phone that took the photo gets its own reading back for the
+    // "What Rob will see" preview — with the MBI masked.
     sendJson(res, 200, {
       ok: true,
       item_id: itemId,
-      extracted: item.extracted,
+      extracted: maskedExtracted,
       error: extractError,
       writeback,
     });
@@ -205,4 +244,44 @@ function mapExtractedToUpsertInputs(items: ExtractedItem[]): {
     }
   }
   return { meds, providers };
+}
+
+// AgentBase outcomes that mean the card's data is safely in the CRM (or
+// already was). Anything else keeps the masked reading for the broker.
+const CARD_STORED = new Set(['written', 'already_on_file']);
+
+function maskCard(e: ExtractedItem): ExtractedItem {
+  if (e.type !== 'medicare_card' || !e.medicare_number) return e;
+  const clean = e.medicare_number.replace(/[^A-Za-z0-9]/g, '');
+  return { ...e, medicare_number: clean.length > 4 ? `•••• ${clean.slice(-4)}` : '••••' };
+}
+
+// Hand the card to AgentBase, which validates the MBI, checks the name
+// against the client, encrypts and stores it. Plan Match never stores it.
+async function sendMedicareCard(clientId: number, card: ExtractedMedicareCard): Promise<string> {
+  const baseUrl = process.env.AGENTBASE_API_URL;
+  const secret = process.env.PLANMATCH_WEBHOOK_SECRET;
+  if (!baseUrl || !secret) return 'not_configured';
+  if (!card.medicare_number) return 'no_number_read';
+  try {
+    const resp = await fetch(`${baseUrl.replace(/\/$/, '')}/planmatch-session/medicare-card`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret}` },
+      body: JSON.stringify({
+        clientId,
+        memberName: card.member_name,
+        mbi: card.medicare_number,
+        partA: card.part_a_effective,
+        partB: card.part_b_effective,
+      }),
+    });
+    const body = (await resp.json().catch(() => ({}))) as { outcome?: string; error?: string };
+    return body.outcome ?? body.error ?? `http_${resp.status}`;
+  } catch (err) {
+    console.error('[capture-submit] medicare card forward failed', {
+      clientId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return 'network_error';
+  }
 }
