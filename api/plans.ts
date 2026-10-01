@@ -931,6 +931,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         'contract_id, plan_id, segment_id, plan_name, carrier, parent_organization, plan_type, state, county_name, monthly_premium, annual_deductible, moop, moop_combined, drug_deductible, star_rating, snp, snp_type, dsnp_integration_status, zero_cost_sharing, csnp_condition_type, dsnp_accepted_populations, dsnp_only_contract, sbf_url, sanctioned',
       )
       .eq('sanctioned', false)
+      // pm_plans is dual-year; scope to the resolved catalog year so a county
+      // query returns each plan once (not two premiums). Same catalogYear the
+      // pbp overlay fetches use — one resolution per request. No-op while only
+      // 2026 is loaded; prevents dual-year the moment PY2027 reloads.
+      .eq('plan_year', catalogYear)
       .limit(limit);
 
     if (!includeNonComm && nonComm.contracts.size > 0) {
