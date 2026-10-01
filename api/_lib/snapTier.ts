@@ -10,7 +10,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export function parsePlanId(planId: string | null | undefined): { contract: string; plan: string; segment: string | null } | null {
-  const m = (planId ?? '').trim().toUpperCase().match(/^([HRS]\d{4})-(\d{3})(?:-(\d{1,3}))?$/);
+  // Accept "H4514-021", "H4514021", "H4514-021-0", "H4514 021" — the CRM
+  // stores plan IDs however they were typed.
+  const m = (planId ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '-')
+    .match(/^([HRS]\d{4})-?(\d{3})(?:-?(\d{1,3}))?$/);
   if (!m) return null;
   return { contract: m[1], plan: m[2], segment: m[3] != null ? String(Number(m[3])) : null };
 }
