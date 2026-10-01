@@ -196,7 +196,7 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
                   {' · '}
                   {p.plan_type ?? '—'}
                   {' · '}${p.premium.toFixed(2)}/mo
-                  {p.star_rating != null && <> · {p.star_rating.toFixed(1)}★</>}
+                  {' · '}{p.star_rating != null ? `${p.star_rating.toFixed(1)}★` : 'Not yet rated'}
                 </div>
               </div>
             </label>

@@ -283,7 +283,7 @@ export function CurrentPlanPicker({ autoFocus, onSelected, hint }: Props) {
                 {p.carrier} · {p.plan_name}
               </div>
               <div style={{ fontSize: 10, color: '#6b7280', fontFamily: "'JetBrains Mono', monospace", marginTop: 1 }}>
-                {p.contract_id}-{p.plan_number} · ${p.premium}/mo · {p.star_rating}★
+                {p.contract_id}-{p.plan_number} · ${p.premium}/mo · {p.star_rating != null ? `${p.star_rating}★` : 'Not yet rated'}
               </div>
             </button>
           ))}

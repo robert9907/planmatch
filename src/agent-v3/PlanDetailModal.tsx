@@ -72,7 +72,7 @@ export function PlanDetailModal({
     { l: 'Part D Ded.', v: `$${plan.drug_deductible ?? 0}` },
     { l: 'PCP', v: formatPcp(plan) },
     { l: 'Specialist', v: formatSpecialist(plan) },
-    { l: 'Stars', v: `${plan.star_rating} ★` },
+    { l: 'Stars', v: plan.star_rating != null ? `${plan.star_rating} ★` : 'Not yet rated' },
   ];
 
   const medicalRows: DetailRow[] = [

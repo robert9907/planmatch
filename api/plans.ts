@@ -137,7 +137,10 @@ interface Plan {
   // Rx through VA pharmacy and only want medical coverage.
   has_drug_coverage: boolean;
   part_b_giveback: number;
-  star_rating: number;
+  // null when CMS hasn't published a star rating for this contract yet (e.g.
+  // the PY2027 shelf before the Star Ratings file posts). Never coerce to 0 —
+  // "0★" reads as a one-star plan; null must render as "Not yet rated".
+  star_rating: number | null;
   // Medicare.gov Plan Compare deep-link for the plan's Summary of
   // Benefits page. Always populated — built from the (contract, plan,
   // segment) triple via planFinderUrl(). The agent UI surfaces this
@@ -378,9 +381,10 @@ function planFinderUrl(
   contractId: string,
   planId: string,
   segmentId: string | null | undefined,
+  planYear: number = PLAN_YEAR,
 ): string {
   const seg = (segmentId ?? '000').padStart(3, '0');
-  const q = `"${contractId}-${planId}-${seg}" "Summary of Benefits" ${PLAN_YEAR} filetype:pdf`;
+  const q = `"${contractId}-${planId}-${seg}" "Summary of Benefits" ${planYear} filetype:pdf`;
   return `https://www.google.com/search?q=${encodeURIComponent(q)}`;
 }
 
@@ -1590,7 +1594,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const parts = key.split('-');
           const seg = (parts[2] ?? '0').replace(/^0+/, '') || '0';
           const pbp = medicalDeductibleBySegmentKey.get(`${parts[0]}-${parts[1]}-${seg}`);
-          return pbp ?? row.annual_deductible ?? 0;
+          // Stays null when neither source filed a medical deductible (e.g. the
+          // PY2027 shelf). Never coerce to $0 — a $0 medical deductible is a
+          // real, quotable selling point and must not be invented.
+          return pbp ?? row.annual_deductible ?? null;
         })(),
         moop_in_network: row.moop ?? 0,
         // Combined In+Out-of-Network MOOP. Populated for PPO plans via
@@ -1601,22 +1608,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         moop_out_of_network: row.moop_combined ?? null,
         drug_deductible: row.drug_deductible,
         part_b_giveback: partBGiveback ?? 0,
-        star_rating: row.star_rating ?? 0,
+        star_rating: row.star_rating ?? null,
         // Prefer the cached medicareadvantage.com plan-page URL when
         // scripts/probe-sbf-urls.ts landed one — brokers get a rich
         // plan-detail page with an inline SoB PDF link, one click.
         // Fall through to planFinderUrl()'s Google-search URL for
         // plans whose carriers aren't on medicareadvantage.com.
-        sbf_url: row.sbf_url ?? planFinderUrl(row.contract_id, row.plan_id, row.segment_id),
+        sbf_url: row.sbf_url ?? planFinderUrl(row.contract_id, row.plan_id, row.segment_id, catalogYear),
         benefits,
         formulary: {},
         in_network_npis: [],
       });
     }
 
-    // Stable-ish ordering: star desc, then premium asc.
+    // Stable-ish ordering: star desc, then premium asc. NULL star (not-yet-
+    // rated, e.g. the whole PY2027 shelf) sorts LAST among rated plans — never
+    // as 0, which would bury it below a genuine 1-star plan. Plans are never
+    // dropped. Within a single-year request every plan shares the same rating
+    // state, so this only matters if rated + unrated years are ever mixed.
+    const starRank = (s: number | null): number => (s == null ? -1 : s);
     plans.sort((a, b) => {
-      if (a.star_rating !== b.star_rating) return b.star_rating - a.star_rating;
+      const sa = starRank(a.star_rating);
+      const sb = starRank(b.star_rating);
+      if (sa !== sb) return sb - sa;
       return a.premium - b.premium;
     });
 
