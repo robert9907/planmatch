@@ -177,6 +177,9 @@ export interface Plan {
   plan_number: string;
   carrier: string;
   plan_name: string;
+  /** True only on plans fetched with includeNonCommissionable (agent
+   *  Providers screen) that Rob is not appointed / not paid on. */
+  non_commissionable?: boolean;
   state: StateCode;
   counties: string[];
   plan_type: PlanType;

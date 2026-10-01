@@ -27,6 +27,7 @@ import { useProviderSearch } from '@/hooks/useProviderSearch';
 import { useSession } from '@/hooks/useSession';
 import { brokerVerifyProvider } from '@/lib/library-client';
 import { fetchPlansForClient } from '@/lib/planCatalog';
+import { checkNetworkBatch } from '@/lib/networkCheck';
 import type { Plan } from '@/types/plans';
 import type { Provider } from '@/types/session';
 import { AgentInsight, Card, Container, Header, Nav } from './atoms';
@@ -72,6 +73,10 @@ export function ProvidersScreen({
       state: client.state,
       county: client.county,
       planType: null,
+      // Doctors get checked across EVERY carrier in the county — UHC and
+      // the other non-appointed plans included. Brain/Compare still use
+      // the commissionable-only pool from AgentV3App.
+      includeNonCommissionable: true,
     }).then((plans) => {
       if (!cancelled) setEligiblePlans(plans);
     });
@@ -87,6 +92,61 @@ export function ProvidersScreen({
   // groups by ProviderCard, where alphabetical-within-carrier matches
   // the way carriers organize their own directories.
   const allEligiblePlans = eligiblePlans;
+
+  // AgentV3App's full-county hydration only covers commissionable plans,
+  // so network status for the non-appointed plans (UHC etc.) is resolved
+  // here. Same library endpoint (cache + FHIR live), same session field.
+  const nonCommPlans = useMemo(
+    () => eligiblePlans.filter((p) => p.non_commissionable),
+    [eligiblePlans],
+  );
+  const providerNpiKey = useMemo(
+    () => providers.map((p) => `${p.id}:${p.npi ?? ''}`).join('|'),
+    [providers],
+  );
+  useEffect(() => {
+    if (nonCommPlans.length === 0) return;
+    if (!client.state || !client.county) return;
+    let cancelled = false;
+    const ctx = { state: client.state, county: client.county };
+    for (const { id: providerId, npi } of useSession.getState().providers) {
+      if (!npi) continue;
+      checkNetworkBatch(npi, nonCommPlans, ctx)
+        .then((map) => {
+          if (cancelled || map.size === 0) return;
+          const current = useSession
+            .getState()
+            .providers.find((p) => p.id === providerId);
+          if (!current) return;
+          const next: Record<string, 'in' | 'out' | 'unknown'> = {
+            ...(current.networkStatus ?? {}),
+          };
+          let changed = false;
+          for (const [planId, result] of map) {
+            // Never overwrite a broker "Mark In-Network" override.
+            if (next[planId] === 'in') continue;
+            if (next[planId] !== result.status) {
+              next[planId] = result.status;
+              changed = true;
+            }
+          }
+          if (changed) updateProvider(providerId, { networkStatus: next });
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          console.warn(
+            `[providers] non-appointed hydration failed for npi=${npi}:`,
+            err instanceof Error ? err.message : err,
+          );
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+    // Tracks the provider/NPI set, not `providers` — networkStatus
+    // writes would otherwise loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nonCommPlans, client.state, client.county, providerNpiKey]);
 
   return (
     <Container>
@@ -354,6 +414,18 @@ function ProviderRail({
     slot.push(r);
     byCarrier.set(c, slot);
   }
+  // Carriers start collapsed — the header row carries the per-carrier
+  // In / Out / Unverified counts, click to drop down the plans.
+  const [openCarriers, setOpenCarriers] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const toggleCarrier = (c: string) =>
+    setOpenCarriers((prev) => {
+      const next = new Set(prev);
+      if (next.has(c)) next.delete(c);
+      else next.add(c);
+      return next;
+    });
 
   return (
     <div>
@@ -378,29 +450,87 @@ function ProviderRail({
         </span>
       </div>
 
-      {Array.from(byCarrier.entries()).map(([carrier, group]) => (
-        <div key={carrier} style={{ marginBottom: 12 }}>
-          <div
+      {Array.from(byCarrier.entries()).map(([carrier, group]) => {
+        const isOpen = openCarriers.has(carrier);
+        let gIn = 0;
+        let gOut = 0;
+        let gUnk = 0;
+        for (const r of group) {
+          if (r.state === 'in') gIn += 1;
+          else if (r.state === 'out') gOut += 1;
+          else gUnk += 1;
+        }
+        const allNonComm = group.every((r) => r.plan.non_commissionable);
+        return (
+        <div key={carrier} style={{ marginBottom: 6 }}>
+          <button
+            type="button"
+            onClick={() => toggleCarrier(carrier)}
+            aria-expanded={isOpen}
             style={{
+              width: '100%',
               fontSize: 11,
               fontWeight: 700,
               letterSpacing: 0.4,
               textTransform: 'uppercase',
               color: '#475569',
-              padding: '4px 4px 6px',
-              borderBottom: '1px solid rgba(13,47,94,0.06)',
-              marginBottom: 4,
+              padding: '9px 10px',
+              background: isOpen ? '#f1f5f9' : 'white',
+              border: '1px solid rgba(13,47,94,0.08)',
+              borderRadius: 8,
+              marginBottom: isOpen ? 6 : 0,
               display: 'flex',
-              justifyContent: 'space-between',
+              alignItems: 'center',
               gap: 8,
+              cursor: 'pointer',
+              textAlign: 'left',
             }}
           >
-            <span>{carrier}</span>
-            <span style={{ color: '#94a3b8', fontWeight: 500 }}>
-              {group.length} plan{group.length === 1 ? '' : 's'}
+            <span
+              style={{
+                display: 'inline-block',
+                width: 10,
+                color: '#94a3b8',
+                transform: isOpen ? 'rotate(90deg)' : 'none',
+                transition: 'transform 0.15s ease',
+              }}
+            >
+              ▸
             </span>
-          </div>
-          {group.map((row) => {
+            <span
+              style={{
+                flex: 1,
+                minWidth: 0,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {carrier}
+              {allNonComm && (
+                <span
+                  style={{
+                    marginLeft: 8,
+                    color: '#94a3b8',
+                    fontWeight: 600,
+                    textTransform: 'none',
+                    letterSpacing: 0,
+                  }}
+                >
+                  · Not appointed
+                </span>
+              )}
+            </span>
+            <span style={{ display: 'flex', gap: 8, flexShrink: 0, letterSpacing: 0 }}>
+              {gIn > 0 && <span style={{ color: '#065f46' }}>✓ {gIn}</span>}
+              {gOut > 0 && <span style={{ color: '#991b1b' }}>✕ {gOut}</span>}
+              {gUnk > 0 && <span style={{ color: '#92400e' }}>⚠ {gUnk}</span>}
+              <span style={{ color: '#94a3b8', fontWeight: 500 }}>
+                {group.length} plan{group.length === 1 ? '' : 's'}
+              </span>
+            </span>
+          </button>
+          {isOpen && group.map((row) => {
             const isUnverified = row.state === 'unknown';
             return (
               <div
@@ -431,6 +561,11 @@ function ProviderRail({
                   title={row.plan.plan_name}
                 >
                   {row.plan.plan_name}
+                  {row.plan.non_commissionable && !allNonComm && (
+                    <span style={{ marginLeft: 6, color: '#94a3b8', fontWeight: 500 }}>
+                      · Not appointed
+                    </span>
+                  )}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                   <RowBadge state={row.state} />
@@ -459,7 +594,8 @@ function ProviderRail({
             );
           })}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

@@ -81,6 +81,9 @@ interface Plan {
   segment_id: string;
   carrier: string;
   plan_name: string;
+  /** Present (true) only when the caller passed includeNonCommissionable=1
+   *  and Rob is not appointed / not paid on this plan. */
+  non_commissionable?: boolean;
   state: string;
   counties: string[];
   plan_type: AppPlanType;
@@ -856,6 +859,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ? req.query.planType
     : null) as AppPlanType | null;
   const idsParam = typeof req.query.ids === 'string' ? req.query.ids : '';
+  // Opt-in for the agent Providers screen only: return the county's
+  // non-commissionable plans too (tagged non_commissionable: true) so the
+  // broker can check a doctor across EVERY carrier, UHC included. Every
+  // other caller omits it and keeps the exclusion — brain, Compare and
+  // the consumer surface are unchanged.
+  const includeNonComm = req.query.includeNonCommissionable === '1';
   // Unknown / absent → 'none'. Deliberately lenient rather than a 400:
   // older agent clients don't send the param at all, and a typo must
   // not take the whole plan catalog down.
@@ -915,7 +924,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .eq('sanctioned', false)
       .limit(limit);
 
-    if (nonComm.contracts.size > 0) {
+    if (!includeNonComm && nonComm.contracts.size > 0) {
       plansQuery = plansQuery.not(
         'contract_id',
         'in',
@@ -1004,7 +1013,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // remaining (contract_id, plan_id) pairs Rob can't sell — UHC
     // convention where only specific plans within a contract are
     // blocked, not the whole contract.
-    rows = filterPlanLevelExclusions(rows, nonComm.plans);
+    if (!includeNonComm) rows = filterPlanLevelExclusions(rows, nonComm.plans);
 
     // ─── Manual D-SNP populations override ──────────────────────────
     // pm_dsnp_populations holds per-plan HealthSherpa-captured accepted
@@ -1514,6 +1523,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         segment_id: row.segment_id || '000',
         carrier: row.carrier ?? row.parent_organization ?? '—',
         plan_name: row.plan_name,
+        ...(includeNonComm &&
+        (nonComm.contracts.has(row.contract_id) ||
+          nonComm.plans.has(`${row.contract_id}-${row.plan_id}`))
+          ? { non_commissionable: true }
+          : {}),
         state: row.state,
         counties: [...counties].sort(),
         plan_type: mapPlanType(row.plan_type, row.snp, row.snp_type),

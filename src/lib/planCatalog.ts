@@ -14,6 +14,7 @@ import type { PlanType, StateCode } from '@/types/session';
 
 interface ApiPlan {
   id: string;
+  non_commissionable?: boolean;
   contract_id: string;
   plan_number: string;
   segment_id: string;
@@ -77,6 +78,10 @@ export interface FetchPlansParams {
    *  with newer inputs. Prevents a stale response from overwriting a
    *  newer eligiblePlans state (the AgentBase-hydrate race). */
   signal?: AbortSignal;
+  /** Agent Providers screen only: also return plans Rob can't sell
+   *  (tagged non_commissionable) so doctors are checked across every
+   *  carrier. Leave unset everywhere else. */
+  includeNonCommissionable?: boolean;
 }
 
 /** Missing-geo hard-fail. Callers MUST guard on state+county being
@@ -130,6 +135,7 @@ export async function fetchPlansForClient(params: FetchPlansParams): Promise<Pla
     qs.set('state', params.state!);
     qs.set('county', params.county);
     if (params.planType) qs.set('planType', params.planType);
+    if (params.includeNonCommissionable) qs.set('includeNonCommissionable', '1');
   }
   qs.set('limit', '2000');
 
@@ -200,6 +206,7 @@ function toPlan(p: ApiPlan): Plan {
     plan_number: p.plan_number,
     carrier: p.carrier,
     plan_name: p.plan_name,
+    ...(p.non_commissionable ? { non_commissionable: true } : {}),
     state: p.state as StateCode,
     counties: p.counties ?? [],
     plan_type: p.plan_type,
