@@ -35,6 +35,7 @@ import {
   getNonCommissionableSets,
 } from './_lib/non-commissionable.js';
 import { supabase } from './_lib/supabase.js';
+import { resolvePlanCatalogYear } from './_lib/plan-catalog-year.js';
 
 type AppPlanType = 'MA' | 'MAPD' | 'DSNP' | 'CSNP' | 'ISNP' | 'PDP' | 'MEDSUPP';
 
@@ -873,6 +874,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     MEDICAID_LEVELS.has(req.query.medicaidLevel)
       ? (req.query.medicaidLevel as MedicaidLevel)
       : 'none';
+  // pm_plans is dual-year; the pbp_benefits view now exposes plan_year. Resolve
+  // one catalog year and filter the pbp overlay fetches below by it so a 2027
+  // plan never shows 2026 cost-shares. (The pm_plans query's own year filter is
+  // owned by the in-flight PY2027 branch; this only scopes the pbp overlay.)
+  const catalogYear = resolvePlanCatalogYear({
+    explicit: req.query.plan_year,
+    effectiveDate: req.query.effective_date,
+  });
   const limit = Math.min(
     Math.max(
       Number.isFinite(Number(req.query.limit)) ? Number(req.query.limit) : DEFAULT_LIMIT,
@@ -1113,6 +1122,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await sb
         .from('pbp_benefits')
         .select('plan_id, benefit_type, copay, coinsurance, tier_id, description')
+        .eq('plan_year', catalogYear)
         .in('plan_id', [...pbpKeyVariants])
         .in('benefit_type', pbpTypes)
         .order('plan_id', { ascending: true })
@@ -1149,6 +1159,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .select(
           'plan_id, benefit_type, copay, copay_max, coinsurance, coinsurance_max, tier_id, description, source',
         )
+        .eq('plan_year', catalogYear)
         .in('plan_id', [...pbpKeyVariants])
         .in('source', ['medicare_gov', 'sb_ocr', 'cms_pbp', 'manual'])
         .order('plan_id', { ascending: true })

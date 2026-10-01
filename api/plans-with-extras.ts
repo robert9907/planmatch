@@ -35,6 +35,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { supabase } from './_lib/supabase.js';
+import { resolvePlanCatalogYear } from './_lib/plan-catalog-year.js';
 
 type Source = 'medicare_gov' | 'sb_ocr' | 'manual' | 'pbp_federal';
 
@@ -106,6 +107,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     .map((s) => s.trim())
     .filter(Boolean);
   if (ids.length === 0) return badRequest(res, 'ids required (comma-separated triple ids)');
+  // Scope the pbp_benefits overlay to the resolved catalog year (the view now
+  // exposes plan_year). Absent param ⇒ date-driven default. Keeps a 2027 plan
+  // from picking up 2026 cost-shares once the PY2027 PBP extract loads.
+  const catalogYear = resolvePlanCatalogYear({
+    explicit: req.query.plan_year,
+    effectiveDate: req.query.effective_date,
+  });
 
   const triples = ids.map(parseTripleId).filter(
     (t): t is { contract_id: string; plan_id: string; segment_id: string } => !!t,
@@ -152,6 +160,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { data: pbpData, error: pbpErr } = await sb
       .from('pbp_benefits')
       .select('plan_id, benefit_type, tier_id, copay, coinsurance, description, source')
+      .eq('plan_year', catalogYear)
       .in('plan_id', ids);
     if (pbpErr) {
       const code = (pbpErr as { code?: string }).code;

@@ -21,6 +21,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { supabase } from './_lib/supabase.js';
 import { expandRxcui } from './formulary.js';
+import { resolvePlanCatalogYear } from './_lib/plan-catalog-year.js';
 
 // PostgREST on this project caps every query at 1000 rows
 // (db-max-rows). The formulary fetch can easily exceed that — Durham
@@ -160,6 +161,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const idsParam = typeof req.query.ids === 'string' ? req.query.ids : '';
   const ids = idsParam.split(',').map((s) => s.trim()).filter(Boolean);
   if (ids.length === 0) return badRequest(res, 'ids required (triple ids comma-separated)');
+  // Scope the pbp_benefits overlay to the resolved catalog year (view now
+  // exposes plan_year) so a 2027 plan never shows 2026 cost-shares.
+  const catalogYear = resolvePlanCatalogYear({
+    explicit: req.query.plan_year,
+    effectiveDate: req.query.effective_date,
+  });
 
   const rxcuis = (typeof req.query.rxcuis === 'string' ? req.query.rxcuis : '')
     .split(',').map((s) => s.trim()).filter(Boolean);
@@ -224,6 +231,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         sb
           .from('pbp_benefits')
           .select('plan_id, benefit_type, tier_id, copay, coinsurance, description, source')
+          .eq('plan_year', catalogYear)
           .in('plan_id', uniqueAcceptableIds(ids, tripleIds))
           .in('source', ['medicare_gov', 'sb_ocr', 'cms_pbp', 'manual'])
           .order('plan_id', { ascending: true })
