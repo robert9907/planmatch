@@ -287,6 +287,12 @@ function ClientDeliveryCard({
           {recommended.plan_name}
         </div>
         <div
+          style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--i2)', marginTop: 2, userSelect: 'all' }}
+          title="CMS contract-plan-segment — the key the plan crosswalk joins on"
+        >
+          {recommended.id}
+        </div>
+        <div
           className="flex flex-wrap"
           style={{ gap: 6, marginTop: 10 }}
         >

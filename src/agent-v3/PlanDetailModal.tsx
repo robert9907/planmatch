@@ -192,7 +192,10 @@ export function PlanDetailModal({
               {plan.carrier}
             </div>
             <div style={{ color: '#cbd5e1', fontSize: 12 }}>
-              {plan.plan_name} · {plan.plan_type}
+              {plan.plan_name} · {plan.plan_type} ·{' '}
+              <span style={{ fontFamily: 'monospace', userSelect: 'all' }} title="CMS contract-plan-segment">
+                {plan.id}
+              </span>
               {brainScore != null && (
                 <span
                   style={{
