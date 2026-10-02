@@ -1,4 +1,5 @@
-import type { ComplianceItemDef } from '@/lib/compliance';
+import { renderItemDetail, type ComplianceItemDef } from '@/lib/compliance';
+import { useSession } from '@/hooks/useSession';
 
 interface ComplianceItemProps {
   def: ComplianceItemDef;
@@ -7,6 +8,7 @@ interface ComplianceItemProps {
 }
 
 export function ComplianceItem({ def, checked, onToggle }: ComplianceItemProps) {
+  const clientName = useSession((s) => s.client.name);
   return (
     <label
       className="flex items-start gap-3 cursor-pointer"
@@ -47,7 +49,7 @@ export function ComplianceItem({ def, checked, onToggle }: ComplianceItemProps) 
         </div>
         {def.detail && (
           <div style={{ fontSize: 11, color: 'var(--i2)', marginTop: 3, lineHeight: 1.4 }}>
-            {def.detail}
+            {renderItemDetail(def.detail, clientName)}
           </div>
         )}
       </div>
