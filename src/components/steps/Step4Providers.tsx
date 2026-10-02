@@ -317,6 +317,7 @@ function ProviderRow({
   const inCount = plans.filter((p) => provider.networkStatus?.[p.id] === 'in').length;
   const outCount = plans.filter((p) => provider.networkStatus?.[p.id] === 'out').length;
   const unknownCount = plans.length - inCount - outCount;
+  const clientFirst = useSession((s) => s.client.name).trim().split(/\s+/)[0];
 
   return (
     <div
@@ -412,7 +413,7 @@ function ProviderRow({
         />
         <span>
           <strong>Confirmed in-network manually</strong> — I called the office and they take
-          Dorothy's plan. Overrides FHIR result for finalist calculation.
+          {clientFirst ? `${clientFirst}'s` : "the client's"} plan. Overrides FHIR result for finalist calculation.
         </span>
       </label>
     </div>

@@ -72,7 +72,7 @@ export function CapturePanel({ capture, accept = 'any' }: CapturePanelProps) {
         >
           {capture.status === 'waiting'
             ? 'Waiting for first photo…'
-            : 'All processed. Dorothy can send more anytime.'}
+            : `All processed. ${capture.clientName?.trim().split(/\s+/)[0] || 'The client'} can send more anytime.`}
         </div>
       ) : (
         <div className="flex flex-col gap-2">
