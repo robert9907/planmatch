@@ -77,15 +77,16 @@ function safeCostShare(s: string): string {
   return s;
 }
 
-// Plan.id ships as "<contract>-<plan>-<segment>" ("H1036-318-000"). The
-// segment suffix is a Plan Finder internal detail that brokers never
-// say out loud — carriers print the contract-plan pair on member cards
-// and Marx/CMS systems quote the same form, so strip the trailing
-// segment for any display surface.
+// Plan.id ships as "<contract>-<plan>-<segment>" ("H1036-318-000"). We
+// now KEEP the full contract-plan-segment triple on display surfaces:
+// with both PY2026 and PY2027 loaded, the same contract-plan pair can
+// carry multiple segments at different cost-shares, so the segment is
+// the only thing that disambiguates which row a column is quoting. This
+// matches the full-triple treatment on plan detail + quote output
+// (1f93de3). Formerly this stripped the segment to the contract-plan
+// pair; that hid real differences between segments.
 function planIdShort(id: string): string {
-  const parts = id.split('-');
-  if (parts.length < 2) return id;
-  return `${parts[0]}-${parts[1]}`;
+  return id;
 }
 
 // ── Design tokens ──────────────────────────────────────────────

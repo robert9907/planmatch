@@ -305,23 +305,31 @@ async function main() {
     for (const row of landscape.values()) {
       if (row.snp_type_raw === 'D-SNP') {
         const r = await client.query(
+          // plan_year=2026 scope: pm_plans now holds BOTH 2026 and 2027 on
+          // the same (contract,plan,segment) key. This script backfills from
+          // the CY2026 Landscape CSV, so it must only touch 2026 rows — an
+          // unscoped UPDATE would clobber the 2027 rows too. (Same fix as
+          // f8ac2b6 for the refreshLandscapeSnpDetails extraction.)
           `UPDATE pm_plans
               SET dsnp_integration_status = $3,
                   zero_cost_sharing       = $4
             WHERE contract_id = $1
               AND plan_id     = $2
-              AND snp_type    = 'D-SNP'`,
+              AND snp_type    = 'D-SNP'
+              AND plan_year   = 2026`,
           [row.contract_id, row.plan_id, row.dsnp_integration_status, row.zero_cost_sharing],
         );
         if ((r.rowCount ?? 0) > 0) dsnpUpdated += r.rowCount ?? 0;
         else dsnpUnmatched += 1;
       } else if (row.snp_type_raw === 'C-SNP') {
         const r = await client.query(
+          // plan_year=2026 scope — see the D-SNP UPDATE above.
           `UPDATE pm_plans
               SET csnp_condition_type = $3
             WHERE contract_id = $1
               AND plan_id     = $2
-              AND snp_type    = 'C-SNP'`,
+              AND snp_type    = 'C-SNP'
+              AND plan_year   = 2026`,
           [row.contract_id, row.plan_id, row.csnp_condition_type],
         );
         if ((r.rowCount ?? 0) > 0) csnpUpdated += r.rowCount ?? 0;
