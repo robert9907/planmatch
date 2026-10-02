@@ -1250,7 +1250,7 @@ export function CompareScreen({
         totalProviderCount={providers.length}
         onPickChallenger={setChallenger}
         onBackToGrid={() => setMode('grid')}
-        onEnroll={recommendAndAdvance(challenger)}
+        onEnroll={(p) => recommendAndAdvance(p)()}
         onBack={onBack}
       />
     );
@@ -4183,7 +4183,9 @@ function H2HView({
   totalProviderCount: number;
   onPickChallenger: (p: Plan) => void;
   onBackToGrid: () => void;
-  onEnroll: () => void;
+  /** Enroll a specific plan — every challenger chip carries its own
+   *  Enroll, not just the one currently in the right-hand column. */
+  onEnroll: (plan: Plan) => void;
   onBack: () => void;
 }) {
   const baseAnnual = annualEstimate(baseline, annualDrugByPlanId[baseline.id] ?? null).total ?? 0;
@@ -4240,8 +4242,11 @@ function H2HView({
         {pool.map((p) => {
           const active = p.id === challenger.id;
           return (
-            <button
+            <span
               key={p.id}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            >
+            <button
               type="button"
               onClick={() => onPickChallenger(p)}
               style={{
@@ -4259,6 +4264,15 @@ function H2HView({
             >
               {p.carrier}
             </button>
+            <Btn
+              tier="primary"
+              size="xs"
+              onClick={() => onEnroll(p)}
+              title={`Enroll ${p.carrier} — ${p.plan_name}`}
+            >
+              Enroll
+            </Btn>
+            </span>
           );
         })}
       </div>
@@ -4332,6 +4346,18 @@ function H2HView({
             >
               📄 SBF ↗
             </a>
+            {!baselineIsCurrent && (
+              <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end' }}>
+                <Btn
+                  tier="primary"
+                  size="xs"
+                  onClick={() => onEnroll(baseline)}
+                  title={`Enroll ${baseline.carrier} — ${baseline.plan_name}`}
+                >
+                  Enroll
+                </Btn>
+              </div>
+            )}
           </div>
           <div style={{ display: 'flex', justifyContent: 'center' }}>
             <div
@@ -4641,7 +4667,7 @@ function H2HView({
           <Btn tier="onDark" size="lg" onClick={onBackToGrid}>
             Keep {baselineLabel}
           </Btn>
-          <Btn tier="primary" size="lg" onClick={onEnroll}>
+          <Btn tier="primary" size="lg" onClick={() => onEnroll(challenger)}>
             Enroll →
           </Btn>
         </div>
