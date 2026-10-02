@@ -671,6 +671,16 @@ export function AgentV3App() {
     dsnpEligible: client.dsnpEligible,
   });
 
+  // The Compare screen's drug costs come from the library's rank-plans
+  // response (served by the consumer app). The agent holds the authoritative
+  // publication signal locally via /api/plan-brain-data (brain.data). When the
+  // catalog year's formulary isn't published yet AND the client takes drugs, we
+  // must NOT display the rank-plans drug tiers/costs — they'd be a cross-year
+  // guess or $0. Gate the Compare UI client-side on this flag.
+  const formularyUnavailable =
+    brain.data?.formularyPublished === false && medications.length > 0;
+  const unpublishedPlanYear = brain.data?.planYear ?? null;
+
   // ── Provider network hydration: full-county direct call ───────────
   // Calls /api/library/provider-network (via checkNetworkBatch) for
   // every (NPI × eligiblePlan) pair so the broker sees in/out/unknown
@@ -846,6 +856,10 @@ export function AgentV3App() {
     tier: number | null;
     monthlyCopay: number | null;
     annualCost: number;
+    // True when the catalog year's formulary isn't published yet — the row has
+    // no real tier or cost; render "formulary not yet published", never $0 /
+    // Tier / Not covered.
+    costUnavailable?: boolean;
   };
 
   // planById is keyed by the normalized triple form so the agent's
@@ -960,6 +974,17 @@ export function AgentV3App() {
     ],
   );
 
+  // Display gate: when the catalog year's formulary isn't published yet, the
+  // per-plan drug totals from rank-plans are a cross-year guess. Null them all
+  // so every downstream total renders incomplete ("—") rather than a figure
+  // that silently excludes (or fabricates) drug cost. Inert for 2026.
+  const annualDrugByPlanIdForDisplay = useMemo<Record<string, number | null>>(() => {
+    if (!formularyUnavailable) return annualDrugByPlanId;
+    const out: Record<string, number | null> = {};
+    for (const k of Object.keys(annualDrugByPlanId)) out[k] = null;
+    return out;
+  }, [annualDrugByPlanId, formularyUnavailable]);
+
   const benchGateResultsByPlanId = useMemo<
     Record<string, { gate1_passed: boolean; gate2_passed: boolean; gate3_passed: boolean }>
   >(() => {
@@ -1039,14 +1064,29 @@ export function AgentV3App() {
         annual_cost: number;
       }>,
     ): DrugRow[] =>
-      meds.map((m) => ({
-        rxcui: m.rxcui,
-        name: m.name,
-        covered: m.covered,
-        tier: m.tier,
-        monthlyCopay: m.copay,
-        annualCost: m.annual_cost,
-      }));
+      meds.map((m) =>
+        formularyUnavailable
+          ? {
+              // Formulary not published → drop the rank-plans tier/cost entirely
+              // rather than show a cross-year guess. Leaf renderers key off
+              // costUnavailable to print "formulary not yet published".
+              rxcui: m.rxcui,
+              name: m.name,
+              covered: false,
+              tier: null,
+              monthlyCopay: null,
+              annualCost: 0,
+              costUnavailable: true,
+            }
+          : {
+              rxcui: m.rxcui,
+              name: m.name,
+              covered: m.covered,
+              tier: m.tier,
+              monthlyCopay: m.copay,
+              annualCost: m.annual_cost,
+            },
+      );
     for (const lp of ranked.result.top_plans) {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p) out[p.id] = adapt(lp.medications);
@@ -1366,6 +1406,8 @@ const explanationsByPlanId = useMemo<
           <MedsScreen
             clientView={clientView}
             capture={capture}
+            formularyUnavailable={formularyUnavailable}
+            unpublishedPlanYear={unpublishedPlanYear}
             onBack={() => setScreen('disclaimers')}
             onNext={() => setScreen('providers')}
           />
@@ -1395,7 +1437,9 @@ const explanationsByPlanId = useMemo<
             benchPlans={benchPlans}
             benchGateResultsByPlanId={benchGateResultsByPlanId}
             ribbonByPlanId={ribbonByPlanId}
-            annualDrugByPlanId={annualDrugByPlanId}
+            annualDrugByPlanId={annualDrugByPlanIdForDisplay}
+            drugCostsUnavailable={formularyUnavailable}
+            unpublishedPlanYear={unpublishedPlanYear}
             drugCoverageUnknownByPlanId={drugCoverageUnknownByPlanId}
             drugsCoveredByPlanId={drugsCoveredByPlanId}
             drugsTotalByPlanId={drugsTotalByPlanId}
@@ -1418,7 +1462,7 @@ const explanationsByPlanId = useMemo<
         {screen === 'compliance' && (
           <ComplianceScreen
             brainRankedPlans={brainRankedPlans}
-            annualDrugByPlanId={annualDrugByPlanId}
+            annualDrugByPlanId={annualDrugByPlanIdForDisplay}
             onRecommend={onRecommend}
             onBack={() => setScreen('compare')}
             onNext={() => setScreen('enroll')}
@@ -1429,7 +1473,7 @@ const explanationsByPlanId = useMemo<
             current={currentPlan}
             brainRankedPlans={brainRankedPlans}
             onRecommend={onRecommend}
-            annualDrugByPlanId={annualDrugByPlanId}
+            annualDrugByPlanId={annualDrugByPlanIdForDisplay}
             onBack={() => setScreen('compliance')}
           />
         )}

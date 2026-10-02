@@ -63,6 +63,13 @@ interface Props {
   onBack: () => void;
   clientView: boolean;
   capture: UseCaptureSessionResult;
+  /** True when the catalog year's Part D formulary isn't published yet (CMS
+   *  SPUF not posted) AND the client takes drugs. Per-drug tier + annual
+   *  estimate render "formulary not yet published" instead of a tier/$ figure —
+   *  never $0 or a prior-year tier. Optional; false/absent for 2026. */
+  formularyUnavailable?: boolean;
+  /** The unpublished catalog year, for the per-drug note copy. */
+  unpublishedPlanYear?: number | null;
 }
 
 // Pure-visual icon picker — falls back to a generic capsule if nothing
@@ -79,7 +86,7 @@ function iconForMed(med: Medication): string {
   return '💊';
 }
 
-export function MedsScreen({ onNext, onBack, clientView, capture }: Props) {
+export function MedsScreen({ onNext, onBack, clientView, capture, formularyUnavailable, unpublishedPlanYear }: Props) {
   const client = useSession((s) => s.client);
   const medications = useSession((s) => s.medications);
   const addMedication = useSession((s) => s.addMedication);
@@ -284,13 +291,24 @@ export function MedsScreen({ onNext, onBack, clientView, capture }: Props) {
             index={i}
             plans={eligiblePlans}
             tick={formularyTick}
+            formularyUnavailable={formularyUnavailable}
+            unpublishedPlanYear={unpublishedPlanYear}
             onRemove={() => removeMedication(med.id)}
             onRepick={() => handleRepick(med)}
           />
         ))
       )}
 
-      {!clientView && medications.length > 0 && (
+      {!clientView && medications.length > 0 && formularyUnavailable && (
+        <AgentInsight>
+          📋 <b>{unpublishedPlanYear ?? 'Next year'} Part D formulary not yet published.</b>{' '}
+          CMS hasn&apos;t released the drug file for these plans, so tiers and drug costs
+          aren&apos;t available yet — they post during Annual Enrollment. Don&apos;t quote
+          drug costs from this screen until then.
+        </AgentInsight>
+      )}
+
+      {!clientView && medications.length > 0 && !formularyUnavailable && (
         <AgentInsight>
           {costDriver ? (
             <>
@@ -441,6 +459,8 @@ function MedRow({
   tick,
   onRemove,
   onRepick,
+  formularyUnavailable,
+  unpublishedPlanYear,
 }: {
   med: Medication;
   index: number;
@@ -448,9 +468,13 @@ function MedRow({
   tick: number;
   onRemove: () => void;
   onRepick: () => void;
+  formularyUnavailable?: boolean;
+  unpublishedPlanYear?: number | null;
 }) {
   const stats = useMemo(() => perDrugBest(med, plans, tick), [med, plans, tick]);
-  const tierForIcon = stats.bestTier ?? 0;
+  // When the catalog year's formulary isn't published, suppress any tier color
+  // (it would come from stale cross-year data) — the row says "not yet published".
+  const tierForIcon = formularyUnavailable ? 0 : stats.bestTier ?? 0;
   const dosage = [med.dose, med.frequency].filter(Boolean).join(' • ');
 
   // Cap the Checking spinner at 12s. If the formulary prime returns
@@ -501,7 +525,11 @@ function MedRow({
           {dosage || (med.rxcui ? `rxcui ${med.rxcui}` : 'no dosage on file')}
         </div>
       </div>
-      <TierBadge tier={stats.bestTier} />
+      {formularyUnavailable ? (
+        <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600 }}>Tier —</span>
+      ) : (
+        <TierBadge tier={stats.bestTier} />
+      )}
       <button
         type="button"
         onClick={onRemove}
@@ -519,7 +547,14 @@ function MedRow({
         ✕
       </button>
       <div style={{ textAlign: 'right', minWidth: 95 }}>
-        {!med.rxcui ? (
+        {med.rxcui && formularyUnavailable ? (
+          // Formulary for this catalog year isn't published yet — no tier, no
+          // estimate. Never show $0 / "Not covered" / a prior-year tier here.
+          <div style={{ fontSize: 10, color: '#92400e', fontWeight: 600, lineHeight: 1.3 }}>
+            {unpublishedPlanYear ?? 'Next year'} formulary
+            <br />not yet published
+          </div>
+        ) : !med.rxcui ? (
           // Yellow "couldn't match to formulary" warning. Tap fires
           // onRepick, which pre-fills the AddMedPanel search with the
           // original broker-typed name so a re-search is one click.

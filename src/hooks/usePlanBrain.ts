@@ -122,6 +122,14 @@ export interface ProviderNetworkRow {
   covered: boolean | null;
 }
 export interface PlanBrainData {
+  // The catalog year these plans/benefits belong to, and whether CMS has
+  // published that year's formulary yet (active cms_spuf_releases row). When
+  // formularyPublished is false, formularyByContractPlan is empty NOT because
+  // the drugs aren't covered but because the year's SPUF drug file isn't out —
+  // the brain must not price drugs. Optional for backward-compat with any
+  // cached/older response; treated as published when absent.
+  planYear?: number;
+  formularyPublished?: boolean;
   benefitsByPlan: Record<string, BenefitRow[]>;
   drugCostCache: Record<string, Record<string, DrugCostCacheRow>>;
   formularyByContractPlan: Record<string, Record<string, FormularyRow>>;
@@ -226,6 +234,13 @@ export interface ScoredPlan {
    *  formulary. UI surfaces the "drug coverage estimated — confirm
    *  with your pharmacist" disclaimer on affected plan columns. */
   drugCoverageUnknown: boolean;
+  /** Mirror of BrainScore.drugCostsUnavailable — true when the catalog
+   *  year's formulary isn't published yet (CMS SPUF not posted) AND the
+   *  user has drugs. When true, drug costs are $0 and EXCLUDED from the
+   *  total: the UI must render "formulary not yet published" per drug and
+   *  label any drug-inclusive total incomplete (or hide it). Never both
+   *  this and drugCoverageUnknown. Same value for every plan in a run. */
+  drugCostsUnavailable: boolean;
   /** Count of user drugs the plan's formulary actually files. Wired
    *  directly from BrainScore.coveredCount so UI doesn't have to
    *  re-query plan.formulary (which is `{}` in agent-v3 because no one
@@ -245,6 +260,10 @@ export interface ScoredPlan {
     tier: number | null;
     monthlyCopay: number | null;
     annualCost: number;
+    /** True when the catalog year's formulary isn't published yet. The row
+     *  carries NO real tier or cost — render "formulary not yet published",
+     *  never $0 / Tier / Not covered. */
+    costUnavailable?: boolean;
   }>;
   ribbon: RibbonKey | null;
   breakdown: string;
@@ -726,6 +745,10 @@ export function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
     weightsOverride: args.weightsOverride ?? undefined,
     enrollmentPeriod: client.enrollmentPeriod,
     sepReasonCode: client.sepReasonCode,
+    // Carry the formulary-publication state so the brain refuses to price
+    // drugs for a year whose SPUF drug file CMS hasn't posted yet.
+    formularyPublished: data.formularyPublished,
+    planYear: data.planYear,
   };
 }
 
@@ -825,6 +848,7 @@ function adaptScored(
     providerNetworkStatus,
     uncoveredDrugRxcuis,
     drugCoverageUnknown: score.drugCoverageUnknown,
+    drugCostsUnavailable: score.drugCostsUnavailable,
     drugsCovered: score.coveredCount,
     drugsTotal: score.totalCount,
     drugBreakdown: score.drugBreakdown,

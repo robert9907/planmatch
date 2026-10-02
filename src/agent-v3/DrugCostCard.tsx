@@ -99,6 +99,9 @@ export interface DrugCostCardDrugRow {
   tier: number | null;
   monthlyCopay: number | null;
   annualCost: number;
+  // True when the catalog year's formulary isn't published yet — no real tier
+  // or cost. Render "formulary not yet published", never $0 / Tier / Not covered.
+  costUnavailable?: boolean;
 }
 
 export interface DrugCostCardComparisonPlan {
@@ -1061,6 +1064,39 @@ export function DrugCostCard(props: DrugCostCardProps): ReactNode {
   );
 
   if (drugBreakdown.length === 0) return null;
+
+  // Formulary for this catalog year isn't published yet (CMS SPUF not posted):
+  // no tiers, no costs, no timeline. Render the state plainly instead of
+  // computing $0 totals and a misleading talking point. Run-wide, so every row
+  // carries costUnavailable together.
+  if (drugBreakdown.every((d) => d.costUnavailable)) {
+    return (
+      <div
+        style={{
+          borderTop: `1px solid ${BORDER}`,
+          background: 'white',
+          fontFamily: FONT_LABEL,
+          padding: '8px 10px',
+        }}
+      >
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 0.5,
+            textTransform: 'uppercase',
+            color: MUTED,
+          }}
+        >
+          Drug costs
+        </span>
+        <div style={{ marginTop: 4, fontSize: 11, fontStyle: 'italic', color: MUTED }}>
+          Formulary not yet published — drug tiers and costs aren&apos;t available for this
+          plan year yet (they post during Annual Enrollment).
+        </div>
+      </div>
+    );
+  }
 
   const medByRxcui = new Map<string, Medication>();
   for (const m of medications) {

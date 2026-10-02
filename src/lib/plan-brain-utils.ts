@@ -215,6 +215,13 @@ export interface DrugYearlyEstimate {
   // Consumed by the LIS override in dual-eligible.ts (step 3).
   // Defaults false when the input drug didn't carry the flag.
   isBrand: boolean;
+  // True ONLY when the plan year's formulary isn't published yet (CMS
+  // hasn't posted the SPUF drug file). Distinct from covered/confirmedUncovered:
+  // we have NO formulary at all, so tier is null and yearlyCost is 0 — not a
+  // real $0 and not a full-retail guess. The UI must render "formulary not yet
+  // published" and label any drug-inclusive total incomplete. Absent/false in
+  // every normal (published-year) estimate. See unavailableDrugEstimates.
+  costUnavailable?: boolean;
 }
 
 // Single-drug yearly cost estimate. Cache hit → use it. Cache miss →
@@ -317,6 +324,28 @@ const BUNDLE_PLAN_YEAR = 2026;
 // per-plan `deductibleAppliesToTiers` starts flowing (from
 // pm_beneficiary_cost_v2 rows) this becomes an arg.
 const DEFAULT_DEDUCTIBLE_TIERS: ReadonlyArray<number> = [3, 4, 5];
+
+// Drug estimates for a plan year whose formulary CMS hasn't published yet.
+// The brain calls this INSTEAD of estimateBundleYearlyCost when
+// formularyPublished === false, so the empty formulary read never reaches the
+// retail-penalty / tier-fallback paths. Every drug comes back cost-unavailable:
+// $0 yearly (excluded from totals, which the UI labels incomplete), null tier,
+// not covered and not confirmed-uncovered (we genuinely don't know). One entry
+// per input drug, in input order — same contract as estimateBundleYearlyCost.
+export function unavailableDrugEstimates(
+  drugs: ReadonlyArray<{ rxcui?: string; name: string; isBrand?: boolean }>,
+): DrugYearlyEstimate[] {
+  return drugs.map((d) => ({
+    rxcui: d.rxcui,
+    name: d.name,
+    tier: null,
+    yearlyCost: 0,
+    covered: false,
+    confirmedUncovered: false,
+    isBrand: d.isBrand ?? false,
+    costUnavailable: true,
+  }));
+}
 
 export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyEstimate[] {
   // ── 1. Per-drug metadata — unchanged from the pre-timeline body ──

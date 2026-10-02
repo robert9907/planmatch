@@ -112,6 +112,14 @@ export interface BrainScore {
    *  LiveTop3PickPlan.drugCoverageUnknown so the UI can display
    *  "drug coverage estimated — confirm with your pharmacist". */
   drugCoverageUnknown: boolean;
+  /** True when the plan year's formulary isn't published yet (CMS SPUF not
+   *  posted) AND the user has drugs. When true: totalAnnualDrugCost is 0 and
+   *  EXCLUDED from a priced total — totalOOPEstimate is therefore incomplete
+   *  and the UI must label it so (or hide it), and every drugBreakdown row is
+   *  costUnavailable. Distinct from drugCoverageUnknown (which means "priced
+   *  with a retail guess, confirm with pharmacist"); the two are never both
+   *  true. Same value for every plan in a run. */
+  drugCostsUnavailable: boolean;
   /** Count of user drugs that had zero coverage evidence (no
    *  formulary row, no cache hit) on EVERY plan in the pool — i.e.,
    *  almost certainly OTC / vitamin / discontinued. Gate 2 excludes
@@ -296,6 +304,10 @@ export interface BrainScore {
     // Enables Generic/Brand chips on cards and the LIS L3+ copay
     // override in dual-eligible.ts.
     isBrand: boolean;
+    // True when the catalog year's formulary isn't published yet. The row
+    // carries NO real tier or cost — render "formulary not yet published",
+    // never $0/Tier/Not covered. Absent/false in every published-year row.
+    costUnavailable?: boolean;
   }>;
   /** Present ONLY when applyDualEligibleCostAdjustment ran (i.e.
    *  userProfile.medicaidLevel !== 'none' OR lisTier !== 'none').
@@ -586,6 +598,17 @@ export interface BrainInputs {
    * omitted, no MA-only filtering happens (legacy behavior).
    */
   mapdContractPlanIds?: ReadonlySet<string>;
+  /** Whether CMS has published the formulary for the catalog year these
+   *  plans belong to (active cms_spuf_releases row). Comes from
+   *  /api/plan-brain-data's formularyPublished. When false AND the user has
+   *  drugs, the brain must NOT price them — an empty formulary read for an
+   *  unpublished year would otherwise draw the full-retail penalty on every
+   *  drug and present a complete-looking OOP total. Defaults to true (published)
+   *  when omitted, so legacy/2026 call sites are unaffected. */
+  formularyPublished?: boolean;
+  /** Catalog year these plans belong to — informational, pairs with
+   *  formularyPublished for UI copy ("2027 formulary not yet published"). */
+  planYear?: number;
   // Weight overrides — agent dashboard will eventually wire sliders.
   weightsOverride?: BrainWeights;
   /** Enrollment period the beneficiary is using. When provided, the brain

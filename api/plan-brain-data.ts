@@ -22,6 +22,7 @@ import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { supabase } from './_lib/supabase.js';
 import { expandRxcui } from './formulary.js';
 import { resolvePlanCatalogYear } from './_lib/plan-catalog-year.js';
+import { isFormularyPublished } from './_lib/formulary-published.js';
 
 // PostgREST on this project caps every query at 1000 rows
 // (db-max-rows). The formulary fetch can easily exceed that — Durham
@@ -219,9 +220,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const expandedRxcuiList = [...expandedSet];
 
-    // Run the five queries in parallel — none of them depend on each
-    // other's results.
-    const [benefitsRes, drugCacheRes, formularyRes, ndcRes, networkRes] = await Promise.all([
+    // Run the queries in parallel — none of them depend on each other's
+    // results. formularyPublished gates whether the client is allowed to
+    // treat an empty/partial formulary read as real cost data (it is not
+    // until CMS posts the year's SPUF drug file ~Oct 31).
+    const [benefitsRes, drugCacheRes, formularyRes, ndcRes, networkRes, formularyPublished] = await Promise.all([
       // Paginated + filtered to the four real sources so the alt_
       // dedup below sees every candidate (a source-restricted query
       // truncated at PostgREST's 1000-row cap would silently drop the
@@ -260,6 +263,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               .select(
                 'contract_id, plan_id, rxcui, tier, copay, coinsurance, prior_auth, step_therapy',
               )
+              // Year-scope: pm_formulary is year-aware. Without this a 2027 plan
+              // gets its 2026 twin's tiers/copays — a real-looking drug price for
+              // a year CMS hasn't published.
+              .eq('plan_year', catalogYear)
               .in('contract_id', contracts)
               .in('plan_id', planNumbers)
               .in('rxcui', expandedRxcuiList)
@@ -279,6 +286,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             .in('plan_id', contractPlans)
             .in('npi', npis)
         : Promise.resolve({ data: [], error: null }),
+      isFormularyPublished(sb, catalogYear),
     ]);
 
     if (benefitsRes.error) throw benefitsRes.error;
@@ -420,6 +428,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     res.setHeader('Cache-Control', 'no-store');
     return sendJson(res, 200, {
+      planYear: catalogYear,
+      // When false, an empty formularyByContractPlan means "CMS hasn't posted
+      // this year's drug file yet" — NOT $0, not full retail, not the prior
+      // year's tier. The brain must surface drug tiers/costs as unavailable and
+      // label any total that would include drugs as incomplete.
+      formularyPublished,
       benefitsByPlan,
       drugCostCache,
       formularyByContractPlan,

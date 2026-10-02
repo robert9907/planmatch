@@ -25,22 +25,26 @@ export async function lookupTier(
   formularyDb: SupabaseClient,
   planId: string | null | undefined,
   rxcui: string | null | undefined,
+  planYear?: number | null,
 ): Promise<number | null> {
   const p = parsePlanId(planId);
   if (!p || !rxcui) return null;
   try {
-    const { data, error } = await formularyDb
+    let q = formularyDb
       .from('pm_formulary')
       .select('tier, plan_year, segment_id')
       .eq('contract_id', p.contract)
       .eq('plan_id', p.plan)
-      .eq('rxcui', rxcui)
-      .limit(50);
+      .eq('rxcui', rxcui);
+    // When the caller knows the plan's year, pin to it so a later year's
+    // formulary (once loaded) can't bleed its tiers onto a prior-year plan.
+    if (planYear != null) q = q.eq('plan_year', planYear);
+    const { data, error } = await q.limit(50);
     if (error) throw error;
     let rows = (data ?? []).filter((r) => typeof r.tier === 'number');
     if (rows.length === 0) return null;
-    // Latest plan year on file only.
-    const year = Math.max(...rows.map((r) => r.plan_year ?? 0));
+    // No explicit year → fall back to the latest plan year on file.
+    const year = planYear != null ? planYear : Math.max(...rows.map((r) => r.plan_year ?? 0));
     rows = rows.filter((r) => (r.plan_year ?? 0) === year);
     // Match the client's segment when we know it and it's on file.
     if (p.segment != null) {

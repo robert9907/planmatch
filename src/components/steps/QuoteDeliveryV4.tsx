@@ -321,7 +321,7 @@ interface MedRow {
   /** Per-cell provenance — drives the rendering between actual,
    *  estimate (with asterisk + tooltip), unavailable (em dash),
    *  and excluded. Length matches columns.length. */
-  sources: ('cache' | 'formulary' | 'tier_estimate' | 'unavailable' | 'excluded' | 'no_rxcui')[];
+  sources: ('cache' | 'formulary' | 'tier_estimate' | 'unavailable' | 'excluded' | 'formulary_unpublished' | 'no_rxcui')[];
   paStFlags: Array<{ pa?: boolean; st?: boolean } | null>;
 }
 
@@ -826,6 +826,11 @@ export function QuoteDeliveryV4({
   // Total Rx Cost — prefer live /api/drug-costs total when available.
   const rxTotalAnnual = useMemo<(number | null)[]>(() => {
     return columns.map((c) => {
+      // Formulary for the catalog year isn't published yet → we cannot honestly
+      // total drug costs. Return null (cell renders incomplete) BEFORE the live
+      // /api/drug-costs path, so a cross-year cache row can't inject a figure.
+      if (brainData?.formularyPublished === false && medications.length > 0) return null;
+
       // Path 1 — live /api/drug-costs total. Authoritative.
       const live = lookupPlanCost(drugCosts, c.plan);
       if (live?.annual_cost != null) return Math.round(live.annual_cost);
@@ -884,11 +889,24 @@ export function QuoteDeliveryV4({
     hearing: number;
     otc: number;
     food: number;
+    // True when the plan year's formulary isn't published yet: `rx` is 0 only
+    // because we have no drug data, so `total` EXCLUDES drugs and must be
+    // rendered as incomplete (or withheld), never as a finished figure.
+    rxIncomplete: boolean;
   }
+
+  // Run-wide: the catalog year's formulary isn't published yet AND the client
+  // takes drugs. Drives the "not yet published" treatment across the quote.
+  const formularyUnavailable =
+    brainData?.formularyPublished === false && medications.length > 0;
+  const unpublishedPlanYear = brainData?.planYear ?? null;
+  const unpublishedRxNote = `excl. Rx — ${unpublishedPlanYear ?? ''} formulary not yet published`.replace('  ', ' ');
 
   const annualBreakdown = useMemo<ValueBreakdown[]>(() => {
     return columns.map((c, i) => {
-      const rx = rxTotalAnnual[i] ?? 0;
+      const rxRaw = rxTotalAnnual[i];
+      const rxIncomplete = rxRaw == null && formularyUnavailable;
+      const rx = rxRaw ?? 0;
       const premium = (c.plan.premium ?? 0) * 12;
       const giveback = (c.plan.part_b_giveback ?? 0) * 12;
       // Dental — annual_max if positive, else 0 (no annual cap).
@@ -903,9 +921,9 @@ export function QuoteDeliveryV4({
       const cost = rx + premium;
       const value = giveback + dental + vision + hearing + otc + food;
       const total = -(cost - value);
-      return { total, rx, premium, giveback, dental, vision, hearing, otc, food };
+      return { total, rx, premium, giveback, dental, vision, hearing, otc, food, rxIncomplete };
     });
-  }, [columns, rxTotalAnnual]);
+  }, [columns, rxTotalAnnual, formularyUnavailable]);
 
   // The Total Annual Value strip used to read these numbers. The new
   // cost-positive renderer computes both the per-column cost and the
@@ -929,6 +947,12 @@ export function QuoteDeliveryV4({
   // explicit rather than relying on useMemo's lazy capture.
   const aepVerdict = useMemo(() => {
     if (!isAnnualReview || !currentPlan || !result) {
+      return { active: false as const };
+    }
+    // Stay/switch and its savings are drug-blind while the formulary is
+    // unpublished (every plan's drug cost is 0). Don't assert a cost verdict on
+    // an incomplete total — the per-plan strip already shows "excl. Rx".
+    if (formularyUnavailable) {
       return { active: false as const };
     }
     const currentCol = columns.find((c) => c.variant === 'current');
@@ -965,7 +989,7 @@ export function QuoteDeliveryV4({
       netDeltaVsCurrent,
       givebackDrop,
     };
-  }, [isAnnualReview, currentPlan, result, columns, recommendation]);
+  }, [isAnnualReview, currentPlan, result, columns, recommendation, formularyUnavailable]);
 
   const whySwitch = useMemo<string[]>(() => {
     const baselinePlan = columns[baseIdx]?.plan ?? null;
@@ -2238,6 +2262,8 @@ export function QuoteDeliveryV4({
                       : monthlyHere - monthlyBase;
                   const tooltipFor = (src: typeof source): string => {
                     switch (src) {
+                      case 'formulary_unpublished':
+                        return "This plan year's formulary hasn't been published by CMS yet, so drug tiers and costs aren't available. They post during Annual Enrollment.";
                       case 'unavailable':
                         return 'Cost data not available for this plan. Verify with the carrier before quoting.';
                       case 'tier_estimate':
@@ -2258,12 +2284,12 @@ export function QuoteDeliveryV4({
                         style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}
                         title={tooltipFor(source)}
                       >
-                        {tier != null && source !== 'unavailable' && <TierSquareBadge tier={tier} />}
+                        {tier != null && source !== 'unavailable' && source !== 'formulary_unpublished' && <TierSquareBadge tier={tier} />}
                         <span
                           style={{
                             fontFamily: FONT.mono,
                             fontSize: 12,
-                            color: source === 'unavailable' ? COL.inkSub : source === 'tier_estimate' ? '#6b7280' : s.bodyFg,
+                            color: source === 'unavailable' || source === 'formulary_unpublished' ? COL.inkSub : source === 'tier_estimate' ? '#6b7280' : s.bodyFg,
                             fontStyle: source === 'tier_estimate' ? 'italic' : 'normal',
                           }}
                         >
@@ -2298,14 +2324,14 @@ export function QuoteDeliveryV4({
                 let estimates = 0;
                 for (const row of medRows) {
                   const src = row.sources[ci];
-                  if (src === 'unavailable' || src === 'no_rxcui') unavailable += 1;
+                  if (src === 'unavailable' || src === 'no_rxcui' || src === 'formulary_unpublished') unavailable += 1;
                   else if (src === 'tier_estimate') estimates += 1;
                 }
 
                 const isComplete = unavailable === 0 && annualRaw != null;
                 const realBase = baseAnnual != null && (medRows.every((r) => {
                   const sb = r.sources[baseIdx];
-                  return sb !== 'unavailable' && sb !== 'no_rxcui';
+                  return sb !== 'unavailable' && sb !== 'no_rxcui' && sb !== 'formulary_unpublished';
                 }));
                 const delta =
                   ci === 0 || !isComplete || !realBase || annualRaw == null || baseAnnual == null
@@ -2492,7 +2518,12 @@ export function QuoteDeliveryV4({
                   if (!baseB) return null;
                   return Math.max(0, Math.round((baseB.rx + baseB.premium) - (baseB.giveback + baseB.dental + baseB.vision + baseB.hearing + baseB.otc + baseB.food)));
                 })();
-                const savings = baselineCost != null && ci !== baseIdx
+                // An incomplete (drug-excluding) total can't be honestly
+                // compared against another column — suppress the savings chip
+                // whenever either this column or the baseline excludes Rx.
+                const rxIncomplete = breakdown?.rxIncomplete === true;
+                const baseRxIncomplete = annualBreakdown[baseIdx]?.rxIncomplete === true;
+                const savings = baselineCost != null && ci !== baseIdx && !rxIncomplete && !baseRxIncomplete
                   ? baselineCost - annualCost
                   : 0;
                 const tooltip = real
@@ -2527,6 +2558,11 @@ export function QuoteDeliveryV4({
                     }}
                   >
                     {`$${annualCost.toLocaleString()}/yr`}
+                    {rxIncomplete && (
+                      <span style={{ display: 'block', fontSize: 9, marginTop: 2, fontWeight: 600, color: '#ffd166' }}>
+                        {unpublishedRxNote}
+                      </span>
+                    )}
                     {!isCurrent && savings > 0 && (
                       <span style={{ fontSize: 9, marginLeft: 6, opacity: 0.85 }}>saves ${Math.round(savings).toLocaleString()}</span>
                     )}
@@ -2697,6 +2733,13 @@ export function QuoteDeliveryV4({
           <strong>—</strong> = cost data not available for this (plan, drug) pair · verify with the carrier before quoting
         </div>
       )}
+      {formularyUnavailable && (
+        <div style={{ padding: '4px 0 0', fontSize: 10, color: COL.inkSub }}>
+          <strong>Not yet published</strong> = CMS hasn't released the {unpublishedPlanYear ?? 'upcoming'} Part D formulary yet, so drug
+          tiers and costs aren't available for these plans. Annual totals shown <strong>exclude drug costs</strong> until the
+          formulary posts (during Annual Enrollment). Don't quote drug costs from this screen yet.
+        </div>
+      )}
 
       {result && client.county && (
         <div style={{ padding: '6px 0 0', fontSize: 10, color: COL.inkSub }}>
@@ -2851,7 +2894,17 @@ function makeCol(plan: Plan, scored: ScoredPlan | null, variant: ColumnVariant):
 //                     the broker knows how much of the total was
 //                     unknowable.
 
-type CostSource = 'cache' | 'formulary' | 'tier_estimate' | 'unavailable' | 'excluded';
+type CostSource =
+  | 'cache'
+  | 'formulary'
+  | 'tier_estimate'
+  | 'unavailable'
+  | 'excluded'
+  // The catalog year's formulary isn't published yet (CMS SPUF not posted).
+  // Distinct from 'unavailable' (no data for THIS drug on a published plan):
+  // here we have NO formulary at all for the year, so we can't price ANY drug.
+  // Renders "Not yet published", never a price, a tier, or "Not covered".
+  | 'formulary_unpublished';
 
 interface DrugInfo {
   tier: number | null;
@@ -2890,6 +2943,11 @@ function lookupDrugCost(
   pharmacyFill: PharmacyFill,
 ): DrugInfo | null {
   if (!med.rxcui) return null;
+  // Formulary for this catalog year isn't published yet (CMS SPUF not posted).
+  // We have no tiers or cost-shares for ANY drug — refuse to price. This gate
+  // sits ahead of every cache/formulary/estimate path so nothing downstream can
+  // fabricate a $0, a full-retail guess, or a prior-year tier.
+  if (data?.formularyPublished === false) return formularyUnpublished();
   const tripleId = plan.id;
   const contractPlan = `${plan.contract_id}-${plan.plan_number}`;
 
@@ -3045,6 +3103,21 @@ function notCovered(): DrugInfo {
     monthly: null,
     annual: null,
     source: 'excluded',
+    is_estimate: false,
+    pa: false,
+    st: false,
+  };
+}
+
+// The plan year's formulary isn't published yet. No tier, no cost — the quote
+// must say so, never fall back to $0 / full retail / a prior-year tier.
+function formularyUnpublished(): DrugInfo {
+  return {
+    tier: null,
+    label: 'Not yet published',
+    monthly: null,
+    annual: null,
+    source: 'formulary_unpublished',
     is_estimate: false,
     pa: false,
     st: false,

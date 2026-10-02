@@ -39,6 +39,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { supabase } from './_lib/supabase.js';
+import { resolvePlanCatalogYear } from './_lib/plan-catalog-year.js';
+import { isFormularyPublished } from './_lib/formulary-published.js';
 
 interface FormularyRow {
   contract_id: string;
@@ -273,14 +275,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const rxcuisCsv = typeof req.query.rxcuis === 'string' ? req.query.rxcuis : '';
   const contractIdsCsv = typeof req.query.contract_ids === 'string' ? req.query.contract_ids : '';
+  // pm_formulary is year-aware; scope every read to the resolved catalog year so
+  // a 2027 plan never returns its 2026 twin's tiers/copays.
+  const catalogYear = resolvePlanCatalogYear({
+    explicit: req.query.plan_year,
+    effectiveDate: req.query.effective_date,
+  });
 
   try {
     const sb = supabase();
+    // When false, an empty/not_covered result for this year means CMS hasn't
+    // posted the drug file yet — callers must say so, not render "not covered".
+    const formulary_published = await isFormularyPublished(sb, catalogYear);
 
     // ─── Bulk mode ──────────────────────────────────────────────────
     if (rxcuisCsv) {
       const originals = rxcuisCsv.split(',').map((s) => s.trim()).filter(Boolean);
-      if (originals.length === 0) return sendJson(res, 200, { rows: [] });
+      if (originals.length === 0) return sendJson(res, 200, { rows: [], formulary_published });
 
       // Expansion and combo-classification run in parallel per original.
       // Combo classification is what decides whether the caller's final
@@ -343,6 +354,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             .select(
               'contract_id, plan_id, rxcui, drug_name, tier, copay, coinsurance, prior_auth, step_therapy, quantity_limit',
             )
+            .eq('plan_year', catalogYear)
             .in('rxcui', rxChunk)
             .range(from, from + PAGE - 1);
           if (cid) q = q.eq('contract_id', cid);
@@ -416,7 +428,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
       }
       res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=120');
-      return sendJson(res, 200, { rows });
+      return sendJson(res, 200, { rows, formulary_published });
     }
 
     // ─── Single lookup ──────────────────────────────────────────────
@@ -449,6 +461,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           )
           .eq('contract_id', contractId)
           .eq('plan_id', planId)
+          .eq('plan_year', catalogYear)
           .in('rxcui', chunk)
           .range(0, chunk.length - 1);
       }),
@@ -460,8 +473,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (data.length === 0) {
-      res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300');
-      return sendJson(res, 200, { tier: 'not_covered' });
+      // Don't CDN-cache a "nothing on file" answer for an unpublished year —
+      // it flips to real data the day CMS posts the SPUF file (~Oct 31).
+      res.setHeader('Cache-Control', formulary_published ? 'public, max-age=60, s-maxage=300' : 'no-store');
+      return sendJson(res, 200, { tier: 'not_covered', formulary_published });
     }
 
     let best: ScoredRow | undefined;
@@ -479,8 +494,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // (hydrocodone/APAP, amlodipine/benazepril) accepts combo siblings
     // because by definition every valid match has a combo drug_name.
     if (!best || (suppressCombos && !best.isExact && best.isCombo)) {
-      res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300');
-      return sendJson(res, 200, { tier: 'not_covered' });
+      res.setHeader('Cache-Control', formulary_published ? 'public, max-age=60, s-maxage=300' : 'no-store');
+      return sendJson(res, 200, { tier: 'not_covered', formulary_published });
     }
 
     res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300');
@@ -492,6 +507,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       prior_auth: best.row.prior_auth === true,
       step_therapy: best.row.step_therapy === true,
       quantity_limit: best.row.quantity_limit === true,
+      formulary_published,
     });
   } catch (err) {
     return serverError(res, err);

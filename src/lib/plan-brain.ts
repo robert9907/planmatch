@@ -52,6 +52,7 @@ import {
   copayForCategory,
   deriveUtilization,
   estimateBundleYearlyCost,
+  unavailableDrugEstimates,
   extractCategoryAnnualValue,
   extractExtraAnnualFromAggregated,
   extractOtcQuarterly,
@@ -700,24 +701,34 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     const aggregatedPlan = input.planByKey?.get(planKeyWithSegment(row)) ?? null;
 
     const planDrugCache = input.drugCostCacheByPlanKey?.get(planKeyWithSegment(row));
-    const drugEstimates = estimateBundleYearlyCost({
-      drugs: input.userProfile.drugs,
-      formulary,
-      benefits,
-      drugDeductible: row.drug_deductible,
-      cache: planDrugCache,
-      rxcuiToNdc: input.rxcuiToNdc,
-    });
+    // Formulary not published for this catalog year (CMS SPUF not posted) and
+    // the user has drugs → we have NO formulary to price against. Pricing the
+    // empty read would draw the full-retail penalty on every drug and present a
+    // complete-looking OOP total. Instead mark every drug cost-unavailable: $0,
+    // excluded from the total (which the UI labels incomplete), no tier.
+    const drugCostsUnavailable = input.formularyPublished === false && userHasDrugs;
+    const drugEstimates = drugCostsUnavailable
+      ? unavailableDrugEstimates(input.userProfile.drugs)
+      : estimateBundleYearlyCost({
+          drugs: input.userProfile.drugs,
+          formulary,
+          benefits,
+          drugDeductible: row.drug_deductible,
+          cache: planDrugCache,
+          rxcuiToNdc: input.rxcuiToNdc,
+        });
     const totalAnnualDrugCost = drugEstimates.reduce((s, x) => s + x.yearlyCost, 0);
     const coveredCount = drugEstimates.filter((x) => x.covered).length;
     const lowTierCount = drugEstimates.filter((x) => x.tier != null && x.tier <= 2).length;
     const totalCount = drugEstimates.length;
     // At least one user drug has no cache row AND isn't on the formulary —
     // we have no evidence either way. UI surfaces a "drug coverage
-    // estimated — confirm with your pharmacist" disclaimer.
-    const drugCoverageUnknown = drugEstimates.some(
-      (x) => !x.covered && !x.confirmedUncovered,
-    );
+    // estimated — confirm with your pharmacist" disclaimer. Suppressed when
+    // the formulary simply isn't published (drugCostsUnavailable owns that
+    // state and carries a different, non-pharmacist message).
+    const drugCoverageUnknown =
+      !drugCostsUnavailable &&
+      drugEstimates.some((x) => !x.covered && !x.confirmedUncovered);
 
     const moopBenefit = benefitByCategory(benefits, 'moop_in');
     const moopAmount =
@@ -861,6 +872,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
         monthlyCopay: cov?.copay ?? null,
         annualCost: Math.round(est.yearlyCost),
         isBrand: est.isBrand,
+        costUnavailable: est.costUnavailable === true,
       };
     });
 
@@ -910,6 +922,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       totalCount,
       lowTierCount,
       drugCoverageUnknown,
+      drugCostsUnavailable,
       // Pool-wide OTC count filled in after the map completes (needs
       // to see every plan's per-drug coverage to decide which meds
       // are truly non-Rx). See the pre-pass right after this map.

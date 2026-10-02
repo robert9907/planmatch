@@ -118,6 +118,15 @@ interface Props {
    *  type-check. */
   ribbonByPlanId?: Record<string, string | null>;
   annualDrugByPlanId: Record<string, number | null>;
+  /** True when the catalog year's Part D formulary isn't published yet (CMS
+   *  SPUF not posted) AND the client takes drugs. Drug tiers/costs aren't
+   *  available: per-drug rows render "formulary not yet published" and every
+   *  drug-inclusive total is withheld/labeled incomplete — never $0, full
+   *  retail, or a prior-year tier. Optional; false/absent for 2026. */
+  drugCostsUnavailable?: boolean;
+  /** The unpublished catalog year, for banner/row copy ("2027 formulary not
+   *  yet published"). */
+  unpublishedPlanYear?: number | null;
   /** True when the brain couldn't confirm coverage for ≥1 user drug on
    *  this plan (no pm_drug_cost_cache row AND not on the formulary).
    *  The drug-cost row in the slot card renders an amber disclaimer
@@ -277,6 +286,9 @@ interface DrugRow {
   tier: number | null;
   monthlyCopay: number | null;
   annualCost: number;
+  // True when the catalog year's formulary isn't published yet — no real tier
+  // or cost. Render "formulary not yet published", never $0 / Tier / Not covered.
+  costUnavailable?: boolean;
 }
 
 // Old per-plan coveredCount(plan, rxcuis) read plan.formulary[rxcui],
@@ -692,6 +704,8 @@ export function CompareScreen({
   scoredPlans,
   ribbonByPlanId,
   annualDrugByPlanId,
+  drugCostsUnavailable,
+  unpublishedPlanYear,
   drugCoverageUnknownByPlanId,
   drugsCoveredByPlanId,
   drugsTotalByPlanId,
@@ -1355,6 +1369,33 @@ export function CompareScreen({
         missingNpiCount={missingNpiCount}
         totalProviderCount={providers.length}
       />
+
+      {drugCostsUnavailable && (
+        <div
+          role="alert"
+          style={{
+            margin: '10px 0 14px',
+            padding: '10px 14px',
+            borderRadius: 8,
+            background: '#fef3c7',
+            border: '1px solid #f59e0b',
+            color: '#78350f',
+            fontSize: 13,
+            lineHeight: 1.45,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+          }}
+        >
+          <span aria-hidden style={{ fontSize: 16, lineHeight: '18px' }}>⚠</span>
+          <span>
+            <strong>{unpublishedPlanYear ?? 'Next year'} Part D formulary not yet published.</strong>{' '}
+            CMS hasn&apos;t released the drug file for these plans, so drug tiers and costs aren&apos;t
+            available — they post during Annual Enrollment. Plan totals shown here{' '}
+            <strong>exclude drug costs</strong>. Don&apos;t quote drug costs until the formulary publishes.
+          </span>
+        </div>
+      )}
 
       <ModeToggle
         mode={mode}
@@ -2858,6 +2899,9 @@ function DrugBreakdown({
   const covered = breakdown.filter((d) => d.covered).length;
   const total = breakdown.reduce((sum, d) => sum + d.annualCost, 0);
   const isCompact = variant === 'compact';
+  // Every drug lacks a published formulary → no honest total exists. The total
+  // line reads "not yet published" instead of a summed figure or "0/N covered".
+  const allUnavail = breakdown.every((d) => d.costUnavailable);
 
   if (isCompact) {
     return (
@@ -2881,10 +2925,11 @@ function DrugBreakdown({
           style={{
             fontFamily: FONT_NUM,
             fontWeight: 700,
-            color: covered === breakdown.length ? '#15803d' : TEXT,
+            color: allUnavail ? MUTED : covered === breakdown.length ? '#15803d' : TEXT,
+            fontStyle: allUnavail ? 'italic' : 'normal',
           }}
         >
-          {fmt(total)}/yr ({covered}/{breakdown.length} covered)
+          {allUnavail ? 'formulary not yet published' : `${fmt(total)}/yr (${covered}/${breakdown.length} covered)`}
         </span>
       </div>
     );
@@ -2913,12 +2958,46 @@ function DrugBreakdown({
         }}
       >
         <span>Drug costs</span>
-        <span style={{ color: covered === breakdown.length ? '#15803d' : MUTED }}>
-          {covered}/{breakdown.length} covered
+        <span style={{ color: allUnavail ? MUTED : covered === breakdown.length ? '#15803d' : MUTED }}>
+          {allUnavail ? 'formulary pending' : `${covered}/${breakdown.length} covered`}
         </span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         {breakdown.map((d) => {
+          // Formulary not published yet → no tier, no cost. Show the drug name
+          // and a single "not yet published" note spanning the cost columns,
+          // never "Not covered" / "$0/yr" / a tier.
+          if (d.costUnavailable) {
+            return (
+              <div
+                key={d.rxcui || d.name}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) auto',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 11,
+                  color: MUTED,
+                }}
+              >
+                <span
+                  style={{
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    minWidth: 0,
+                  }}
+                  title={d.name}
+                >
+                  {d.name}
+                </span>
+                <span style={{ fontSize: 10, fontStyle: 'italic', textAlign: 'right' }}>
+                  formulary not yet published
+                </span>
+              </div>
+            );
+          }
           const tierLabel = d.tier != null ? `Tier ${d.tier}` : 'Not covered';
           const copayLabel =
             d.monthlyCopay != null ? `$${d.monthlyCopay}/mo` : '—';
@@ -2980,7 +3059,9 @@ function DrugBreakdown({
         }}
       >
         <span>Total drug cost</span>
-        <span style={{ fontFamily: FONT_NUM }}>{fmt(total)}/yr</span>
+        <span style={{ fontFamily: FONT_NUM, fontStyle: allUnavail ? 'italic' : 'normal', color: allUnavail ? MUTED : TEXT }}>
+          {allUnavail ? 'not yet published' : `${fmt(total)}/yr`}
+        </span>
       </div>
     </div>
   );

@@ -118,6 +118,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // A client deleted after the link went out gets nothing written.
         if (!clientRow || clientRow.deleted_at) throw new Error('client_deleted');
         const planId = (clientRow.plan_id as string | null | undefined) ?? null;
+        // The client's current plan is the one in force this calendar year, so
+        // pin the tier lookup to that year — not the AEP selling year. Keeps a
+        // later year's formulary (once loaded) from bleeding onto this plan.
+        const currentPlanYear = new Date().getUTCFullYear();
         await Promise.all(
           meds.map(async (m) => {
             m.rxcui = await resolveSnapRxcui(supabase(), {
@@ -126,7 +130,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               form: m.form ?? null,
             });
             // Tier on the client's current plan (blank without a code or plan).
-            m.tier_on_recommended_plan = await lookupTier(supabase(), planId, m.rxcui);
+            m.tier_on_recommended_plan = await lookupTier(supabase(), planId, m.rxcui, currentPlanYear);
           }),
         );
         const card = extracted.find((e): e is ExtractedMedicareCard => e.type === 'medicare_card');

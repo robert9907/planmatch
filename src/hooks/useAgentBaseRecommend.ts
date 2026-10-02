@@ -199,18 +199,26 @@ export function useAgentBaseRecommend() {
           severity: f.severity,
           message: f.message,
         })),
-        real_annual_cost: input.recommendedScored.realAnnualCost
-          ? {
-              premium: input.recommendedScored.realAnnualCost.premium,
-              drugs: input.recommendedScored.realAnnualCost.drugs,
-              medical_visits: input.recommendedScored.realAnnualCost.medicalVisits,
-              supplies: input.recommendedScored.realAnnualCost.supplies,
-              er_expected: input.recommendedScored.realAnnualCost.erExpected,
-              hospital_expected: input.recommendedScored.realAnnualCost.hospitalExpected,
-              giveback_savings: input.recommendedScored.realAnnualCost.givebackSavings,
-              net_annual: input.recommendedScored.realAnnualCost.netAnnual,
-            }
-          : null,
+        // True when the plan year's Part D formulary isn't published yet: the
+        // cost breakdown below EXCLUDES drugs, so net_annual is not a complete
+        // figure. Persist the flag so the CRM record is self-describing and
+        // nothing downstream reads net_annual as a finished total.
+        drug_costs_unavailable: input.recommendedScored.drugCostsUnavailable === true,
+        // Don't persist a drug-excluding breakdown as if it were the real
+        // annual cost — withhold it entirely until the formulary publishes.
+        real_annual_cost:
+          input.recommendedScored.realAnnualCost && !input.recommendedScored.drugCostsUnavailable
+            ? {
+                premium: input.recommendedScored.realAnnualCost.premium,
+                drugs: input.recommendedScored.realAnnualCost.drugs,
+                medical_visits: input.recommendedScored.realAnnualCost.medicalVisits,
+                supplies: input.recommendedScored.realAnnualCost.supplies,
+                er_expected: input.recommendedScored.realAnnualCost.erExpected,
+                hospital_expected: input.recommendedScored.realAnnualCost.hospitalExpected,
+                giveback_savings: input.recommendedScored.realAnnualCost.givebackSavings,
+                net_annual: input.recommendedScored.realAnnualCost.netAnnual,
+              }
+            : null,
         composite_score: input.recommendedScored.composite,
         weights: input.brainResult.weights,
         finalists_compared: input.brainResult.scored.map((s) => ({

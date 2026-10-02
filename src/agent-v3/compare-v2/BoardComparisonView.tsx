@@ -57,6 +57,9 @@ interface DrugRow {
   tier: number | null;
   monthlyCopay: number | null;
   annualCost: number;
+  // True when the catalog year's formulary isn't published yet — no real tier
+  // or cost. Render "not yet published", never $0 / Tier / Not covered.
+  costUnavailable?: boolean;
 }
 
 export interface BoardComparisonViewProps {
@@ -1087,6 +1090,10 @@ function buildDrugSection(
       const drugRow = idx >= 0 ? perPlanByKey[idx].get(drug.rxcui || drug.name) : undefined;
       if (!drugRow) {
         return { text: 'Not on formulary', score: null };
+      }
+      if (drugRow.costUnavailable) {
+        // Formulary not published yet — no tier/cost. Never "Not covered".
+        return { text: 'Not yet published', score: null, neutralOnPending: true };
       }
       if (!drugRow.covered) {
         return { text: 'Not covered', score: null };
