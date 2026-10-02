@@ -4741,23 +4741,17 @@ function H2HView({
           {/* One Enroll per side. The incumbent (Current) never gets one —
               there's nothing to enroll into. */}
           {!baselineIsCurrent && (
-            <Btn
-              tier="primary"
-              size="lg"
+            <EnrollPlanButton
+              label={`Enroll ${baselineLabel}`}
+              plan={baseline}
               onClick={() => onEnroll(baseline)}
-              title={`Enroll ${baseline.carrier} — ${baseline.plan_name}`}
-            >
-              Enroll {baselineLabel} →
-            </Btn>
+            />
           )}
-          <Btn
-            tier="primary"
-            size="lg"
+          <EnrollPlanButton
+            label="Enroll Recommended"
+            plan={challenger}
             onClick={() => onEnroll(challenger)}
-            title={`Enroll ${challenger.carrier} — ${challenger.plan_name}`}
-          >
-            Enroll Recommended →
-          </Btn>
+          />
         </div>
       </div>
 
@@ -4804,6 +4798,47 @@ function H2HView({
         </button>
       </div>
     </Container>
+  );
+}
+
+// Verdict-bar Enroll button that names the exact plan — carrier plan
+// name + contract-plan ID — so the broker can see which plan moves to
+// Compliance before clicking.
+function EnrollPlanButton({
+  label,
+  plan,
+  onClick,
+}: {
+  label: string;
+  plan: Plan;
+  onClick: () => void;
+}) {
+  return (
+    <Btn
+      tier="primary"
+      size="lg"
+      onClick={onClick}
+      title={`${label} — ${plan.plan_name} (${planIdShort(plan.id)})`}
+      style={{
+        height: 'auto',
+        minHeight: 44,
+        padding: '8px 18px',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: 2,
+        whiteSpace: 'normal',
+        textAlign: 'left',
+        maxWidth: 300,
+      }}
+    >
+      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', opacity: 0.85 }}>
+        {label} →
+      </span>
+      <span style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.25 }}>{plan.plan_name}</span>
+      <span style={{ fontFamily: FONT_NUM, fontSize: 12, fontWeight: 600, opacity: 0.9 }}>
+        {planIdShort(plan.id)}
+      </span>
+    </Btn>
   );
 }
 

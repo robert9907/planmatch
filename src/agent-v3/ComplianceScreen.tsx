@@ -214,6 +214,43 @@ export function ComplianceScreen({
         </div>
       </div>
 
+      {/* The exact plan this Compliance pass is for — name + contract-plan
+          ID — so the broker never saves the wrong plan to AgentBase. */}
+      <div
+        style={{
+          marginBottom: 16,
+          padding: '12px 16px',
+          borderRadius: 10,
+          background: recommendedPlan ? '#ecfdf5' : '#fef2f2',
+          border: `1px solid ${recommendedPlan ? '#a7f3d0' : '#fecaca'}`,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 9,
+            fontWeight: 700,
+            letterSpacing: 1,
+            textTransform: 'uppercase',
+            color: recommendedPlan ? '#047857' : '#b91c1c',
+          }}
+        >
+          {recommendedPlan ? 'Enrolling into' : 'No plan selected'}
+        </div>
+        {recommendedPlan ? (
+          <div style={{ marginTop: 3, color: '#0d2f5e' }}>
+            <span style={{ fontSize: 16, fontWeight: 700 }}>{recommendedPlan.plan_name}</span>
+            <span style={{ fontSize: 13, fontWeight: 600, marginLeft: 8, fontFamily: 'monospace' }}>
+              {planIdLabel(recommendedPlan)}
+            </span>
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{recommendedPlan.carrier}</div>
+          </div>
+        ) : (
+          <div style={{ marginTop: 3, fontSize: 12, color: '#7f1d1d' }}>
+            Go back to Compare and click Enroll on the plan you want.
+          </div>
+        )}
+      </div>
+
       {/* Verbatim disclaimers — confirmed earlier on the Disclaimers
           screen (screen 2). Show as read-only status so the broker
           can see the complete compliance picture; the gate below
@@ -384,7 +421,7 @@ export function ComplianceScreen({
                 : !allDone
                   ? `${total - done} items left before Save unlocks.`
                   : recommendedPlan
-                    ? `Ready to save — ${recommendedPlan.carrier} · ${recommendedPlan.plan_name}`
+                    ? `Ready to save — ${recommendedPlan.carrier} · ${recommendedPlan.plan_name} · ${planIdLabel(recommendedPlan)}`
                     : brainRankedPlans.length === 0
                       ? 'Brain ranking not ready — go back to Compare.'
                       : 'Pick a plan on Compare first.'}
@@ -483,6 +520,7 @@ export function ComplianceScreen({
             >
               {client.name || 'Client'} · {recommendedPlan?.carrier} ·{' '}
               {recommendedPlan?.plan_name}
+              {recommendedPlan ? ` · ${planIdLabel(recommendedPlan)}` : ''}
             </div>
             <div style={{ fontSize: 10, color: '#065f46', marginBottom: 12 }}>
               Open the client card in AgentBase to review and submit to HealthSherpa.
@@ -914,4 +952,9 @@ function GrievanceProcedure() {
       </div>
     </details>
   );
+}
+
+// Contract-plan ID as printed on member cards ("H1036-318").
+function planIdLabel(p: Plan): string {
+  return `${p.contract_id}-${p.plan_number}`;
 }
