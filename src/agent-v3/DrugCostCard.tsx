@@ -311,21 +311,40 @@ function planInputForSingleDrug(
   const tier = drug.tier ?? 0;
   const tierShares: TierCostShares = {};
   // pm_beneficiary_cost_v2 cost_type: 1 = flat copay, 2 = coinsurance
-  // (fraction 0..1). Map to the library's discriminated union.
-  const dedAmount = phaseHit?.phases.deductible?.cost_amount;
-  if (dedAmount != null) {
-    tierShares.deductible = phaseHit!.phases.deductible!.cost_type === 1
-      ? { type: 'copay', amount: dedAmount }
-      : { type: 'coinsurance', amount: dedAmount };
-  }
-  const initAmount = phaseHit?.phases.initial?.cost_amount;
-  if (initAmount != null) {
-    tierShares.initial = phaseHit!.phases.initial!.cost_type === 1
-      ? { type: 'copay', amount: initAmount }
-      : { type: 'coinsurance', amount: initAmount };
+  // (fraction 0..1), 0 = NOT APPLICABLE. Map to the library's
+  // discriminated union.
+  //
+  // cost_type 0 carries no cost share at all — the plan filed nothing
+  // in this bucket. The previous `cost_type === 1 ? copay : coinsurance`
+  // ternary swept 0 into the coinsurance branch and produced
+  // { type: 'coinsurance', amount: 0 } — a 0% coinsurance, i.e. a free
+  // drug. Because `amount` was still a number, the drug.monthlyCopay
+  // fallback below never fired either. Every tier whose requested
+  // pharmacy bucket was not applicable therefore rendered $0/yr.
+  // /api/drug-phases now substitutes the standard-pharmacy row before
+  // it gets here, but a cost_type 0 that survives both buckets must
+  // read as "no data", never as zero.
+  const toCostShare = (
+    cell: { cost_type: number; cost_amount: number | null } | undefined,
+  ): { type: 'copay' | 'coinsurance'; amount: number } | null => {
+    if (!cell || cell.cost_amount == null) return null;
+    if (cell.cost_type === 1) return { type: 'copay', amount: cell.cost_amount };
+    if (cell.cost_type === 2) {
+      return { type: 'coinsurance', amount: cell.cost_amount };
+    }
+    return null;
+  };
+
+  const dedShare = toCostShare(phaseHit?.phases.deductible);
+  if (dedShare) tierShares.deductible = dedShare;
+
+  const initShare = toCostShare(phaseHit?.phases.initial);
+  if (initShare) {
+    tierShares.initial = initShare;
   } else if (typeof drug.monthlyCopay === 'number') {
-    // Fallback to rank-result copay when the SPUF row is missing an
-    // initial cost share — same fallback the pre-refactor code used.
+    // Fallback to rank-result copay when the SPUF row is missing a
+    // usable initial cost share — same fallback the pre-refactor code
+    // used.
     tierShares.initial = { type: 'copay', amount: drug.monthlyCopay };
   }
   return {
