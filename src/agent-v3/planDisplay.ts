@@ -182,7 +182,10 @@ export function formatCostShare(
   if (opts?.isPdp) return 'N/A — Part D only';
   if (!cs) return '—';
   if (cs.copay != null) return `$${cs.copay}`;
-  if (cs.coinsurance != null) return `${cs.coinsurance}%`;
+  // A flat 0% coinsurance means the member pays nothing — render it as the
+  // "$0" selling point, not "0% coinsurance" (which reads as a cost, or
+  // gets mistaken for unknown). Real percentages still render as "N%".
+  if (cs.coinsurance != null) return cs.coinsurance === 0 ? '$0' : `${cs.coinsurance}%`;
   if (cs.description) return cs.description;
   return '—';
 }
@@ -254,7 +257,10 @@ export function formatCostShareWithRange(
     }
     return `$${cs.copay}`;
   }
-  if (cs.coinsurance != null) return `${cs.coinsurance}%`;
+  // Flat 0% coinsurance = member pays nothing → "$0" (the selling point).
+  // Range cases (e.g. 0%–20%) were already handled above and keep their
+  // range rendering; this only fires for a single flat coinsurance value.
+  if (cs.coinsurance != null) return cs.coinsurance === 0 ? '$0' : `${cs.coinsurance}%`;
   if (cs.description) return cs.description;
   return '—';
 }
