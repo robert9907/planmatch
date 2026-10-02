@@ -104,8 +104,19 @@ const PER_REQUEST_TIMEOUT_MS = 10_000;
 // MAX_CONTRACTIDS_POST constant.
 const CONSUMER_CONTRACTIDS_CAP = 20;
 
-function cacheKey(contractPlanId: string, rxcui: string): string {
-  return `${contractPlanId}::${rxcui}`;
+// Cache key includes plan_year: during AEP a broker compares the same
+// contract-plan-segment at 2026 AND 2027 in one session, and the two
+// years can place a drug on different tiers — so they must not share a
+// cache slot. A null/undefined year keeps the legacy 2-part key for
+// single-year callers that haven't been threaded yet.
+function cacheKey(
+  contractPlanId: string,
+  rxcui: string,
+  planYear?: number | null,
+): string {
+  return planYear != null
+    ? `${contractPlanId}::${rxcui}::${planYear}`
+    : `${contractPlanId}::${rxcui}`;
 }
 
 function normalizeTier(raw: unknown): FormularyTier | 'not_covered' {
@@ -159,13 +170,18 @@ function rowToHit(row: {
   };
 }
 
-/** Look up one (contract_plan_id, rxcui) pair. */
+/** Look up one (contract_plan_id, rxcui) pair for a given plan_year.
+ *  planYear scopes the consumer endpoint to the right year's SPUF
+ *  formulary: without it, a 2027 plan would be answered against the
+ *  2026 formulary (or, once the endpoint is year-aware, against the
+ *  date-fallback year). Omit only for legacy single-year callers. */
 export async function lookupFormulary(
   contractPlanId: string,
   rxcui: string | null | undefined,
+  planYear?: number | null,
 ): Promise<FormularyHit> {
   if (!rxcui) return emptyHit();
-  const key = cacheKey(contractPlanId, rxcui);
+  const key = cacheKey(contractPlanId, rxcui, planYear);
   const cached = cache.get(key);
   if (cached) return cached;
 
@@ -181,6 +197,7 @@ export async function lookupFormulary(
     plan_id: planId,
     rxcui,
   });
+  if (planYear != null) qs.set('plan_year', String(planYear));
   try {
     const res = await fetch(`${LIBRARY_URL}/api/formulary?${qs.toString()}`, {
       method: 'GET',
@@ -202,12 +219,14 @@ async function fetchBulkChunk(
   contractIds: string[],
   rxcuis: string[],
   names: Record<string, string> | undefined,
+  planYear: number | null | undefined,
 ): Promise<LibraryPostResponse> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), PER_REQUEST_TIMEOUT_MS);
   try {
     const body: Record<string, unknown> = { contractIds, rxcuis };
     if (names && Object.keys(names).length > 0) body.names = names;
+    if (planYear != null) body.planYear = planYear;
     const res = await fetch(`${LIBRARY_URL}/api/formulary`, {
       method: 'POST',
       headers: {
@@ -231,12 +250,13 @@ async function fetchBulkChunkWithRetry(
   contractIds: string[],
   rxcuis: string[],
   names: Record<string, string> | undefined,
+  planYear: number | null | undefined,
 ): Promise<LibraryPostResponse> {
   try {
-    return await fetchBulkChunk(contractIds, rxcuis, names);
+    return await fetchBulkChunk(contractIds, rxcuis, names, planYear);
   } catch (err) {
     console.warn('[formularyLookup] chunk attempt 1 failed, retrying:', err);
-    return fetchBulkChunk(contractIds, rxcuis, names);
+    return fetchBulkChunk(contractIds, rxcuis, names, planYear);
   }
 }
 
@@ -266,6 +286,7 @@ export async function bulkLookupFormulary(
   contractIds: string[],
   rxcuis: string[],
   names?: Record<string, string>,
+  planYear?: number | null,
 ): Promise<Map<string, FormularyHit>> {
   const out = new Map<string, FormularyHit>();
   const realRxcuis = rxcuis.filter(Boolean);
@@ -287,7 +308,7 @@ export async function bulkLookupFormulary(
   }
 
   const settled = await Promise.allSettled(
-    chunks.map((chunk) => fetchBulkChunkWithRetry(chunk, realRxcuis, scopedNames)),
+    chunks.map((chunk) => fetchBulkChunkWithRetry(chunk, realRxcuis, scopedNames, planYear)),
   );
 
   for (const result of settled) {
@@ -299,8 +320,9 @@ export async function bulkLookupFormulary(
       const hit = rowToHit(m);
       // Agent has historically keyed the cache on `contractId_planId`
       // (underscore). The endpoint returns `contractId_planId` in
-      // contract_plan_id, so this is a 1:1 mapping.
-      const key = cacheKey(m.contract_plan_id, m.rxcui);
+      // contract_plan_id, so this is a 1:1 mapping. Key by planYear too
+      // so a 2026 and 2027 hit for the same plan don't collide.
+      const key = cacheKey(m.contract_plan_id, m.rxcui, planYear);
       out.set(key, hit);
       cache.set(key, hit);
     }
@@ -322,7 +344,8 @@ export function clearFormularyCache(): void {
 export function getCachedFormulary(
   contractPlanId: string,
   rxcui: string | null | undefined,
+  planYear?: number | null,
 ): FormularyHit | null {
   if (!rxcui) return null;
-  return cache.get(cacheKey(contractPlanId, rxcui)) ?? null;
+  return cache.get(cacheKey(contractPlanId, rxcui, planYear)) ?? null;
 }
