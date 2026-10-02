@@ -25,6 +25,7 @@ import {
   DISCLAIMERS,
   SECTIONS,
   totalComplianceItems,
+  renderItemDetail,
 } from '@/lib/compliance';
 import { Container, Nav } from './atoms';
 import { annualEstimate } from './planDisplay';
@@ -321,7 +322,7 @@ export function ComplianceScreen({
                       </div>
                       {it.detail && (
                         <div style={{ color: '#64748b', fontSize: 10, marginTop: 1 }}>
-                          {it.detail}
+                          {renderItemDetail(it.detail, client.name)}
                         </div>
                       )}
                     </div>

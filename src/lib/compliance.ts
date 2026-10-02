@@ -76,7 +76,7 @@ export const SECTIONS: ComplianceSection[] = [
       {
         id: 'curr_plan',
         label: 'Current plan coverage reviewed',
-        detail: 'Confirmed what Dorothy has today — carrier, plan name, effective dates.',
+        detail: 'Confirmed what [CLIENT] has today — carrier, plan name, effective dates.',
       },
       {
         id: 'curr_meds',
@@ -107,7 +107,7 @@ export const SECTIONS: ComplianceSection[] = [
       {
         id: 'plan_network',
         label: 'In-network providers and facilities verified',
-        detail: 'Ran each finalist plan against Dorothy\u2019s providers; exceptions or out-of-network providers flagged.',
+        detail: 'Ran each finalist plan against [CLIENT]\u2019s providers; exceptions or out-of-network providers flagged.',
       },
     ],
   },
@@ -123,7 +123,7 @@ export const SECTIONS: ComplianceSection[] = [
       {
         id: 'pharmacy_network',
         label: 'Preferred pharmacy network confirmed',
-        detail: 'Dorothy\u2019s pharmacy is in-network (or a preferred alternative was identified).',
+        detail: '[CLIENT]\u2019s pharmacy is in-network (or a preferred alternative was identified).',
       },
     ],
   },
@@ -160,7 +160,7 @@ export const SECTIONS: ComplianceSection[] = [
       {
         id: 'enrollment_period',
         label: 'Appropriate enrollment period confirmed',
-        detail: 'AEP / OEP / SEP / IEP — the period Dorothy is using is named and documented.',
+        detail: 'AEP / OEP / SEP / IEP — the period [CLIENT] is using is named and documented.',
       },
       {
         id: 'effective_date',
@@ -170,7 +170,7 @@ export const SECTIONS: ComplianceSection[] = [
       {
         id: 'client_rights',
         label: 'Right to contact Medicare directly emphasized',
-        detail: 'Dorothy knows she can call 1-800-MEDICARE (TTY 1-877-486-2048) or visit Medicare.gov at any time.',
+        detail: '[CLIENT] knows they can call 1-800-MEDICARE (TTY 1-877-486-2048) or visit Medicare.gov at any time.',
       },
     ],
   },
@@ -182,6 +182,16 @@ export function allComplianceItemIds(): string[] {
 
 export function totalComplianceItems(): number {
   return allComplianceItemIds().length + DISCLAIMERS.length;
+}
+
+/** Fills the [CLIENT] token in a checklist item's detail with the
+ *  client's first name, or "the client" / "The client" when no name
+ *  is on file. */
+export function renderItemDetail(detail: string, clientName: string | null | undefined): string {
+  const first = (clientName ?? '').trim().split(/\s+/)[0] ?? '';
+  return detail.replace(/\[CLIENT\]/g, (_m, offset: number) =>
+    first || (offset === 0 ? 'The client' : 'the client'),
+  );
 }
 
 export function renderDisclaimerBody(
