@@ -702,7 +702,6 @@ export function CompareScreen({
   compositeByPlanId,
   unresolvedDrugs,
   dualEligibleByPlanId,
-  onRecommend,
   onBack,
   onNext,
   rankedPlans,
@@ -1202,10 +1201,14 @@ export function CompareScreen({
   // through Compliance/Enroll as a "save the plan you already have,"
   // which the brain excludes from ranking. Skip the recommend + let
   // the screen advance so the broker can pick a real candidate.
+  //
+  // ⚠ Never writes to AgentBase. The AgentBase save happens on the
+  // Compliance screen's gate button, after the broker has walked the
+  // checklist with the client — writing here put the client in the
+  // CRM before compliance was done.
   const recommendAndAdvance = (plan: Plan | null) => () => {
     if (plan && plan.id !== current?.id) {
       setRecommendation(plan.id);
-      onRecommend?.(plan);
     }
     onNext();
   };
@@ -1215,22 +1218,12 @@ export function CompareScreen({
   // Does NOT advance the screen — the broker stays on the board so they
   // can enroll another plan (e.g. a shared-plan sibling policy) or
   // review the recommendation before moving on.
+  // Same rule as recommendAndAdvance: pin the plan and go to
+  // Compliance; the AgentBase write happens there, not here.
   const enrollFromCard = (plan: Plan | null) => async (): Promise<{ ok: true } | { ok: false; error: string }> => {
     if (!plan) return { ok: false, error: 'No plan on this slot' };
-    setRecommendation(plan.id);
-    const result = onRecommend?.(plan);
-    // Fire-and-forget legacy callers return void; treat that as success
-    // since we have no signal either way. New async callers return the
-    // actual outcome from POST /api/agentbase-recommend.
-    if (!result || typeof (result as Promise<unknown>).then !== 'function') {
-      return { ok: true };
-    }
-    try {
-      return await result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err ?? 'Unknown error');
-      return { ok: false, error: message };
-    }
+    recommendAndAdvance(plan)();
+    return { ok: true };
   };
 
   // ── H2H mode ───────────────────────────────────────────────
@@ -4183,8 +4176,7 @@ function H2HView({
   totalProviderCount: number;
   onPickChallenger: (p: Plan) => void;
   onBackToGrid: () => void;
-  /** Enroll a specific plan — every challenger chip carries its own
-   *  Enroll, not just the one currently in the right-hand column. */
+  /** Enroll a specific plan (left Top Pick or right Recommended). */
   onEnroll: (plan: Plan) => void;
   onBack: () => void;
 }) {
@@ -4242,11 +4234,8 @@ function H2HView({
         {pool.map((p) => {
           const active = p.id === challenger.id;
           return (
-            <span
-              key={p.id}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-            >
             <button
+              key={p.id}
               type="button"
               onClick={() => onPickChallenger(p)}
               style={{
@@ -4264,15 +4253,6 @@ function H2HView({
             >
               {p.carrier}
             </button>
-            <Btn
-              tier="primary"
-              size="xs"
-              onClick={() => onEnroll(p)}
-              title={`Enroll ${p.carrier} — ${p.plan_name}`}
-            >
-              Enroll
-            </Btn>
-            </span>
           );
         })}
       </div>
@@ -4346,18 +4326,6 @@ function H2HView({
             >
               📄 SBF ↗
             </a>
-            {!baselineIsCurrent && (
-              <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end' }}>
-                <Btn
-                  tier="primary"
-                  size="xs"
-                  onClick={() => onEnroll(baseline)}
-                  title={`Enroll ${baseline.carrier} — ${baseline.plan_name}`}
-                >
-                  Enroll
-                </Btn>
-              </div>
-            )}
           </div>
           <div style={{ display: 'flex', justifyContent: 'center' }}>
             <div
@@ -4664,11 +4632,25 @@ function H2HView({
           </div>
         )}
         <div style={{ display: 'flex', gap: 8 }}>
-          <Btn tier="onDark" size="lg" onClick={onBackToGrid}>
-            Keep {baselineLabel}
-          </Btn>
-          <Btn tier="primary" size="lg" onClick={() => onEnroll(challenger)}>
-            Enroll →
+          {/* One Enroll per side. The incumbent (Current) never gets one —
+              there's nothing to enroll into. */}
+          {!baselineIsCurrent && (
+            <Btn
+              tier="primary"
+              size="lg"
+              onClick={() => onEnroll(baseline)}
+              title={`Enroll ${baseline.carrier} — ${baseline.plan_name}`}
+            >
+              Enroll {baselineLabel} →
+            </Btn>
+          )}
+          <Btn
+            tier="primary"
+            size="lg"
+            onClick={() => onEnroll(challenger)}
+            title={`Enroll ${challenger.carrier} — ${challenger.plan_name}`}
+          >
+            Enroll Recommended →
           </Btn>
         </div>
       </div>
