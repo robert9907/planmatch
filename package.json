@@ -14,6 +14,7 @@
     "db:migrate:print": "cat scripts/migrations/001_pbp_benefits.sql",
     "formulary:import": "tsx scripts/import-cms-spuf.ts",
     "formulary:test": "tsx --test scripts/cms-spuf/parser.test.ts",
+    "crosswalk:import": "tsx scripts/import-plan-crosswalk.ts",
     "pbp:import": "tsx scripts/import-cms-pbp.ts",
     "pbp:test": "tsx --test scripts/cms-pbp/parser.test.ts",
     "api:test": "tsx --test scripts/tests/plans-range-collapse.test.ts",
