@@ -35,6 +35,9 @@ export interface IncomingProvider {
   name: string;
   npi?: string | null;
   specialty?: string | null;
+  /** Directory-only fields, written when the provider is first created. */
+  phone?: string | null;
+  address?: string | null;
   network_status?: string | null;
 }
 
@@ -319,7 +322,13 @@ export async function upsertProvidersForClient(
 
       const { data: inserted, error: insProvErr } = await sb
         .from('providers')
-        .insert({ name, specialty: p.specialty ?? null, npi: npi || null })
+        .insert({
+          name,
+          specialty: p.specialty ?? null,
+          npi: npi || null,
+          phone: p.phone ?? null,
+          address: p.address ?? null,
+        })
         .select('id')
         .single();
       if (!insProvErr) {
