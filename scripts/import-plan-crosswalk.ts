@@ -317,16 +317,25 @@ async function registerCmsWatch(opts: {
     loaded_posting: opts.posting,
   });
   await withClient(async (c) => {
-    // Upsert only config (+ minimal row if the watcher hasn't created it yet).
+    // Two statements, deliberately split so a load can NEVER touch the watcher's
+    // curated metadata on an existing source (expected_from/by, notes,
+    // plan_match_impact, severity_on_change, label, url, method,
+    // poll_interval_hours) — overwriting those would silently degrade the
+    // "CMS file is late" alerting.
+    //   1. Create a minimal row ONLY if the watcher hasn't (DO NOTHING never
+    //      alters an existing row; category 'crosswalk' matches the pipeline).
     await c.query(
-      // category 'crosswalk' matches the pipeline's existing plan_crosswalk_2027
-      // source. On conflict we touch ONLY config — the source row is the
-      // watcher's to curate (label, expected dates, notes, etc.).
       `insert into cms_watch.sources (source_key, domain, category, label, method, url, plan_year, config)
-       values ($1,'medicare','crosswalk',$2,'http_probe',$3,$4,$5::jsonb)
-       on conflict (source_key) do update
-         set config = cms_watch.sources.config || excluded.config, updated_at = now()`,
-      [sourceKey, `Plan Crosswalk ${opts.destYear}`, opts.zipUrl, opts.destYear, loadedConfig],
+       values ($1,'medicare','crosswalk',$2,'http_probe',$3,$4,'{}'::jsonb)
+       on conflict (source_key) do nothing`,
+      [sourceKey, `Plan Crosswalk ${opts.destYear}`, opts.zipUrl, opts.destYear],
+    );
+    //   2. Merge loaded_* into config — the ONLY column a load ever writes on an
+    //      existing row.
+    await c.query(
+      `update cms_watch.sources set config = config || $2::jsonb, updated_at = now()
+       where source_key = $1`,
+      [sourceKey, loadedConfig],
     );
     await c.query(
       `insert into cms_watch.checks (source_key, ok, available, http_status, content_bytes, content_hash, payload)
