@@ -32,6 +32,7 @@ import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
 import { upsertMedicationsForClient, upsertProvidersForClient } from './_lib/agentbaseDedup.js';
 import { requireSession } from './_lib/require-session.js';
+import { resolvePlanCatalogYear } from './_lib/plan-catalog-year.js';
 
 // AgentBase CRM URL pattern. /clients/{id} matches the existing
 // AgentBase routing convention; if it changes, override via env.
@@ -271,6 +272,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // The giveback flag landed in AgentBase migration 006 — drives
     // PlanMatch's Landing Needs-Attention surface during AEP and
     // AgentBase's CRM list filter.
+    const planYear = resolvePlanCatalogYear();
     const planTriple = `${fullBody.recommended_plan.contract_id}-${fullBody.recommended_plan.plan_id}-${fullBody.recommended_plan.segment_id}`;
     const today = new Date().toISOString().slice(0, 10);
     const recommendNowIso = new Date().toISOString();
@@ -297,7 +299,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       carrier: fullBody.recommended_plan.carrier,
       plan_name: fullBody.recommended_plan.plan_name,
       plan_id: planTriple,
-      year: 2026,
+      // Plan year of the catalog this plan was quoted from — same
+      // resolver /api/plans uses (2026 until the Oct 15 AEP cutover,
+      // 2027 after), so AEP enrollments land on the card as 2027.
+      year: planYear,
       lead_source: matched ? undefined : 'planmatch', // don't overwrite existing source
       next_step: `Recommended ${fullBody.recommended_plan.plan_name} via PlanMatch on ${today}` +
         (fullBody.giveback_plan_enrolled ? ' · GIVEBACK — re-evaluate at AEP' : ''),
@@ -495,7 +500,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           carrier: fullBody.recommended_plan.carrier,
           contract_id: fullBody.recommended_plan.contract_id,
           compliance: fullBody.compliance ?? null,
-          session_summary: fullBody.session_summary ?? null,
+          session_summary: fullBody.session_summary
+            ? { ...fullBody.session_summary, planYear }
+            : null,
           source: 'planmatch',
           created_at: recommendNowIso,
         });
