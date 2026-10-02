@@ -45,6 +45,7 @@
  *   npm run crosswalk:import -- --url=https://www.cms.gov/files/zip/plan-crosswalk-2027.zip --from-year=2026 --apply
  *   npm run crosswalk:import -- --from-year=2026 --apply    # defaults --url to the from_year+1 canonical zip
  */
+import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -52,7 +53,7 @@ import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import yauzl from 'yauzl';
 import './cms-spuf/env.js';
-import { withTransaction, closePool } from './cms-spuf/pg.js';
+import { withClient, withTransaction, closePool } from './cms-spuf/pg.js';
 
 // ── CMS STATUS -> stable status_class slug ──────────────────────────────────
 // Verbatim STATUS is stored too; this slug is what retention logic filters on.
@@ -256,25 +257,30 @@ function summarize(rows: Row[]): void {
   console.log(`  employer plans (plan_id >= 800 either side): ${employer}`);
 }
 
-async function load(rows: Row[], fromYear: number, sourceUrl: string): Promise<{ deleted: number; inserted: number }> {
+// Supersede keys on from_year: DELETE the whole from_year, then INSERT the new
+// posting. A same-year re-post (new posting date) replaces cleanly; a different
+// from_year is never touched, so prior years stay as history. Each row records
+// which posting it came from.
+async function load(rows: Row[], fromYear: number, posting: string, sourceUrl: string): Promise<{ deleted: number; inserted: number }> {
   return withTransaction(async (c) => {
     const del = await c.query('DELETE FROM aep.plan_crosswalk WHERE from_year = $1', [fromYear]);
     const CHUNK = 500;
+    const COLS = 12;
     let inserted = 0;
     for (let i = 0; i < rows.length; i += CHUNK) {
       const slice = rows.slice(i, i + CHUNK);
       const values: unknown[] = [];
       const tuples = slice.map((r, j) => {
-        const b = j * 11;
+        const b = j * COLS;
         values.push(
           fromYear, r.prevContract, r.prevPlan, null, // prev_segment NULL — file has no segment
           r.currContract, r.currPlan, null,            // curr_segment NULL
-          r.status, r.statusClass, r.isEmployer, sourceUrl,
+          r.status, r.statusClass, r.isEmployer, posting, sourceUrl,
         );
-        return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9},$${b + 10},$${b + 11})`;
+        return `(${Array.from({ length: COLS }, (_, k) => `$${b + k + 1}`).join(',')})`;
       });
       const sql = `INSERT INTO aep.plan_crosswalk
-        (from_year, prev_contract, prev_plan, prev_segment, curr_contract, curr_plan, curr_segment, status, status_class, is_employer, source_url)
+        (from_year, prev_contract, prev_plan, prev_segment, curr_contract, curr_plan, curr_segment, status, status_class, is_employer, posting, source_url)
         VALUES ${tuples.join(',')}`;
       const res = await c.query(sql, values);
       inserted += res.rowCount ?? 0;
@@ -284,6 +290,67 @@ async function load(rows: Row[], fromYear: number, sourceUrl: string): Promise<{
     }
     return { deleted: del.rowCount ?? 0, inserted };
   });
+}
+
+// Register the load in cms_watch the way the rest of the figure pipeline does:
+// merge loaded_* into the source's config (NEVER rewrite curated metadata — the
+// source row is owned by the watcher), append a check, and log an event. Reached
+// over the direct Postgres connection (cms_watch is off the PostgREST surface, so
+// no public wrapper is needed). Best-effort: a failure here must not fail a load
+// that already committed.
+async function registerCmsWatch(opts: {
+  destYear: number;
+  fromYear: number;
+  posting: string;
+  rows: number;
+  sha256: string;
+  contentBytes: number;
+  zipUrl: string;
+  detail: string;
+}): Promise<void> {
+  const sourceKey = `plan_crosswalk_${opts.destYear}`;
+  const loadedTarget = `aep.plan_crosswalk from_year=${opts.fromYear}`;
+  const loadedConfig = JSON.stringify({
+    loaded_rows: opts.rows,
+    loaded_sha256: opts.sha256,
+    loaded_target: loadedTarget,
+    loaded_posting: opts.posting,
+  });
+  await withClient(async (c) => {
+    // Upsert only config (+ minimal row if the watcher hasn't created it yet).
+    await c.query(
+      // category 'crosswalk' matches the pipeline's existing plan_crosswalk_2027
+      // source. On conflict we touch ONLY config — the source row is the
+      // watcher's to curate (label, expected dates, notes, etc.).
+      `insert into cms_watch.sources (source_key, domain, category, label, method, url, plan_year, config)
+       values ($1,'medicare','crosswalk',$2,'http_probe',$3,$4,$5::jsonb)
+       on conflict (source_key) do update
+         set config = cms_watch.sources.config || excluded.config, updated_at = now()`,
+      [sourceKey, `Plan Crosswalk ${opts.destYear}`, opts.zipUrl, opts.destYear, loadedConfig],
+    );
+    await c.query(
+      `insert into cms_watch.checks (source_key, ok, available, http_status, content_bytes, content_hash, payload)
+       values ($1, true, true, 200, $2, $3, $4::jsonb)`,
+      [sourceKey, opts.contentBytes, opts.sha256,
+       JSON.stringify({ loaded_rows: opts.rows, from_year: opts.fromYear, posting: opts.posting })],
+    );
+    await c.query(
+      `insert into cms_watch.events (source_key, event_type, severity, plan_year, title, detail, url)
+       values ($1,'new_item','normal',$2,$3,$4,$5)`,
+      [sourceKey, opts.destYear,
+       `Plan crosswalk ${opts.destYear} loaded (from_year=${opts.fromYear}, posting ${opts.posting}): ${opts.rows} rows`,
+       opts.detail, opts.zipUrl],
+    );
+  });
+}
+
+function statusBreakdown(rows: Row[]): string {
+  const byClass = new Map<string, number>();
+  for (const r of rows) byClass.set(r.statusClass, (byClass.get(r.statusClass) ?? 0) + 1);
+  const cc = rows.filter((r) => r.prevContract !== r.currContract).length;
+  const emp = rows.filter((r) => r.isEmployer).length;
+  const parts = [...byClass.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`);
+  return `status_class: ${parts.join(', ')}. ${cc} contract changes; ${emp} employer.`;
 }
 
 async function main(): Promise<void> {
@@ -325,8 +392,25 @@ async function main(): Promise<void> {
     if (!args.apply) {
       console.log('\n  DRY RUN — no rows written. Re-run with --apply to load.');
     } else {
-      const { deleted, inserted } = await load(rows, args.fromYear, sourceUrl);
+      const { deleted, inserted } = await load(rows, args.fromYear, postedMMDDYYYY, sourceUrl);
       console.log(`\n  APPLIED — from_year=${args.fromYear}: deleted ${deleted} prior rows, inserted ${inserted}.`);
+      // Register in cms_watch (best-effort — the load is already committed).
+      try {
+        const sha256 = createHash('sha256').update(buf).digest('hex');
+        await registerCmsWatch({
+          destYear,
+          fromYear: args.fromYear,
+          posting: postedMMDDYYYY,
+          rows: inserted,
+          sha256,
+          contentBytes: buf.length,
+          zipUrl: sourceBase ?? canonicalUrl(destYear),
+          detail: statusBreakdown(rows),
+        });
+        console.log(`  cms_watch: registered load on source plan_crosswalk_${destYear} (loaded_posting=${postedMMDDYYYY}).`);
+      } catch (err) {
+        console.warn(`  cms_watch: registration failed (load is unaffected): ${err instanceof Error ? err.message : err}`);
+      }
     }
   } finally {
     if (tmp && !args.keep) await rm(tmp, { recursive: true, force: true });
