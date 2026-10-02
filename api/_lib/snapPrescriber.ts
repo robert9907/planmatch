@@ -122,23 +122,64 @@ function toResolved(r: NppesResult): ResolvedPrescriber {
   };
 }
 
-/** One NPPES match in the client's state → full record; otherwise name only. */
+// Credential on the label → which NPPES taxonomy it must carry. Used only
+// to break a tie between several same-name people in the state.
+function credentialFits(credential: string | null, taxonomy: string): boolean {
+  if (!credential) return true;
+  const c = credential.replace(/[.\-\s]/g, '').toUpperCase();
+  const t = taxonomy.toLowerCase();
+  if (c === 'FNP' || c.startsWith('FNP')) return t.includes('nurse practitioner') && t.includes('family');
+  if (['NP', 'APRN', 'ANP', 'AGNP', 'DNP', 'CNP', 'CRNP', 'PMHNP', 'NPC'].includes(c)) return t.includes('nurse practitioner');
+  if (c === 'PA' || c === 'PAC') return t.includes('physician assistant');
+  if (['DDS', 'DMD'].includes(c)) return t.includes('dentist');
+  if (c === 'DPM') return t.includes('podiatr');
+  if (c === 'OD') return t.includes('optometr');
+  if (['MD', 'DO', 'MBBS'].includes(c)) {
+    return !/(nurse|physician assistant|dentist|podiatr|optometr|pharmac|counselor|social worker|psycholog)/.test(t);
+  }
+  return true;
+}
+
+/** Resolve a parsed prescriber. Exactly one NPPES match in the client's
+ *  state (after the credential tie-break) → full record; else name only. */
+export async function resolveParts(p: PrescriberName, clientState: string | null): Promise<ResolvedPrescriber> {
+  const nameOnly: ResolvedPrescriber = { name: p.display, npi: null, specialty: null, phone: null, address: null };
+  const state = (clientState ?? '').trim().toUpperCase().slice(0, 2) || null;
+  if (!p.first || !p.last || !state) return nameOnly;
+
+  // Labels print both "First Last" and "Last First" — try both orders.
+  const [a, b] = await Promise.all([nppes(p.first, p.last, state), nppes(p.last, p.first, state)]);
+  if (a === null || b === null) return nameOnly;
+  const byNpi = new Map<string, NppesResult>();
+  for (const r of [...a, ...b]) if (r?.number) byNpi.set(r.number, r);
+  let hits = [...byNpi.values()];
+  if (hits.length > 1 && p.credential) {
+    hits = hits.filter((r) => {
+      const tax = r.taxonomies?.find((t) => t.primary) ?? r.taxonomies?.[0];
+      return credentialFits(p.credential, tax?.desc ?? '');
+    });
+  }
+  if (hits.length !== 1) return nameOnly;
+  return toResolved(hits[0]);
+}
+
 export async function resolvePrescriber(
   raw: string | null | undefined,
   clientState: string | null,
 ): Promise<ResolvedPrescriber | null> {
   const p = parsePrescriber(raw);
-  if (!p) return null;
-  const nameOnly: ResolvedPrescriber = { name: p.display, npi: null, specialty: null, phone: null, address: null };
-  const state = (clientState ?? '').trim().toUpperCase().slice(0, 2) || null;
-  if (!p.first || !p.last || !state) return nameOnly;
-
-  // Labels print both "First Last" and "Last First" — try both orders and
-  // accept only when exactly one person matches across them.
-  const [a, b] = await Promise.all([nppes(p.first, p.last, state), nppes(p.last, p.first, state)]);
-  if (a === null || b === null) return nameOnly;
-  const byNpi = new Map<string, NppesResult>();
-  for (const r of [...a, ...b]) if (r?.number) byNpi.set(r.number, r);
-  if (byNpi.size !== 1) return nameOnly;
-  return toResolved([...byNpi.values()][0]);
+  return p ? resolveParts(p, clientState) : null;
 }
+
+/** Combine two readings of the same prescriber ("Robin Edwards" on one
+ *  bottle, "Edwards F.N.P." on another): keep whichever parts each has. */
+export function mergeParts(a: PrescriberName, b: PrescriberName): PrescriberName {
+  const first = a.first ?? b.first;
+  const last = a.last ?? b.last;
+  const credential = a.credential ?? b.credential;
+  const display = [first, last].filter(Boolean).join(' ') + (credential ? `, ${credential}` : '');
+  return { display, first, last, credential };
+}
+
+export const sameLast = (a: PrescriberName, b: PrescriberName) =>
+  !!a.last && !!b.last && a.last.toLowerCase() === b.last.toLowerCase();
