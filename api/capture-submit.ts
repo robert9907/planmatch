@@ -19,6 +19,7 @@ import {
 import { resolveSnapRxcui } from './_lib/snapRxcui.js';
 import { daysSupply, nextRefillDate, quantityText } from './_lib/snapRefill.js';
 import { lookupTier } from './_lib/snapTier.js';
+import { resolvePrescriber } from './_lib/snapPrescriber.js';
 
 export const config = {
   api: {
@@ -112,7 +113,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Client's current plan, for the Tier column.
         const { data: clientRow } = await ab
           .from('clients')
-          .select('plan_id, deleted_at')
+          .select('plan_id, state, deleted_at')
           .eq('id', session.agentbase_client_id)
           .maybeSingle();
         // A client deleted after the link went out gets nothing written.
@@ -133,6 +134,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             m.tier_on_recommended_plan = await lookupTier(supabase(), planId, m.rxcui, currentPlanYear);
           }),
         );
+        // Each label's prescriber goes into Linked Providers (with an NPI
+        // only when the registry gives exactly one match in the client's state).
+        const prescriberNames = [
+          ...new Set(
+            extracted
+              .map((e) => (e.type === 'medication' ? (e.prescribing_physician ?? '').trim() : ''))
+              .filter(Boolean),
+          ),
+        ];
+        const prescribers = await Promise.all(
+          prescriberNames.map((n) => resolvePrescriber(n, (clientRow.state as string | null) ?? null)),
+        );
+        for (const pr of prescribers) {
+          if (pr) providers.push({ name: pr.name, npi: pr.npi, specialty: pr.specialty, phone: pr.phone, address: pr.address });
+        }
         const card = extracted.find((e): e is ExtractedMedicareCard => e.type === 'medicare_card');
         const [medRes, provRes, cardRes] = await Promise.all([
           meds.length
