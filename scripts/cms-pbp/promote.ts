@@ -454,7 +454,9 @@ export async function promote(opts: {
   // extract isn't present yet; the try/catch surfaces the failure so
   // an operator can rerun scripts/populate-landscape-snp-details.ts.
   try {
-    const stats = await withClient((c) => refreshLandscapeSnpDetails(c));
+    const stats = await withClient((c) =>
+      refreshLandscapeSnpDetails(c, undefined, planYear),
+    );
     counts.pm_plans_dsnp_updated = stats.dsnpUpdated;
     counts.pm_plans_csnp_updated = stats.csnpUpdated;
     console.log(

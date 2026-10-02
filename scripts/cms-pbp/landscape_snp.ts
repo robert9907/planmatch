@@ -176,8 +176,33 @@ export interface RefreshResult {
 export async function refreshLandscapeSnpDetails(
   client: pg.PoolClient | pg.Client,
   landscapeCsvPath?: string,
+  planYear?: number,
 ): Promise<RefreshResult> {
-  const landscape = await loadLandscapeSnpDetails(landscapeCsvPath);
+  // plan_year is REQUIRED: these UPDATEs hit pm_plans, which now holds
+  // 2026 and 2027 side by side keyed on (contract, plan, snp_type).
+  // Without a year filter a 2027 refresh overwrites the 2026 D-SNP
+  // integration flag (and vice-versa) on a page a client may be reading
+  // mid-AEP — D-SNP integration status does change between plan years.
+  // Refuse to run unscoped rather than bleed one year onto another.
+  if (!planYear || !Number.isInteger(planYear)) {
+    throw new Error(
+      'refreshLandscapeSnpDetails: planYear is required — refusing to UPDATE pm_plans unscoped.',
+    );
+  }
+
+  // Skip entirely when no Landscape CSV is staged — never overwrite the
+  // manually-seeded D-SNP population (128 plans, NC/TX/GA) with empty
+  // data. Resolve the path the same way loadLandscapeSnpDetails does.
+  const resolvedCsv =
+    landscapeCsvPath ?? process.env.LANDSCAPE_CSV_PATH ?? DEFAULT_LANDSCAPE_CSV;
+  if (!existsSync(resolvedCsv)) {
+    console.warn(
+      `[landscape_snp] no Landscape CSV staged at ${resolvedCsv} — skipping SNP refresh for plan_year ${planYear} (pm_plans left untouched).`,
+    );
+    return { dsnpUpdated: 0, dsnpUnmatched: 0, csnpUpdated: 0, csnpUnmatched: 0, scanned: 0 };
+  }
+
+  const landscape = await loadLandscapeSnpDetails(resolvedCsv);
 
   // Idempotent ALTER TABLE — no-op if migration 014 already ran, but
   // guards against a fresh DB that skipped the migration.
@@ -200,8 +225,9 @@ export async function refreshLandscapeSnpDetails(
                 zero_cost_sharing       = $4
           WHERE contract_id = $1
             AND plan_id     = $2
-            AND snp_type    = 'D-SNP'`,
-        [row.contract_id, row.plan_id, row.dsnp_integration_status, row.zero_cost_sharing],
+            AND snp_type    = 'D-SNP'
+            AND plan_year   = $5`,
+        [row.contract_id, row.plan_id, row.dsnp_integration_status, row.zero_cost_sharing, planYear],
       );
       if ((r.rowCount ?? 0) > 0) dsnpUpdated += r.rowCount ?? 0;
       else dsnpUnmatched += 1;
@@ -211,8 +237,9 @@ export async function refreshLandscapeSnpDetails(
             SET csnp_condition_type = $3
           WHERE contract_id = $1
             AND plan_id     = $2
-            AND snp_type    = 'C-SNP'`,
-        [row.contract_id, row.plan_id, row.csnp_condition_type],
+            AND snp_type    = 'C-SNP'
+            AND plan_year   = $4`,
+        [row.contract_id, row.plan_id, row.csnp_condition_type, planYear],
       );
       if ((r.rowCount ?? 0) > 0) csnpUpdated += r.rowCount ?? 0;
       else csnpUnmatched += 1;
