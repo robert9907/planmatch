@@ -80,6 +80,10 @@ interface Plan {
   contract_id: string;
   plan_number: string;
   segment_id: string;
+  /** The catalog year this plan was resolved for. Carried so client
+   *  formulary lookups scope to the right year's SPUF (and the module
+   *  cache keys by it) — a 2027 plan must not read 2026 drug tiers. */
+  plan_year: number;
   carrier: string;
   plan_name: string;
   /** Present (true) only when the caller passed includeNonCommissionable=1
@@ -1586,6 +1590,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         contract_id: row.contract_id,
         plan_number: row.plan_id,
         segment_id: row.segment_id || '000',
+        plan_year: catalogYear,
         carrier: row.carrier ?? row.parent_organization ?? '—',
         plan_name: row.plan_name,
         ...(includeNonComm &&

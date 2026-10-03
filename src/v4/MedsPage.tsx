@@ -83,7 +83,7 @@ export function MedsPage({ capture, onBack, onContinue }: Props) {
     const contractIds = [...new Set(eligiblePlans.map((p) => p.contract_id))];
     const rxcuis = medications.map((m) => m.rxcui).filter((s): s is string => !!s);
     if (rxcuis.length === 0) return;
-    bulkLookupFormulary(contractIds, rxcuis).then(() => {
+    bulkLookupFormulary(contractIds, rxcuis, undefined, eligiblePlans[0]?.plan_year).then(() => {
       if (!cancelled) setFormularyTick((t) => t + 1);
     });
     return () => { cancelled = true; };
@@ -99,7 +99,7 @@ export function MedsPage({ capture, onBack, onContinue }: Props) {
     if (rxs.length === 0) return totalPlans;
     return eligiblePlans.filter((p) =>
       rxs.every((rx) => {
-        const hit = getCachedFormulary(`${p.contract_id}_${p.plan_number}`, rx);
+        const hit = getCachedFormulary(`${p.contract_id}_${p.plan_number}`, rx, p.plan_year);
         return hit && hit.tier !== 'not_covered' && hit.tier !== 'excluded';
       }),
     ).length;
@@ -223,7 +223,7 @@ function MedRow({ med, plans, onRemove }: { med: Medication; plans: Plan[]; onRe
   // the top 3 "carrier-representative" badges get inline placement and
   // the rest collapse into "+N more".
   const hits = plans.map((p) => {
-    const hit = med.rxcui ? getCachedFormulary(`${p.contract_id}_${p.plan_number}`, med.rxcui) : null;
+    const hit = med.rxcui ? getCachedFormulary(`${p.contract_id}_${p.plan_number}`, med.rxcui, p.plan_year) : null;
     return { plan: p, hit };
   });
   const covered = hits.filter((h) => h.hit && h.hit.tier !== 'not_covered' && h.hit.tier !== 'excluded');

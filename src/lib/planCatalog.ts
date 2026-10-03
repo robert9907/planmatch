@@ -18,6 +18,9 @@ interface ApiPlan {
   contract_id: string;
   plan_number: string;
   segment_id: string;
+  // Catalog year the plan was resolved for; carried through to Plan so
+  // formulary lookups scope to the right year. Optional for older builds.
+  plan_year?: number;
   carrier: string;
   plan_name: string;
   state: string;
@@ -204,6 +207,7 @@ function toPlan(p: ApiPlan): Plan {
     id: p.id,
     contract_id: p.contract_id,
     plan_number: p.plan_number,
+    plan_year: p.plan_year,
     carrier: p.carrier,
     plan_name: p.plan_name,
     ...(p.non_commissionable ? { non_commissionable: true } : {}),

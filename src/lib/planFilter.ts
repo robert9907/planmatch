@@ -52,7 +52,10 @@ export function computeFunnel(input: FilterInput): FunnelSnapshot {
     for (const plan of plans) {
       if (!alive.has(plan.id)) continue;
       const contractPlanId = `${plan.contract_id}_${plan.plan_number}`;
-      const hit = getCachedFormulary(contractPlanId, med.rxcui);
+      // Read with the plan's year so this hits the same cache slot the
+      // prime (bulkLookupFormulary) wrote — they MUST agree on plan_year
+      // or this silently misses and formulary elimination goes inert.
+      const hit = getCachedFormulary(contractPlanId, med.rxcui, plan.plan_year);
       if (!hit) continue;
       if (hit.tier === 'not_covered' || hit.tier === 'excluded') {
         cuts.push({

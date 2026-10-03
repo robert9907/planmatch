@@ -175,6 +175,11 @@ export interface Plan {
   id: string;
   contract_id: string;
   plan_number: string;
+  // Catalog year this plan belongs to. Formulary lookups pass it so the
+  // module cache keys by year and the consumer endpoint scopes to the
+  // right SPUF. Optional: the MockPlan demo seed omits it (falls back to
+  // the year-less cache key / server date default).
+  plan_year?: number;
   carrier: string;
   plan_name: string;
   /** True only on plans fetched with includeNonCommissionable (agent

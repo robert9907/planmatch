@@ -161,7 +161,7 @@ export function MedsScreen({ onNext, onBack, clientView, capture, formularyUnava
         .filter((m) => m.rxcui && m.name)
         .map((m) => [m.rxcui as string, m.name]),
     );
-    bulkLookupFormulary(contractIds, rxcuis, names).then(() => {
+    bulkLookupFormulary(contractIds, rxcuis, names, eligiblePlans[0]?.plan_year).then(() => {
       if (!cancelled) setFormularyTick((t) => t + 1);
     });
     return () => {
@@ -188,7 +188,7 @@ export function MedsScreen({ onNext, onBack, clientView, capture, formularyUnava
     const allDry = rxcuis.every(
       (rxcui) =>
         !eligiblePlans.some((p) =>
-          getCachedFormulary(`${p.contract_id}_${p.plan_number}`, rxcui),
+          getCachedFormulary(`${p.contract_id}_${p.plan_number}`, rxcui, p.plan_year),
         ),
     );
     if (!allDry) return;
@@ -201,7 +201,7 @@ export function MedsScreen({ onNext, onBack, clientView, capture, formularyUnava
         .filter((m) => m.rxcui && m.name)
         .map((m) => [m.rxcui as string, m.name]),
     );
-    bulkLookupFormulary(contractIds, rxcuis, names).then(() => {
+    bulkLookupFormulary(contractIds, rxcuis, names, eligiblePlans[0]?.plan_year).then(() => {
       if (!cancelled) setFormularyTick((t) => t + 1);
     });
     return () => {
@@ -388,7 +388,7 @@ function perDrugBest(
   let covered = 0;
   let anyHit = false;
   for (const p of plans) {
-    const hit = getCachedFormulary(`${p.contract_id}_${p.plan_number}`, med.rxcui);
+    const hit = getCachedFormulary(`${p.contract_id}_${p.plan_number}`, med.rxcui, p.plan_year);
     if (!hit) continue;
     anyHit = true;
     if (hit.tier === 'not_covered' || hit.tier === 'excluded') continue;

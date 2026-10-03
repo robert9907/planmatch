@@ -183,7 +183,7 @@ export function Step5BenefitFilters({ onAdvance }: Step5Props) {
       .map((m) => m.rxcui)
       .filter((s): s is string => typeof s === 'string' && s.length > 0);
     if (rxcuis.length === 0) return;
-    bulkLookupFormulary(contractIds, rxcuis).then(() => {
+    bulkLookupFormulary(contractIds, rxcuis, undefined, eligiblePlans[0]?.plan_year).then(() => {
       if (!cancelled) setFormularyTick((t) => t + 1);
     });
     return () => {

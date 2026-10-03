@@ -839,7 +839,7 @@ export function AgentV3App() {
       .filter((s): s is string => !!s);
     if (rxcuis.length === 0) return;
     const contractIds = [...new Set(eligiblePlans.map((p) => p.contract_id))];
-    void bulkLookupFormulary(contractIds, rxcuis);
+    void bulkLookupFormulary(contractIds, rxcuis, undefined, eligiblePlans[0]?.plan_year);
   }, [eligiblePlans, medications]);
 
   // ── Brain derivatives, sourced from the library result ─────────

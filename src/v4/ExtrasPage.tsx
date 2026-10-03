@@ -164,7 +164,7 @@ export function ExtrasPage({ onBack, onContinue }: Props) {
     const rxcuis = medications.map((m) => m.rxcui).filter((s): s is string => !!s);
     if (rxcuis.length === 0) return;
     const contractIds = [...new Set(eligiblePlans.map((p) => p.contract_id))];
-    bulkLookupFormulary(contractIds, rxcuis).then(() => {
+    bulkLookupFormulary(contractIds, rxcuis, undefined, eligiblePlans[0]?.plan_year).then(() => {
       if (!cancelled) setFormularyTick((t) => t + 1);
     });
     return () => { cancelled = true; };

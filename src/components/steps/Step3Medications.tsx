@@ -108,7 +108,7 @@ export function Step3Medications({ capture, onAdvance }: Step3Props) {
       .map((m) => m.rxcui)
       .filter((s): s is string => typeof s === 'string' && s.length > 0);
     if (rxcuis.length === 0) return;
-    bulkLookupFormulary(contractIds, rxcuis).then(() => {
+    bulkLookupFormulary(contractIds, rxcuis, undefined, eligiblePlans[0]?.plan_year).then(() => {
       if (!cancelled) setFormularyTick((t) => t + 1);
     });
     return () => {
@@ -310,7 +310,7 @@ function MedicationRow({
           tier = null;
         } else {
           const contractPlanId = `${p.contract_id}_${p.plan_number}`;
-          const hit = getCachedFormulary(contractPlanId, med.rxcui);
+          const hit = getCachedFormulary(contractPlanId, med.rxcui, p.plan_year);
           if (hit) {
             tier = hit.tier === 'not_covered' ? null : (hit.tier as FormularyTier);
           } else {

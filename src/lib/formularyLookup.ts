@@ -38,8 +38,8 @@
 import type { FormularyTier } from '@/types/plans';
 
 const LIBRARY_URL: string =
-  ((import.meta.env as { VITE_PLANMATCH_LIBRARY_URL?: string })
-    .VITE_PLANMATCH_LIBRARY_URL ??
+  ((import.meta.env as { VITE_PLANMATCH_LIBRARY_URL?: string } | undefined)
+    ?.VITE_PLANMATCH_LIBRARY_URL ??
     'https://planmatch.generationhealth.me') as string;
 
 export interface FormularyHit {
