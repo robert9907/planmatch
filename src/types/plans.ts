@@ -243,6 +243,12 @@ export interface Plan {
   // need to show "what the member pays" should read `consumer_premium`.
   consumer_premium: number;
   annual_deductible: number | null;
+  // Source-loaded signal for annual_deductible (medical). true when the
+  // value is filed OR the medical-deductible source is loaded for the
+  // plan_year (so a null = genuine $0). false ⇒ the null is UNKNOWN (the
+  // year's source isn't loaded yet) and must NOT be treated as $0. Optional
+  // for back-compat with responses that predate it (treated as known).
+  annual_deductible_known?: boolean;
   moop_in_network: number;
   moop_out_of_network: number | null;
   drug_deductible: number | null;

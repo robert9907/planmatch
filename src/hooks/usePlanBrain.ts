@@ -51,6 +51,7 @@ import { BROKER_IMPLICATIONS } from '@/lib/condition-detector';
 import { ARCHETYPE_RULES } from '@/lib/broker-playbook';
 import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
 import { normalizeLisTier } from '@/lib/dual-eligible';
+import { resolveMedicalDeductible } from '@/lib/plan-brain-utils';
 import type {
   AnnualCostEstimate,
   AnnualUtilization,
@@ -422,7 +423,10 @@ function planToPmRow(plan: Plan, county: string, idx: number): PmPlanRow {
     county_name: county,
     county_fips: null,
     monthly_premium: plan.premium,
-    annual_deductible: plan.annual_deductible ?? 0,
+    // "Missing stays missing": an unknown medical deductible (null + source
+    // not loaded, e.g. PY2027) stays null into the cost model — never a
+    // fabricated $0. A null whose source IS loaded is a genuine $0.
+    annual_deductible: resolveMedicalDeductible(plan.annual_deductible, plan.annual_deductible_known),
     moop: plan.moop_in_network,
     drug_deductible: plan.drug_deductible,
     star_rating: plan.star_rating,

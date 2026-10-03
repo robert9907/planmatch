@@ -845,7 +845,11 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
         snfPerDay: snfDayOneCopay(benefits),
         ambulancePerTrip: copayForCategory(benefits, 'ambulance'),
         dmeCoinsurancePct: dmeCoinsurance(benefits),
-        annualDeductible: row.annual_deductible ?? 0,
+        // Preserve null (unknown) through to the cost model — it coalesces
+        // null→0 for the arithmetic (utilization-model) but keeps the field
+        // honest so an unknown deductible never reads as a genuine $0. The
+        // null-vs-$0 gate already ran upstream (resolveMedicalDeductible).
+        annualDeductible: row.annual_deductible,
       },
     });
 

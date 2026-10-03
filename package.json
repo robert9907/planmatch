@@ -23,6 +23,7 @@
     "test:partd": "tsx --test scripts/tests/partDTimeline.test.ts scripts/tests/partDTimeline-incumbent.test.ts",
     "test:formulary-unpublished": "tsx --test scripts/tests/formulary-unpublished.test.ts",
     "test:cost-share": "TSX_TSCONFIG_PATH=./tsconfig.scripts.json tsx --test scripts/tests/cost-share-zero.test.ts",
+    "test:medical-deductible": "TSX_TSCONFIG_PATH=./tsconfig.scripts.json tsx --test scripts/tests/medical-deductible-known.test.ts",
     "provider:fhir-lookup": "tsx scripts/fhir-provider-lookup.ts",
     "test:persona-audit": "tsx scripts/cms-secret-shopper.ts",
     "audit:parity": "tsx scripts/parity-audit/run.ts"

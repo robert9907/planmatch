@@ -127,6 +127,10 @@ interface Plan {
   // matches the "premium you pay" column. Computed below from snp_type.
   consumer_premium: number;
   annual_deductible: number | null;
+  // true when annual_deductible is filed OR its source is loaded for the
+  // plan_year (null ⇒ genuine $0); false ⇒ null is UNKNOWN (source not
+  // loaded). Gate null→$0 on this downstream so unknown never reads as $0.
+  annual_deductible_known: boolean;
   moop_in_network: number;
   moop_out_of_network: number | null;
   drug_deductible: number | null;
@@ -1329,6 +1333,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // Year-level signal: is the medical-deductible SOURCE loaded for this
+    // catalog year at all (medicare_gov medical_deductible scrape done)?
+    // This distinguishes a genuine $0 — a 2026 plan whose source is loaded
+    // but files no medical deductible — from UNKNOWN (the PY2027 shelf,
+    // not yet scraped). County-independent on purpose: a sparse county
+    // must not mis-signal "unknown" for a year whose source is loaded.
+    // Consumers must treat a null medical deductible as unknown (never $0)
+    // when this is false — see resolveMedicalDeductible in plan-brain-utils.
+    const medicalDeductibleSourceLoaded = await (async () => {
+      const { data, error } = await sb
+        .from('pbp_benefits_v2')
+        .select('id')
+        .eq('benefit_type', 'medical_deductible')
+        .eq('source', 'medicare_gov')
+        .eq('plan_year', catalogYear)
+        .limit(1);
+      if (error) {
+        // Fail safe toward legacy behavior: if the probe errors, treat the
+        // source as loaded so we don't spuriously flip known plans to
+        // "unknown". The cost model still coalesces null→0 either way.
+        console.warn('[plans] medical_deductible source-loaded probe failed:', error.message);
+        return true;
+      }
+      return (data?.length ?? 0) > 0;
+    })();
+
     const synthBenefits: BenefitRow[] = [];
     for (const [key, row] of bestByKey) {
       const canonical = normalizePbpKey(row.plan_id);
@@ -1543,6 +1573,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         'partb_giveback',
         'coverage_amount',
       );
+      // Resolve the medical deductible once: PBP (medicare_gov, more
+      // current) wins over the landscape value; null when neither filed.
+      const annualDeductibleValue = (() => {
+        const parts = key.split('-');
+        const seg = (parts[2] ?? '0').replace(/^0+/, '') || '0';
+        const pbp = medicalDeductibleBySegmentKey.get(`${parts[0]}-${parts[1]}-${seg}`);
+        return pbp ?? row.annual_deductible ?? null;
+      })();
       plans.push({
         id: key,
         contract_id: row.contract_id,
@@ -1593,15 +1631,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // (contract-plan-segment) and we match the matching pbp row
         // built above from pbp_benefits_v2.segment_id. Normalize the
         // segment to strip leading zeros so '000' and '0' both hit.
-        annual_deductible: (() => {
-          const parts = key.split('-');
-          const seg = (parts[2] ?? '0').replace(/^0+/, '') || '0';
-          const pbp = medicalDeductibleBySegmentKey.get(`${parts[0]}-${parts[1]}-${seg}`);
-          // Stays null when neither source filed a medical deductible (e.g. the
-          // PY2027 shelf). Never coerce to $0 — a $0 medical deductible is a
-          // real, quotable selling point and must not be invented.
-          return pbp ?? row.annual_deductible ?? null;
-        })(),
+        // Stays null when neither source filed a medical deductible (e.g. the
+        // PY2027 shelf). Never coerce to $0 here — a $0 medical deductible is a
+        // real, quotable selling point and must not be invented.
+        annual_deductible: annualDeductibleValue,
+        // Source-loaded signal: true when the medical-deductible value is
+        // present OR its source is loaded for this year (so a null = genuine
+        // $0). False only when null AND the year's source isn't loaded (the
+        // null is UNKNOWN). Consumers gate null→$0 on this (see
+        // resolveMedicalDeductible) so an unknown deductible never ranks or
+        // displays as $0.
+        annual_deductible_known: annualDeductibleValue != null || medicalDeductibleSourceLoaded,
         moop_in_network: row.moop ?? 0,
         // Combined In+Out-of-Network MOOP. Populated for PPO plans via
         // the medicare.gov backfill (scripts/parity-audit/backfill-

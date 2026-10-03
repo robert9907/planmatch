@@ -13,6 +13,25 @@ import {
   type TierCostShares,
 } from '../../api/library/partDTimeline';
 
+// ─── Medical deductible: null-vs-$0 gate ──────────────────────────────
+//
+// A medical deductible that is NULL because its source isn't loaded for
+// the plan_year (the PY2027 shelf — no medicare_gov medical_deductible
+// scrape yet) is UNKNOWN, not $0, and must never be fabricated into a $0
+// in the cost model: a plan with an unknown deductible would otherwise
+// rank/display as if it had none. A null whose source IS loaded (a 2026
+// plan that simply files no medical deductible) is a genuine $0 (the
+// Medicare.gov parity fix). `known` is the API's source-loaded signal
+// (annual_deductible_known); undefined preserves legacy behavior for
+// responses that predate it.
+export function resolveMedicalDeductible(
+  value: number | null | undefined,
+  known: boolean | undefined,
+): number | null {
+  if (value != null) return value;      // a filed value always wins
+  return known === false ? null : 0;    // null: unknown when source unloaded, else genuine $0
+}
+
 // ─── Utilization profiles (CMS-typical visit counts) ──────────────────
 
 export const UTIL_LOW: Utilization = {
