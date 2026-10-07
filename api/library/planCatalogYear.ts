@@ -18,6 +18,8 @@
 export const PLAN_CATALOG_CUTOVER_MS = Date.UTC(2026, 9, 15); // 2026-10-15 UTC
 export const KNOWN_PLAN_YEARS: ReadonlySet<number> = new Set([2026, 2027]);
 
+import { planYearOverride } from './planYearOverride.js';
+
 const YEAR_RE = /^\d{4}$/;
 
 export function parsePlanYearParam(raw: unknown): number | null {
@@ -47,6 +49,13 @@ export interface ResolveCatalogYearOpts {
 export function resolvePlanCatalogYear(opts: ResolveCatalogYearOpts = {}): number {
   const explicit = parsePlanYearParam(opts.explicit);
   if (explicit !== null) return explicit;
+  // Client-only: a ?plan_year= URL override. Consulted HERE rather than at
+  // each call site so the Part D constants in src/agent-v3 and the plan rows
+  // the fetchers request can never disagree about the year — the failure this
+  // whole module exists to prevent. No-op on the server (no window), where
+  // the same value arrives as `explicit` off the query string instead.
+  const override = planYearOverride();
+  if (override !== null) return override;
   const fromDate = planYearFromEffectiveDate(opts.effectiveDate);
   if (fromDate !== null) return fromDate;
   const nowMs = (opts.now ?? new Date()).getTime();
