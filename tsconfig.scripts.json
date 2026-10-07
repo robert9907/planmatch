@@ -32,7 +32,8 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": { "@/*": ["src/*"] },
-    "types": ["node"]
+    "types": ["node"],
+    "composite": true
   },
   "files": [
     "scripts/audit-plan-completeness.ts",
