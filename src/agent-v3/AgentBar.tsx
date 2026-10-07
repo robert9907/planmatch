@@ -26,6 +26,11 @@
 //                    broker can verify a hydrated client mid-call.
 
 import { useState } from 'react';
+import {
+  PLAN_CATALOG_CUTOVER_MS,
+  resolvePlanCatalogYear,
+} from '../../api/library/planCatalogYear';
+import { planYearOverride } from '../../api/library/planYearOverride';
 
 // 8-screen agent flow: Client → Disclaimers → Meds → Providers →
 // Priorities → Compare (4-up grid + H2H toggle) → Compliance →
@@ -90,6 +95,74 @@ interface Props {
    *  Defaults to the prod CRM where the broker actually places the
    *  call. */
   agentBaseHref?: string;
+}
+
+// ─── Plan-year control ───────────────────────────────────────────────
+//
+// Which catalog year this quote is being built from, and a one-click
+// switch to the other one.
+//
+// Why it exists: the catalog year is date-driven and flips at the Oct 15
+// cutover, but CMS permits marketing next-year plans from Oct 1. Without
+// this, a broker quoting during Oct 1-14 can only pull the current year
+// while the consumer site already shows next year's plans. After the
+// cutover it runs the other way — pinning the prior year for the mid-year
+// SEP and effective-date work that continues through Dec 31.
+//
+// Why it RELOADS instead of setting React state: the Part D structural
+// constants in DrugCostCard, PartDTimelineOverlay and plan-brain-utils
+// resolve ONCE at module load. Flipping the year in state would leave those
+// pinned to the old year while plan rows came back as the new one — pricing
+// a 2027 plan with 2026 phase thresholds, the exact defect PR #26 fixed. A
+// reload re-evaluates every module against one year, so the surface cannot
+// go internally inconsistent. The broker is between quotes when they click.
+//
+// The pill goes amber whenever the active year is NOT the date default, so
+// "I am pinned to a year I did not mean to be" is visible at a glance
+// instead of being discovered from a wrong number on a client's quote.
+const KNOWN_YEARS = [2026, 2027] as const;
+
+function PlanYearPill() {
+  const active = resolvePlanCatalogYear();
+  const dateDefault = Date.now() >= PLAN_CATALOG_CUTOVER_MS ? 2027 : 2026;
+  const pinned = planYearOverride() !== null && active !== dateDefault;
+  const other = KNOWN_YEARS.find((y) => y !== active) ?? dateDefault;
+
+  function switchTo(year: number) {
+    const url = new URL(window.location.href);
+    if (year === dateDefault) {
+      url.searchParams.delete('plan_year');
+    } else {
+      url.searchParams.set('plan_year', String(year));
+    }
+    window.location.assign(url.toString());
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => switchTo(other)}
+      title={
+        pinned
+          ? `Quoting PY${active} — pinned, not the ${dateDefault} default. Click for ${other}.`
+          : `Quoting PY${active}. Click to switch to ${other}.`
+      }
+      style={{
+        background: pinned ? 'rgba(245,158,11,0.18)' : 'rgba(131,240,249,0.12)',
+        border: `1px solid ${pinned ? '#f59e0b' : 'rgba(131,240,249,0.3)'}`,
+        borderRadius: 5,
+        padding: '2px 8px',
+        fontSize: 10,
+        color: pinned ? '#fbbf24' : '#83f0f9',
+        fontWeight: 700,
+        letterSpacing: 1,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {pinned ? `PY${active} · pinned` : `PY${active}`}
+    </button>
+  );
 }
 
 export function AgentBar({
@@ -233,6 +306,7 @@ export function AgentBar({
         >
           {clientView ? '👁 Client' : '🧠 Agent'}
         </button>
+        <PlanYearPill />
       </div>
 
       {/* Center: Screen Nav */}
