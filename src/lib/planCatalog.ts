@@ -1,3 +1,4 @@
+import { planYearOverride } from '../../api/library/planYearOverride';
 // planCatalog — plan lookup backed by pm_plans + pm_plan_benefits via
 // the /api/plans serverless route. Replaces the 12-plan static array
 // in cmsPlans.ts for Step 5 Benefit Filters and Step 6 Quote &
@@ -138,6 +139,11 @@ export async function fetchPlansForClient(params: FetchPlansParams): Promise<Pla
     if (params.includeNonCommissionable) qs.set('includeNonCommissionable', '1');
   }
   qs.set('limit', '2000');
+  // Forward the ?plan_year= override so the rows we get back are the same
+  // catalog year the Part D constants resolve to. Absent => no param => the
+  // API's own date-driven resolver decides, unchanged.
+  const yearOverride = planYearOverride();
+  if (yearOverride !== null) qs.set('plan_year', String(yearOverride));
 
   try {
     const res = await fetch(`/api/plans?${qs.toString()}`, {

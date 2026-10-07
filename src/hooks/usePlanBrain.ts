@@ -55,6 +55,7 @@ import type {
   AnnualCostEstimate,
   AnnualUtilization,
 } from '@/lib/utilization-model';
+import { planYearOverride } from '../../api/library/planYearOverride';
 
 // ─── Compat type re-exports ──────────────────────────────────────────
 // These mirror the pre-transplant agent shape so callers (QuoteDeliveryV4,
@@ -1268,6 +1269,9 @@ export function usePlanBrain(args: Args): State {
         const qs = new URLSearchParams({ ids: planIds });
         if (rxcuis) qs.set('rxcuis', rxcuis);
         if (npis) qs.set('npis', npis);
+        // Same catalog year the plan rows and the Part D math use.
+        const yearOverride = planYearOverride();
+        if (yearOverride !== null) qs.set('plan_year', String(yearOverride));
         const res = await fetch(`/api/plan-brain-data?${qs.toString()}`, {
           signal: controller.signal,
         });

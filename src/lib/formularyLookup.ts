@@ -36,6 +36,7 @@
 // works.
 
 import type { FormularyTier } from '@/types/plans';
+import { planYearOverride } from '../../api/library/planYearOverride';
 
 const LIBRARY_URL: string =
   ((import.meta.env as { VITE_PLANMATCH_LIBRARY_URL?: string })
@@ -181,6 +182,8 @@ export async function lookupFormulary(
     plan_id: planId,
     rxcui,
   });
+  const yearOverride = planYearOverride();
+  if (yearOverride !== null) qs.set('plan_year', String(yearOverride));
   try {
     const res = await fetch(`${LIBRARY_URL}/api/formulary?${qs.toString()}`, {
       method: 'GET',
@@ -208,6 +211,8 @@ async function fetchBulkChunk(
   try {
     const body: Record<string, unknown> = { contractIds, rxcuis };
     if (names && Object.keys(names).length > 0) body.names = names;
+    const yearOverride = planYearOverride();
+    if (yearOverride !== null) body.planYear = yearOverride;
     const res = await fetch(`${LIBRARY_URL}/api/formulary`, {
       method: 'POST',
       headers: {
