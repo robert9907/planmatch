@@ -35,7 +35,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { supabase } from './_lib/supabase.js';
-import { resolvePlanCatalogYear } from './_lib/plan-catalog-year.js';
+import { resolvePlanCatalogYear } from './library/planCatalogYear.js';
 
 type Source = 'medicare_gov' | 'sb_ocr' | 'manual' | 'pbp_federal';
 

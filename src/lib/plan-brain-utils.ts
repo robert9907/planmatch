@@ -12,6 +12,8 @@ import {
   type PlanInput as PartDPlanInput,
   type TierCostShares,
 } from '../../api/library/partDTimeline';
+import { getPlanYearParams } from '../../api/library/planYearParams';
+import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear';
 
 // ─── Utilization profiles (CMS-typical visit counts) ──────────────────
 
@@ -153,17 +155,30 @@ export function annualMedicalCostFromUtilization(
 
 // ─── Drug cost estimation ─────────────────────────────────────────────
 
+// Plan year every partDTimeline input on this surface is built against,
+// and the source of the Part D structural constants below. Resolved off
+// the shared catalog-year resolver — the same one /api/plans uses — so
+// the brain's drug math rolls at the Oct 15 AEP cutover instead of
+// pricing 2027 plans with 2026 phase thresholds.
+const BUNDLE_PLAN_YEAR = resolvePlanCatalogYear();
+const BUNDLE_PARAMS = getPlanYearParams(BUNDLE_PLAN_YEAR);
+
 // Common Part D insulin names (subset of the PlanDetail INSULIN_NAME_RE)
 // — the IRA $35/mo cap applies regardless of the plan's nominal rate.
 const INSULIN_NAME_RE =
   /\b(insulin|lantus|basaglar|toujeo|levemir|tresiba|humalog|novolog|fiasp|admelog|apidra|lyumjev|humulin|novolin|afrezza|semglee|rezvoglar)\b/i;
-const INSULIN_MONTHLY_CAP_2026 = 35;
+const INSULIN_MONTHLY_CAP = BUNDLE_PARAMS.insulinMonthlyCap;
 
-// 2026 IRA Part D true-out-of-pocket (TrOOP) cap. Above this
-// threshold cost-sharing is $0 for ALL Part D beneficiaries (IRA
-// §11201), LIS or not. Consumed by the LIS override in
-// dual-eligible.ts as a backstop after LIS copay caps are applied.
-export const PART_D_OOP_CAP_2026 = 2100;
+// IRA Part D true-out-of-pocket (TrOOP) cap for the resolved catalog
+// year ($2,100 for 2026, $2,400 for 2027). Above this threshold
+// cost-sharing is $0 for ALL Part D beneficiaries (IRA §11201), LIS or
+// not. Consumed by the LIS override in dual-eligible.ts as a backstop
+// after LIS copay caps are applied.
+//
+// Year-keyed rather than a literal: this value feeds the ranking math,
+// so a stale cap doesn't just misprint a figure — it changes which
+// plan wins.
+export const PART_D_OOP_CAP = BUNDLE_PARAMS.troopCap;
 
 // Notional retail price per tier — used when the per-NDC drug cost
 // cache hasn't been populated yet for this plan. Empirically sane for
@@ -237,7 +252,7 @@ export function estimateDrugYearlyCost(d: EstimateDrugInput): DrugYearlyEstimate
     if (hit) {
       const yearly = hit.estimated_yearly_total ?? estimateFromTier(hit.tier ?? tier, hit.full_cost ?? null, d.benefits);
       const capped = INSULIN_NAME_RE.test(d.name)
-        ? Math.min(yearly, INSULIN_MONTHLY_CAP_2026 * 12)
+        ? Math.min(yearly, INSULIN_MONTHLY_CAP * 12)
         : yearly;
       return {
         rxcui: d.rxcui,
@@ -255,7 +270,7 @@ export function estimateDrugYearlyCost(d: EstimateDrugInput): DrugYearlyEstimate
   if (cov) {
     const yearly = estimateFromTier(tier, NOTIONAL_TIER_FULL_COST[tier ?? 3] ?? 200, d.benefits);
     const capped = INSULIN_NAME_RE.test(d.name)
-      ? Math.min(yearly, INSULIN_MONTHLY_CAP_2026 * 12)
+      ? Math.min(yearly, INSULIN_MONTHLY_CAP * 12)
       : yearly;
     return { rxcui: d.rxcui, name: d.name, tier, yearlyCost: Math.max(0, Math.round(capped)), covered: true, confirmedUncovered: false, isBrand: d.isBrand ?? false };
   }
@@ -313,10 +328,7 @@ interface DrugInfo {
   cacheOverride: number | null;
 }
 
-// Plan year used when constructing partDTimeline inputs. Kept as a
-// constant here so a 2027 rollover is a single-line change (paired
-// with adding a 2027 row to api/library/planYearParams.ts).
-const BUNDLE_PLAN_YEAR = 2026;
+
 
 // Bundle timeline planYear default. Deductible eligibility mirrors
 // the incumbent's implicit `tier >= 3` filter — the 2026 CMS default,
@@ -375,7 +387,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
         cachedFullCost = hit.full_cost;
         if (hit.estimated_yearly_total != null) {
           const yearly = isInsulin
-            ? Math.min(hit.estimated_yearly_total, INSULIN_MONTHLY_CAP_2026 * 12)
+            ? Math.min(hit.estimated_yearly_total, INSULIN_MONTHLY_CAP * 12)
             : hit.estimated_yearly_total;
           cacheOverride = Math.max(0, Math.round(yearly));
         }
@@ -553,7 +565,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
     // spend doesn't accumulate toward the plan's deductible or TrOOP.
     if (!info.covered) {
       const yearly = info.isInsulin
-        ? INSULIN_MONTHLY_CAP_2026 * 12
+        ? INSULIN_MONTHLY_CAP * 12
         : info.retailMonthly * 12;
       return {
         rxcui: info.input.rxcui,

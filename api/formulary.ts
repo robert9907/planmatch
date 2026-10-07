@@ -39,7 +39,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { supabase } from './_lib/supabase.js';
-import { resolvePlanCatalogYear } from './_lib/plan-catalog-year.js';
+import { resolvePlanCatalogYear } from './library/planCatalogYear.js';
 import { isFormularyPublished } from './_lib/formulary-published.js';
 
 interface FormularyRow {

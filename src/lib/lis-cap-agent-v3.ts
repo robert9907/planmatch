@@ -24,7 +24,7 @@ import {
   type LivingSetting,
   type MedicaidLevel,
 } from './dual-eligible';
-import { PART_D_OOP_CAP_2026 } from './plan-brain-utils';
+import { PART_D_OOP_CAP } from './plan-brain-utils';
 import type { LibraryRankPlan, LibraryRankResult } from './library-client';
 import type { Plan } from '../types/plans';
 
@@ -77,7 +77,7 @@ export function applyLisCapsToLibraryPlan(
     running += Math.round(perFill * 12);
   }
   return {
-    adjustedTotal: Math.min(running, PART_D_OOP_CAP_2026),
+    adjustedTotal: Math.min(running, PART_D_OOP_CAP),
     lisCopaysApplied: lisCopays,
   };
 }

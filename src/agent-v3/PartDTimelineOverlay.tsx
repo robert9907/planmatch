@@ -31,6 +31,7 @@ import {
   type TierCostShares,
 } from '../../api/library/partDTimeline';
 import { getPlanYearParams } from '../../api/library/planYearParams';
+import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear';
 
 // ─── Tokens (kept in sync with DrugCostCard) ─────────────────────────
 
@@ -48,7 +49,11 @@ const PHASE_COLOR: Record<MonthlyRow['phase'], { bg: string; fg: string; label: 
 
 const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-const CARD_PLAN_YEAR = 2026;
+// Resolved catalog year, not a literal — same resolver /api/plans and
+// DrugCostCard use, so the overlay's deductible / catastrophic figures
+// and its "Part D cost timeline — YYYY" heading roll at the Oct 15 AEP
+// cutover instead of reading 2026 against a 2027 plan.
+const CARD_PLAN_YEAR = resolvePlanCatalogYear();
 const PART_D_PARAMS = getPlanYearParams(CARD_PLAN_YEAR);
 
 // Notional retail per tier — same values as plan-brain-utils
