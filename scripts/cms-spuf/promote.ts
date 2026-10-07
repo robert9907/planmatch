@@ -294,11 +294,11 @@ export async function promote(opts: {
     // the v2 swap.
 
     await c.query(`TRUNCATE pm_mapd_plan_set`);
-    const mr = await c.query(`
+    const mpr = await c.query(`
       INSERT INTO pm_mapd_plan_set (contract_id, plan_id)
       SELECT DISTINCT contract_id, plan_id FROM pm_formulary_v2
     `);
-    counts.pm_mapd_plan_set = mr.rowCount ?? 0;
+    counts.pm_mapd_plan_set = mpr.rowCount ?? 0;
 
     // ─── Release status flip ──────────────────────────────────────────
     //

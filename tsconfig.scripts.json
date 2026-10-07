@@ -34,5 +34,16 @@
     "paths": { "@/*": ["src/*"] },
     "types": ["node"]
   },
-  "files": ["scripts/audit-plan-completeness.ts"]
+  "files": [
+    "scripts/audit-plan-completeness.ts",
+    "scripts/import-cms-spuf.ts",
+    "scripts/cms-spuf/promote.ts",
+    "scripts/cms-spuf/loader.ts",
+    "scripts/cms-spuf/schema.ts",
+    "scripts/cms-spuf/discover.ts",
+    "scripts/cms-spuf/download.ts",
+    "scripts/cms-spuf/parser.ts",
+    "scripts/cms-spuf/pg.ts",
+    "scripts/cms-spuf/env.ts"
+  ]
 }
