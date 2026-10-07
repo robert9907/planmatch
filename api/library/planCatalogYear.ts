@@ -1,7 +1,12 @@
 // Which plan-year catalog a request should see. Mirrors the consumer repo's
 // api/_lib/plan-catalog-year.ts (robert9907/plan-match) — kept lean here: the
 // agent only needs the year RESOLVER to filter pm_plans + the pbp_benefits
-// overlay. pm_plans is dual-year (PY2026 + PY2027); the pbp_benefits view now
+// overlay.
+//
+// Lives in api/library/ (not api/_lib/) because the CLIENT imports it too:
+// the Part D cards in src/agent-v3 resolve the same catalog year the API
+// does, so a 2027 plan is never priced with 2026 Part D constants. Pure date
+// math — no secrets, no node APIs, safe in the browser bundle. pm_plans is dual-year (PY2026 + PY2027); the pbp_benefits view now
 // exposes plan_year, so readers filter both by the resolved catalog year and a
 // 2027 plan never shows 2026 cost-shares (or the reverse).
 //

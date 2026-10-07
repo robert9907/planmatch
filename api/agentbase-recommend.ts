@@ -32,7 +32,7 @@ import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
 import { upsertMedicationsForClient, upsertProvidersForClient } from './_lib/agentbaseDedup.js';
 import { requireSession } from './_lib/require-session.js';
-import { resolvePlanCatalogYear } from './_lib/plan-catalog-year.js';
+import { resolvePlanCatalogYear } from './library/planCatalogYear.js';
 
 // AgentBase CRM URL pattern. /clients/{id} matches the existing
 // AgentBase routing convention; if it changes, override via env.

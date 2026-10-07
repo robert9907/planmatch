@@ -21,7 +21,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { supabase } from './_lib/supabase.js';
 import { expandRxcui } from './formulary.js';
-import { resolvePlanCatalogYear } from './_lib/plan-catalog-year.js';
+import { resolvePlanCatalogYear } from './library/planCatalogYear.js';
 import { isFormularyPublished } from './_lib/formulary-published.js';
 
 // PostgREST on this project caps every query at 1000 rows

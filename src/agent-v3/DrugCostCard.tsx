@@ -29,8 +29,9 @@
 // Phase timeline model (per drug, isolated):
 //   • deductible_applies = false               → all fills in 'initial'
 //   • deductible_applies = true                → month-by-month sim:
-//       cumulative user-OOP tracks against PART_D_MAX_DEDUCTIBLE_2026
-//       ($590) and PART_D_OOP_CAP_2026 ($2100). Phase transitions on
+//       cumulative user-OOP tracks against PART_D_MAX_DEDUCTIBLE
+//       and PART_D_OOP_CAP (both year-keyed off the resolved catalog
+//       year — see the Constants block). Phase transitions on
 //       the fill that crosses the threshold. Simulation is per-drug
 //       (each drug's own cumulative) — the real Part D deductible is
 //       shared across the whole basket, but the per-drug story here
@@ -56,18 +57,24 @@ import {
   type TierCostShares,
 } from '../../api/library/partDTimeline';
 import { getPlanYearParams } from '../../api/library/planYearParams';
+import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear';
 
 // ─── Constants ────────────────────────────────────────────────────────
 //
-// Card-level plan year — Rob's spec keeps the Compare surface anchored
-// to the current year (agent quotes for effective-date within the year).
-// Cross-year projections would need this threaded from the client's
-// intended effective date; that's a follow-up when mid-year enrollment
-// quoting lands.
-const CARD_PLAN_YEAR = 2026;
+// Card-level plan year — the Compare surface stays anchored to ONE year,
+// but that year is now the resolved catalog year rather than a literal,
+// so it rolls at the Oct 15 AEP cutover without a redeploy. Same
+// resolver /api/plans uses, so the card's Part D constants always match
+// the catalog the plans on screen came from (2027 → $700 deductible,
+// $2,400 TrOOP; 2026 → $615 / $2,100).
+//
+// Cross-year projections would still need this threaded from the
+// client's intended effective date; that's a follow-up when mid-year
+// enrollment quoting lands.
+const CARD_PLAN_YEAR = resolvePlanCatalogYear();
 const PART_D_PARAMS = getPlanYearParams(CARD_PLAN_YEAR);
-const PART_D_MAX_DEDUCTIBLE_2026 = PART_D_PARAMS.partDDeductibleMax;
-const PART_D_OOP_CAP_2026 = PART_D_PARAMS.troopCap;
+const PART_D_MAX_DEDUCTIBLE = PART_D_PARAMS.partDDeductibleMax;
+const PART_D_OOP_CAP = PART_D_PARAMS.troopCap;
 
 /** Notional retail per fill by tier — used when a phase costs
  *  coinsurance and we don't have a live pm_drug_cost_cache hit. Same
@@ -351,7 +358,7 @@ function planInputForSingleDrug(
     // Plans that don't file drug_deductible fall back to the year's
     // max — matches the pre-refactor behavior of assuming full ceiling
     // when data is missing (conservative for the beneficiary).
-    deductible: planDrugDeductible ?? PART_D_MAX_DEDUCTIBLE_2026,
+    deductible: planDrugDeductible ?? PART_D_MAX_DEDUCTIBLE,
     deductibleAppliesToTiers: phaseHit?.deductible_applies ? [tier] : [],
     tierCostShares: { [tier]: tierShares },
   };
@@ -676,7 +683,7 @@ function PhaseBreakdownRows({ timeline }: { timeline: DrugTimeline }) {
   };
   const dedLabel =
     timeline.deductibleFillCount > 0
-      ? `${timeline.deductibleFillCount} fill${timeline.deductibleFillCount === 1 ? '' : 's'} until $${PART_D_MAX_DEDUCTIBLE_2026} met`
+      ? `${timeline.deductibleFillCount} fill${timeline.deductibleFillCount === 1 ? '' : 's'} until $${PART_D_MAX_DEDUCTIBLE} met`
       : 'not applicable';
   const initLabel =
     timeline.initialFillCount > 0
@@ -686,7 +693,7 @@ function PhaseBreakdownRows({ timeline }: { timeline: DrugTimeline }) {
   const catLabel =
     timeline.catastrophicFillCount > 0
       ? `${timeline.catastrophicFillCount} fill${timeline.catastrophicFillCount === 1 ? '' : 's'} at $0`
-      : `after $${PART_D_OOP_CAP_2026} annual out-of-pocket`;
+      : `after $${PART_D_OOP_CAP} annual out-of-pocket`;
   return (
     <div style={{ marginTop: 8 }}>
       <Row phase="deductible" countLabel={dedLabel} total={timeline.deductibleTotalCost} />
@@ -1031,10 +1038,10 @@ function buildTalkingPoint(args: {
     const firstInitialCost = firstInitialCell?.liscappedCost ?? null;
     const cadenceLabel = fillsPerYear === 4 ? '90-day' : '30-day';
     if (hitDeductible && firstInitialCost != null) {
-      return `Your ${expandedDrug.name} hits the $${PART_D_MAX_DEDUCTIBLE_2026} deductible in January, then you pay ${fmtCents(firstInitialCost)} every ${cadenceLabel} fill during initial coverage.`;
+      return `Your ${expandedDrug.name} hits the $${PART_D_MAX_DEDUCTIBLE} deductible in January, then you pay ${fmtCents(firstInitialCost)} every ${cadenceLabel} fill during initial coverage.`;
     }
     if (t.everInCatastrophic) {
-      return `Your ${expandedDrug.name} crosses the $${PART_D_OOP_CAP_2026} out-of-pocket cap mid-year — Part D covers 100% after that.`;
+      return `Your ${expandedDrug.name} crosses the $${PART_D_OOP_CAP} out-of-pocket cap mid-year — Part D covers 100% after that.`;
     }
     if (firstInitialCost != null && firstInitialCost === 0) {
       return `Your ${expandedDrug.name} is $0 all year${expandedDrug.tier != null ? ` (Tier ${expandedDrug.tier}).` : '.'}`;

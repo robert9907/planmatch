@@ -35,7 +35,7 @@ import {
   getNonCommissionableSets,
 } from './_lib/non-commissionable.js';
 import { supabase } from './_lib/supabase.js';
-import { resolvePlanCatalogYear } from './_lib/plan-catalog-year.js';
+import { resolvePlanCatalogYear } from './library/planCatalogYear.js';
 
 type AppPlanType = 'MA' | 'MAPD' | 'DSNP' | 'CSNP' | 'ISNP' | 'PDP' | 'MEDSUPP';
 

@@ -16,7 +16,7 @@
 // no longer files one.
 
 import type { BrainScore } from './plan-brain-types';
-import { PART_D_OOP_CAP_2026 } from './plan-brain-utils';
+import { PART_D_OOP_CAP } from './plan-brain-utils';
 import type { PlanBenefitRow, PmPlanRow } from './brain-foreign-types';
 import type { AnnualCostEstimate } from './utilization-model';
 
@@ -557,7 +557,7 @@ export function applyDualEligibleCostAdjustment(
       return { ...drug, annualCost: yearly };
     });
     // TrOOP backstop — Part D free above $2,100 for everyone (IRA §11201).
-    adjTotalAnnualDrug = Math.min(runningTotal, PART_D_OOP_CAP_2026);
+    adjTotalAnnualDrug = Math.min(runningTotal, PART_D_OOP_CAP);
     adjRac.drugCost = adjTotalAnnualDrug;
   }
 
