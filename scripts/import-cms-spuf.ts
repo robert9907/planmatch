@@ -49,6 +49,10 @@ interface Args {
   skipPromote: boolean;
   keepZip: boolean;
   skipSpecs: string[]; // resolved skip list (from --skip or DEFAULT_SKIP)
+  /** Finish an already-staged release: skip download + load, promote only. */
+  promoteOnly: boolean;
+  /** Which release to promote. Required with --promote-only. */
+  releaseId: number | null;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -58,6 +62,8 @@ function parseArgs(argv: string[]): Args {
     skipPromote: false,
     keepZip: false,
     skipSpecs: [...DEFAULT_SKIP],
+    promoteOnly: false,
+    releaseId: null,
   };
   let skipExplicit = false;
   for (const arg of argv) {
@@ -75,6 +81,8 @@ function parseArgs(argv: string[]): Args {
       case 'force':           out.force = true; break;
       case 'dry-run':         out.dryRun = true; break;
       case 'skip-promote':    out.skipPromote = true; break;
+      case 'promote-only':    out.promoteOnly = true; break;
+      case 'release-id':      out.releaseId = Number(val); break;
       case 'keep-zip':        out.keepZip = true; break;
       case 'skip':
         // --skip=     → load everything (override default)
@@ -119,6 +127,10 @@ Optional:
   --force                              Re-import even if SHA matches existing release
   --dry-run                            Parse and validate, no DB writes
   --skip-promote                       Load landing tables but don't swap pm_*_v2
+  --promote-only --release-id=N        Promote an ALREADY-STAGED release into
+                                       pm_*_v2. No download, no re-load. Use when
+                                       an import died after the COPY phase and
+                                       left the release stuck at status='loading'.
   --skip=spec1,spec2                   Skip these file specs. Default: ${DEFAULT_SKIP.join(',')}
                                        Pass --skip= to load everything.
                                        Names: plan_information, basic_drugs, beneficiary_cost,
@@ -131,11 +143,128 @@ Optional:
 
 // ─── Main ─────────────────────────────────────────────────────────────
 
+/**
+ * Promote a release whose landing rows are already staged.
+ *
+ * Verifies before touching anything: the release must exist, must not already
+ * be promoted, and must actually have rows in the landing tables. A release
+ * marked 'loading' with NO staged rows died during the COPY phase, not after
+ * it — promoting that would publish a partial formulary, so it is refused and
+ * the operator is sent to a full re-import instead.
+ */
+async function promoteOnly(releaseId: number, dryRun: boolean): Promise<void> {
+  const release = await withClient(async (c) => {
+    const { rows } = await c.query(
+      `SELECT release_id, plan_year, release_kind, release_date, status,
+              imported_at, promoted_at
+         FROM cms_spuf_releases
+        WHERE release_id = $1`,
+      [releaseId],
+    );
+    return rows[0] as
+      | {
+          release_id: number;
+          plan_year: number;
+          release_kind: string;
+          release_date: string;
+          status: string;
+          imported_at: string | null;
+          promoted_at: string | null;
+        }
+      | undefined;
+  });
+
+  if (!release) throw new Error(`No release with release_id=${releaseId}`);
+
+  console.log(
+    `[promote-only] release_id=${release.release_id} plan_year=${release.plan_year} ` +
+      `kind=${release.release_kind} date=${release.release_date} status=${release.status}`,
+  );
+
+  if (release.promoted_at) {
+    console.log(
+      `[promote-only] Already promoted at ${release.promoted_at}. ` +
+        `Re-promoting is safe but pointless unless the landing rows changed.`,
+    );
+  }
+
+  // Count what is actually staged, per landing table. This doubles as the
+  // row_counts the interrupted run never got to write.
+  const tables = [...new Set(ALL_FILES.map((f) => f.landingTable))];
+  const rowCounts: Record<string, number> = {};
+  await withClient(async (c) => {
+    for (const t of tables) {
+      const { rows } = await c.query(
+        `SELECT count(*)::bigint AS n FROM ${t} WHERE release_id = $1`,
+        [releaseId],
+      );
+      rowCounts[t] = Number(rows[0].n);
+    }
+  });
+
+  console.log('[promote-only] Staged rows:');
+  for (const [t, n] of Object.entries(rowCounts)) {
+    console.log(`        ${t}: ${n.toLocaleString()}`);
+  }
+
+  const staged = Object.values(rowCounts).reduce((a, b) => a + b, 0);
+  if (staged === 0) {
+    throw new Error(
+      `release_id=${releaseId} has no landing rows. It died during the COPY ` +
+        `phase, not after it — re-import with --force rather than promoting ` +
+        `a partial load.`,
+    );
+  }
+
+  if (dryRun) {
+    console.log('[promote-only] DRY RUN — stopping before promote.');
+    return;
+  }
+
+  // Record the 'loaded' state the interrupted run never wrote, so the release
+  // row stops lying about where it got to even if the promote then fails.
+  await setReleaseStatus(releaseId, 'loaded', { rowCounts });
+
+  console.log('[promote-only] Promoting to pm_*_v2 (single transaction)…');
+  const t0 = Date.now();
+  const { counts } = await promote({ releaseId, planYear: release.plan_year });
+  console.log(
+    `[promote-only] Promotion complete in ${((Date.now() - t0) / 1000).toFixed(1)}s:`,
+  );
+  for (const [t, n] of Object.entries(counts)) {
+    console.log(`        ${t}: ${n.toLocaleString()}`);
+  }
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.dryRun) {
     console.log('[main] DRY RUN — no DB writes');
+  }
+
+  // 0) --promote-only: finish a release whose landing rows are already in.
+  //
+  // The load phase COPYs each file in its own auto-committed transaction and
+  // only then writes status='loaded' + row_counts. So a run killed between
+  // the last COPY and that write (OOM, closed terminal, laptop asleep — a
+  // 2.5 GB import takes a while) leaves a release with COMPLETE staging rows,
+  // status stuck at 'loading', row_counts null and error null. Nothing threw,
+  // so nothing was recorded as failed.
+  //
+  // Without this flag the only way forward is --force, which purges the
+  // landing rows and re-downloads and re-loads 1.1M+ rows to rebuild state
+  // that is already correct in the database. This promotes what is there.
+  //
+  // promote() is idempotent per plan year — DELETE FROM pm_*_v2 WHERE
+  // plan_year, then INSERT from the given release, in one transaction — so
+  // re-running is safe.
+  if (args.promoteOnly) {
+    if (args.releaseId === null || !Number.isFinite(args.releaseId)) {
+      throw new Error('--promote-only requires --release-id=N');
+    }
+    await promoteOnly(args.releaseId, args.dryRun);
+    return;
   }
 
   // 1) Resolve the release we're importing.
