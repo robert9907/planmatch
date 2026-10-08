@@ -366,6 +366,10 @@ function buildMetrics(args: {
   annualDrugByPlanId: Record<string, number | null>;
   drugsCoveredByPlanId: Record<string, number>;
   drugsTotalByPlanId: Record<string, number>;
+  /** Client's medications, in intake order — one H2H row each. */
+  medications: ReadonlyArray<{ rxcui?: string; name: string }>;
+  /** Per-plan per-drug breakdown from the brain (tier, $/mo, $/yr). */
+  drugBreakdownByPlanId: Record<string, ReadonlyArray<DrugRow>>;
 }): Metric[] {
   const {
     rxcuis,
@@ -373,7 +377,40 @@ function buildMetrics(args: {
     annualDrugByPlanId,
     drugsCoveredByPlanId,
     drugsTotalByPlanId,
+    medications,
+    drugBreakdownByPlanId,
   } = args;
+  // One row per client drug: what that drug costs on each plan. Matched
+  // to the brain's breakdown by rxcui, then by name. A plan the brain
+  // didn't price shows "Not priced" — never a guessed $0.
+  const drugRowFor = (p: Plan, med: { rxcui?: string; name: string }): DrugRow | null => {
+    const rows = drugBreakdownByPlanId[p.id];
+    if (!rows || rows.length === 0) return null;
+    return (
+      (med.rxcui ? rows.find((r) => r.rxcui === med.rxcui) : undefined) ??
+      rows.find((r) => r.name.toLowerCase() === med.name.toLowerCase()) ??
+      null
+    );
+  };
+  const perDrugMetrics: Metric[] = medications.map((med, i) => ({
+    key: `med_${i}`,
+    label: med.name,
+    format: (p: Plan) => {
+      const r = drugRowFor(p, med);
+      if (!r) return 'Not priced';
+      if (r.costUnavailable) return 'Formulary not yet published';
+      if (!r.covered) return 'Not covered';
+      const tier = r.tier != null ? `Tier ${r.tier}` : 'Covered';
+      const mo = r.monthlyCopay != null ? ` · $${r.monthlyCopay}/mo` : '';
+      return `${tier}${mo} · ${fmt(r.annualCost)}/yr`;
+    },
+    numeric: (p: Plan) => {
+      const r = drugRowFor(p, med);
+      return r && r.covered && !r.costUnavailable ? r.annualCost : null;
+    },
+    higherIsBetter: false,
+    group: 'drug_coverage' as MetricGroup,
+  }));
   const drug = (p: Plan) => annualDrugByPlanId[p.id] ?? null;
   const drugsCovered = (p: Plan) => drugsCoveredByPlanId[p.id];
   const drugsTotal = (p: Plan) => drugsTotalByPlanId[p.id];
@@ -424,6 +461,7 @@ function buildMetrics(args: {
       higherIsBetter: true,
       group: 'drug_coverage',
     },
+    ...perDrugMetrics,
     {
       key: 'providers',
       label: 'Doctors in-network',
@@ -747,8 +785,18 @@ export function CompareScreen({
         annualDrugByPlanId,
         drugsCoveredByPlanId: drugsCoveredByPlanId ?? {},
         drugsTotalByPlanId: drugsTotalByPlanId ?? {},
+        medications,
+        drugBreakdownByPlanId: drugBreakdownByPlanId ?? {},
       }),
-    [rxcuis, providers, annualDrugByPlanId, drugsCoveredByPlanId, drugsTotalByPlanId],
+    [
+      rxcuis,
+      providers,
+      annualDrugByPlanId,
+      drugsCoveredByPlanId,
+      drugsTotalByPlanId,
+      medications,
+      drugBreakdownByPlanId,
+    ],
   );
 
   // Union of every plan currently on the Compare board (scored + bench)
