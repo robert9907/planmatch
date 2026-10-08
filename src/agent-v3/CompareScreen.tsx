@@ -1572,7 +1572,6 @@ export function CompareScreen({
       <SummaryBar
         headline={topChallenger}
         savings={headlineSavings}
-        onEnroll={recommendAndAdvance(topChallenger)}
       />
 
       {(() => {
@@ -2884,14 +2883,16 @@ function DrugBreakdown({
   variant = 'full',
 }: {
   breakdown: ReadonlyArray<DrugRow>;
-  /** 'full' for slot cards (per-med rows + total); 'compact' for
-   *  the 220px bench cards (single-line summary). */
-  variant?: 'full' | 'compact';
+  /** 'full' = wide 4-column rows; 'card' = the 4-up board cards
+   *  (name + tier · $/mo per row, annual total at the bottom);
+   *  'compact' = the 220px bench cards (single-line summary). */
+  variant?: 'full' | 'card' | 'compact';
 }) {
   if (breakdown.length === 0) return null;
   const covered = breakdown.filter((d) => d.covered).length;
   const total = breakdown.reduce((sum, d) => sum + d.annualCost, 0);
   const isCompact = variant === 'compact';
+  const isCard = variant === 'card';
   // Every drug lacks a published formulary → no honest total exists. The total
   // line reads "not yet published" instead of a summed figure or "0/N covered".
   const allUnavail = breakdown.every((d) => d.costUnavailable);
@@ -2995,6 +2996,37 @@ function DrugBreakdown({
           const copayLabel =
             d.monthlyCopay != null ? `$${d.monthlyCopay}/mo` : '—';
           const annualLabel = `${fmt(d.annualCost)}/yr`;
+          if (isCard) {
+            return (
+              <div
+                key={d.rxcui || d.name}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) auto',
+                  alignItems: 'baseline',
+                  gap: 6,
+                  fontSize: 11,
+                  color: d.covered ? TEXT : '#991b1b',
+                }}
+              >
+                <span
+                  style={{
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    minWidth: 0,
+                  }}
+                  title={d.name}
+                >
+                  {d.name}
+                </span>
+                <span style={{ fontFamily: FONT_NUM, fontSize: 10, whiteSpace: 'nowrap' }}>
+                  {d.covered ? `${tierLabel} · ${copayLabel}` : 'Not covered'}
+                </span>
+              </div>
+            );
+          }
           return (
             <div
               key={d.rxcui || d.name}
@@ -3221,7 +3253,6 @@ function SlotCell({
   //   • Full 50-row metric list (see H2HView for the exhaustive view)
   //   • ProviderList, DrugCostCard, WhyThisPlan
   //   • SBF external link
-  //   • Enroll button (still available on SummaryBar below the grid)
 
   const highlight = isBestMatch;
   const rankLabel = isBaseline
@@ -3632,6 +3663,52 @@ function SlotCell({
         />
       </div>
 
+      {/* Client's medications on this plan — tier + monthly copay per
+          drug, annual total. When the brain didn't score this plan
+          (e.g. dragged in from the bench) the meds still list, marked
+          not priced, so the card never silently drops them. */}
+      {medications.length > 0 &&
+        (drugBreakdown != null && drugBreakdown.length > 0 ? (
+          <div style={{ margin: '0 -10px' }}>
+            <DrugBreakdown breakdown={drugBreakdown} variant="card" />
+          </div>
+        ) : (
+          <div
+            style={{
+              borderTop: `1px solid ${T.line}`,
+              paddingTop: 8,
+              fontSize: 11,
+              color: MUTED,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: 0.5,
+                textTransform: 'uppercase',
+                marginBottom: 4,
+              }}
+            >
+              Drug costs
+            </div>
+            {medications.map((m, idx) => (
+              <div
+                key={m.rxcui || m.name || idx}
+                style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}
+              >
+                <span
+                  style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}
+                  title={m.name}
+                >
+                  {m.name}
+                </span>
+                <span style={{ fontStyle: 'italic', whiteSpace: 'nowrap' }}>not priced</span>
+              </div>
+            ))}
+          </div>
+        ))}
+
       {/* Action block — stacked, one tier per row.
           Was: three equal-width buttons in three different treatments
           (mint tint / navy fill / mint outline), with "Summary of
@@ -3690,9 +3767,9 @@ function SlotCell({
       </div>
 
       {/* Compare v2: the params below are still supplied by the
-          callsite even though the reskin doesn't render them (Enroll
-          moved to SummaryBar; ProviderList / DrugCostCard / WhyThisPlan
-          hidden pending the Quick Preview drawer). Reference them here
+          callsite even though the reskin doesn't render them
+          (ProviderList / DrugCostCard / WhyThisPlan hidden pending the
+          Quick Preview drawer). Reference them here
           so noUnusedLocals stays happy — cheap and reversible. */}
         <span
           style={{ display: 'none' }}
@@ -4171,14 +4248,14 @@ function MetricRow({
 }
 
 // ── Summary bar (grid mode footer) ─────────────────────────────
+// Info only — Enroll lives on each board card, so this bar no longer
+// carries a second, plan-implicit Enroll button.
 function SummaryBar({
   headline,
   savings,
-  onEnroll,
 }: {
   headline: Plan | null;
   savings: number;
-  onEnroll: () => void;
 }) {
   if (!headline) return null;
   return (
@@ -4244,9 +4321,6 @@ function SummaryBar({
           </div>
         </div>
       )}
-      <Btn tier="primary" size="lg" onClick={onEnroll}>
-        Enroll →
-      </Btn>
     </div>
   );
 }
