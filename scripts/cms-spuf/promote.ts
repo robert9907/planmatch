@@ -290,14 +290,23 @@ export async function promote(opts: {
     // from pm_formulary_v2 — to detect MA-only plans (no Part D)
     // without paginating millions of formulary rows. Refresh it here
     // every promote so it stays consistent with the active release.
-    // TRUNCATE + INSERT inside the transaction keeps it atomic with
-    // the v2 swap.
+    //
+    // DELETE-by-plan_year (NOT TRUNCATE) + INSERT inside the transaction
+    // keeps it atomic with the v2 swap while leaving the OTHER plan year's
+    // rows in place. TRUNCATE wiped every year, so promoting the CY2027
+    // shelf would have destroyed the 2026 rows AEP still needs live.
+    // pm_mapd_plan_set is keyed (plan_year, contract_id, plan_id).
 
-    await c.query(`TRUNCATE pm_mapd_plan_set`);
-    const mpr = await c.query(`
-      INSERT INTO pm_mapd_plan_set (contract_id, plan_id)
-      SELECT DISTINCT contract_id, plan_id FROM pm_formulary_v2
-    `);
+    await c.query(`DELETE FROM pm_mapd_plan_set WHERE plan_year = $1`, [planYear]);
+    const mpr = await c.query(
+      `
+      INSERT INTO pm_mapd_plan_set (plan_year, contract_id, plan_id)
+      SELECT DISTINCT $1::int, contract_id, plan_id
+      FROM pm_formulary_v2
+      WHERE plan_year = $1
+    `,
+      [planYear],
+    );
     counts.pm_mapd_plan_set = mpr.rowCount ?? 0;
 
     // ─── Release status flip ──────────────────────────────────────────
