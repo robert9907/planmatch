@@ -291,6 +291,25 @@ interface DrugRow {
   costUnavailable?: boolean;
 }
 
+// Per-fill cost label for one drug on one plan. Uses the brain's
+// per-drug copay when it has one; when it's null (coinsurance tiers,
+// and some plans where the library leaves it blank) falls back to the
+// SAME plan's filed CMS cost-share for that drug's tier — the numbers
+// the Rx Tier rows show. Copay → "$X/mo", coinsurance → "N%".
+// Never borrowed from another plan; null when nothing is filed.
+function drugMonthlyLabel(plan: Plan | null | undefined, r: DrugRow): string | null {
+  if (r.monthlyCopay != null) return `$${r.monthlyCopay}/mo`;
+  if (!plan || r.tier == null) return null;
+  const tiers = plan.benefits?.rx_tiers as unknown as
+    | Record<string, { copay: number | null; coinsurance: number | null } | undefined>
+    | undefined;
+  const cs = tiers?.[`tier_${r.tier}`];
+  if (!cs) return null;
+  if (cs.copay != null) return `$${cs.copay}/mo`;
+  if (cs.coinsurance != null) return `${cs.coinsurance}%`;
+  return null;
+}
+
 // Old per-plan coveredCount(plan, rxcuis) read plan.formulary[rxcui],
 // which is always `{}` in agent-v3 (plan.formulary is populated lazily
 // via /api/formulary and nothing re-hydrates back onto the Plan object).
@@ -401,7 +420,8 @@ function buildMetrics(args: {
       if (r.costUnavailable) return 'Formulary not yet published';
       if (!r.covered) return 'Not covered';
       const tier = r.tier != null ? `Tier ${r.tier}` : 'Covered';
-      const mo = r.monthlyCopay != null ? ` · $${r.monthlyCopay}/mo` : '';
+      const moLabel = drugMonthlyLabel(p, r);
+      const mo = moLabel ? ` · ${moLabel}` : '';
       return `${tier}${mo} · ${fmt(r.annualCost)}/yr`;
     },
     numeric: (p: Plan) => {
@@ -2929,8 +2949,12 @@ function ProviderList({
 function DrugBreakdown({
   breakdown,
   variant = 'full',
+  plan,
 }: {
   breakdown: ReadonlyArray<DrugRow>;
+  /** The plan these rows are for — lets a blank per-drug copay fall
+   *  back to this plan's filed tier cost-share. */
+  plan?: Plan | null;
   /** 'full' = wide 4-column rows; 'card' = the 4-up board cards
    *  (name + tier · $/mo per row, annual total at the bottom);
    *  'compact' = the 220px bench cards (single-line summary). */
@@ -3041,8 +3065,7 @@ function DrugBreakdown({
             );
           }
           const tierLabel = d.tier != null ? `Tier ${d.tier}` : 'Not covered';
-          const copayLabel =
-            d.monthlyCopay != null ? `$${d.monthlyCopay}/mo` : '—';
+          const copayLabel = drugMonthlyLabel(plan, d) ?? '—';
           const annualLabel = `${fmt(d.annualCost)}/yr`;
           if (isCard) {
             return (
@@ -3718,7 +3741,7 @@ function SlotCell({
       {medications.length > 0 &&
         (drugBreakdown != null && drugBreakdown.length > 0 ? (
           <div style={{ margin: '0 -10px' }}>
-            <DrugBreakdown breakdown={drugBreakdown} variant="card" />
+            <DrugBreakdown breakdown={drugBreakdown} variant="card" plan={plan} />
           </div>
         ) : (
           <div
