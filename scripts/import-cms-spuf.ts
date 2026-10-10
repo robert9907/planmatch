@@ -397,6 +397,21 @@ async function main(): Promise<void> {
         return loadFile({ client, spec, zipPath, releaseId, workDir });
       });
       if (!result.skipped) rowCounts[spec.landingTable] = result.rows;
+      // Fail loud on a non-skipped file that loaded ZERO rows. loadFile returns
+      // skipped=true when a file is legitimately absent (a quarterly-only file
+      // in a monthly bundle) — that is fine. skipped=false with rows=0 means the
+      // file WAS present in the ZIP but produced no data: a silent-zero that used
+      // to be recorded as "0 loaded" and then promoted anyway. That is exactly
+      // how pm_pricing_v2 / pm_pharmacy_network_v2 ended up empty on an otherwise
+      // green release. Treat it as a hard load failure so the release is marked
+      // failed (and the watcher escalates it) instead of publishing a formulary
+      // missing an entire file.
+      if (!result.skipped && result.rows === 0) {
+        throw new Error(
+          `${spec.name} (${spec.landingTable}): present in ZIP but loaded 0 rows. ` +
+            `Refusing to promote a partial release — check the inner-zip extract and header.`,
+        );
+      }
     }
     await setReleaseStatus(releaseId, 'loaded', { rowCounts });
   } catch (err) {
