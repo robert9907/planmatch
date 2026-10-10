@@ -123,33 +123,18 @@ anon+authenticated by default. RLS is the only gate. See
 
 - Every `git commit`: the typecheck must pass.
 - Every `git push`: typecheck must pass, on a clean tree, with the pushed branch checked out.
-- CMS ground truth runs against the branch's Vercel preview URL before any merge to main (PLAN_MATCH_BASE_URL=<preview>). The standing target is **219/228 with the 6 B8b-accepted deviations counted** — that is a passing run. Anything below 219 is a regression and must be investigated. 228/228 is NOT the goal and must never be reached by changing the validator, the fixtures, or the tolerances (the remaining 9 are known fixture-stale failures — see "Known ground-truth failures" below).
+- CMS ground truth runs against the branch's Vercel preview URL before any merge to main (PLAN_MATCH_BASE_URL=<preview>). The standing target is **228/228 with the 6 B8b-accepted deviations counted** (as of 2026-10-10) — that is a passing run. Anything below 228 is a regression and must be investigated. Never reach a passing score by changing the validator, the fixtures, the grading, or the tolerances to match the code — see "Ground truth & fixtures" below.
 - A push that changes brain paths also needs a passing full audit (secret-shopper suite) on that exact commit: `node scripts/gate/full-audit.mjs`.
 - Dry run anytime: `node scripts/gate/ship-gate.mjs manual`.
 - If a gate blocks you, fix the cause. Never use `--no-verify`, change `core.hooksPath`, deploy with the Vercel CLI, or edit gate files or validators to get past a failure. Those trigger an approval prompt for Rob.
 - Report results with the real numbers from the output, including failures. Never summarize a failing run as passing.
 
-## Known ground-truth failures — do not "fix" these
+## Ground truth & fixtures
 
-**Rob's ruling (Sep 2026):** the graded numeric copay is the real filed copay a senior actually pays, **never the published range's low end**. Grading on the low end scores 228/228 but would show a $0 specialist copay on 188 plans and feed $0 into Gate 4 — a lie that reads as free care. Correct copay beats the score. The range stays display-only (`copay_low`/`copay_high`, `coinsurance_low`/`coinsurance_high`).
+As of **2026-10-10, ground truth is 228/228 with 6 accepted B8b deviations** — a passing run. This was reached by re-capturing the 7 previously-stale copay/coinsurance fixtures from medicare.gov Plan Finder (they had held the $0 range floor captured 2026-06-27).
 
-These 9 fixtures fail on purpose. The value we serve is correct; the fixture holds a stale range floor captured before the ruling. **Do not revert the grading to make them green.**
+**Rob's ruling (Sep 2026):** the graded numeric copay is the real filed copay a senior actually pays — **the high end of the filed range, never the published range's $0 low end**. Grading on the low end would score green cosmetically but show a $0 specialist copay on ~188 plans and feed $0 into Gate 4 — a lie that reads as free care. The range stays display-only (`copay_low`/`copay_high`, `coinsurance_low`/`coinsurance_high`). The grading rule lives in `api/plans.ts` `costShareFor`: `specialist`/`urgent_care` copay and `asc` copay (`HIGH_END_COPAY_CATEGORIES`) use the real filed / high-end value; `LOW_END_COINSURANCE_CATEGORIES` is intentionally empty (no category grades coinsurance on a cms_pbp low).
 
-| Field | Plan | We serve | Why the fixture disagrees |
-|---|---|---|---|
-| specialist.copay | H3146-004 | **45** | fixture holds the $0 range floor |
-| specialist.copay | H5253-189 | **25** | fixture holds the $0 range floor |
-| urgent_care.copay | H5253-041 | **40** | fixture holds the $0 range floor |
-| urgent_care.copay | H5453-017 | **40** | fixture holds the $0 range floor |
-| urgent_care.copay | H5253-189 | **65** | fixture holds the $0 range floor |
-| urgent_care.coinsurance | H5453-016 | **20%** | fixture holds the range floor (cms_pbp 0% low of a 0–20% range) |
-| ambulance.coinsurance | H5453-016 | **45%** | fixture holds the range floor (cms_pbp 0% low; ground/air split) |
-| outpatient_surgery_asc.coinsurance | H5253-041 | **20%** | cms_pbp filed a bare 0 with no copay behind it — an empty filing, not a real cost-share |
-| outpatient_surgery_asc.coinsurance | H5453-016 | **30%** | cms_pbp filed a bare 0 with no copay behind it — an empty filing, not a real cost-share |
+**Never "fix" a ground-truth failure by changing the validator, the grading, or the tolerances to make it pass.**
 
-**The rule that produced them** (in `api/plans.ts`, `costShareFor`):
-- `specialist` and `urgent_care` copay use the real filed value on the winning row.
-- `asc` copay uses the cms_pbp `copay_max` (`HIGH_END_COPAY_CATEGORIES`).
-- No category grades coinsurance on a cms_pbp low: `LOW_END_COINSURANCE_CATEGORIES` is intentionally empty.
-
-**The only legitimate way these turn green:** the fixtures were captured 2026-06-27. Re-capture them from Medicare Plan Finder. Do not adjust the fixtures to match the code, and do not change the code to match the fixtures.
+**Re-capturing a fixture from medicare.gov is the only legitimate way to turn a failure green — and only when medicare.gov matches what we serve.** Pull the plan's current value from medicare.gov Plan Finder (`~/Code/plan-match/scripts/scrape-medicare-gov.ts`, e.g. `pnpm mg:scrape --fips NNNNN --plan H1234-567`). If medicare.gov's filed value equals our served value, update the fixture. **If medicare.gov disagrees with what we serve, do NOT update the fixture — flag it to Rob as a real data bug** (plan, field, our value, medicare.gov's value).
