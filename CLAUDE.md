@@ -11,6 +11,33 @@ Never edit that folder from this session — see
 - Owner: Rob Simm — solo NC Medicare broker, NPN #10447418
 - Hosting: Vercel
 
+## Two-repo trap — read before any "it's not in the codebase" claim
+
+Plan Match is split across TWO similarly-named repos. A grep in the wrong one
+returns "not found" and reads like a ghost. This has cost multiple sessions —
+e.g. `not_in_network` "appears nowhere in the repo" and PR #25 called
+nonexistent, when both were real in the OTHER repo.
+
+- **robert9907/planmatch** (`~/planmatch/planmatch`) — THIS repo, the AGENT
+  tool. Only reads/PATCHes `provider_verifications` via `/api/*`. Small (≤6 PRs).
+- **robert9907/plan-match** (`~/Code/plan-match`) — CONSUMER widget. Owns the
+  row INSERTs and the prov-net scraper + status markers. Large (50+ PRs).
+
+Before concluding something isn't in the code, grep BOTH checkouts and check
+PRs in BOTH GitHub repos. The writer of a `provider_verifications` value is
+almost always in the consumer repo, not here.
+
+### provider_verifications has TWO status vocabularies — never conflate them
+- `provider_verifications.status` (DB column, CHECK-constrained):
+  `unverified | researching | verified | not_in_network`. The broker queue /
+  scraper verdict state.
+- brain `providerNetworkState`: `in_network | out_of_network | unverified`
+  (+ display compat `all_in | partial | all_out | unknown`) — a per-plan
+  RANKING signal derived from `pm_provider_network_cache`, a DIFFERENT table.
+  `in_network` / `pending` / `unknown` are NOT valid for the status column.
+
+Conflating these is what produced the "zero verified is impossible" confusion.
+
 ## Databases
 
 - **plan-match-prod** (`rpcbrkmvalvdmroqzpaq`) — shared with consumer app.
