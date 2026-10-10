@@ -502,7 +502,7 @@ function ScoreCell({
           color: fg,
         }}
       >
-        {text}
+        {color === 'red' ? <span style={RED_TINT}>{text}</span> : text}
       </div>
       {subtext && (
         <div
@@ -1189,3 +1189,13 @@ const CELL_HEADER_PLAN: CSSProperties = {
 // Color-carries-the-signal palette (no pill backgrounds).
 const SCORE_GREEN_FG = '#7FE0C4';
 const SCORE_RED_FG = '#fca5a5';
+// Red-row treatment: soft red tint behind the number (dark-mode system
+// red #FF453A at 14% + hairline ring), matching the consumer compare.
+const RED_TINT: CSSProperties = {
+  display: 'inline-block',
+  background: 'rgba(255,69,58,0.14)',
+  boxShadow: 'inset 0 0 0 0.5px rgba(255,105,97,0.28)',
+  color: '#FFB4AE',
+  borderRadius: 7,
+  padding: '1px 8px',
+};
