@@ -61,7 +61,7 @@
   "fixtures": [
     {
       "id": "H5253-041-000",
-      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27; specialist/UC/ambulance re-captured 2026-10-10 from medicare.gov (served value = CMS filed high end of range)",
       "state": "NC",
       "county": "Durham",
       "carrier": "UnitedHealthcare",
@@ -82,7 +82,7 @@
             "coinsurance": 0
           },
           "urgent_care": {
-            "copay": 0,
+            "copay": 40,
             "coinsurance": null
           },
           "emergency": {
@@ -493,7 +493,7 @@
     },
     {
       "id": "H3146-004-000",
-      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27; specialist/UC/ambulance re-captured 2026-10-10 from medicare.gov (served value = CMS filed high end of range)",
       "state": "NC",
       "county": "Durham",
       "carrier": "Aetna Medicare",
@@ -510,7 +510,7 @@
             "coinsurance": null
           },
           "specialist": {
-            "copay": 0,
+            "copay": 45,
             "coinsurance": null
           },
           "urgent_care": {
@@ -601,7 +601,7 @@
     },
     {
       "id": "H5453-016-000",
-      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27; specialist/UC/ambulance re-captured 2026-10-10 from medicare.gov (served value = CMS filed high end of range)",
       "state": "GA",
       "county": "Bulloch",
       "carrier": "Devoted Health",
@@ -623,7 +623,7 @@
           },
           "urgent_care": {
             "copay": null,
-            "coinsurance": 0
+            "coinsurance": 20
           },
           "emergency": {
             "copay": 115,
@@ -663,7 +663,7 @@
           },
           "ambulance": {
             "copay": null,
-            "coinsurance": 0
+            "coinsurance": 45
           },
           "telehealth": {
             "copay": null,
@@ -709,7 +709,7 @@
     },
     {
       "id": "H5453-017-000",
-      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27; specialist/UC/ambulance re-captured 2026-10-10 from medicare.gov (served value = CMS filed high end of range)",
       "state": "GA",
       "county": "Bulloch",
       "carrier": "Devoted Health",
@@ -730,7 +730,7 @@
             "coinsurance": null
           },
           "urgent_care": {
-            "copay": 0,
+            "copay": 40,
             "coinsurance": null
           },
           "emergency": {
@@ -817,7 +817,7 @@
     },
     {
       "id": "H5253-189-000",
-      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27",
+      "verifiedOn": "CMS source 2026-03 + extracted 2026-06-27; specialist/UC/ambulance re-captured 2026-10-10 from medicare.gov (served value = CMS filed high end of range)",
       "state": "NC",
       "county": "Alamance",
       "carrier": "UnitedHealthcare",
@@ -834,11 +834,11 @@
             "coinsurance": null
           },
           "specialist": {
-            "copay": 0,
+            "copay": 25,
             "coinsurance": null
           },
           "urgent_care": {
-            "copay": 0,
+            "copay": 65,
             "coinsurance": null
           },
           "emergency": {
