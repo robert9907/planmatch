@@ -31,6 +31,8 @@ import { Container, Nav } from './atoms';
 import { annualEstimate } from './planDisplay';
 import type { ComplianceSnapshot, AgentV3SessionSummary } from './agentbaseSync';
 import { buildComplianceSnapshot } from './EnrollScreen';
+import { ProviderNetworkProof } from './ProviderNetworkProof';
+import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear';
 
 // Mirrors EnrollScreen.tsx:24 — kept as a duplicated constant rather
 // than a shared import to keep this screen's gate self-contained.
@@ -77,6 +79,9 @@ export function ComplianceScreen({
   const disclaimerTimestamps = useSession((s) => s.disclaimerTimestamps);
   const resetSession = useSession((s) => s.resetSession);
   const recommendationId = useSession((s) => s.recommendation);
+  const providers = useSession((s) => s.providers);
+  // Same resolver the plan list uses — the year of the plans on screen.
+  const catalogYear = resolvePlanCatalogYear();
 
   const [saveStatus, setSaveStatus] = useState<
     'idle' | 'saving' | 'saved' | 'error'
@@ -250,6 +255,16 @@ export function ComplianceScreen({
           </div>
         )}
       </div>
+
+      {recommendedPlan ? (
+        <ProviderNetworkProof
+          plan={recommendedPlan}
+          providers={providers}
+          state={client.state ?? null}
+          county={client.county ?? null}
+          planYear={catalogYear}
+        />
+      ) : null}
 
       {/* Verbatim disclaimers — confirmed earlier on the Disclaimers
           screen (screen 2). Show as read-only status so the broker
@@ -447,7 +462,7 @@ export function ComplianceScreen({
                       const sessionSummary: AgentV3SessionSummary = {
                         zip: client.zip,
                         county: client.county,
-                        planYear: 2026,
+                        planYear: catalogYear,
                         estimatedAnnualCost: candAnnual ?? undefined,
                       };
                       const r = await (onRecommend?.(recommendedPlan, {

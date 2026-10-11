@@ -9,6 +9,7 @@
 // (AgentBase) makes CMS audit + duplicate-contact avoidance simpler.
 
 import { useState } from 'react';
+import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear';
 import type { Plan } from '@/types/plans';
 import { useSession } from '@/hooks/useSession';
 import { Card, Container, Header, Nav, fmt } from './atoms';
@@ -263,7 +264,7 @@ export function EnrollScreen({
                 const sessionSummary: AgentV3SessionSummary = {
                   zip: client.zip,
                   county: client.county,
-                  planYear: 2026,
+                  planYear: resolvePlanCatalogYear(),
                   estimatedAnnualCost: candAnnual ?? undefined,
                 };
                 const r = await (onRecommend?.(recommendedPlan, { compliance, sessionSummary }) ??

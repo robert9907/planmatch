@@ -108,10 +108,10 @@ anon+authenticated by default. RLS is the only gate. See
 
 ## Compliance text — exact, never paraphrased
 
-- TPMO disclaimer, CMS simplified form only:
-  > We do not offer every plan available in your area. Any information we provide is limited to those plans we do offer in your area. Please contact Medicare.gov or 1-800-MEDICARE (TTY 1-877-486-2048), 24 hours a day/7 days a week to get information on all of your options.
+- TPMO disclaimer — CY2027 codified standardized content, **42 CFR 422.2267(e)(41) / 423.2267(e)(41)**. Because Rob does **not** sell every plan in the area, the **count variant is REQUIRED** (not the "any information we provide is limited…" all-plans form). Rob's ruling, Sep 2026 — supersedes the old "never use the count variant" rule; do not reapply that one. The wording is fixed standardized content; only the organization count (N) and product count (M) may vary, and there is **no SHIP referral**:
+  > We do not offer every plan available in your area. Currently we represent N organizations which offer M products in your area. Please contact Medicare.gov or 1-800-MEDICARE to get information on all of your options.
 
-  Never use the variant that states a count of organizations or products.
+  N and M are scoped to plans Rob is appointed and plan-year-certified to sell in the displayed county. The sentence lives in `src/lib/compliance.ts`.
 - Phone number: (828) 761-3326. Never 3324. Fix any instance you see and mention it.
 - 2026 Medicare figures must be CMS-confirmed. A $257 Part B deductible or $1,676 Part A deductible is stale and counts as a failure.
 

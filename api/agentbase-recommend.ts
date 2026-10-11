@@ -33,6 +33,7 @@ import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
 import { upsertMedicationsForClient, upsertProvidersForClient } from './_lib/agentbaseDedup.js';
 import { requireSession } from './_lib/require-session.js';
 import { resolvePlanCatalogYear } from './library/planCatalogYear.js';
+import { recordEnrollmentEvidence } from './_lib/providerEvidence.js';
 
 // AgentBase CRM URL pattern. /clients/{id} matches the existing
 // AgentBase routing convention; if it changes, override via env.
@@ -532,6 +533,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // ─── Doctor network proof (Enroll only) ─────────────────────
+    // When the compliance snapshot is present the broker is enrolling, not
+    // just recommending. Record, per doctor, the database's network answer
+    // for this exact plan + plan year, its source and check date — the
+    // broker's proof of what the directory said today. Uses the year the
+    // session quoted (session_summary.planYear) so an AEP-intent quote of
+    // a 2027 plan records 2027 evidence. Best-effort: never blocks the
+    // enrollment write above.
+    let evidenceRecorded = 0;
+    let evidenceNotConfirmed = 0;
+    let evidenceError: string | null = null;
+    if (fullBody.compliance) {
+      try {
+        const quotedYear = Number(fullBody.session_summary?.planYear);
+        const evidenceYear = Number.isInteger(quotedYear) && quotedYear >= 2020 ? quotedYear : planYear;
+        const rows = await recordEnrollmentEvidence({
+          sessionId: fullBody.session?.session_token || `client-${clientId}`,
+          agentbaseClientId: clientId,
+          clientName: fullBody.client?.name?.trim() || null,
+          planYear: evidenceYear,
+          contractId: fullBody.recommended_plan.contract_id,
+          planId: fullBody.recommended_plan.plan_id,
+          segmentId: fullBody.recommended_plan.segment_id,
+          providers: fullBody.providers ?? [],
+        });
+        evidenceRecorded = rows.length;
+        evidenceNotConfirmed = rows.filter((r) => r.status === 'not_confirmed').length;
+      } catch (evErr) {
+        evidenceError = (evErr as Error).message;
+        console.error('[recommend] provider evidence failed', { client_id: clientId, message: evidenceError });
+      }
+    }
+
     // ─── Forward rich payload to the webhook (best-effort) ───────
     // The direct write above is the must-not-fail path. The webhook
     // forward is the rich-data path; if it fails (AgentBase webhook
@@ -587,6 +621,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       audit_log_error: auditLogError,
       audit_columns_missing: auditColumnsMissing,
       recommended_at: recommendNowIso,
+      provider_evidence_recorded: evidenceRecorded,
+      provider_evidence_not_confirmed: evidenceNotConfirmed,
+      provider_evidence_error: evidenceError,
     });
   } catch (err) {
     return serverError(res, err);

@@ -131,13 +131,18 @@ export async function checkProviderNetwork(args: {
   county: string;
   state: string;
   plan_ids?: string[];
+  /** Catalog year of the plans asked about. Omitted → the library's date
+   *  default (unchanged behavior for existing callers). */
+  plan_year?: number;
   signal?: AbortSignal;
 }): Promise<LibraryProviderNetworkResponse> {
-  const { npis, county, state, plan_ids, signal } = args;
+  const { npis, county, state, plan_ids, plan_year, signal } = args;
   const res = await fetch(`${LIBRARY_URL}/api/library/provider-network`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ npis, county, state, plan_ids }),
+    body: JSON.stringify(
+      plan_year != null ? { npis, county, state, plan_ids, plan_year } : { npis, county, state, plan_ids },
+    ),
     signal,
   });
   if (!res.ok) {
