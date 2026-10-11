@@ -37,6 +37,22 @@ function digitsOnly(phone: string | undefined): string {
   return (phone ?? '').replace(/\D/g, '');
 }
 
+// Coverage year for a brand-new lead that has no effective date yet.
+// AEP opens Oct 15; from then through year-end a new enrollment's
+// coverage is effective the following Jan 1, so we stamp next year.
+// Before Oct 15 a new SEP/ICEP enrollment is effective the first of the
+// coming month — still the current calendar year. Once a real effective
+// date lands on the client (SEP/T65/AEP/ACA), the AgentBase DB trigger
+// trg_clients_sync_year_from_effdate recomputes `year` from that date's
+// year and takes over from this creation-time estimate.
+function currentCoverageYear(now: Date): number {
+  const y = now.getFullYear();
+  const m = now.getMonth(); // 0 = Jan … 9 = Oct
+  const d = now.getDate();
+  const aepOpen = m > 9 || (m === 9 && d >= 15); // on/after Oct 15
+  return aepOpen ? y + 1 : y;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
   if (await requireSession(req, res)) return;
@@ -82,7 +98,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const insert = {
       first_name: firstName,
       last_name: lastName,
-      name: `${firstName} ${lastName}`.trim(),
       phone: body.phone?.trim() || null,
       email: body.email?.trim() || null,
       dob: body.dob?.trim() || null,
@@ -93,7 +108,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       carrier: body.currentCarrier?.trim() || null,
       plan_name: body.currentPlanName?.trim() || null,
       plan_id: body.currentPlanId?.trim() || null,
-      year: 2026,
+      // Creation-time estimate only; superseded by the effective-date
+      // trigger once the client actually enrolls (see currentCoverageYear).
+      year: currentCoverageYear(new Date()),
       // Triggers AgentBase's "🚨 New Leads" popup (filter in
       // agentbase-crm/components/AgentBaseCRM.jsx:2291 is
       //   clients.status === "New Lead" && !c.newLeadAlertDismissedAt
