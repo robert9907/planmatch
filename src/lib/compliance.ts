@@ -198,11 +198,12 @@ export function renderItemDetail(detail: string, clientName: string | null | und
 
 export function renderDisclaimerBody(
   def: DisclaimerDef,
-  ctx: { orgCount: number; planCount: number; planType: PlanType | null },
+  ctx: { orgCount: number | null; planCount: number | null; planType: PlanType | null },
 ): string {
+  // null = counts not loaded; shows "…" so nobody reads a guessed number.
   return def.body
-    .replace('[ORG_COUNT]', String(ctx.orgCount))
-    .replace('[PLAN_COUNT]', String(ctx.planCount))
+    .replace('[ORG_COUNT]', ctx.orgCount == null ? '…' : String(ctx.orgCount))
+    .replace('[PLAN_COUNT]', ctx.planCount == null ? '…' : String(ctx.planCount))
     .replace('[PLAN_TYPE_LONG]', planTypeLong(ctx.planType));
 }
 

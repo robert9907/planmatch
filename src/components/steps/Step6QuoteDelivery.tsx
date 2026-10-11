@@ -7,7 +7,7 @@ import { BROKER } from '@/lib/constants';
 import { ComplianceChecklist } from '@/components/compliance/ComplianceChecklist';
 import { SaveSessionButton } from '@/components/sync/SaveSessionButton';
 import { DISCLAIMERS, allComplianceItemIds, renderDisclaimerBody } from '@/lib/compliance';
-import { plansForClient } from '@/lib/cmsPlans';
+import { useTpmoCounts } from '@/hooks/useTpmoCounts';
 import type { Plan } from '@/types/plans';
 import { QuoteDeliveryV4 } from './QuoteDeliveryV4';
 
@@ -233,11 +233,7 @@ function ClientDeliveryCard({
 }) {
   const client = useSession((s) => s.client);
   // TPMO counts — same source as the call-script checklist.
-  const tpmoPlans = useMemo(
-    () => plansForClient({ state: client.state, planType: client.planType, county: client.county }),
-    [client.state, client.planType, client.county],
-  );
-  const tpmoOrgCount = useMemo(() => new Set(tpmoPlans.map((p) => p.carrier)).size, [tpmoPlans]);
+  const tpmo = useTpmoCounts();
   const recommended = recommendation
     ? finalists.find((p) => p.id === recommendation)
     : finalists[0];
@@ -326,8 +322,8 @@ function ClientDeliveryCard({
         {BROKER.name} · {BROKER.license} · {BROKER.phone}
         <br />
         {renderDisclaimerBody(DISCLAIMERS.find((d) => d.id === 'tpmo')!, {
-          orgCount: tpmoOrgCount,
-          planCount: tpmoPlans.length,
+          orgCount: tpmo.counts?.orgCount ?? null,
+          planCount: tpmo.counts?.productCount ?? null,
           planType: client.planType,
         })}
       </div>

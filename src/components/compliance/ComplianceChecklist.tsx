@@ -7,7 +7,7 @@ import {
   renderDisclaimerBody,
   totalComplianceItems,
 } from '@/lib/compliance';
-import { plansForClient } from '@/lib/cmsPlans';
+import { useTpmoCounts } from '@/hooks/useTpmoCounts';
 import { BROKER } from '@/lib/constants';
 import { ComplianceItem } from './ComplianceItem';
 import { DisclaimerCard } from './DisclaimerCard';
@@ -19,16 +19,10 @@ export function ComplianceChecklist() {
   const toggleComplianceItem = useSession((s) => s.toggleComplianceItem);
   const confirmDisclaimer = useSession((s) => s.confirmDisclaimer);
 
-  const eligiblePlans = useMemo(
-    () => plansForClient({ state: client.state, planType: client.planType, county: client.county }),
-    [client.state, client.planType, client.county],
-  );
-
-  const orgCount = useMemo(
-    () => new Set(eligiblePlans.map((p) => p.carrier)).size,
-    [eligiblePlans],
-  );
-  const planCount = eligiblePlans.length;
+  // TPMO counts: what Rob can sell in the client's county (/api/tpmo-counts).
+  const tpmo = useTpmoCounts();
+  const orgCount = tpmo.counts?.orgCount ?? null;
+  const planCount = tpmo.counts?.productCount ?? null;
 
   const allItemIds = useMemo(allComplianceItemIds, []);
   const checkedCount = allItemIds.filter((id) => complianceChecked.includes(id)).length;
@@ -55,7 +49,10 @@ export function ComplianceChecklist() {
               planType: client.planType,
             })}
             confirmed={disclaimersConfirmed.includes(def.id)}
-            onConfirm={() => confirmDisclaimer(def.id)}
+            onConfirm={() => {
+              if (def.id === 'tpmo' && !tpmo.counts) return;
+              confirmDisclaimer(def.id);
+            }}
           />
         ))}
       </div>

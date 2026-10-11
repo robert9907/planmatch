@@ -4,7 +4,8 @@
 // required verbatim disclaimers BEFORE any plan discussion:
 //
 //   1. TPMO disclaimer  — required within the first minute of the call,
-//      includes live ORG_COUNT + PLAN_COUNT derived from eligiblePlans.
+//      includes live ORG_COUNT + PLAN_COUNT: what Rob can sell in the
+//      client's county (/api/tpmo-counts).
 //   2. Call recording notice — required at call start, before any plan
 //      discussion.
 //   3. Scope of Appointment confirmation — required before discussing
@@ -22,6 +23,7 @@ import type { CSSProperties } from 'react';
 import type { Plan } from '@/types/plans';
 import { useSession } from '@/hooks/useSession';
 import { DISCLAIMERS, renderDisclaimerBody } from '@/lib/compliance';
+import { useTpmoCounts } from '@/hooks/useTpmoCounts';
 import { Container, Nav } from './atoms';
 
 interface Props {
@@ -30,22 +32,16 @@ interface Props {
   onNext: () => void;
 }
 
-export function DisclaimersScreen({ eligiblePlans, onBack, onNext }: Props) {
+export function DisclaimersScreen({ onBack, onNext }: Props) {
   const planType = useSession((s) => s.client.planType);
   const confirmed = useSession((s) => s.disclaimersConfirmed);
   const confirmDisclaimer = useSession((s) => s.confirmDisclaimer);
 
-  // TPMO live counts. ORG_COUNT = unique carriers; PLAN_COUNT = total
-  // plans in the broker's catalog for this client's county+state. Both
-  // collapse to 1 when eligiblePlans hasn't loaded yet — the verbatim
-  // text still reads correctly, just understates the catalog. By the
-  // time the broker is reading the TPMO aloud the plan list has
-  // landed.
-  const orgCount =
-    eligiblePlans.length > 0
-      ? new Set(eligiblePlans.map((p) => p.carrier)).size
-      : 1;
-  const planCount = eligiblePlans.length > 0 ? eligiblePlans.length : 1;
+  // TPMO counts: organizations / products Rob can sell in the client's
+  // county (appointed AND certified), from /api/tpmo-counts.
+  const tpmo = useTpmoCounts();
+  const orgCount = tpmo.counts?.orgCount ?? null;
+  const planCount = tpmo.counts?.productCount ?? null;
 
   const total = DISCLAIMERS.length;
   const done = DISCLAIMERS.filter((d) => confirmed.includes(d.id)).length;
@@ -133,7 +129,10 @@ export function DisclaimersScreen({ eligiblePlans, onBack, onNext }: Props) {
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
               <button
                 type="button"
-                onClick={() => confirmDisclaimer(def.id)}
+                onClick={() => {
+                  if (def.id === 'tpmo' && !tpmo.counts) return;
+                  confirmDisclaimer(def.id);
+                }}
                 style={CHECKBOX_STYLE(isDone)}
                 aria-label={`Confirm ${def.title}`}
               >
@@ -188,6 +187,13 @@ export function DisclaimersScreen({ eligiblePlans, onBack, onNext }: Props) {
                   }}
                 >
                   {body}
+                  {def.id === 'tpmo' && !tpmo.counts && (
+                    <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: tpmo.status === 'error' ? '#b42318' : '#6b7280' }}>
+                      {tpmo.status === 'error'
+                        ? `Can’t count plans you sell here — don’t read this yet. ${tpmo.error}`
+                        : 'Counting the plans you sell in this county…'}
+                    </div>
+                  )}
                 </div>
                 {!isDone && (
                   <div
