@@ -46,6 +46,7 @@ import {
   NPI_NOT_FOUND_PLAN_ID,
   type CarrierId,
 } from './_lib/fhir-provider.js';
+import { outranks } from './_lib/network-row-precedence.js';
 
 // How long a per-(npi, carrier) "FHIR said no_match" sentinel suppresses
 // re-querying. Long enough that the live fallback doesn't burn budget on
@@ -58,6 +59,8 @@ interface CacheRow {
   segment_id: string;
   npi: string;
   covered: boolean;
+  source?: string | null;
+  checked_at?: string | null;
 }
 
 interface DataUnavailableRow {
@@ -305,7 +308,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const q1 = new URLSearchParams();
     q1.set('plan_id', `in.(${planIds.join(',')})`);
     q1.set('npi', `in.(${npis.join(',')})`);
-    q1.set('select', 'plan_id,segment_id,npi,covered');
+    q1.set('select', 'plan_id,segment_id,npi,covered,source,checked_at');
     q1.set('limit', '2000');
     // plan_id in pm_provider_network_cache is the COMBINED form
     // ("H5253-189"); pm_plans stores contract_id + plan_id separately.
@@ -522,7 +525,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const q2 = new URLSearchParams();
       q2.set('plan_id', `in.(${planIds.join(',')})`);
       q2.set('npi', `in.(${npisFanned.join(',')})`);
-      q2.set('select', 'plan_id,segment_id,npi,covered');
+      q2.set('select', 'plan_id,segment_id,npi,covered,source,checked_at');
       q2.set('limit', '2000');
       const reread = await fetch(`${base}/rest/v1/pm_provider_network_cache?${q2}`, { headers: H });
       let addedCount = 0;
@@ -561,12 +564,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   for (const npi of npis) {
     byNpi[npi] = { byPlanId: {}, directory: dirByNpi.get(npi) ?? null };
   }
+  // One row of record per (NPI, plan): Plan Finder wins every time, then
+  // broker-verified, carrier directory, Insurelytix (network-row-precedence).
+  const winner = new Map<string, CacheRow>();
   for (const c of coverage) {
+    const k = `${c.npi}|${c.plan_id}`;
+    const cur = winner.get(k);
+    if (!cur || outranks(c, cur)) winner.set(k, c);
+  }
+  for (const c of winner.values()) {
     const slot = byNpi[c.npi];
     if (!slot) continue;
-    // First-write-wins so a medicare_gov in_network read isn't
-    // overwritten by a later FHIR row claiming the same (plan, NPI).
-    if (slot.byPlanId[c.plan_id]) continue;
     slot.byPlanId[c.plan_id] = c.covered ? 'in_network' : 'out_of_network';
   }
 

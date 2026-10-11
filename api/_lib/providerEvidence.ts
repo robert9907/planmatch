@@ -11,6 +11,7 @@
 // row is the proof of what the directory said on enrollment day.
 
 import { supabase } from './supabase.js';
+import { outranks } from './network-row-precedence.js';
 
 export type EvidenceStatus = 'in_network' | 'out_of_network' | 'not_confirmed';
 
@@ -58,7 +59,8 @@ export function pickRowOfRecord(
   const seg = norm(segmentId);
   const sameSeg = rows.filter((r) => norm(r.segment_id) === seg);
   const pool = sameSeg.length > 0 ? sameSeg : rows;
-  return [...pool].sort((a, b) => (b.checked_at ?? '').localeCompare(a.checked_at ?? ''))[0];
+  // Plan Finder wins every time; same source → newest check.
+  return pool.reduce((best, r) => (outranks(r, best) ? r : best));
 }
 
 export function buildEvidenceRows(args: {

@@ -57,3 +57,14 @@ test('doctor with no NPI is still recorded, as not_confirmed', () => {
   assert.equal(r.status, 'not_confirmed');
   assert.equal(r.provider_name, 'Dr No NPI');
 });
+
+test('Plan Finder wins every time over a newer carrier row (Rob, Oct 11 2026)', () => {
+  const rows: CacheRowLite[] = [
+    { plan_id: 'H5253-189', segment_id: '0', npi: '1619976297', covered: true, source: 'fhir_humana', checked_at: '2026-10-12' },
+    { plan_id: 'H5253-189', segment_id: '0', npi: '1619976297', covered: false, source: 'medicare_gov', checked_at: '2026-10-09' },
+    { plan_id: 'H5253-189', segment_id: '0', npi: '1619976297', covered: true, source: 'broker_verified', checked_at: '2026-10-11' },
+  ];
+  assert.equal(pickRowOfRecord(rows, '0')?.source, 'medicare_gov');
+  const [r] = buildEvidenceRows({ ...base, providers: [{ npi: '1619976297', name: 'Dr A', network_status: 'in' }], cacheRows: rows });
+  assert.equal(r.status, 'out_of_network');
+});
