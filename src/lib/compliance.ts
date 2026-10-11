@@ -30,11 +30,13 @@ export const DISCLAIMERS: DisclaimerDef[] = [
     title: 'TPMO disclaimer',
     when: 'Required within the first minute of the call.',
     body:
+      // CY2027 standardized content, 42 CFR 422.2267(e)(41) / 423.2267(e)(41),
+      // count variant (Rob does not sell every plan). Fixed wording; only the
+      // counts vary. No SHIP referral.
       'We do not offer every plan available in your area. Currently we represent ' +
-      '[ORG_COUNT] organizations and [PLAN_COUNT] plans in your area. Please contact ' +
-      'Medicare.gov, 1-800-MEDICARE (TTY: 1-877-486-2048) 24 hours a day, 7 days a ' +
-      'week, or your local State Health Insurance Program (SHIP) to get information ' +
-      'on all of your options.',
+      '[ORG_COUNT] organizations which offer [PLAN_COUNT] products in your area. ' +
+      'Please contact Medicare.gov or 1-800-MEDICARE to get information on all of ' +
+      'your options.',
     tokens: ['ORG_COUNT', 'PLAN_COUNT'],
   },
   {

@@ -6,7 +6,8 @@ import { fetchPlansByIds } from '@/lib/planCatalog';
 import { BROKER } from '@/lib/constants';
 import { ComplianceChecklist } from '@/components/compliance/ComplianceChecklist';
 import { SaveSessionButton } from '@/components/sync/SaveSessionButton';
-import { DISCLAIMERS, allComplianceItemIds } from '@/lib/compliance';
+import { DISCLAIMERS, allComplianceItemIds, renderDisclaimerBody } from '@/lib/compliance';
+import { plansForClient } from '@/lib/cmsPlans';
 import type { Plan } from '@/types/plans';
 import { QuoteDeliveryV4 } from './QuoteDeliveryV4';
 
@@ -231,6 +232,12 @@ function ClientDeliveryCard({
   recommendation: string | null;
 }) {
   const client = useSession((s) => s.client);
+  // TPMO counts — same source as the call-script checklist.
+  const tpmoPlans = useMemo(
+    () => plansForClient({ state: client.state, planType: client.planType, county: client.county }),
+    [client.state, client.planType, client.county],
+  );
+  const tpmoOrgCount = useMemo(() => new Set(tpmoPlans.map((p) => p.carrier)).size, [tpmoPlans]);
   const recommended = recommendation
     ? finalists.find((p) => p.id === recommendation)
     : finalists[0];
@@ -318,9 +325,11 @@ function ClientDeliveryCard({
       >
         {BROKER.name} · {BROKER.license} · {BROKER.phone}
         <br />
-        We do not offer every plan available in your area. Please contact Medicare.gov,
-        1-800-MEDICARE (TTY 1-877-486-2048), or your local SHIP to get information on all
-        of your options.
+        {renderDisclaimerBody(DISCLAIMERS.find((d) => d.id === 'tpmo')!, {
+          orgCount: tpmoOrgCount,
+          planCount: tpmoPlans.length,
+          planType: client.planType,
+        })}
       </div>
     </div>
   );
