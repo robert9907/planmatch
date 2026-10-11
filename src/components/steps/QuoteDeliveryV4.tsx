@@ -1159,6 +1159,7 @@ export function QuoteDeliveryV4({
       recommendation: recommendation ?? null,
       pharmacyLabel: pharmacyFill === 'mail_90' ? '90-day mail' : '30-day retail',
       isAnnualReview,
+      planYear: brainData?.planYear ?? null,
     };
     setPrintableSnapshot(snapshot);
     // Cleanup clears the snapshot so a stale Print click after
@@ -1168,7 +1169,7 @@ export function QuoteDeliveryV4({
     setPrintableSnapshot, client, medications, providers, result,
     columns, medRows, providerRows, copayRows, inpatientRow, inpatientTotal,
     planCostRows, extraRows, rxTotalMonthly, rxTotalAnnual, whySwitch,
-    recommendation, pharmacyFill, isAnnualReview,
+    recommendation, pharmacyFill, isAnnualReview, brainData?.planYear,
   ]);
 
   // ── AgentBase sync on Recommend ────────────────────────────────────
