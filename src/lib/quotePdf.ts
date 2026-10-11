@@ -17,7 +17,7 @@
 
 import { jsPDF } from 'jspdf';
 import autoTable, { type RowInput } from 'jspdf-autotable';
-import { BROKER, MEDICARE_2026 } from './constants';
+import { BROKER } from './constants';
 import type { ScoredPlan, PlanBrainResult } from '@/hooks/usePlanBrain';
 import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
@@ -101,6 +101,9 @@ export interface PrintableQuote {
    *  cover title ("Annual Plan Review" vs "Medicare Plan Comparison")
    *  and any future AEP-specific page content. */
   isAnnualReview: boolean;
+  /** CMS catalog year this quote is for (brainData.planYear). Drives the
+   *  disclaimer year so a 2027 quote doesn't print "2026". */
+  planYear: number | null;
 }
 
 // ─── Style tokens (B&W friendly) ─────────────────────────────────────
@@ -758,7 +761,7 @@ function drawRecommendationPage(doc: jsPDF, q: PrintableQuote, _finalize: Array<
   doc.setFontSize(8);
   doc.setTextColor(COL.inkSub);
   const disclaimer =
-    `This comparison is based on CMS plan data for ${MEDICARE_2026 ? '2026' : new Date().getFullYear()}. ` +
+    `This comparison is based on CMS plan data for ${q.planYear ?? new Date().getFullYear()}. ` +
     'Costs are estimates derived from the plan\'s formulary tier, average utilization for your detected ' +
     'conditions, and CMS-published copays — verify with the carrier before enrollment. ' +
     `Rob Simm · NPN #${BROKER.npn} · ${BROKER.email} · ${BROKER.phone}.`;
