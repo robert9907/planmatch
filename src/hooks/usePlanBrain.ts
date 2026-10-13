@@ -1247,11 +1247,13 @@ export function usePlanBrain(args: Args): State {
       const npiList = npis ? npis.split(',').filter(Boolean) : [];
       if (npiList.length > 0 && client.state && client.county) {
         try {
+          const warmYear = planYearOverride();
           await checkProviderNetwork({
             npis: npiList,
             state: client.state,
             county: client.county,
             plan_ids: planIds.split(',').filter(Boolean),
+            ...(warmYear !== null ? { plan_year: warmYear } : {}),
             signal: controller.signal,
           });
         } catch (err) {

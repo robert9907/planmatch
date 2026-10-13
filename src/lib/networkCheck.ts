@@ -20,6 +20,9 @@
 import type { Plan } from '@/types/plans';
 import { supabaseBrowser } from './supabaseBrowser';
 import { checkProviderNetwork } from './library-client';
+import { planYearOverride } from '../../api/library/planYearOverride';
+import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear';
+import { outranks } from '../../api/_lib/network-row-precedence';
 
 export type NetworkStatus = 'in' | 'out' | 'unknown';
 export type NetworkSource = 'cache' | 'fallback_unknown' | 'fhir_live';
@@ -38,6 +41,8 @@ interface CacheRow {
   plan_id: string;
   npi: string;
   covered: boolean | null;
+  source?: string | null;
+  checked_at?: string | null;
 }
 
 interface BatchContext {
@@ -98,11 +103,14 @@ async function libraryBatch(
   const plansByTriple = new Map<string, Plan>();
   for (const p of plans) plansByTriple.set(p.id, p);
 
+  // Same catalog year as the plan rows (URL override, else the server default).
+  const yearOverride = planYearOverride();
   const resp = await checkProviderNetwork({
     npis: [npi],
     state,
     county,
     plan_ids: plans.map((p) => p.id),
+    ...(yearOverride !== null ? { plan_year: yearOverride } : {}),
   });
   const npiBlock = resp.by_npi[npi];
   // [AUDIT 2] Raw response → per-NPI block. Count plans before any
@@ -216,8 +224,10 @@ async function directBatch(
   try {
     const { data, error } = await supabaseBrowser()
       .from('pm_provider_network_cache')
-      .select('plan_id, npi, covered')
+      .select('plan_id, npi, covered, source, checked_at')
       .eq('npi', npi)
+      // Year-scope: never answer a 2027 plan with its 2026 twin's network.
+      .eq('plan_year', planYearOverride() ?? resolvePlanCatalogYear())
       .in('plan_id', [...contractPlans]);
     if (error) throw error;
     rows = (data ?? []) as unknown as CacheRow[];
@@ -225,13 +235,16 @@ async function directBatch(
     console.warn('[network-check] cache read failed:', (err as Error).message);
   }
 
-  const coveredByCp = new Map<string, boolean>();
+  // Plan Finder wins every time, then broker-verified, carrier directory,
+  // Insurelytix (was: any covered=true row won).
+  const rowByCp = new Map<string, CacheRow>();
   for (const r of rows) {
-    const prior = coveredByCp.get(r.plan_id);
-    if (prior === true) continue;
-    if (r.covered === true) coveredByCp.set(r.plan_id, true);
-    else if (r.covered === false) coveredByCp.set(r.plan_id, false);
+    if (r.covered !== true && r.covered !== false) continue;
+    const cur = rowByCp.get(r.plan_id);
+    if (!cur || outranks(r, cur)) rowByCp.set(r.plan_id, r);
   }
+  const coveredByCp = new Map<string, boolean>();
+  for (const [cp, r] of rowByCp) coveredByCp.set(cp, r.covered === true);
 
   for (const [cp, planList] of planIdsByContractPlan) {
     const covered = coveredByCp.get(cp);

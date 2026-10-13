@@ -23,6 +23,7 @@ import { supabase } from './_lib/supabase.js';
 import { expandRxcui } from './formulary.js';
 import { resolvePlanCatalogYear } from './library/planCatalogYear.js';
 import { isFormularyPublished } from './_lib/formulary-published.js';
+import { outranks } from './_lib/network-row-precedence.js';
 
 // PostgREST on this project caps every query at 1000 rows
 // (db-max-rows). The formulary fetch can easily exceed that — Durham
@@ -147,6 +148,8 @@ interface NetworkRow {
   segment_id: string;
   npi: string;
   covered: boolean | null;
+  source?: string | null;
+  checked_at?: string | null;
 }
 
 function splitTriple(id: string): { contract: string; plan: string; segment: string } | null {
@@ -282,7 +285,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       npis.length > 0
         ? sb
             .from('pm_provider_network_cache')
-            .select('plan_id, segment_id, npi, covered')
+            .select('plan_id, segment_id, npi, covered, source, checked_at')
+            // Year-scope: a 2026 network answer never stands in for 2027.
+            .eq('plan_year', catalogYear)
             .in('plan_id', contractPlans)
             .in('npi', npis)
         : Promise.resolve({ data: [], error: null }),
@@ -423,7 +428,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const segNorm = (r.segment_id ?? '0').replace(/^0+/, '') || '0';
       const triple = `${r.plan_id}-${segNorm === '0' ? '000' : segNorm.padStart(3, '0')}`;
       const matched = matchToRequestedTriple(triple, ids) ?? triple;
-      (networkByPlan[matched] ||= {})[r.npi] = r;
+      // One row of record per (plan, doctor): Plan Finder wins every time,
+      // then broker-verified, carrier directory, Insurelytix.
+      const slot = (networkByPlan[matched] ||= {});
+      const cur = slot[r.npi];
+      if (!cur || outranks(r, cur)) slot[r.npi] = r;
     }
 
     res.setHeader('Cache-Control', 'no-store');
