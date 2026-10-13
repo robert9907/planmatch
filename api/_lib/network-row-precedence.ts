@@ -24,3 +24,17 @@ export function outranks(a: RankableRow, b: RankableRow): boolean {
   if (ra !== rb) return ra < rb;
   return (a.checked_at ?? '') > (b.checked_at ?? '');
 }
+
+/** One row of record per key (e.g. plan|npi), by the precedence above. */
+export function pickRowsOfRecord<T extends RankableRow>(
+  rows: ReadonlyArray<T>,
+  keyOf: (r: T) => string,
+): Map<string, T> {
+  const out = new Map<string, T>();
+  for (const r of rows) {
+    const k = keyOf(r);
+    const cur = out.get(k);
+    if (!cur || outranks(r, cur)) out.set(k, r);
+  }
+  return out;
+}

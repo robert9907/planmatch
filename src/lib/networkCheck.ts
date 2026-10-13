@@ -22,7 +22,7 @@ import { supabaseBrowser } from './supabaseBrowser';
 import { checkProviderNetwork } from './library-client';
 import { planYearOverride } from '../../api/library/planYearOverride';
 import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear';
-import { outranks } from '../../api/_lib/network-row-precedence';
+import { pickRowsOfRecord } from '../../api/_lib/network-row-precedence';
 
 export type NetworkStatus = 'in' | 'out' | 'unknown';
 export type NetworkSource = 'cache' | 'fallback_unknown' | 'fhir_live';
@@ -237,12 +237,10 @@ async function directBatch(
 
   // Plan Finder wins every time, then broker-verified, carrier directory,
   // Insurelytix (was: any covered=true row won).
-  const rowByCp = new Map<string, CacheRow>();
-  for (const r of rows) {
-    if (r.covered !== true && r.covered !== false) continue;
-    const cur = rowByCp.get(r.plan_id);
-    if (!cur || outranks(r, cur)) rowByCp.set(r.plan_id, r);
-  }
+  const rowByCp = pickRowsOfRecord(
+    rows.filter((r) => r.covered === true || r.covered === false),
+    (r) => r.plan_id,
+  );
   const coveredByCp = new Map<string, boolean>();
   for (const [cp, r] of rowByCp) coveredByCp.set(cp, r.covered === true);
 
