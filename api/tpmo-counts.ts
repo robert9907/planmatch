@@ -11,7 +11,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
-import { getSellabilitySets, resolveSellability } from './_lib/sellability.js';
+import { computeSellable, getSellableRules, getSellableFlags } from './_lib/sellable-rules.js';
 import { parsePlanYearParam, resolvePlanCatalogYear } from './library/planCatalogYear.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -28,7 +28,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!url || !key) return serverError(res, new Error('Supabase env not configured'));
   const base = url.replace(/\/$/, '');
   try {
-    const sets = await getSellabilitySets(base, key);
+    // Sellable set = the brain's definition (pm_non_commissionable_rules
+    // + UHC/Devoted flags + Wellcare allowlist), NOT the old is_appointed/
+    // is_certified gate — so N/M match the top four and can't drift.
+    const [rules, flags] = [await getSellableRules(base, key, planYear), getSellableFlags()];
+    const now = new Date();
     const p = new URLSearchParams();
     p.set('state', `eq.${state}`);
     p.set('county_name', `ilike.${county}`);
@@ -41,12 +45,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
     if (!r.ok) throw new Error(`pm_plans ${r.status}: ${(await r.text()).slice(0, 200)}`);
     const rows = (await r.json()) as Array<{
-      contract_id: string; plan_id: string; carrier: string | null; parent_organization: string | null;
+      contract_id: string; plan_id: string; segment_id: string | null; carrier: string | null; parent_organization: string | null;
     }>;
-    const sellable = rows.filter((x) => {
-      const f = resolveSellability(sets, x.contract_id, x.plan_id);
-      return f.is_appointed && f.is_certified;
-    });
+    const sellable = rows.filter((x) =>
+      computeSellable(
+        {
+          contract_id: x.contract_id,
+          plan_id: x.plan_id,
+          segment_id: x.segment_id ?? '0',
+          state,
+          county_name: county,
+          carrier: x.carrier,
+        },
+        { rules, flags, now },
+      ),
+    );
     const orgCount = new Set(sellable.map((x) => x.parent_organization ?? x.carrier ?? '—')).size;
     res.setHeader('Cache-Control', 'private, max-age=300');
     return sendJson(res, 200, {

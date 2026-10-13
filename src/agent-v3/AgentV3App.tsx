@@ -902,6 +902,26 @@ export function AgentV3App() {
       .filter((p): p is Plan => p != null);
   }, [ranked.result, planById]);
 
+  // Authoritative sellability from the library brain — UHC/Devoted flags
+  // + exclude rules + Wellcare allowlist, richer than /api/plans' exclude-
+  // only non_commissionable tag. Keyed by the agent's Plan.id (via the
+  // same normalizePlanId collision fix the network-status mirror uses).
+  // Drives the enroll block (onRecommend) and the "Not sellable" bench
+  // marker. Top-4 plans are always sellable (the brain excludes
+  // non-sellable from the picks), so only the bench is ever flagged.
+  const librarySellableByAgentId = useMemo<Map<string, boolean>>(() => {
+    const m = new Map<string, boolean>();
+    if (!ranked.result) return m;
+    const agentIdByNormalized = new Map<string, string>();
+    for (const p of eligiblePlans) agentIdByNormalized.set(normalizePlanId(p.id), p.id);
+    for (const lp of [...ranked.result.top_plans, ...ranked.result.bench_plans]) {
+      if (lp.sellable == null) continue;
+      const agentId = agentIdByNormalized.get(normalizePlanId(lp.plan_id));
+      if (agentId) m.set(agentId, lp.sellable);
+    }
+    return m;
+  }, [ranked.result, eligiblePlans]);
+
   // Bench = the broker's workspace, not the brain's runners-up. The
   // brain's filterPlanPool strips D-SNPs from clients flagged
   // dsnpEligible !== true and MA-only plans from clients with meds —
@@ -916,7 +936,16 @@ export function AgentV3App() {
   const benchPlans = useMemo<Plan[]>(() => {
     if (eligiblePlans.length === 0) return [];
     const topIds = new Set(scoredPlans.map((p) => p.id));
-    const out = eligiblePlans.filter((p) => !topIds.has(p.id));
+    const out = eligiblePlans
+      .filter((p) => !topIds.has(p.id))
+      // Mark non-sellable bench plans so CompareScreen badges them and
+      // enroll is blocked. The library sellability (UHC/Devoted/Wellcare
+      // allowlist) supersedes the exclude-only non_commissionable tag.
+      .map((p) =>
+        librarySellableByAgentId.get(p.id) === false && !p.non_commissionable
+          ? { ...p, non_commissionable: true }
+          : p,
+      );
     if (ranked.result) {
       console.log(
         '[agent-v3] bench:',
@@ -931,7 +960,7 @@ export function AgentV3App() {
       );
     }
     return out;
-  }, [eligiblePlans, scoredPlans, ranked.result]);
+  }, [eligiblePlans, scoredPlans, ranked.result, librarySellableByAgentId]);
 
   // The by-plan-id maps below are keyed by the agent's Plan.id (NOT the
   // library's lp.plan_id) because CompareScreen looks them up as
@@ -1248,6 +1277,18 @@ const explanationsByPlanId = useMemo<
       sessionSummary?: AgentV3SessionSummary;
     },
   ): Promise<{ ok: true } | { ok: false; error: string }> {
+    // Compliance gate: never write a non-sellable plan to AgentBase. The
+    // library brain is authoritative (UHC/Devoted flags, exclude rules,
+    // Wellcare allowlist). Blocks the enroll before any sync input is
+    // built, so nothing reaches /api/agentbase-recommend.
+    if (librarySellableByAgentId.get(plan.id) === false) {
+      return {
+        ok: false,
+        error:
+          `${plan.carrier ?? ''} ${plan.plan_name} is not sellable — Rob can't enroll this plan. ` +
+          `The client can enroll on Medicare.gov or by calling 1-800-MEDICARE.`,
+      };
+    }
     const idParam = getClientIdParam();
     const agentbaseClientId =
       idParam && /^\d+$/.test(idParam) ? Number(idParam) : null;

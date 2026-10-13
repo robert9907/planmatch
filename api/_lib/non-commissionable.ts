@@ -40,7 +40,14 @@ async function fetchOnce(
   supabaseKey: string,
 ): Promise<NonCommissionableSets> {
   const base = supabaseUrl.replace(/\/$/, '');
-  const url = `${base}/rest/v1/pm_non_commissionable_contracts?select=contract_id,plan_number`;
+  // Read the real rules table filtered to action='exclude'. The 2027
+  // table also carries `allow` rows (the Wellcare focus-plan allowlist)
+  // which must NEVER be treated as blocks — reading action-blind hid
+  // those sellable plans. This action-aware read matches the exclude-only
+  // VIEW (pm_non_commissionable_contracts) the old build read, so once
+  // this deploys the view can be dropped.
+  const url =
+    `${base}/rest/v1/pm_non_commissionable_rules?select=contract_id,plan_number&action=eq.exclude`;
   const resp = await fetch(url, {
     headers: {
       apikey: supabaseKey,
