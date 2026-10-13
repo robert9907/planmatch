@@ -12,6 +12,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { computeSellable, getSellableRules, getSellableFlags } from './_lib/sellable-rules.js';
+import { getSellabilitySets, resolveSellability } from './_lib/sellability.js';
 import { parsePlanYearParam, resolvePlanCatalogYear } from './library/planCatalogYear.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -28,10 +29,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!url || !key) return serverError(res, new Error('Supabase env not configured'));
   const base = url.replace(/\/$/, '');
   try {
-    // Sellable set = the brain's definition (pm_non_commissionable_rules
-    // + UHC/Devoted flags + Wellcare allowlist), NOT the old is_appointed/
-    // is_certified gate — so N/M match the top four and can't drift.
+    // SPLIT sellable set, matching the brain:
+    //  • 2027+: the full sellable definition (exclude rules + Wellcare
+    //    allowlist + UHC/Devoted flags) via computeSellable.
+    //  • 2026: the appointed set (is_appointed && is_certified) MINUS
+    //    UHC-after-cutoff and Devoted — Rob can't write those for any
+    //    year. getSellableRules returns [] for 2026, so computeSellable
+    //    collapses to the flags-only check there.
     const [rules, flags] = [await getSellableRules(base, key, planYear), getSellableFlags()];
+    const appointedSets = planYear < 2027 ? await getSellabilitySets(base, key) : null;
     const now = new Date();
     const p = new URLSearchParams();
     p.set('state', `eq.${state}`);
@@ -47,19 +53,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rows = (await r.json()) as Array<{
       contract_id: string; plan_id: string; segment_id: string | null; carrier: string | null; parent_organization: string | null;
     }>;
-    const sellable = rows.filter((x) =>
-      computeSellable(
-        {
-          contract_id: x.contract_id,
-          plan_id: x.plan_id,
-          segment_id: x.segment_id ?? '0',
-          state,
-          county_name: county,
-          carrier: x.carrier,
-        },
-        { rules, flags, now },
-      ),
-    );
+    const sellable = rows.filter((x) => {
+      const ref = {
+        contract_id: x.contract_id,
+        plan_id: x.plan_id,
+        segment_id: x.segment_id ?? '0',
+        state,
+        county_name: county,
+        carrier: x.carrier,
+      };
+      // rules=[] for 2026 ⇒ computeSellable is flags-only there (UHC/Devoted).
+      const sell = computeSellable(ref, { rules, flags, now });
+      if (planYear >= 2027) return sell;
+      // 2026: appointed set AND not UHC(post-cutoff)/Devoted.
+      const f = resolveSellability(appointedSets!, x.contract_id, x.plan_id);
+      return f.is_appointed && f.is_certified && sell;
+    });
     const orgCount = new Set(sellable.map((x) => x.parent_organization ?? x.carrier ?? '—')).size;
     res.setHeader('Cache-Control', 'private, max-age=300');
     return sendJson(res, 200, {

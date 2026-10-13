@@ -923,7 +923,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         new Error('SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing'),
       );
     }
-    const nonComm = await getNonCommissionableSets(supabaseUrl, supabaseKey);
+    const nonComm = await getNonCommissionableSets(supabaseUrl, supabaseKey, catalogYear);
 
     // ─── Step 1: fetch matching pm_plans rows ───────────────────────
     // When ids are passed we ignore the geo filters and just load those

@@ -32,22 +32,25 @@ interface Cache {
   fetchedAt: number;
 }
 
-let cache: Cache | null = null;
-let inflight: Promise<NonCommissionableSets> | null = null;
+const cacheByYear = new Map<number, Cache>();
+const inflightByYear = new Map<number, Promise<NonCommissionableSets>>();
 
 async function fetchOnce(
   supabaseUrl: string,
   supabaseKey: string,
+  planYear: number,
 ): Promise<NonCommissionableSets> {
   const base = supabaseUrl.replace(/\/$/, '');
-  // Read the real rules table filtered to action='exclude'. The 2027
-  // table also carries `allow` rows (the Wellcare focus-plan allowlist)
-  // which must NEVER be treated as blocks — reading action-blind hid
-  // those sellable plans. This action-aware read matches the exclude-only
-  // VIEW (pm_non_commissionable_contracts) the old build read, so once
-  // this deploys the view can be dropped.
+  // Read the real rules table filtered to action='exclude' for THIS plan
+  // year. The 2027 table also carries `allow` rows (the Wellcare focus-
+  // plan allowlist) which must NEVER be treated as blocks. YEAR GATE: the
+  // exclude rules are a PY2027 construct, so for plan_year < 2027 there
+  // are no rows and nothing is filtered — the 2026 catalog is not
+  // over-filtered by 2027 excludes. (UHC/Devoted carrier flags are
+  // enforced via the shared library result, not here.)
   const url =
-    `${base}/rest/v1/pm_non_commissionable_rules?select=contract_id,plan_number&action=eq.exclude`;
+    `${base}/rest/v1/pm_non_commissionable_rules` +
+    `?select=contract_id,plan_number&action=eq.exclude&plan_year=eq.${planYear}`;
   const resp = await fetch(url, {
     headers: {
       apikey: supabaseKey,
@@ -78,31 +81,38 @@ async function fetchOnce(
   return { contracts, plans };
 }
 
+const EMPTY_SETS: NonCommissionableSets = { contracts: new Set(), plans: new Set() };
+
 export async function getNonCommissionableSets(
   supabaseUrl: string,
   supabaseKey: string,
+  planYear: number,
 ): Promise<NonCommissionableSets> {
+  // YEAR GATE: exclude rules are PY2027-only. For earlier years there are
+  // no rows — return empty so the 2026 catalog isn't filtered.
+  if (planYear < 2027) return EMPTY_SETS;
   const now = Date.now();
-  if (cache && now - cache.fetchedAt < TTL_MS) {
-    return cache.sets;
-  }
-  if (inflight) return inflight;
-  inflight = (async () => {
+  const cached = cacheByYear.get(planYear);
+  if (cached && now - cached.fetchedAt < TTL_MS) return cached.sets;
+  const existing = inflightByYear.get(planYear);
+  if (existing) return existing;
+  const p = (async () => {
     try {
-      const sets = await fetchOnce(supabaseUrl, supabaseKey);
-      cache = { sets, fetchedAt: now };
+      const sets = await fetchOnce(supabaseUrl, supabaseKey, planYear);
+      cacheByYear.set(planYear, { sets, fetchedAt: now });
       return sets;
     } catch (err) {
-      if (cache) {
+      if (cached) {
         console.warn('[non-commissionable] refresh failed, serving stale:', err);
-        return cache.sets;
+        return cached.sets;
       }
       throw err;
     } finally {
-      inflight = null;
+      inflightByYear.delete(planYear);
     }
   })();
-  return inflight;
+  inflightByYear.set(planYear, p);
+  return p;
 }
 
 export function postgrestNotInValue(ids: ReadonlySet<string>): string | null {
