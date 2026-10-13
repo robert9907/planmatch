@@ -1233,12 +1233,10 @@ export function usePlanBrain(args: Args): State {
       // rows. The downstream /api/plan-brain-data read picks up the
       // freshly-populated rows.
       //
-      // Previously this hit the local agent endpoint
-      // /api/provider-network-status (copied from consumer in 590f336)
-      // — same logic, different host. The library call replaces it so
+      // Previously this hit a local agent copy of
+      // /api/provider-network-status. The library call replaced it so
       // there's exactly one pipeline writing to the cache from the
-      // agent. The local endpoint stays on disk for now in case we
-      // need to roll back, but no caller in src/ should reach it.
+      // agent; the local copy (year-less) was removed Oct 2026.
       //
       // Failures here are intentionally swallowed. The brain still
       // runs against whatever's in cache; Gate 1 passes Unknown (see
