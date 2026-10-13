@@ -297,7 +297,15 @@ export interface LibraryRankPlan {
     gate1_passed: boolean;
     gate2_passed: boolean;
     gate3_passed: boolean;
+    /** Lower-copays gate (optional — absent on older API responses). */
+    gate4_passed?: boolean;
   };
+  /** Sellability — false ⇒ non-commissionable (UHC/Devoted flag, exclude
+   *  rule, or Wellcare non-allowlist). Never in the top four; shown on the
+   *  bench marked "Not sellable" with enroll blocked. Optional: absent on
+   *  older API responses ⇒ treated as sellable. */
+  sellable?: boolean;
+  sellable_reason?: string | null;
 }
 
 export interface LibraryRankResult {
@@ -307,9 +315,18 @@ export interface LibraryRankResult {
   gate1_survivors: number;
   gate2_survivors: number;
   gate3_survivors: number;
+  gate4_survivors?: number;
   detected_conditions: string[];
   csnp_eligible: boolean;
   dsnp_eligible: boolean;
+  /** TPMO (e)(41) counts computed from the sellable county set. */
+  tpmo_org_count?: number;
+  tpmo_product_count?: number;
+  /** Fixed CMS-safe copy when the county can't fill four sellable plans. */
+  sellable_shortfall_message?: string | null;
+  /** Gate-3-surviving sellable plans that are coinsurance-only on a Gate-4
+   *  copay service (reported per county). */
+  copay_coinsurance_only_count?: number;
 }
 
 /** The 4 CMS-recognized C-SNP qualifying conditions the brain

@@ -2385,6 +2385,29 @@ function BenchCard({
           gap: 4,
         }}
       >
+        {plan.non_commissionable && (
+          <span
+            style={{
+              display: 'inline-block',
+              alignSelf: 'flex-start',
+              background: '#FCE8E8',
+              color: '#B42318',
+              fontFamily: F.label,
+              fontSize: 8.5,
+              fontWeight: 700,
+              letterSpacing: 0.6,
+              padding: '2px 7px',
+              borderRadius: 4,
+              textTransform: 'uppercase',
+              minWidth: 96,
+              textAlign: 'center',
+              marginBottom: 2,
+            }}
+            title="Not sellable — Rob can't enroll this plan. Client enrolls via Medicare.gov or 1-800-MEDICARE."
+          >
+            Not sellable
+          </span>
+        )}
         {showElimChip && (
           <span
             style={{
