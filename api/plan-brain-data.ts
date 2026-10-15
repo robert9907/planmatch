@@ -444,6 +444,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       getSellabilitySets(sbUrl, sbKey),
       getSellableRules(sbUrl, sbKey, catalogYear),
     ]);
+
+    // ─── MA-only (no-Part-D) exclusion set ─────────────────────────────
+    // pm_mapd_plan_set is the authoritative projection of distinct
+    // (plan_year, contract_id, plan_id) that have a Part D formulary — i.e.
+    // the TRUE MAPD set. The brain drops any eligible plan NOT in this set
+    // for a non-VA, drug-having user, because pm_plans.plan_type doesn't carry
+    // the MA-only distinction (an HMO-POS medical-only plan like Blue Medicare
+    // Medical Only H3449-012 looks like a normal MAPD otherwise). Scoped to the
+    // ranked year + this request's contracts (same as the consumer's
+    // plans-with-extras). Returned as `${contract_id}-${plan_id}` strings.
+    // Fails SAFE: on error we return an EMPTY array and the brain suspends the
+    // MA-only filter (gated on size > 0) so a failed load never empties the
+    // county. pm_mapd_plan_set CY2027 rows exist only once the shelf is
+    // promoted — before promotion the empty set correctly suspends the filter.
+    const mapdContractPlanIds: string[] = [];
+    {
+      const { data: mapdData, error: mapdErr } = await sb
+        .from('pm_mapd_plan_set')
+        .select('contract_id, plan_id')
+        .eq('plan_year', catalogYear)
+        .in('contract_id', contracts);
+      if (mapdErr) {
+        console.warn(
+          `[plan-brain-data] pm_mapd_plan_set load failed (${mapdErr.message}) — ` +
+            'returning empty set; brain suspends the MA-only filter (fail-safe).',
+        );
+      } else {
+        for (const r of (mapdData ?? []) as Array<{ contract_id: string; plan_id: string }>) {
+          mapdContractPlanIds.push(`${r.contract_id}-${r.plan_id}`);
+        }
+      }
+    }
     const sellableFlags = getSellableFlags();
     const sellableByPlan: Record<
       string,
@@ -483,6 +515,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       sellableByPlan,
       sellableRules,
       sellableFlags,
+      // Authoritative MAPD (has-Part-D) set for the ranked year. The brain
+      // drops any eligible plan NOT in this set for a non-VA drug-having user
+      // so a medical-only plan never ranks for someone who needs drug coverage.
+      // Empty ⇒ MA-only filter suspended (fail-safe / pre-promotion).
+      mapdContractPlanIds,
       stats: {
         benefits: (benefitsRes.data ?? []).length,
         drugCache: (drugCacheRes.data ?? []).length,

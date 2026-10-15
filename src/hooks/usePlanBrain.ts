@@ -148,6 +148,12 @@ export interface PlanBrainData {
   >;
   sellableRules?: readonly import('../../api/_lib/sellable-rules').SellableRule[];
   sellableFlags?: import('../../api/_lib/sellable-rules').SellableFlags;
+  // Authoritative MAPD (has-Part-D) set for the ranked year, as
+  // `${contract_id}-${plan_id}` strings (projection of pm_mapd_plan_set).
+  // The brain drops any eligible plan NOT in this set for a non-VA
+  // drug-having user. Optional for back-compat with older/cached responses;
+  // absent or empty ⇒ MA-only filter suspended (fail-safe / pre-promotion).
+  mapdContractPlanIds?: string[];
 }
 
 // Compat applied-rule shape — agent UI reads `action`/`reason`/`points`/`ruleId`.
@@ -625,30 +631,28 @@ export function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
     formularyByPlanKey.set(contractPlan, inner);
   }
 
-  // ── mapdContractPlanIds ──────────────────────────────────────────
-  // INTENTIONALLY UNSET. The brain's MA-only filter (plan-brain.ts:841)
-  // drops any plan not in this set when the user has no VA coverage —
-  // designed for the consumer flow, where the pool is mixed MA/MAPD.
+  // ── mapdContractPlanIds (MA-only exclusion) ───────────────────────
+  // The authoritative MAPD (has-Part-D) set for the ranked year, sourced by
+  // /api/plan-brain-data from pm_mapd_plan_set (a projection of distinct
+  // (plan_year, contract_id, plan_id) that have a Part D formulary). The
+  // brain drops any eligible plan NOT in this set for a non-VA drug-having
+  // user — see the MA-only filter in plan-brain.ts (gated on size > 0).
   //
-  // Why we can't derive it here: /api/plan-brain-data scopes the
-  // pm_formulary query to the user's specific rxcuis (expandedRxcuiList).
-  // So `data.formularyByContractPlan` only contains plans that cover
-  // the user's exact meds — NOT the full set of MAPDs. Building
-  // mapdContractPlanIds from it under-reports MAPD coverage and the
-  // brain ends up filtering the pool down to whatever 2-3 plans
-  // happen to list the user's drugs (Durham NC 27713 went from 50+
-  // candidates to 2 — the bug this comment exists for).
+  // CORRECTION (was previously hardcoded undefined): the old comment claimed
+  // /api/plans' planType=MAPD query pre-filter already removed MA-only plans,
+  // making this redundant. It does NOT — api/plans.ts mapPlanType() maps every
+  // non-PDP/non-SNP plan_type (including HMO-POS) to 'MAPD', so a medical-only
+  // plan with NO Part D (e.g. Blue Medicare Medical Only H3449-012,
+  // drug_deductible=null, absent from pm_mapd_plan_set) passes the planType
+  // filter and would otherwise rank #1 for a drug-having user. The consumer
+  // excludes it via this exact set; the agent now mirrors that.
   //
-  // Why it's safe to skip: the agent's /api/plans already applies a
-  // planType=MAPD filter at query time via mapPlanType(plan_type, snp,
-  // snp_type). MA-only plans never enter the agent pool in the first
-  // place, so the brain's redundant filter has nothing to do. If a
-  // future caller passes planType=null and needs MA-only suppression,
-  // the right fix is to add a dedicated /api/plan-brain-data field
-  // populated by SELECT DISTINCT (contract_id, plan_id) FROM
-  // pm_formulary WHERE contract_id IN (...) AND plan_id IN (...) —
-  // not to revive the rxcui-scoped derivation below.
-  const mapdContractPlanIds: ReadonlySet<string> | undefined = undefined;
+  // This is NOT the old rxcui-scoped derivation (which under-counted MAPDs and
+  // collapsed Durham to 2 plans) — pm_mapd_plan_set is the full per-year MAPD
+  // projection, independent of the user's drug list. Empty set (failed/pre-
+  // promotion load) ⇒ the brain's size>0 gate suspends the filter (fail-safe).
+  const mapdContractPlanIds: ReadonlySet<string> | undefined =
+    data.mapdContractPlanIds ? new Set(data.mapdContractPlanIds) : undefined;
 
   // ── providerNetworkByPlanKey (keyed contract-plan, no segment) ───
   const providerNetworkByPlanKey = new Map<

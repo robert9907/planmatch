@@ -118,6 +118,15 @@ async function main() {
   const rules = await getSellableRules(SB_URL, SB_KEY, YEAR);
   const flags = getSellableFlags();
 
+  // ── MAPD (has-Part-D) set for the year — mirrors /api/plan-brain-data ─
+  const { data: mapdRows } = await sb
+    .from('pm_mapd_plan_set')
+    .select('contract_id, plan_id')
+    .eq('plan_year', YEAR).in('contract_id', contracts);
+  const mapdContractPlanIds = new Set<string>(
+    (mapdRows ?? []).map((r: { contract_id: string; plan_id: string }) => `${r.contract_id}-${r.plan_id}`),
+  );
+
   const userProfile: UserProfile = {
     drugs: [DRUG],
     providers: [],
@@ -137,6 +146,7 @@ async function main() {
     county: COUNTY,
     formularyPublished: true,
     planYear: YEAR,
+    mapdContractPlanIds,
     sellableRules: rules,
     sellableFlags: flags,
     now: new Date('2026-10-15T12:00:00Z'),
@@ -147,12 +157,18 @@ async function main() {
   // ── Report ─────────────────────────────────────────────────────────
   const troyKey = 'H4676-001';
   const troyRow = pmRows.find((r) => `${r.contract_id}-${r.plan_id}` === troyKey);
+  // Medical-only (no Part D) plans we expect excluded by the MA-only filter.
+  const MEDICAL_ONLY = ['H3449-012', 'H5521-241'];
   console.log('═'.repeat(76));
   console.log(`DURHAM NC ${YEAR} — local brain (runPlanBrain) top four — drug: ${DRUG.name}`);
-  console.log(`pool: ${pmRows.length} plans · sellableRules: ${rules.length} · uhcExcludedFrom=${flags.uhcExcludedFrom} devotedExcluded=${flags.devotedExcluded}`);
+  console.log(`pool: ${pmRows.length} plans · sellableRules: ${rules.length} · mapdSet: ${mapdContractPlanIds.size} · uhcExcludedFrom=${flags.uhcExcludedFrom} devotedExcluded=${flags.devotedExcluded}`);
   console.log('═'.repeat(76));
   console.log(`Troy Medicare H4676-001 in pool: ${troyRow ? 'YES' : 'NO'}` +
     (troyRow ? ` (premium $${troyRow.monthly_premium}/mo, is_appointed=${troyRow.is_appointed}, is_certified=${troyRow.is_certified})` : ''));
+  for (const mo of MEDICAL_ONLY) {
+    const row = pmRows.find((r) => `${r.contract_id}-${r.plan_id}` === mo);
+    console.log(`Medical-only ${mo} (${row?.plan_name ?? 'n/a'}) in pool: ${row ? 'YES' : 'NO'} · in MAPD set: ${mapdContractPlanIds.has(mo)}`);
+  }
 
   const picks = out.liveTop3?.picks ?? [];
   console.log(`\nTOP FOUR (${picks.length}):`);
@@ -182,9 +198,25 @@ async function main() {
   console.log(`  sample non-sellable: ` +
     nonSellable.slice(0, 8).map((s) => `${s.row.carrier}/${s.row.contract_id}-${s.row.plan_id}`).join(', '));
 
-  const pass = !inFour && troyScored?.score.sellable === false;
+  // MA-only exclusion check: no medical-only plan may be in the four, and each
+  // must be absent from the eligible pool (filtered out before scoring).
+  console.log('\n── MA-ONLY (NO PART D) EXCLUSION ──');
+  const fourKeys = new Set(picks.map((pk) => `${pk.plan.row.contract_id}-${pk.plan.row.plan_id}`));
+  const rankedKeys = new Set(out.ranked.map((s) => `${s.row.contract_id}-${s.row.plan_id}`));
+  let medicalOnlyOk = true;
+  for (const mo of MEDICAL_ONLY) {
+    const inPool = pmRows.some((r) => `${r.contract_id}-${r.plan_id}` === mo);
+    if (!inPool) { console.log(`  ${mo}: not in county pool (n/a)`); continue; }
+    const inFourMO = fourKeys.has(mo);
+    const inRanked = rankedKeys.has(mo);
+    const ok = !inFourMO && !inRanked; // filtered out of eligible ⇒ absent from both
+    if (!ok) medicalOnlyOk = false;
+    console.log(`  ${mo}: in four=${inFourMO ? 'YES (REGRESSION!)' : 'NO ✓'} · in ranked/scored=${inRanked ? 'YES (should be filtered)' : 'NO ✓'}`);
+  }
+
+  const pass = !inFour && troyScored?.score.sellable === false && medicalOnlyOk;
   console.log('\n' + '═'.repeat(76));
-  console.log(pass ? 'ACCEPTANCE: PASS ✓  Troy is NOT in the four and is benched sellable=false.'
+  console.log(pass ? 'ACCEPTANCE: PASS ✓  Troy benched sellable=false; medical-only plans excluded from the four.'
                    : 'ACCEPTANCE: FAIL ✗  (see above)');
   console.log('═'.repeat(76));
   process.exit(pass ? 0 : 2);

@@ -629,7 +629,26 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   let eligible = filterPlanPool(input.plans, population, dualEligible, widenForCsnp);
 
   // MA-only filter: drop plans without Part D for non-VA users.
-  if (input.mapdContractPlanIds && input.userProfile.hasVaDrugCoverage !== true) {
+  //
+  // mapdContractPlanIds is the authoritative MAPD (has-Part-D) set for the
+  // ranked year (pm_mapd_plan_set, via /api/plan-brain-data). pm_plans.plan_type
+  // does NOT carry the MA-only distinction — a medical-only HMO-POS (e.g. Blue
+  // Medicare Medical Only, drug_deductible=null) looks like a normal MAPD and
+  // would otherwise rank for a drug-having user. Mirrors the consumer brain.
+  //
+  // GATE on size > 0 (fail-safe): an empty set means either the load failed or
+  // the year's shelf isn't promoted yet (pm_mapd_plan_set has no rows for the
+  // year). Applying the filter against an empty set would drop EVERY plan and
+  // take the county dark. Suspend the filter in that case — the per-plan
+  // "formulary not yet published" state (formularyPublished=false) already
+  // covers the pre-promotion window. Also keep the formularyPublished guard so
+  // a partial mid-import set can't prune the pool.
+  if (
+    input.formularyPublished !== false &&
+    input.mapdContractPlanIds &&
+    input.mapdContractPlanIds.size > 0 &&
+    input.userProfile.hasVaDrugCoverage !== true
+  ) {
     const mapdSet = input.mapdContractPlanIds;
     eligible = eligible.filter((p) => mapdSet.has(`${p.contract_id}-${p.plan_id}`));
   }
