@@ -114,6 +114,16 @@ export interface LibraryProviderPlan {
   status: 'in_network' | 'out_of_network' | 'unknown';
   source: 'fhir_live' | 'cache' | 'medicare_gov' | 'unknown';
   last_verified: string | null;
+  /** Raw winning cache source ('broker_verified' | 'fhir_*' | 'healthspring'
+   *  | 'medicare_gov' | …) when the library surfaces it, so the agent can
+   *  render the exact cross-surface provenance label (provenanceLabel).
+   *  Optional: today's /api/library/provider-network collapses `source` to
+   *  the 4-value enum above and omits this — the label falls back to the
+   *  enum map until the endpoint also returns source_raw. */
+  source_raw?: string | null;
+  /** Set when the answer was carried over from a prior plan year (no row
+   *  for the requested year); drives the "(YYYY network)" label suffix. */
+  fallback_year?: number | null;
 }
 
 export interface LibraryProviderResult {

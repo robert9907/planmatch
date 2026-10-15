@@ -1,8 +1,20 @@
 // Which pm_provider_network_cache row answers for a (doctor, plan, year)
-// when several sources have one. Rob's ruling (Oct 11, 2026): Medicare
-// Plan Finder wins every time. After it: broker-verified, then carrier
-// directories, then Insurelytix, then anything else. Same rank → newest
-// checked_at.
+// when several sources have one.
+//
+// Rob's ruling (Oct 13, 2026) — SUPERSEDES the Oct-11 "Medicare Plan
+// Finder wins every time" rule, and mirrors the consumer repo's
+// api/_lib/network-row-precedence.ts exactly: the CARRIER is
+// authoritative on its own network. Broker-verified (a human
+// confirmation) wins, then carrier directories (FHIR / HealthTeam /
+// Insurelytix / Alignment / HealthSpring), then Medicare Plan Finder,
+// then anything else. Same rank → newest checked_at.
+//
+// Why the flip: medicare.gov Plan Finder routinely lists a doctor as
+// out-of-network who IS in-network (stale/partial CMS feed). Letting a
+// medicare_gov "false" override a carrier FHIR "true" wrongly eliminated
+// real in-network plans (Dr. Klein on BCBS). A medicare_gov-only "false"
+// is now treated as UNKNOWN, not out-of-network — see isTrustedSource +
+// every caller (plan-brain-data, networkCheck, providerEvidence).
 
 export interface RankableRow {
   source?: string | null;
@@ -10,11 +22,25 @@ export interface RankableRow {
 }
 
 export function sourceRank(source: string | null | undefined): number {
-  if (source === 'medicare_gov') return 0;
-  if (source === 'broker_verified') return 1;
-  if (source && (source.startsWith('fhir_') || source === 'healthteam')) return 2;
-  if (source === 'insurelytix') return 3;
-  return 4;
+  if (source === 'broker_verified') return 0;
+  if (source && (source.startsWith('fhir_') || source === 'healthteam' || source === 'insurelytix' || source === 'alignment' || source === 'healthspring')) return 1;
+  if (source === 'medicare_gov') return 2;
+  return 3;
+}
+
+/** A trusted source's "not covered" is proof of out-of-network (eliminates
+ *  at Gate 1). A non-trusted "not covered" — notably medicare_gov, which
+ *  under-reports in-network providers — is treated as UNKNOWN, not out. */
+export function isTrustedSource(source: string | null | undefined): boolean {
+  if (!source) return false;
+  return (
+    source === 'broker_verified' ||
+    source === 'healthteam' ||
+    source === 'insurelytix' ||
+    source === 'alignment' ||
+    source === 'healthspring' ||
+    source.startsWith('fhir_')
+  );
 }
 
 /** true when `a` should answer instead of `b`. */
