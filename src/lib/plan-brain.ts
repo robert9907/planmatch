@@ -74,6 +74,7 @@ import {
   MEDICAL_COST_SHARE_CATEGORIES,
 } from './dual-eligible';
 import { firstTierCopay } from './inpatient-format';
+import { computeSellability } from '../../api/_lib/sellable-rules';
 
 // Day-1 SNF copay from the ladder description ("Days 1-20: $0/day · …"),
 // falling back to the row's flat copay when the description doesn't
@@ -628,7 +629,28 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   let eligible = filterPlanPool(input.plans, population, dualEligible, widenForCsnp);
 
   // MA-only filter: drop plans without Part D for non-VA users.
-  if (input.mapdContractPlanIds && input.userProfile.hasVaDrugCoverage !== true) {
+  //
+  // mapdContractPlanIds is the authoritative MAPD (has-Part-D) set for the
+  // ranked year (pm_mapd_plan_set, via /api/plan-brain-data). pm_plans.plan_type
+  // does NOT carry the MA-only distinction — a medical-only HMO-POS (e.g. Blue
+  // Medicare Medical Only, drug_deductible=null) looks like a normal MAPD and
+  // would otherwise rank for a drug-having user. Mirrors the consumer brain.
+  //
+  // GATE on the set being LOADED (size > 0), NOT on formularyPublished — the
+  // 2027 MA-PD set (pm_mapd_plan_set, 677 rows) is built and frozen long before
+  // the 2027 SPUF formulary is promoted, so a 2027 request has formularyPublished
+  // === false but a complete MA-PD set. Gating on formularyPublished here (as the
+  // consumer brain used to) skips the filter for the whole PY2027 shelf and leaks
+  // no-Part-D medical-only plans into the four. Mirrors the consumer brain's
+  // final condition exactly (fix #1, PR #77). An EMPTY set means "not loaded"
+  // (load failed, or the year's set isn't built) → filter OFF so a county is
+  // never emptied; the set is built atomically, so non-empty == complete (no
+  // mid-import partial window). VA users keep every plan.
+  if (
+    input.mapdContractPlanIds &&
+    input.mapdContractPlanIds.size > 0 &&
+    input.userProfile.hasVaDrugCoverage !== true
+  ) {
     const mapdSet = input.mapdContractPlanIds;
     eligible = eligible.filter((p) => mapdSet.has(`${p.contract_id}-${p.plan_id}`));
   }
@@ -908,6 +930,35 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       gate4: '', // filled in after rankedByCost is sorted (see below)
     };
 
+    // ── Sellability — computed BEFORE the gates ───────────────────────
+    // Non-sellable plans never enter the race for the top four; they still
+    // flow to `ranked` (the bench) so CompareScreen can badge "Not sellable"
+    // and the AgentBase recommend write stays blocked. Engage whenever a
+    // ruleset is WIRED (sellableRules defined, even the empty 2026 array):
+    // the appointment gate + UHC/Devoted flags apply for EVERY year, and the
+    // exclude rules + Wellcare allowlist only when rules are present (2027).
+    // sellableRules undefined ⇒ unwired caller / fixture ⇒ every plan sellable
+    // (back-compat). Mirrors the consumer brain exactly.
+    const sellability = input.sellableRules
+      ? computeSellability(
+          {
+            contract_id: row.contract_id,
+            plan_id: row.plan_id,
+            segment_id: row.segment_id,
+            state: row.state,
+            county_name: row.county_name,
+            carrier: row.carrier,
+            is_appointed: row.is_appointed,
+            is_certified: row.is_certified,
+          },
+          {
+            rules: input.sellableRules,
+            flags: input.sellableFlags ?? { uhcExcludedFrom: null, devotedExcluded: false },
+            now: input.now ?? new Date(),
+          },
+        )
+      : { sellable: true, reason: null };
+
     const score: BrainScore = {
       // Axis scores filled in below once we know the pool size.
       drugCostScore: 0,
@@ -961,6 +1012,8 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
       gate1Passed: false,
       gate2Passed: false,
       gate3Passed: false,
+      sellable: sellability.sellable,
+      sellableReason: sellability.reason,
       explanations,
     };
     return { row, benefits, formulary, score, plan: aggregatedPlan };
@@ -1124,26 +1177,42 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     s.score.extraBenefitsScore = extrasDirect[i];
   });
 
+  // ── Sellability partition (pre-gate) ──────────────────────────────
+  // Non-sellable plans never enter the race for the top four. They stay in
+  // rawScored (and thus in `ranked` / the bench) so CompareScreen can show
+  // them below the four with a "Not sellable" marker + blocked enroll.
+  // Sellability was tagged per plan above from input.sellableRules; when no
+  // rules are wired every plan is sellable (score.sellable stays undefined ⇒
+  // `!== false` keeps it in the pool). Mirrors the consumer brain.
+  const sellablePool = rawScored.filter((s) => s.score.sellable !== false);
+  if (typeof console !== 'undefined' && console.info) {
+    console.info(
+      `[brain-funnel] sellable filter: ${sellablePool.length}/${rawScored.length} sellable ` +
+        `(${rawScored.length - sellablePool.length} non-sellable held for the bench)`,
+    );
+  }
+
   // ── Gate 1 — providers ────────────────────────────────────────────
-  const gate1 = applyProviderGate(rawScored, userHasProviders);
+  // Runs on the sellable pool only — the top-four race is sellable-only.
+  const gate1 = applyProviderGate(sellablePool, userHasProviders);
   for (const s of gate1) s.score.gate1Passed = true;
   // Unconditional diagnostic — surfaces silent provider-gate bypass.
   // userHasProviders=false means Gate 1 returns the whole pool
   // unchanged; cacheSize=0 with userHasProviders=true means every
   // plan flagged unverified and Gate 1 still passed all through.
-  const g1In = rawScored.filter((s) => s.score.allProvidersInNetwork).length;
-  const g1Out = rawScored.filter((s) => s.score.anyProviderDefinitivelyOut).length;
-  const g1Absent = rawScored.filter(
+  const g1In = sellablePool.filter((s) => s.score.allProvidersInNetwork).length;
+  const g1Out = sellablePool.filter((s) => s.score.anyProviderDefinitivelyOut).length;
+  const g1Absent = sellablePool.filter(
     (s) => !s.score.allProvidersInNetwork && !s.score.anyProviderDefinitivelyOut,
   ).length;
   if (typeof console !== 'undefined' && console.info) {
     console.info(
       `[brain-funnel] userHasProviders=${userHasProviders} cacheSize=${input.providerNetworkByPlanKey?.size ?? 0} ` +
-      `gate1: in=${g1In} out=${g1Out} absent=${g1Absent} (pool=${rawScored.length}, survived=${gate1.length})`,
+      `gate1: in=${g1In} out=${g1Out} absent=${g1Absent} (sellablePool=${sellablePool.length}, survived=${gate1.length})`,
     );
   }
-  debugLog(`Gate 1: ${gate1.length}/${rawScored.length} survived providers`);
-  console.log('Gate 1:', gate1.length, 'survived of', rawScored.length);
+  debugLog(`Gate 1: ${gate1.length}/${sellablePool.length} survived providers`);
+  console.log('Gate 1:', gate1.length, 'survived of', sellablePool.length);
 
   // ── Gate 2 — medications ──────────────────────────────────────────
   const gate2Survivors = applyMedicationGate(gate1, userHasDrugs, gate2BypassIndices);
@@ -1242,7 +1311,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
     population,
     scopeLabel: input.county ? `in ${input.county} County` : 'in your area',
     qualifyingPlanCount: eligible.length,
-    providerFilterFellBack: userHasProviders && gate1.length < rawScored.length && diversified.length < 4,
+    providerFilterFellBack: userHasProviders && gate1.length < sellablePool.length && diversified.length < 4,
     highMoopFilterFellBack: false,
     priorityGateRelaxation:
       diversified.some((p) => p.score.csnpReservedSlot) ? 'half' : undefined,

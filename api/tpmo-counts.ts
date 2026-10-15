@@ -29,15 +29,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!url || !key) return serverError(res, new Error('Supabase env not configured'));
   const base = url.replace(/\/$/, '');
   try {
-    // SPLIT sellable set, matching the brain:
-    //  • 2027+: the full sellable definition (exclude rules + Wellcare
-    //    allowlist + UHC/Devoted flags) via computeSellable.
-    //  • 2026: the appointed set (is_appointed && is_certified) MINUS
-    //    UHC-after-cutoff and Devoted — Rob can't write those for any
-    //    year. getSellableRules returns [] for 2026, so computeSellable
-    //    collapses to the flags-only check there.
+    // Single sellable definition, matching the brain's computeSellable:
+    // the appointment gate (is_appointed && is_certified) + the UHC/Devoted
+    // flags fire for EVERY plan year; the exclude rules + Wellcare allowlist
+    // only engage when a ruleset is wired (2027 — getSellableRules returns []
+    // for 2026). Appointment is attached to the ref for every year (same as
+    // the consumer), so the one computeSellable call handles both years and
+    // the old separate 2026 is_appointed && is_certified check is gone.
     const [rules, flags] = [await getSellableRules(base, key, planYear), getSellableFlags()];
-    const appointedSets = planYear < 2027 ? await getSellabilitySets(base, key) : null;
+    const appointedSets = await getSellabilitySets(base, key);
     const now = new Date();
     const p = new URLSearchParams();
     p.set('state', `eq.${state}`);
@@ -54,6 +54,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       contract_id: string; plan_id: string; segment_id: string | null; carrier: string | null; parent_organization: string | null;
     }>;
     const sellable = rows.filter((x) => {
+      // Attach appointment/certification for EVERY year so the appointment
+      // gate inside computeSellable fires the same way it does in the brain.
+      const f = resolveSellability(appointedSets, x.contract_id, x.plan_id);
       const ref = {
         contract_id: x.contract_id,
         plan_id: x.plan_id,
@@ -61,13 +64,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         state,
         county_name: county,
         carrier: x.carrier,
+        is_appointed: f.is_appointed,
+        is_certified: f.is_certified,
       };
-      // rules=[] for 2026 ⇒ computeSellable is flags-only there (UHC/Devoted).
-      const sell = computeSellable(ref, { rules, flags, now });
-      if (planYear >= 2027) return sell;
-      // 2026: appointed set AND not UHC(post-cutoff)/Devoted.
-      const f = resolveSellability(appointedSets!, x.contract_id, x.plan_id);
-      return f.is_appointed && f.is_certified && sell;
+      // rules=[] for 2026 ⇒ computeSellable is appointment + flags only there
+      // (UHC/Devoted); 2027 adds the exclude rules + Wellcare allowlist.
+      return computeSellable(ref, { rules, flags, now });
     });
     const orgCount = new Set(sellable.map((x) => x.parent_organization ?? x.carrier ?? '—')).size;
     res.setHeader('Cache-Control', 'private, max-age=300');
