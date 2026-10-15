@@ -33,6 +33,11 @@
  *   pnpm tsx scripts/cms-ground-truth-validate.ts --verbose
  *   pnpm tsx scripts/cms-ground-truth-validate.ts --snapshot   (pins current /api/plans values into the fixture file; sets verifiedOn = 'production-snapshot YYYY-MM-DD')
  *
+ *   # LIVE gate (CY2027, the default catalog during AEP):
+ *   pnpm tsx scripts/cms-ground-truth-validate.ts
+ *   # CY2026 diagnostic (SEP catalog) — pin the year AND its fixtures:
+ *   pnpm tsx scripts/cms-ground-truth-validate.ts --fixtures scripts/cms-ground-truth-fixtures-2026.json --year 2026
+ *
  * Exit codes:
  *   0  every compared field passed
  *   1  one or more comparisons failed
@@ -157,6 +162,11 @@ interface CliArgs {
   verbose: boolean;
   snapshot: boolean;
   fixturePath: string;
+  /** Pin the catalog year of /api/plans (appends &plan_year=YYYY). Omitted =
+   *  the endpoint's default (post-Oct-15 AEP cutover that is the 2027 catalog).
+   *  Used by the 2026-pinned diagnostic:
+   *    --fixtures scripts/cms-ground-truth-fixtures-2026.json --year 2026 */
+  year?: number;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -176,6 +186,7 @@ function parseArgs(argv: string[]): CliArgs {
     else if (a === '--verbose' || a === '-v') out.verbose = true;
     else if (a === '--snapshot') out.snapshot = true;
     else if (a === '--fixtures' && next) { out.fixturePath = resolve(next); i++; }
+    else if (a === '--year' && next) { out.year = Number(next); i++; }
   }
   return out;
 }
@@ -362,7 +373,7 @@ function checksForFixture(fixture: Fixture, plan: ApiPlan | undefined, tolerance
   return out;
 }
 
-async function fetchPlans(base: string, fixtures: Fixture[]): Promise<Map<string, ApiPlan>> {
+async function fetchPlans(base: string, fixtures: Fixture[], year?: number): Promise<Map<string, ApiPlan>> {
   // Query by (state, county) and resolve each fixture by contract+plan
   // afterwards. The /api/plans?ids= path enforces a strict id-string
   // filter that compares the queried id verbatim against the
@@ -390,7 +401,8 @@ async function fetchPlans(base: string, fixtures: Fixture[]): Promise<Map<string
         const [key, loc] = item;
         const url =
           `${base}/api/plans?state=${encodeURIComponent(loc.state)}` +
-          `&county=${encodeURIComponent(loc.county)}&limit=500`;
+          `&county=${encodeURIComponent(loc.county)}&limit=500` +
+          (year ? `&plan_year=${year}` : '');
         const res = await fetch(url);
         if (!res.ok) {
           throw new Error(`GET ${url} → HTTP ${res.status}`);
@@ -611,7 +623,7 @@ async function main(): Promise<void> {
   const ids = file.fixtures.map((f) => f.id);
   let plans: Map<string, ApiPlan>;
   try {
-    plans = await fetchPlans(args.base, file.fixtures);
+    plans = await fetchPlans(args.base, file.fixtures, args.year);
   } catch (err) {
     console.error('API fetch failed:', err);
     process.exit(2);
