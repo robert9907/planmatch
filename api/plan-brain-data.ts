@@ -25,6 +25,7 @@ import { resolvePlanCatalogYear } from './library/planCatalogYear.js';
 import { isFormularyPublished } from './_lib/formulary-published.js';
 import { getSellabilitySets, resolveSellability } from './_lib/sellability.js';
 import { getSellableRules, getSellableFlags } from './_lib/sellable-rules.js';
+import { outranks, isTrustedSource } from './_lib/network-row-precedence.js';
 
 // PostgREST on this project caps every query at 1000 rows
 // (db-max-rows). The formulary fetch can easily exceed that — Durham
@@ -149,6 +150,9 @@ interface NetworkRow {
   segment_id: string;
   npi: string;
   covered: boolean | null;
+  source?: string | null;
+  checked_at?: string | null;
+  plan_year?: number | null;
 }
 
 function splitTriple(id: string): { contract: string; plan: string; segment: string } | null {
@@ -170,6 +174,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     explicit: req.query.plan_year,
     effectiveDate: req.query.effective_date,
   });
+  // Prior-year carry-over for provider networks (mirrors the consumer's
+  // /api/library/provider-network): CMS contract-plan IDs persist between
+  // years with networks that rarely change, so when the requested year has
+  // no row for a (plan, doctor) we fall back to the prior year's answer —
+  // the requested year always wins when both exist (year-aware winner below).
+  const networkFallbackYear = catalogYear >= 2027 ? catalogYear - 1 : null;
+  const networkReadYears = networkFallbackYear != null ? [catalogYear, networkFallbackYear] : [catalogYear];
 
   const rxcuis = (typeof req.query.rxcuis === 'string' ? req.query.rxcuis : '')
     .split(',').map((s) => s.trim()).filter(Boolean);
@@ -284,7 +295,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       npis.length > 0
         ? sb
             .from('pm_provider_network_cache')
-            .select('plan_id, segment_id, npi, covered')
+            .select('plan_id, segment_id, npi, covered, source, checked_at, plan_year')
+            // Requested year + (for 2027+) the prior year, so a plan with no
+            // requested-year row can carry over. The year-aware winner below
+            // only uses the prior-year row when the requested year is silent.
+            .in('plan_year', networkReadYears)
             .in('plan_id', contractPlans)
             .in('npi', npis)
         : Promise.resolve({ data: [], error: null }),
@@ -425,7 +440,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const segNorm = (r.segment_id ?? '0').replace(/^0+/, '') || '0';
       const triple = `${r.plan_id}-${segNorm === '0' ? '000' : segNorm.padStart(3, '0')}`;
       const matched = matchToRequestedTriple(triple, ids) ?? triple;
-      (networkByPlan[matched] ||= {})[r.npi] = r;
+      // One row of record per (plan, doctor). The requested year always beats
+      // a prior-year carry-over; within the same year class, broker-verified >
+      // carrier directory (fhir_*/healthteam/insurelytix/alignment/healthspring)
+      // > Plan Finder > other, freshest wins (network-row-precedence). Mirrors
+      // the consumer's /api/library/provider-network winner.
+      const slot = (networkByPlan[matched] ||= {});
+      const cur = slot[r.npi];
+      const rReq = r.plan_year == null || r.plan_year === catalogYear;
+      const curReq = cur ? cur.plan_year == null || cur.plan_year === catalogYear : false;
+      const take = !cur || (rReq !== curReq ? rReq : outranks(r, cur));
+      if (take) slot[r.npi] = r;
+    }
+    // A medicare_gov (or any non-trusted) "not covered" is UNKNOWN, not out
+    // of network — Plan Finder under-reports in-network doctors, and the
+    // brain's Gate 1 eliminates a covered=false row (plan-brain.ts
+    // applyProviderGate) but passes an ABSENT one as unverified. Drop any
+    // winning row that says "not covered" from a non-trusted source so the
+    // doctor reads as unknown, never a false out-of-network. covered=true,
+    // and trusted covered=false, stay. Matches the consumer's status
+    // endpoints (isTrustedSource).
+    for (const npiMap of Object.values(networkByPlan)) {
+      for (const [npi, row] of Object.entries(npiMap)) {
+        if (row.covered !== true && !isTrustedSource(row.source)) delete npiMap[npi];
+      }
     }
 
     // ─── Sellability — appointment/certification flags + rules + flags ──

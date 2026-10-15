@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Plan } from '@/types/plans';
 import type { Provider } from '@/types/session';
 import { checkProviderNetwork, type LibraryProviderPlan } from '@/lib/library-client';
+import { provenanceLabel } from '../../api/_lib/provider-provenance';
 
 type Row = {
   key: string;
@@ -21,11 +22,17 @@ type Row = {
   checkedAt: string | null;
 };
 
+// Collapsed-enum fallback labels, aligned to the consumer's provenanceLabel
+// vocabulary ("carrier directory", "Medicare.gov", …) so the Compliance proof
+// panel reads the same as the Compare screen (rank-plans). The library
+// endpoint collapses broker_verified → 'cache', so a broker confirmation
+// shows "saved verification" here until /api/library/provider-network also
+// returns source_raw (then provenanceLabel renders "confirmed by your agent").
 const SOURCE_LABEL: Record<LibraryProviderPlan['source'], string> = {
-  fhir_live: 'Carrier directory',
-  medicare_gov: 'Medicare Plan Finder',
-  cache: 'Saved verification',
-  unknown: 'No directory answer',
+  fhir_live: 'carrier directory',
+  medicare_gov: 'Medicare.gov',
+  cache: 'saved verification',
+  unknown: 'no directory answer',
 };
 
 function fmtDate(iso: string | null): string {
@@ -82,10 +89,16 @@ export function ProviderNetworkProof({
           const hit = resp.by_npi?.[r.npi]?.plans?.find((x) => x.plan_id === plan.id)
             ?? resp.by_npi?.[r.npi]?.plans?.[0];
           if (!hit || hit.status === 'unknown') return r;
+          // Exact cross-surface label when the library sends the raw winning
+          // source (+ prior-year carry); otherwise the collapsed-enum map.
+          const sourceLabel =
+            hit.source_raw != null
+              ? provenanceLabel(hit.source_raw, hit.fallback_year ?? null)
+              : SOURCE_LABEL[hit.source] ?? 'saved verification';
           return {
             ...r,
             status: hit.status,
-            sourceLabel: SOURCE_LABEL[hit.source] ?? 'Saved verification',
+            sourceLabel,
             checkedAt: hit.last_verified,
           };
         }));

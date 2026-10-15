@@ -11,7 +11,7 @@
 // row is the proof of what the directory said on enrollment day.
 
 import { supabase } from './supabase.js';
-import { outranks } from './network-row-precedence.js';
+import { outranks, isTrustedSource } from './network-row-precedence.js';
 
 export type EvidenceStatus = 'in_network' | 'out_of_network' | 'not_confirmed';
 
@@ -59,7 +59,8 @@ export function pickRowOfRecord(
   const seg = norm(segmentId);
   const sameSeg = rows.filter((r) => norm(r.segment_id) === seg);
   const pool = sameSeg.length > 0 ? sameSeg : rows;
-  // Plan Finder wins every time; same source → newest check.
+  // Carrier wins over Plan Finder (broker > carrier > medicare_gov > other);
+  // same source → newest check (network-row-precedence).
   return pool.reduce((best, r) => (outranks(r, best) ? r : best));
 }
 
@@ -96,7 +97,18 @@ export function buildEvidenceRows(args: {
       segment_id: args.segmentId,
       npi: npi || '',
       provider_name: p.name || null,
-      status: row ? (row.covered ? 'in_network' : 'out_of_network') : 'not_confirmed',
+      // covered=true → in_network. covered=false records out_of_network ONLY
+      // from a trusted carrier/broker source; a medicare_gov "not covered"
+      // is UNKNOWN (Plan Finder under-reports in-network doctors), so it is
+      // stamped not_confirmed, never out_of_network. Matches the consumer's
+      // isTrustedSource rule.
+      status: row
+        ? row.covered
+          ? 'in_network'
+          : isTrustedSource(row.source)
+            ? 'out_of_network'
+            : 'not_confirmed'
+        : 'not_confirmed',
       source: row?.source ?? null,
       source_checked_at: row?.checked_at ?? null,
       shown_to_broker: p.network_status,
