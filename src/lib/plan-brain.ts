@@ -636,15 +636,17 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   // Medicare Medical Only, drug_deductible=null) looks like a normal MAPD and
   // would otherwise rank for a drug-having user. Mirrors the consumer brain.
   //
-  // GATE on size > 0 (fail-safe): an empty set means either the load failed or
-  // the year's shelf isn't promoted yet (pm_mapd_plan_set has no rows for the
-  // year). Applying the filter against an empty set would drop EVERY plan and
-  // take the county dark. Suspend the filter in that case — the per-plan
-  // "formulary not yet published" state (formularyPublished=false) already
-  // covers the pre-promotion window. Also keep the formularyPublished guard so
-  // a partial mid-import set can't prune the pool.
+  // GATE on the set being LOADED (size > 0), NOT on formularyPublished — the
+  // 2027 MA-PD set (pm_mapd_plan_set, 677 rows) is built and frozen long before
+  // the 2027 SPUF formulary is promoted, so a 2027 request has formularyPublished
+  // === false but a complete MA-PD set. Gating on formularyPublished here (as the
+  // consumer brain used to) skips the filter for the whole PY2027 shelf and leaks
+  // no-Part-D medical-only plans into the four. Mirrors the consumer brain's
+  // final condition exactly (fix #1, PR #77). An EMPTY set means "not loaded"
+  // (load failed, or the year's set isn't built) → filter OFF so a county is
+  // never emptied; the set is built atomically, so non-empty == complete (no
+  // mid-import partial window). VA users keep every plan.
   if (
-    input.formularyPublished !== false &&
     input.mapdContractPlanIds &&
     input.mapdContractPlanIds.size > 0 &&
     input.userProfile.hasVaDrugCoverage !== true

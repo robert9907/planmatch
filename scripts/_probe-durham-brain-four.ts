@@ -144,7 +144,7 @@ async function main() {
     formularyByPlanKey,
     userProfile,
     county: COUNTY,
-    formularyPublished: true,
+    formularyPublished: false, // real PY2027 state (no promoted 2027 SPUF) — proves the MA-only filter does NOT depend on it
     planYear: YEAR,
     mapdContractPlanIds,
     sellableRules: rules,
