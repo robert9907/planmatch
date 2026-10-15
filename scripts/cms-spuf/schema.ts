@@ -65,7 +65,7 @@ export const PLAN_INFORMATION: CmsFileSpec = {
   name: 'plan_information',
   fileName: 'plan_information.txt',
   // CMS uses "plan information  PPUF_…" (no "file" word, double space).
-  innerZipPattern: /^plan\s+information(\s+file)?\s+PPUF.*\.zip$/i,
+  innerZipPattern: /^plan\s+information(\s+file)?\s+(PPUF|\d{4}_\d{8}).*\.zip$/i,
   landingTable: 'cms_spuf_plan_information',
   columns: [
     t('CONTRACT_ID', 'contract_id', false),
@@ -92,7 +92,7 @@ export const PLAN_INFORMATION: CmsFileSpec = {
 export const BASIC_DRUGS: CmsFileSpec = {
   name: 'basic_drugs',
   fileName: 'basic_drugs_formulary_file.txt',
-  innerZipPattern: /^basic\s+drugs\s+formulary\s+file\s+PPUF.*\.zip$/i,
+  innerZipPattern: /^basic\s+drugs\s+formulary\s+file\s+(PPUF|\d{4}_\d{8}).*\.zip$/i,
   landingTable: 'cms_spuf_basic_drugs',
   columns: [
     t('FORMULARY_ID', 'formulary_id', false),
@@ -116,7 +116,7 @@ export const BASIC_DRUGS: CmsFileSpec = {
 export const BENEFICIARY_COST: CmsFileSpec = {
   name: 'beneficiary_cost',
   fileName: 'beneficiary_cost.txt',
-  innerZipPattern: /^beneficiary\s+cost\s+file\s+PPUF.*\.zip$/i,
+  innerZipPattern: /^beneficiary\s+cost\s+file\s+(PPUF|\d{4}_\d{8}).*\.zip$/i,
   landingTable: 'cms_spuf_beneficiary_cost',
   columns: [
     t('CONTRACT_ID', 'contract_id', false),
@@ -156,7 +156,7 @@ export const BENEFICIARY_COST: CmsFileSpec = {
 export const PHARMACY_NETWORK: CmsFileSpec = {
   name: 'pharmacy_networks',
   fileName: 'pharmacy_network.txt',
-  innerZipPattern: /^pharmacy\s+networks?\s+file\s+PPUF.*part\s*\d+\.zip$/i,
+  innerZipPattern: /^pharmacy\s+networks?\s+file\s+(PPUF|\d{4}_\d{8}).*part\s*\d+\.zip$/i,
   multiPart: true,
   landingTable: 'cms_spuf_pharmacy_network',
   columns: [
@@ -184,7 +184,7 @@ export const PHARMACY_NETWORK: CmsFileSpec = {
 export const EXCLUDED_DRUGS: CmsFileSpec = {
   name: 'excluded_drugs',
   fileName: 'excluded_drugs_formulary_file.txt',
-  innerZipPattern: /^excluded\s+drugs\s+formulary\s+file\s+PPUF.*\.zip$/i,
+  innerZipPattern: /^excluded\s+drugs\s+formulary\s+file\s+(PPUF|\d{4}_\d{8}).*\.zip$/i,
   landingTable: 'cms_spuf_excluded_drugs',
   columns: [
     t('CONTRACT_ID', 'contract_id', false),
@@ -205,7 +205,7 @@ export const EXCLUDED_DRUGS: CmsFileSpec = {
 export const INDICATION_BASED_COVERAGE: CmsFileSpec = {
   name: 'indication_based_coverage',
   fileName: 'indication_based_coverage_formulary_file.txt',
-  innerZipPattern: /^indication\s+based\s+coverage\s+formulary\s+file\s+PPUF.*\.zip$/i,
+  innerZipPattern: /^indication\s+based\s+coverage\s+formulary\s+file\s+(PPUF|\d{4}_\d{8}).*\.zip$/i,
   landingTable: 'cms_spuf_indication_based_coverage',
   columns: [
     t('CONTRACT_ID', 'contract_id', false),
@@ -219,7 +219,7 @@ export const INDICATION_BASED_COVERAGE: CmsFileSpec = {
 export const INSULIN_BENEFICIARY_COST: CmsFileSpec = {
   name: 'insulin_beneficiary_cost',
   fileName: 'insulin_beneficiary_cost.txt',
-  innerZipPattern: /^insulin\s+beneficiary\s+cost\s+file\s+PPUF.*\.zip$/i,
+  innerZipPattern: /^insulin\s+beneficiary\s+cost\s+file\s+(PPUF|\d{4}_\d{8}).*\.zip$/i,
   landingTable: 'cms_spuf_insulin_beneficiary_cost',
   columns: [
     t('CONTRACT_ID', 'contract_id', false),
@@ -244,7 +244,7 @@ export const INSULIN_BENEFICIARY_COST: CmsFileSpec = {
 export const PRICING: CmsFileSpec = {
   name: 'pricing',
   fileName: 'pricing.txt',
-  innerZipPattern: /^pricing\s+file\s+PPUF.*\.zip$/i,
+  innerZipPattern: /^pricing\s+file\s+(PPUF|\d{4}_\d{8}).*\.zip$/i,
   landingTable: 'cms_spuf_pricing',
   quarterlyOnly: true,
   columns: [
@@ -261,7 +261,7 @@ export const PRICING: CmsFileSpec = {
 export const GEOGRAPHIC_LOCATOR: CmsFileSpec = {
   name: 'geographic_locator',
   fileName: 'geographic_locator.txt',
-  innerZipPattern: /^geographic\s+locator\s+file\s+PPUF.*\.zip$/i,
+  innerZipPattern: /^geographic\s+locator\s+file\s+(PPUF|\d{4}_\d{8}).*\.zip$/i,
   landingTable: 'cms_spuf_geographic_locator',
   columns: [
     t('COUNTY_CODE', 'county_code', false),
