@@ -94,16 +94,8 @@ export async function promote(opts: {
         d.quantity_limit_amount, d.quantity_limit_days,
         CASE WHEN bc.cost_type_pref = 1 THEN bc.cost_amt_pref END AS copay_default,
         CASE WHEN bc.cost_type_pref = 2 THEN bc.cost_amt_pref END AS coinsurance_default,
-        EXISTS (
-          SELECT 1 FROM cms_spuf_excluded_drugs e
-          WHERE e.release_id = $2 AND e.contract_id = p.contract_id
-            AND e.plan_id = p.plan_id AND e.rxcui = d.rxcui
-        ) AS excluded_drug_supplemental,
-        EXISTS (
-          SELECT 1 FROM cms_spuf_indication_based_coverage i
-          WHERE i.release_id = $2 AND i.contract_id = p.contract_id
-            AND i.plan_id = p.plan_id AND i.rxcui = d.rxcui
-        ) AS indication_restricted,
+        (ex.contract_id IS NOT NULL) AS excluded_drug_supplemental,
+        (ind.contract_id IS NOT NULL) AS indication_restricted,
         CASE
           WHEN bc.tier_specialty_yn = 'Y' THEN 'specialty'
           WHEN m.tty IN ('SCD','SCDC','SCDG','SCDF','GPCK') THEN 'generic'
@@ -121,6 +113,22 @@ export async function promote(opts: {
        AND bc.coverage_level = 1
        AND bc.days_supply = 1
       LEFT JOIN pm_rxcui_meta m ON m.rxcui = d.rxcui
+      -- Supplemental flags via unique LEFT JOINs instead of SELECT-list EXISTS.
+      -- A projected EXISTS stays a per-row correlated SubPlan (the plan only
+      -- index-scans excluded_drugs on release_id, then filters contract/plan/
+      -- rxcui — 14k rows × 50M outer rows = ~34 min). These joins hash-build
+      -- the small side once (PK is unique on all four keys → no fan-out) and
+      -- probe in one pass. indication's PK includes disease, so dedupe to the
+      -- four keys first to keep it 1:0-or-1.
+      LEFT JOIN cms_spuf_excluded_drugs ex
+        ON ex.release_id = $2 AND ex.contract_id = p.contract_id
+       AND ex.plan_id = p.plan_id AND ex.rxcui = d.rxcui
+      LEFT JOIN (
+        SELECT DISTINCT release_id, contract_id, plan_id, rxcui
+        FROM cms_spuf_indication_based_coverage WHERE release_id = $2
+      ) ind
+        ON ind.contract_id = p.contract_id
+       AND ind.plan_id = p.plan_id AND ind.rxcui = d.rxcui
       `,
       [planYear, releaseId],
     );
