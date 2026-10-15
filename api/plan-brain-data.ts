@@ -23,6 +23,8 @@ import { supabase } from './_lib/supabase.js';
 import { expandRxcui } from './formulary.js';
 import { resolvePlanCatalogYear } from './library/planCatalogYear.js';
 import { isFormularyPublished } from './_lib/formulary-published.js';
+import { getSellabilitySets, resolveSellability } from './_lib/sellability.js';
+import { getSellableRules, getSellableFlags } from './_lib/sellable-rules.js';
 
 // PostgREST on this project caps every query at 1000 rows
 // (db-max-rows). The formulary fetch can easily exceed that — Durham
@@ -426,6 +428,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       (networkByPlan[matched] ||= {})[r.npi] = r;
     }
 
+    // ─── Sellability — appointment/certification flags + rules + flags ──
+    // Attached so the LOCAL brain (usePlanBrain → runPlanBrain) can bench
+    // non-sellable plans the same way the consumer does. appointment flags
+    // (pm_plan_sellability) are per-plan; the exclude rules + carrier flags
+    // are per-plan-year. Fails CLOSED on cold-start error (same posture as
+    // the consumer plan endpoints) — a 500 beats routing a plan Rob can't
+    // sell into the top four. pays_commission is carried for the record only;
+    // the brain must NEVER consult it for ranking. sellableRows is keyed by
+    // the caller-supplied triple id so the hook can line it up with its
+    // PmPlanRow triples.
+    const sbUrl = process.env.SUPABASE_URL ?? '';
+    const sbKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+    const [sellabilitySets, sellableRules] = await Promise.all([
+      getSellabilitySets(sbUrl, sbKey),
+      getSellableRules(sbUrl, sbKey, catalogYear),
+    ]);
+    const sellableFlags = getSellableFlags();
+    const sellableByPlan: Record<
+      string,
+      { is_appointed: boolean; is_certified: boolean; pays_commission: boolean }
+    > = {};
+    for (const t of triples) {
+      const flags = resolveSellability(sellabilitySets, t.contract, t.plan);
+      // Key back to the caller's supplied triple form (matchToRequestedTriple
+      // handles the medicare_gov vs zero-padded segment mismatch).
+      const segNorm = t.segment === '0' ? '000' : t.segment.padStart(3, '0');
+      const triple = `${t.contract}-${t.plan}-${segNorm}`;
+      const matched = matchToRequestedTriple(triple, ids) ?? triple;
+      sellableByPlan[matched] = {
+        is_appointed: flags.is_appointed,
+        is_certified: flags.is_certified,
+        pays_commission: flags.pays_commission,
+      };
+    }
+
     res.setHeader('Cache-Control', 'no-store');
     return sendJson(res, 200, {
       planYear: catalogYear,
@@ -439,6 +476,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       formularyByContractPlan,
       ndcByRxcui,
       networkByPlan,
+      // Sellability — per-plan appointment flags + the ranked year's exclude
+      // rules + carrier kill-switch flags. The local brain benches any plan
+      // that isn't sellable (not appointed/certified, UHC/Devoted, exclude
+      // rule, or Wellcare non-allowlist) so its top four match the consumer.
+      sellableByPlan,
+      sellableRules,
+      sellableFlags,
       stats: {
         benefits: (benefitsRes.data ?? []).length,
         drugCache: (drugCacheRes.data ?? []).length,

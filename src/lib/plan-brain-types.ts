@@ -286,6 +286,15 @@ export interface BrainScore {
   gate1Passed: boolean;
   gate2Passed: boolean;
   gate3Passed: boolean;
+  /** Sellability — computed BEFORE the gates. false ⇒ the plan is
+   *  non-commissionable (not appointed/certified, UHC/Devoted flag, exclude
+   *  rule, or Wellcare non-allowlist) and must NEVER enter the top four; it
+   *  still flows to `ranked` (the bench) with a "Not sellable" marker.
+   *  Optional: absent ⇒ sellable (back-compat for callers / fixtures that
+   *  don't wire the filter). */
+  sellable?: boolean;
+  /** Short diagnostic reason when sellable === false; null/absent otherwise. */
+  sellableReason?: string | null;
   // ── Per-medication breakdown (Library + CompareScreen) ─────────
   // One entry per user-listed drug, in the same order the user
   // supplied them. Populated alongside the aggregate coveredCount /
@@ -618,6 +627,21 @@ export interface BrainInputs {
   /** CMS SEP reason code (auto-derived from life event selection upstream).
    *  Only meaningful when enrollmentPeriod === 'SEP'. */
   sepReasonCode?: string;
+  /**
+   * Sellable-rules for the ranked plan_year (pm_non_commissionable_rules,
+   * filtered to that year with county lists normalized by the API loader).
+   * When provided, the brain tags each plan sellable / not-sellable BEFORE
+   * the gates; non-sellable plans never enter the race for the top four but
+   * still flow to `ranked` (bench). Omitted ⇒ every plan is sellable
+   * (back-compat for fixtures / direct callers). Mirrors the consumer
+   * brain's BrainInputs.sellableRules.
+   */
+  sellableRules?: readonly import('../../api/_lib/sellable-rules').SellableRule[];
+  /** Carrier kill-switch flags for the sellable filter (UHC date gate,
+   *  Devoted). Omitted ⇒ both off. */
+  sellableFlags?: import('../../api/_lib/sellable-rules').SellableFlags;
+  /** Evaluation instant for the date-gated UHC flag. Omitted ⇒ now. */
+  now?: Date;
 }
 
 export interface BrainOutput {

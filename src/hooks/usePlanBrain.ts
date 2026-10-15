@@ -136,6 +136,18 @@ export interface PlanBrainData {
   formularyByContractPlan: Record<string, Record<string, FormularyRow>>;
   ndcByRxcui: Record<string, NdcRow>;
   networkByPlan: Record<string, Record<string, ProviderNetworkRow>>;
+  // Sellability — per-plan appointment/certification flags (keyed by the
+  // triple id the client requested), plus the ranked plan-year's exclude
+  // rules + carrier kill-switch flags. Drive the brain's pre-gate sellable
+  // partition so non-sellable plans never enter the top four. Optional for
+  // back-compat with older/cached responses that predate the field — when
+  // absent the brain treats every plan as sellable.
+  sellableByPlan?: Record<
+    string,
+    { is_appointed: boolean; is_certified: boolean; pays_commission: boolean }
+  >;
+  sellableRules?: readonly import('../../api/_lib/sellable-rules').SellableRule[];
+  sellableFlags?: import('../../api/_lib/sellable-rules').SellableFlags;
 }
 
 // Compat applied-rule shape — agent UI reads `action`/`reason`/`points`/`ruleId`.
@@ -301,6 +313,12 @@ export interface ScoredPlan {
     gate2_passed: boolean;
     gate3_passed: boolean;
   };
+  /** Sellability — false ⇒ the plan is non-commissionable (not
+   *  appointed/certified, UHC/Devoted flag, exclude rule, or Wellcare
+   *  non-allowlist) and was held off the top four; it only ever appears on
+   *  the bench. Mirrors BrainScore.sellable. Absent/true ⇒ sellable. */
+  sellable?: boolean;
+  sellableReason?: string | null;
   /** Per-gate customer-facing micro-explainer strings — pass-through
    *  from BrainScore.explanations. One entry per user-supplied
    *  provider / drug / priority on gates 1–3; a single cost-rank line
@@ -389,7 +407,12 @@ interface State {
 // the agent doesn't carry (county_fips, snp_type, sanctioned, enrollment_*)
 // get sensible defaults — those drive a few brain heuristics but never
 // any cost/extras output, so safe to stub.
-function planToPmRow(plan: Plan, county: string, idx: number): PmPlanRow {
+function planToPmRow(
+  plan: Plan,
+  county: string,
+  idx: number,
+  sellableFlags?: { is_appointed: boolean; is_certified: boolean; pays_commission: boolean },
+): PmPlanRow {
   // Plan.id is the canonical "<contract>-<plan>-<segment>" triple
   // (e.g. "H1036-308-0"). Split it back out for the row.
   const parts = plan.id.split('-');
@@ -432,6 +455,12 @@ function planToPmRow(plan: Plan, county: string, idx: number): PmPlanRow {
     sanctioned: false,
     enrollment_count: null,
     enrollment_as_of: null,
+    // Appointment/certification from /api/plan-brain-data's sellableByPlan.
+    // Absent (no row) ⇒ undefined ⇒ sellable (State A) in the brain's filter.
+    // pays_commission is carried for the record only — never read for ranking.
+    is_appointed: sellableFlags?.is_appointed,
+    is_certified: sellableFlags?.is_certified,
+    pays_commission: sellableFlags?.pays_commission,
   };
 }
 
@@ -544,7 +573,13 @@ export interface AdapterArgs {
 export function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
   const { plans, client, medications, providers, data } = args;
   const county = client.county || '';
-  const planRows: PmPlanRow[] = plans.map((p, i) => planToPmRow(p, county, i + 1));
+  // Per-plan appointment/certification flags from /api/plan-brain-data,
+  // keyed by the plan's triple id (same id the hook requested). Absent ⇒
+  // the plan has no pm_plan_sellability row ⇒ sellable (State A).
+  const sellableByPlan = data.sellableByPlan ?? {};
+  const planRows: PmPlanRow[] = plans.map((p, i) =>
+    planToPmRow(p, county, i + 1, sellableByPlan[p.id]),
+  );
 
   // ── planByKey (aggregated Plan objects) ──────────────────────────
   // Brain-side extras readers prefer these over the raw PlanBenefitRow[]
@@ -750,6 +785,14 @@ export function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
     // drugs for a year whose SPUF drug file CMS hasn't posted yet.
     formularyPublished: data.formularyPublished,
     planYear: data.planYear,
+    // Sellability — the ranked year's exclude rules + carrier kill-switch
+    // flags. When present (every live /api/plan-brain-data response), the
+    // brain tags each plan sellable before the gates and benches the
+    // non-sellable ones so the local top four match the consumer. Absent on
+    // older/cached responses ⇒ every plan sellable (back-compat).
+    sellableRules: data.sellableRules,
+    sellableFlags: data.sellableFlags,
+    now: new Date(),
   };
 }
 
@@ -875,6 +918,8 @@ function adaptScored(
       gate2_passed: score.gate2Passed,
       gate3_passed: score.gate3Passed,
     },
+    sellable: score.sellable,
+    sellableReason: score.sellableReason,
     explanations: {
       gate1: score.explanations.gate1,
       gate2: score.explanations.gate2,
