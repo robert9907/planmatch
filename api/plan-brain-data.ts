@@ -23,7 +23,7 @@ import { supabase } from './_lib/supabase.js';
 import { expandRxcui } from './formulary.js';
 import { resolvePlanCatalogYear } from './library/planCatalogYear.js';
 import { isFormularyPublished } from './_lib/formulary-published.js';
-import { outranks } from './_lib/network-row-precedence.js';
+import { outranks, isTrustedSource } from './_lib/network-row-precedence.js';
 
 // PostgREST on this project caps every query at 1000 rows
 // (db-max-rows). The formulary fetch can easily exceed that — Durham
@@ -428,11 +428,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const segNorm = (r.segment_id ?? '0').replace(/^0+/, '') || '0';
       const triple = `${r.plan_id}-${segNorm === '0' ? '000' : segNorm.padStart(3, '0')}`;
       const matched = matchToRequestedTriple(triple, ids) ?? triple;
-      // One row of record per (plan, doctor): Plan Finder wins every time,
-      // then broker-verified, carrier directory, Insurelytix.
+      // One row of record per (plan, doctor): broker-verified, then carrier
+      // directory (fhir_*/healthteam/insurelytix/alignment/healthspring),
+      // then Plan Finder, then other (network-row-precedence).
       const slot = (networkByPlan[matched] ||= {});
       const cur = slot[r.npi];
       if (!cur || outranks(r, cur)) slot[r.npi] = r;
+    }
+    // A medicare_gov (or any non-trusted) "not covered" is UNKNOWN, not out
+    // of network — Plan Finder under-reports in-network doctors, and the
+    // brain's Gate 1 eliminates a covered=false row (plan-brain.ts
+    // applyProviderGate) but passes an ABSENT one as unverified. Drop any
+    // winning row that says "not covered" from a non-trusted source so the
+    // doctor reads as unknown, never a false out-of-network. covered=true,
+    // and trusted covered=false, stay. Matches the consumer's status
+    // endpoints (isTrustedSource).
+    for (const npiMap of Object.values(networkByPlan)) {
+      for (const [npi, row] of Object.entries(npiMap)) {
+        if (row.covered !== true && !isTrustedSource(row.source)) delete npiMap[npi];
+      }
     }
 
     res.setHeader('Cache-Control', 'no-store');

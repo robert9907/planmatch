@@ -22,7 +22,7 @@ import { supabaseBrowser } from './supabaseBrowser';
 import { checkProviderNetwork } from './library-client';
 import { planYearOverride } from '../../api/library/planYearOverride';
 import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear';
-import { pickRowsOfRecord } from '../../api/_lib/network-row-precedence';
+import { pickRowsOfRecord, isTrustedSource } from '../../api/_lib/network-row-precedence';
 
 export type NetworkStatus = 'in' | 'out' | 'unknown';
 export type NetworkSource = 'cache' | 'fallback_unknown' | 'fhir_live';
@@ -235,20 +235,25 @@ async function directBatch(
     console.warn('[network-check] cache read failed:', (err as Error).message);
   }
 
-  // Plan Finder wins every time, then broker-verified, carrier directory,
-  // Insurelytix (was: any covered=true row won).
+  // Broker-verified, then carrier directory, then Plan Finder, then other
+  // (network-row-precedence; was: any covered=true row won).
   const rowByCp = pickRowsOfRecord(
     rows.filter((r) => r.covered === true || r.covered === false),
     (r) => r.plan_id,
   );
-  const coveredByCp = new Map<string, boolean>();
-  for (const [cp, r] of rowByCp) coveredByCp.set(cp, r.covered === true);
+  // in = covered=true. out = covered=false ONLY from a trusted carrier/broker
+  // source; a medicare_gov "not covered" is UNKNOWN (Plan Finder under-reports
+  // in-network doctors), never out. Matches the consumer's status endpoints.
+  const statusByCp = new Map<string, NetworkStatus>();
+  for (const [cp, r] of rowByCp) {
+    statusByCp.set(cp, r.covered === true ? 'in' : isTrustedSource(r.source) ? 'out' : 'unknown');
+  }
 
   for (const [cp, planList] of planIdsByContractPlan) {
-    const covered = coveredByCp.get(cp);
+    const status = statusByCp.get(cp);
     for (const plan of planList) {
-      if (covered === true) out.set(plan.id, makeResult(plan, 'in', 'cache'));
-      else if (covered === false) out.set(plan.id, makeResult(plan, 'out', 'cache'));
+      if (status === 'in') out.set(plan.id, makeResult(plan, 'in', 'cache'));
+      else if (status === 'out') out.set(plan.id, makeResult(plan, 'out', 'cache'));
       else out.set(plan.id, makeResult(plan, 'unknown', 'fallback_unknown'));
     }
   }
