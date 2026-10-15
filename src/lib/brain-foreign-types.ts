@@ -85,6 +85,14 @@ export interface PmPlanRow {
   sanctioned: boolean;
   enrollment_count: number | null;
   enrollment_as_of: string | null;
+  // Sellability signals (pm_plan_sellability), attached per-plan by the hook
+  // adapter. can_enroll = is_appointed AND is_certified — a plan Rob isn't
+  // appointed AND certified for can't enter the top-four race, for ANY plan
+  // year. Absent (undefined) ⇒ sellable (State A). pays_commission is carried
+  // for the record only; the brain must NEVER read it for ranking/routing.
+  is_appointed?: boolean;
+  is_certified?: boolean;
+  pays_commission?: boolean;
 }
 
 // ---------------------------------------------------------------------------

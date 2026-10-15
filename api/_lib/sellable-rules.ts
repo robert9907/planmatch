@@ -34,6 +34,19 @@ export interface SellablePlanRef {
   state: string;
   county_name: string;
   carrier: string | null;
+  // Appointment + certification (pm_plan_sellability, attached to the ref by
+  // the caller). can_enroll = is_appointed AND is_certified. A plan Rob isn't
+  // appointed AND certified for can't be sold through this agent, for ANY
+  // plan year. Absent (undefined) ⇒ sellable (State A) — the DEFAULT_SELLABILITY
+  // posture. pays_commission is NEVER read here (must not affect ranking).
+  is_appointed?: boolean;
+  is_certified?: boolean;
+}
+
+export interface SellabilityResult {
+  sellable: boolean;
+  /** Short diagnostic reason when not sellable; null when sellable. */
+  reason: string | null;
 }
 
 export function normalizeSegmentId(seg: string | null | undefined): string {
@@ -61,23 +74,73 @@ function ruleMatchesPlan(rule: SellableRule, plan: SellablePlanRef): boolean {
   return true;
 }
 
+/**
+ * Decide whether a single plan is sellable, returning the reason when not.
+ * Mirrors the consumer brain's computeSellability
+ * (packages/brain/src/sellability.ts) 1:1 so the agent local brain and the
+ * consumer pick the same four. Pure — pass the ranked plan-year's rules, the
+ * carrier flags, and the evaluation instant.
+ */
+export function computeSellability(
+  plan: SellablePlanRef,
+  args: { rules: readonly SellableRule[]; flags: SellableFlags; now: Date },
+): SellabilityResult {
+  const carrier = plan.carrier ?? '';
+  const { rules, flags, now } = args;
+
+  // ── Appointment + certification gate — EVERY plan year ────────────
+  // can_enroll = is_appointed AND is_certified (pm_plan_sellability, attached
+  // to the ref by the caller). Fires BEFORE the empty-ruleset (2026)
+  // early-return so it applies even when `rules` is empty. Absent fields
+  // (undefined) read as true → sellable (State A). pays_commission is NEVER
+  // read here — commission must not affect ranking or routing.
+  if (plan.is_appointed === false || plan.is_certified === false) {
+    return { sellable: false, reason: 'Not available to enroll through this agent.' };
+  }
+
+  // ── Carrier flags — apply to EVERY plan year ──────────────────────
+  if (carrier === UHC_CARRIER && flags.uhcExcludedFrom) {
+    const cutoff = new Date(flags.uhcExcludedFrom).getTime();
+    if (!Number.isNaN(cutoff) && now.getTime() >= cutoff) {
+      return { sellable: false, reason: 'UnitedHealthcare plans are not offered.' };
+    }
+  }
+  if (carrier === DEVOTED_CARRIER && flags.devotedExcluded) {
+    return { sellable: false, reason: 'Devoted Health plans are not offered.' };
+  }
+
+  // ── Rules table + Wellcare allowlist — 2027 ONLY ──────────────────
+  // An empty ruleset (the 2026 catalog) means the ranked year has no sellable
+  // program: skip the exclude rules AND the Wellcare allowlist. (UHC/Devoted
+  // and the appointment gate above already fired.)
+  if (rules.length === 0) {
+    return { sellable: true, reason: null };
+  }
+
+  const matchesExclude = rules.some((r) => r.action === 'exclude' && ruleMatchesPlan(r, plan));
+  if (carrier === WELLCARE_CARRIER) {
+    if (matchesExclude) {
+      return { sellable: false, reason: 'Wellcare plan is non-commissionable for 2027.' };
+    }
+    const matchesAllow = rules.some((r) => r.action === 'allow' && ruleMatchesPlan(r, plan));
+    if (!matchesAllow) {
+      return { sellable: false, reason: 'Wellcare plan is not on the 2027 commissionable allowlist.' };
+    }
+    return { sellable: true, reason: null };
+  }
+  if (matchesExclude) {
+    return { sellable: false, reason: 'This plan is not offered for 2027.' };
+  }
+  return { sellable: true, reason: null };
+}
+
+/** Boolean convenience over computeSellability — the shape /api/tpmo-counts
+ *  consumes. Carries the appointment gate because computeSellability does. */
 export function computeSellable(
   plan: SellablePlanRef,
   args: { rules: readonly SellableRule[]; flags: SellableFlags; now: Date },
 ): boolean {
-  const carrier = plan.carrier ?? '';
-  const { rules, flags, now } = args;
-  if (carrier === UHC_CARRIER && flags.uhcExcludedFrom) {
-    const cutoff = new Date(flags.uhcExcludedFrom).getTime();
-    if (!Number.isNaN(cutoff) && now.getTime() >= cutoff) return false;
-  }
-  if (carrier === DEVOTED_CARRIER && flags.devotedExcluded) return false;
-  const matchesExclude = rules.some((r) => r.action === 'exclude' && ruleMatchesPlan(r, plan));
-  if (carrier === WELLCARE_CARRIER) {
-    if (matchesExclude) return false;
-    return rules.some((r) => r.action === 'allow' && ruleMatchesPlan(r, plan));
-  }
-  return !matchesExclude;
+  return computeSellability(plan, args).sellable;
 }
 
 export function getSellableFlags(): SellableFlags {
