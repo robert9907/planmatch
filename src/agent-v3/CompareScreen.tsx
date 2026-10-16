@@ -1401,16 +1401,10 @@ export function CompareScreen({
     setMode('h2h');
   }
 
-  // Top challenger = first slot plan that isn't the baseline. Headline
-  // savings on the navy summary bar are baseline.annual − challenger.annual
-  // (positive when the recommendation costs less than what the client has).
+  // Top challenger = first slot plan that isn't the baseline; the
+  // head-to-head toggle opens against it.
   const topChallenger =
     visibleSlotPlans.find((p) => baseline == null || p.id !== baseline.id) ?? null;
-  const headlineSavings =
-    topChallenger && baseline
-      ? (annualEstimate(baseline, annualDrugByPlanId[baseline.id] ?? null).total ?? 0) -
-        (annualEstimate(topChallenger, annualDrugByPlanId[topChallenger.id] ?? null).total ?? 0)
-      : 0;
 
   function enterH2HFromToggle() {
     if (topChallenger) openH2H(topChallenger);
@@ -1636,11 +1630,6 @@ export function CompareScreen({
           baselineId={baseline?.id ?? null}
         />
       )}
-
-      <SummaryBar
-        headline={topChallenger}
-        savings={headlineSavings}
-      />
 
       {(() => {
         // Quadruple fallback so the quote picker never disappears while
@@ -4335,84 +4324,6 @@ function MetricRow({
           }}
         >
           Drug coverage estimated — confirm with your pharmacist before enrolling
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Summary bar (grid mode footer) ─────────────────────────────
-// Info only — Enroll lives on each board card, so this bar no longer
-// carries a second, plan-implicit Enroll button.
-function SummaryBar({
-  headline,
-  savings,
-}: {
-  headline: Plan | null;
-  savings: number;
-}) {
-  if (!headline) return null;
-  return (
-    <div
-      style={{
-        background: NAVY,
-        color: 'white',
-        borderRadius: 12,
-        padding: '14px 18px',
-        display: 'flex',
-        gap: 16,
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-      }}
-    >
-      <div style={{ minWidth: 0 }}>
-        <div
-          style={{
-            fontFamily: FONT_LABEL,
-            fontSize: 9,
-            fontWeight: 700,
-            color: SEAFOAM,
-            textTransform: 'uppercase',
-            letterSpacing: 0.8,
-          }}
-        >
-          Recommended
-        </div>
-        <div
-          style={{
-            fontFamily: FONT_LABEL,
-            fontSize: 16,
-            fontWeight: 700,
-          }}
-        >
-          {headline.carrier} · {headline.plan_name}
-        </div>
-      </div>
-      {savings > 0 && (
-        <div style={{ textAlign: 'center' }}>
-          <div
-            style={{
-              fontFamily: FONT_LABEL,
-              fontSize: 9,
-              fontWeight: 700,
-              color: SEAFOAM,
-              textTransform: 'uppercase',
-              letterSpacing: 0.8,
-            }}
-          >
-            Annual savings
-          </div>
-          <div
-            style={{
-              fontFamily: FONT_NUM,
-              fontSize: 22,
-              fontWeight: 700,
-              color: GREEN,
-            }}
-          >
-            {fmt(savings)}
-          </div>
         </div>
       )}
     </div>
