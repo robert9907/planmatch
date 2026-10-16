@@ -15,7 +15,7 @@
 // 'superseded', new 'loaded' → 'active'. The partial unique index
 // uq_cms_spuf_releases_one_active enforces exactly-one-active per year.
 
-import { withTransaction } from './pg.js';
+import { withClient } from './pg.js';
 
 export async function promote(opts: {
   releaseId: number;
@@ -24,14 +24,29 @@ export async function promote(opts: {
   const { releaseId, planYear } = opts;
   const counts: Record<string, number> = {};
 
-  await withTransaction(async (c) => {
-    // Statement timeout disabled inside this transaction — multi-million-
-    // row INSERTs take longer than the default 30s.
-    await c.query(`SET LOCAL statement_timeout = 0`);
-    // Bigger work_mem reduces external sort/hash spill to pgsql_tmp.
-    // Supabase Pro ships ~4 MB default; bump to 256 MB for promote.
-    await c.query(`SET LOCAL work_mem = '256MB'`);
-    await c.query(`SET LOCAL maintenance_work_mem = '512MB'`);
+  // STAGED AUTOCOMMIT (not one transaction). Each DELETE/INSERT below commits
+  // on its own (withClient = no BEGIN/COMMIT wrapper → Postgres autocommit per
+  // statement). A single multi-minute transaction kept getting its continuation
+  // severed on the Supavisor session connection after the long pm_formulary_v2
+  // insert; committing each step avoids holding one connection open across the
+  // whole promote. Every step is idempotent — delete-then-insert scoped to
+  // plan_year / release_id — so a killed run just re-runs. 2026 rows are never
+  // touched (every DELETE is `WHERE plan_year = $1`, $1 = the promoted year).
+  // Steps that make the year VISIBLE to live readers run LAST, after all the
+  // invisible _v2 data has committed: pm_formulary_plan_index (consumer's
+  // formulary_published_years reads it), pm_mapd_plan_set (MA-only filter), and
+  // the cms_spuf_releases status flip (agent publish + current_plan_year).
+  await withClient(async (c) => {
+    // Session-level (there is no enclosing transaction now, so SET LOCAL would
+    // not persist): disable statement_timeout and raise work_mem for the big
+    // inserts. Applies to every autocommit statement on this client.
+    await c.query(`SET statement_timeout = 0`);
+    await c.query(`SET work_mem = '256MB'`);
+    await c.query(`SET maintenance_work_mem = '512MB'`);
+    const logStep = (name: string, rows: number) => {
+      counts[name] = rows;
+      console.log(`[promote] ${name}: ${rows} rows committed`);
+    };
 
     // ─── pm_formulary_v2 ──────────────────────────────────────────────
     //
@@ -132,7 +147,7 @@ export async function promote(opts: {
       `,
       [planYear, releaseId],
     );
-    counts.pm_formulary_v2 = fr.rowCount ?? 0;
+    logStep('pm_formulary_v2', fr.rowCount ?? 0);
 
     // ─── pm_rxcui_meta sync ───────────────────────────────────────────
     //
@@ -156,7 +171,7 @@ export async function promote(opts: {
             fetched_at = EXCLUDED.fetched_at
       `,
     );
-    counts.pm_rxcui_meta = mr.rowCount ?? 0;
+    logStep('pm_rxcui_meta', mr.rowCount ?? 0);
 
     // ─── pm_beneficiary_cost_v2 (wide → long) ─────────────────────────
 
@@ -190,7 +205,7 @@ export async function promote(opts: {
       `,
       [planYear, releaseId],
     );
-    counts.pm_beneficiary_cost_v2 = bcr.rowCount ?? 0;
+    logStep('pm_beneficiary_cost_v2', bcr.rowCount ?? 0);
 
     // ─── pm_pharmacy_network_v2 ───────────────────────────────────────
     //
@@ -221,7 +236,7 @@ export async function promote(opts: {
       `,
       [planYear, releaseId],
     );
-    counts.pm_pharmacy_network_v2 = pnr.rowCount ?? 0;
+    logStep('pm_pharmacy_network_v2', pnr.rowCount ?? 0);
 
     // ─── pm_pricing_v2 ────────────────────────────────────────────────
 
@@ -235,7 +250,7 @@ export async function promote(opts: {
       `,
       [planYear, releaseId],
     );
-    counts.pm_pricing_v2 = pr.rowCount ?? 0;
+    logStep('pm_pricing_v2', pr.rowCount ?? 0);
 
     // ─── pm_insulin_cost_v2 (wide → long) ─────────────────────────────
 
@@ -257,7 +272,7 @@ export async function promote(opts: {
       `,
       [planYear, releaseId],
     );
-    counts.pm_insulin_cost_v2 = ir.rowCount ?? 0;
+    logStep('pm_insulin_cost_v2', ir.rowCount ?? 0);
 
     // ─── pm_indication_coverage_v2 ────────────────────────────────────
 
@@ -271,7 +286,7 @@ export async function promote(opts: {
       `,
       [planYear, releaseId],
     );
-    counts.pm_indication_coverage_v2 = icr.rowCount ?? 0;
+    logStep('pm_indication_coverage_v2', icr.rowCount ?? 0);
 
     // ─── pm_geographic_locator_v2 ─────────────────────────────────────
 
@@ -289,9 +304,33 @@ export async function promote(opts: {
       `,
       [planYear, releaseId],
     );
-    counts.pm_geographic_locator_v2 = gr.rowCount ?? 0;
+    logStep('pm_geographic_locator_v2', gr.rowCount ?? 0);
 
-    // ─── pm_mapd_plan_set refresh ─────────────────────────────────────
+    // ─── pm_formulary_plan_index (VISIBILITY — run after all _v2 builds) ──
+    //
+    // formulary_published_years() reads this table; its 2027 rows are what flip
+    // the CONSUMER to "2027 formulary published" (plans-with-extras / api/
+    // formulary). So it MUST come after every _v2 build above has committed, or
+    // the consumer would start scoring drugs against a half-built year. Year-
+    // scoped delete+insert (NOT rebuild_formulary_plan_index(), which truncates
+    // ALL years) so 2026's index rows are never touched. Same derivation as that
+    // function, filtered to this plan_year.
+    await c.query(`DELETE FROM pm_formulary_plan_index WHERE plan_year = $1`, [planYear]);
+    const fpi = await c.query(
+      `
+      INSERT INTO pm_formulary_plan_index
+        (contract_id, plan_id, segment_id, plan_year, release_id, formulary_id, drug_count, imported_at)
+      SELECT f.contract_id, f.plan_id, f.segment_id, f.plan_year,
+             max(f.release_id), min(f.formulary_id), count(*)::int, max(f.imported_at)
+      FROM pm_formulary_v2 f
+      WHERE f.plan_year = $1
+      GROUP BY f.contract_id, f.plan_id, f.segment_id, f.plan_year
+      `,
+      [planYear],
+    );
+    logStep('pm_formulary_plan_index', fpi.rowCount ?? 0);
+
+    // ─── pm_mapd_plan_set refresh (VISIBILITY — MA-only filter) ───────────
     //
     // The consumer's api/plans-with-extras.ts uses pm_mapd_plan_set —
     // a tiny (~5k row) projection of distinct (contract_id, plan_id)
@@ -315,7 +354,7 @@ export async function promote(opts: {
     `,
       [planYear],
     );
-    counts.pm_mapd_plan_set = mpr.rowCount ?? 0;
+    logStep('pm_mapd_plan_set', mpr.rowCount ?? 0);
 
     // ─── Release status flip ──────────────────────────────────────────
     //
@@ -337,6 +376,7 @@ export async function promote(opts: {
         WHERE release_id = $1`,
       [releaseId],
     );
+    console.log(`[promote] release ${releaseId} (plan_year=${planYear}) flipped to active`);
   });
 
   return { counts };
