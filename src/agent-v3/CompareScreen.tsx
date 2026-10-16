@@ -4361,7 +4361,7 @@ function H2HView({
   totalProviderCount: number;
   onPickChallenger: (p: Plan) => void;
   onBackToGrid: () => void;
-  /** Enroll a specific plan (left Top Pick or right Recommended). */
+  /** Enroll a specific plan (left Top Pick or right Challenger). */
   onEnroll: (plan: Plan) => void;
   onBack: () => void;
 }) {
@@ -4544,7 +4544,7 @@ function H2HView({
                 letterSpacing: 0.8,
               }}
             >
-              Recommended
+              Challenger
             </div>
             <div
               style={{
@@ -4827,7 +4827,7 @@ function H2HView({
             />
           )}
           <EnrollPlanButton
-            label="Enroll Recommended"
+            label="Enroll Challenger"
             plan={challenger}
             onClick={() => onEnroll(challenger)}
           />
