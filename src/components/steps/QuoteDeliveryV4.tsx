@@ -46,7 +46,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Plan } from '@/types/plans';
-import type { Client, Medication, Provider } from '@/types/session';
+import type { Client, Medication, Provider, CsnpConditionCode } from '@/types/session';
 import { useSession } from '@/hooks/useSession';
 import {
   usePlanBrain,
@@ -291,6 +291,15 @@ const CONDITION_LABEL: Record<Condition, string> = {
   pain_management: 'chronic pain',
 };
 
+// Detected-condition → C-SNP-qualifying CsnpCondition. Only these four qualify
+// a client for a C-SNP; drives the broker confirmation prompt below.
+const DETECTED_TO_CSNP: Partial<Record<Condition, CsnpConditionCode>> = {
+  diabetes: 'diabetes',
+  chf: 'cardio',
+  copd: 'copd',
+  ckd: 'esrd',
+};
+
 const CONFIDENCE_BG: Record<DetectedCondition['confidence'], { bg: string; fg: string; border: string }> = {
   certain:  { bg: '#fcebeb', fg: '#a32d2d', border: '#f3c5c5' },
   likely:   { bg: '#faeeda', fg: '#854f0b', border: '#ecd2a2' },
@@ -372,6 +381,12 @@ export function QuoteDeliveryV4({
   // the archetype-derived weights win (default behavior). Clicking a
   // preset overrides; "Custom" returns to the neutral 33/34/33.
   const [presetKey, setPresetKey] = useState<WeightPresetKey | null>(null);
+  // Broker C-SNP confirmation (Rob, Oct 2026): med-detection no longer
+  // auto-surfaces a C-SNP (plan-brain gate). When the meds imply a qualifying
+  // condition the broker hasn't recorded, prompt before the quote — "Yes"
+  // writes csnpConditions (re-ranks; C-SNP becomes eligible), "No" dismisses.
+  const updateClient = useSession((s) => s.updateClient);
+  const [csnpDismissed, setCsnpDismissed] = useState<CsnpConditionCode[]>([]);
 
   // Per-section collapse state. Sections start expanded; clicking a
   // section header chevron flips its bit. The Total Annual Value /
@@ -1061,6 +1076,19 @@ export function QuoteDeliveryV4({
   // when one is competitive. Top-3 by composite (post-broker-rules
   // adjustment), not necessarily a column slot — that way the banner
   // fires even if the C-SNP didn't win a ribbon column.
+  const pendingCsnp = useMemo<Array<{ csnp: CsnpConditionCode; label: string }>>(() => {
+    const have = new Set(client.csnpConditions ?? []);
+    const out: Array<{ csnp: CsnpConditionCode; label: string }> = [];
+    for (const d of result?.detectedConditions ?? []) {
+      if (d.confidence === 'possible') continue; // only certain/likely prompt
+      const csnp = DETECTED_TO_CSNP[d.condition];
+      if (csnp && !have.has(csnp) && !csnpDismissed.includes(csnp) && !out.some((o) => o.csnp === csnp)) {
+        out.push({ csnp, label: CONDITION_LABEL[d.condition] });
+      }
+    }
+    return out;
+  }, [result, client.csnpConditions, csnpDismissed]);
+
   const csnpInTop3 = useMemo<{ plan: Plan; conditionLabel: string } | null>(() => {
     if (!result) return null;
     const top3 = [...result.scored].sort((a, b) => b.composite - a.composite).slice(0, 3);
@@ -1766,6 +1794,44 @@ export function QuoteDeliveryV4({
         </div>
       )}
 
+      {pendingCsnp.map(({ csnp, label }) => (
+        <div
+          key={csnp}
+          style={{
+            marginBottom: 12,
+            padding: '10px 12px',
+            borderRadius: 8,
+            background: '#fef6e7',
+            border: '1px solid #f0d9a6',
+            color: '#7a4e07',
+            fontSize: 12,
+            fontFamily: FONT.body,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            flexWrap: 'wrap',
+          }}
+        >
+          <span style={{ flex: '1 1 auto', fontWeight: 600 }}>
+            Meds suggest {label} — has the client&rsquo;s doctor confirmed it? A C-SNP
+            only shows if the diagnosis is confirmed.
+          </span>
+          <button
+            type="button"
+            onClick={() => updateClient({ csnpConditions: [...(client.csnpConditions ?? []), csnp] })}
+            style={{ padding: '6px 14px', borderRadius: 999, border: '1.5px solid #0d2f5e', background: '#0d2f5e', color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            Yes, confirmed
+          </button>
+          <button
+            type="button"
+            onClick={() => setCsnpDismissed((p) => [...p, csnp])}
+            style={{ padding: '6px 14px', borderRadius: 999, border: '1px solid rgba(13,47,94,0.25)', background: '#fff', color: '#0d2f5e', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            No / skip
+          </button>
+        </div>
+      ))}
       {csnpInTop3 && (
         <div
           style={{
@@ -1786,7 +1852,8 @@ export function QuoteDeliveryV4({
           <span>⊕</span>
           <span>
             Chronic Care Plan available — <strong>{csnpInTop3.plan.carrier} {csnpInTop3.plan.plan_name}</strong>
-            {' '}is designed for {csnpInTop3.conditionLabel}
+            {' '}is designed for {csnpInTop3.conditionLabel}.{' '}
+            To enroll, the client must have a confirmed {csnpInTop3.conditionLabel} diagnosis. The plan will check with their doctor.
           </span>
         </div>
       )}

@@ -607,13 +607,13 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
   const effectiveCsnpConditions: ReadonlyArray<CsnpCondition> =
     input.userProfile.csnpConditions ?? [];
 
-  // C-SNP-qualifying conditions, unioned from self-report + meds.
-  // Used here only for pool widening — the C-SNP reserved-slot logic
-  // from the consumer is omitted in this faithful port (no
-  // csnp-eligibility module in the agent repo).
-  const userQualifiesForCsnp =
-    effectiveCsnpConditions.length > 0 ||
-    detectedConditionsRaw.some((d) => d.confidence !== 'possible');
+  // C-SNP pool eligibility is driven by SELF-REPORTED / broker-confirmed
+  // conditions only (Rob, Oct 2026 — mirrors the consumer). Med-detection must
+  // NOT auto-promote a client into a C-SNP: the broker confirms a detected
+  // condition before the quote (the "meds suggest …" prompt), which writes it
+  // to csnpConditions. detectedConditionsRaw still feeds utilization/cost
+  // below — it just no longer widens the SNP pool on its own.
+  const userQualifiesForCsnp = effectiveCsnpConditions.length > 0;
 
   // ── Population + plan-pool filter ──────────────────────────────────
   const dualEligible = isStrictlyDualEligible(input.userProfile.dsnpEligible);
