@@ -1231,6 +1231,13 @@ export function CompareScreen({
     [filteredSlots],
   );
 
+  // Board baseline = the plan the broker actually sees in the first
+  // board slot. The board is latched at mount, but scoredPlans[0]
+  // shifts on brain re-runs, so pinning head-to-head to `baseline`
+  // pulled in a plan that wasn't on the board. A current plan on file
+  // still wins.
+  const boardBaseline: Plan | null = current ?? visibleSlotPlans[0] ?? baseline;
+
   const bestByMetric = useMemo<Record<string, number | null>>(() => {
     const out: Record<string, number | null> = {};
     for (const m of metrics) out[m.key] = bestNumeric(m, visibleSlotPlans);
@@ -1309,13 +1316,13 @@ export function CompareScreen({
   };
 
   // ── H2H mode ───────────────────────────────────────────────
-  if (mode === 'h2h' && challenger && baseline) {
+  if (mode === 'h2h' && challenger && boardBaseline) {
     return (
       <H2HView
-        baseline={baseline}
+        baseline={boardBaseline}
         baselineIsCurrent={baselineIsCurrent}
         challenger={challenger}
-        pool={stablePool.filter((p) => p.id !== baseline.id)}
+        pool={stablePool.filter((p) => p.id !== boardBaseline.id)}
         metrics={metrics}
         annualDrugByPlanId={annualDrugByPlanId}
         unresolvedMedCount={unresolvedMedCount}
@@ -1396,7 +1403,7 @@ export function CompareScreen({
   }
 
   function openH2H(plan: Plan) {
-    if (!baseline || plan.id === baseline.id) return;
+    if (!boardBaseline || plan.id === boardBaseline.id) return;
     setChallenger(plan);
     setMode('h2h');
   }
@@ -1404,7 +1411,7 @@ export function CompareScreen({
   // Top challenger = first slot plan that isn't the baseline; the
   // head-to-head toggle opens against it.
   const topChallenger =
-    visibleSlotPlans.find((p) => baseline == null || p.id !== baseline.id) ?? null;
+    visibleSlotPlans.find((p) => boardBaseline == null || p.id !== boardBaseline.id) ?? null;
 
   function enterH2HFromToggle() {
     if (topChallenger) openH2H(topChallenger);
@@ -1509,7 +1516,7 @@ export function CompareScreen({
       <Bench
         filters={filters}
         slotIds={slotIds}
-        baseline={baseline}
+        baseline={boardBaseline}
         annualDrugByPlanId={annualDrugByPlanId}
         ribbonByPlanId={ribbonByPlanId ?? {}}
         gateResultsByPlanId={benchGateResultsByPlanId ?? {}}
@@ -1566,9 +1573,9 @@ export function CompareScreen({
                 key={i}
                 slotIdx={i}
                 plan={plan}
-                isBaseline={plan != null && baseline != null && plan.id === baseline.id}
+                isBaseline={plan != null && boardBaseline != null && plan.id === boardBaseline.id}
                 baselineIsCurrent={baselineIsCurrent}
-                baseline={baseline}
+                baseline={boardBaseline}
                 metrics={metrics}
                 bestByMetric={bestByMetric}
                 providers={providers}
@@ -1627,7 +1634,7 @@ export function CompareScreen({
             setSummaryOpen(false);
             openH2H(plan);
           }}
-          baselineId={baseline?.id ?? null}
+          baselineId={boardBaseline?.id ?? null}
         />
       )}
 
