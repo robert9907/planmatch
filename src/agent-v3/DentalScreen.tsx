@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import { useSession } from '@/hooks/useSession';
 import {
   ageFromDob,
+  missingToothStatus,
   priceDentalPlan,
   type DentalPlan,
   type Household,
@@ -24,9 +25,11 @@ const SEAFOAM = '#83f0f9';
 const MUTED = '#64748b';
 const LINE = 'rgba(13,47,94,0.10)';
 
-type MustHave = 'implants' | 'major' | 'noWait' | 'insuranceOnly';
+type MustHave = 'implants' | 'implantNoWait' | 'replacesMissing' | 'major' | 'noWait' | 'insuranceOnly';
 const MUST_HAVES: Array<{ key: MustHave; label: string }> = [
   { key: 'implants', label: 'Covers implants' },
+  { key: 'implantNoWait', label: 'Implants with no waiting period' },
+  { key: 'replacesMissing', label: 'Replaces teeth already missing' },
   { key: 'major', label: 'Covers major work' },
   { key: 'noWait', label: 'No waiting period' },
   { key: 'insuranceOnly', label: 'Insurance only (hide discount plans)' },
@@ -57,7 +60,7 @@ export function DentalScreen() {
   const [spouseAgeText, setSpouseAgeText] = useState('');
   const [childrenText, setChildrenText] = useState('0');
   const [must, setMust] = useState<Record<MustHave, boolean>>({
-    implants: false, major: false, noWait: false, insuranceOnly: false,
+    implants: false, implantNoWait: false, replacesMissing: false, major: false, noWait: false, insuranceOnly: false,
   });
   const [carriersOff, setCarriersOff] = useState<Record<string, boolean>>({});
   const [compare, setCompare] = useState<string[]>([]);
@@ -111,6 +114,8 @@ export function DentalScreen() {
       if (carriersOff[plan.carrier]) return false;
       if (must.insuranceOnly && !plan.is_insurance) return false;
       if (must.implants && plan.covers_implants !== true) return false;
+      if (must.implantNoWait && !(plan.covers_implants === true && plan.implant_wait_months === 0)) return false;
+      if (must.replacesMissing && missingToothStatus(plan.missing_tooth_clause) !== 'replaces') return false;
       if (must.major && plan.covers_major !== true) return false;
       if (must.noWait && plan.no_waiting !== true) return false;
       return true;
@@ -164,9 +169,16 @@ export function DentalScreen() {
                 label={m.label}
               />
             ))}
-            {must.implants && (
-              <div style={{ fontSize: 11, color: MUTED }}>
-                Plans whose implant coverage isn't confirmed are hidden, not assumed covered.
+            {(must.implants || must.implantNoWait || must.replacesMissing) && (
+              <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.45 }}>
+                Plans whose coverage isn't confirmed are hidden, not assumed covered.
+              </div>
+            )}
+            {(must.implants || must.implantNoWait || must.replacesMissing) && (
+              <div style={{ fontSize: 12, color: NAVY, background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '8px 10px', lineHeight: 1.45 }}>
+                <b>Tooth needs pulling?</b> Have it pulled after the plan starts. A tooth pulled before the
+                effective date counts as already missing — plans marked "Won't replace teeth missing at enrollment"
+                won't pay to replace it. A tooth pulled after enrollment qualifies once the implant waiting period is met.
               </div>
             )}
           </Panel>
@@ -322,9 +334,15 @@ function priceBadges(plan: DentalPlan, price: PriceResult, age: number | null, z
     if (price.flags.includes('quoted_other_zip')) out.push({ text: `Rate quoted for ZIP ${price.quotedZip} — re-quote for ${zip ?? 'this ZIP'}`, tone: 'amber' });
     if (price.flags.includes('starting_at')) out.push({ text: '"Starting at" price', tone: 'amber' });
   }
-  if (plan.covers_implants === true) out.push({ text: 'Implants', tone: 'green' });
+  if (plan.covers_implants === true) {
+    const w = plan.implant_wait_months;
+    out.push({ text: w === 0 ? 'Implants · no wait' : w != null ? `Implants · ${w}-mo wait` : 'Implants', tone: 'green' });
+  }
   if (plan.no_waiting === true) out.push({ text: 'No waiting period', tone: 'green' });
-  if (plan.missing_tooth_clause?.startsWith('No')) out.push({ text: 'No missing-tooth exclusion', tone: 'green' });
+  const mt = missingToothStatus(plan.missing_tooth_clause);
+  if (mt === 'replaces') out.push({ text: 'Replaces teeth already missing', tone: 'green' });
+  if (mt === 'excludes') out.push({ text: "Won't replace teeth missing at enrollment", tone: 'red' });
+  if (mt === 'unknown' && plan.covers_implants === true) out.push({ text: 'Missing-tooth rule unconfirmed', tone: 'amber' });
   return out;
 }
 
@@ -361,6 +379,10 @@ const COMPARE_ROWS: Array<{ label: string; get: (p: DentalPlan, pr: PriceResult)
   { label: 'Basic', get: (p) => p.basic },
   { label: 'Major', get: (p) => p.major },
   { label: 'Implants', get: (p) => p.implants ?? yesNo(p.covers_implants) },
+  {
+    label: 'Implant waiting period',
+    get: (p) => (p.covers_implants !== true ? null : p.implant_wait_months === 0 ? 'None' : p.implant_wait_months != null ? `${p.implant_wait_months} months` : null),
+  },
   { label: 'Dentures', get: (p) => p.dentures },
   { label: 'Missing-tooth rule', get: (p) => p.missing_tooth_clause },
   { label: 'Orthodontia', get: (p) => p.orthodontia },

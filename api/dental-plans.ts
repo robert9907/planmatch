@@ -18,7 +18,7 @@ const PLAN_COLUMNS = [
   'implants', 'dentures', 'crowns', 'root_canals', 'periodontics', 'oral_surgery',
   'waiting_waiver', 'missing_tooth_clause', 'eligibility', 'extras',
   'covers_implants', 'covers_major', 'no_waiting',
-  'household_pricing', 'spouse_discount_pct',
+  'household_pricing', 'spouse_discount_pct', 'implant_wait_months',
   'source_doc', 'source_url', 'captured_at',
 ].join(',');
 

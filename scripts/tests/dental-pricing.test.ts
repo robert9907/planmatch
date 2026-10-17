@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ageFromDob, priceDentalPlan, type DentalRate } from '../../src/lib/dentalPricing';
+import { ageFromDob, missingToothStatus, priceDentalPlan, type DentalRate } from '../../src/lib/dentalPricing';
 
 const rate = (r: Partial<DentalRate> & { monthly_premium: number }): DentalRate => ({
   zip: null, zip_prefixes: null, age_min: null, age_max: null, tier: 'individual', is_starting_at: false, ...r,
@@ -200,6 +200,15 @@ test('tier plan: couple and family use the household tiers', () => {
 test('single person on a per-person plan is just their own rate', () => {
   const r = priceDentalPlan(guardianPremier, { age: 66, zip: '27713', household: { children: 0 } });
   assert.equal(r.kind === 'price' && r.monthly, 114.13);
+});
+
+test('missing-tooth status: only a confirmed "No:" counts as replacing pre-existing gaps', () => {
+  assert.equal(missingToothStatus('No: no missing-tooth exclusion'), 'replaces');
+  assert.equal(missingToothStatus('Yes: teeth missing before coverage are not replaced'), 'excludes');
+  assert.equal(missingToothStatus("N/A: plan doesn't cover dentures, bridges or implants"), 'na');
+  assert.equal(missingToothStatus('Unconfirmed: not stated in the plan summary'), 'unknown');
+  assert.equal(missingToothStatus('Not confirmed'), 'unknown'); // must not read as "No"
+  assert.equal(missingToothStatus(null), 'unknown');
 });
 
 test('ageFromDob handles both date formats and the birthday boundary', () => {
