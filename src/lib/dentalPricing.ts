@@ -91,13 +91,15 @@ export type PriceResult =
   | { kind: 'ineligible'; minAge: number }   // client under the plan's minimum age
   | { kind: 'no_tier' }                      // plan has rates, but not for this household size
   | { kind: 'no_rate' }                      // nothing quoted yet
-  | { kind: 'needs_quote'; reason: 'spouse_age' | 'children' }; // per-person plan we can't price
+  | { kind: 'needs_quote'; reason: 'spouse_age' | 'children' | 'child_ages' }; // per-person plan we can't price
 
 export interface Household {
   /** undefined = no spouse; null = spouse covered but age not entered */
   spouseAge?: number | null;
   /** children under 19 */
   children: number;
+  /** each child's age when known (same length as `children`); null = not entered */
+  childAges?: Array<number | null>;
 }
 
 export interface PriceInput {
@@ -115,8 +117,15 @@ export function householdTier(h: Household): DentalTier {
 
 const cents = (n: number) => Math.round(n * 100 + 1e-9) / 100;
 
-// Per-person carriers charge a child under 19 their age-18 rate (see header).
+// Per-person carriers charge a child under 19 their age-18 rate (see header) —
+// unless the plan publishes its own child age bands (rows ending before 18,
+// e.g. Aetna 0–4, 5–9, 10–14, 15–19). Those plans price each child at their
+// actual age, so the child's age is required.
 const CHILD_RATE_AGE = 18;
+
+export function pricesChildrenByAge(plan: Pick<DentalPlan, 'rates'>): boolean {
+  return plan.rates.some((r) => r.tier === 'individual' && r.age_max != null && r.age_max < 18);
+}
 
 function zipMatches(r: DentalRate, zip: string | null): 'exact' | 'statewide' | 'other' {
   if (r.zip_prefixes && r.zip_prefixes.length) {
@@ -155,8 +164,12 @@ export function priceDentalPlan(
       if (s.kind !== 'price') return { kind: 'needs_quote', reason: 'spouse_age' };
       deps.push(s);
     }
+    const byAge = pricesChildrenByAge(plan);
     for (let i = 0; i < h.children; i++) {
-      const c = dependent(CHILD_RATE_AGE);
+      const known = h.childAges?.[i];
+      if (known != null && known >= 19) return { kind: 'needs_quote', reason: 'children' };
+      if (byAge && known == null) return { kind: 'needs_quote', reason: 'child_ages' };
+      const c = dependent(byAge ? (known as number) : CHILD_RATE_AGE);
       if (c.kind !== 'price') return c;
       deps.push(c);
     }
