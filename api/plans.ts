@@ -1947,7 +1947,7 @@ function buildPbpFallback(rows: PbpBenefitRow[]): PbpFallbackMap {
   return out;
 }
 
-function buildBenefits(
+export function buildBenefits(
   rows: BenefitRow[],
   pbpFallback?: PbpFallback,
 ): PlanBenefits {
@@ -1967,7 +1967,14 @@ function buildBenefits(
   const pmDentalMax = Math.max(toNum(dental?.max_coverage) ?? 0, toNum(dental?.coverage_amount) ?? 0);
   const dentalMax = pmDentalMax > 0 ? pmDentalMax : (pbpFallback?.dentalAnnualMax ?? 0);
 
-  const vision = rows.find((r) => r.benefit_category === 'vision');
+  // Prefer a vision row that carries an eyewear allowance (real supplemental
+  // vision) over a copay-only row (a routine eye-exam copay). Picking the
+  // first match let an exam copay masquerade as supplemental vision
+  // (pressure-test run 1, H3449-027).
+  const visionRows = rows.filter((r) => r.benefit_category === 'vision');
+  const vision =
+    visionRows.find((r) => (toNum(r.max_coverage) ?? 0) > 0 || (toNum(r.coverage_amount) ?? 0) > 0)
+    ?? visionRows[0];
   const visionEyewear = Math.max(toNum(vision?.max_coverage) ?? 0, toNum(vision?.coverage_amount) ?? 0);
 
   const hearing = rows.find((r) => r.benefit_category === 'hearing');
@@ -2048,7 +2055,13 @@ function buildBenefits(
     vision: {
       exam: Boolean(vision),
       eyewear_allowance_year: visionEyewear,
-      description: vision?.benefit_description ?? null,
+      // No eyewear allowance → this is a routine eye-exam copay, not a
+      // supplemental vision benefit; label it so it can't read as an extra.
+      description:
+        vision?.benefit_description
+        ?? (vision && visionEyewear === 0 && toNum(vision.copay) != null
+              ? `Eye exam · $${toNum(vision.copay)} copay (no supplemental eyewear)`
+              : null),
     },
     hearing: {
       aid_allowance_year: hearingAllowance,
