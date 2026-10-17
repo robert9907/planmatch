@@ -141,9 +141,46 @@ test('Guardian couple is the exact sum (quoted 66+40 = $208.46)', () => {
   assert.equal(r.kind === 'price' && r.monthly, 208.46);
 });
 
-test('per-person plan with children is not guessed', () => {
-  const r = priceDentalPlan(guardianPremier, { age: 66, zip: '27713', household: { spouseAge: 64, children: 1 } });
-  assert.deepEqual(r, { kind: 'needs_quote', reason: 'children' });
+test('Guardian child under 19 = age-18 rate, per child (quoted 66 + 2 kids = $314.83)', () => {
+  const one = priceDentalPlan(guardianPremier, { age: 66, zip: '27713', household: { children: 1 } });
+  assert.equal(one.kind === 'price' && one.monthly, 214.48);
+  const two = priceDentalPlan(guardianPremier, { age: 66, zip: '27713', household: { children: 2 } });
+  assert.equal(two.kind === 'price' && two.monthly, 314.83);
+});
+
+test('Guardian Select: dependents use the flat dependent rate, primary must be 50+', () => {
+  const select = {
+    household_pricing: 'sum_by_age' as const,
+    spouse_discount_pct: null,
+    rates: [rate({ age_min: 50, monthly_premium: 73.68 }), rate({ tier: 'dependent', monthly_premium: 73.68 })],
+  };
+  const r = priceDentalPlan(select, { age: 66, zip: '27713', household: { children: 2 } });
+  assert.equal(r.kind === 'price' && r.monthly, 221.04); // quoted
+  const young = priceDentalPlan(select, { age: 45, zip: '27713', household: { children: 1 } });
+  assert.deepEqual(young, { kind: 'ineligible', minAge: 50 });
+});
+
+test('Cigna child = 18–24 rate with the 15% dependent discount (quoted 40 + kid = $59.35)', () => {
+  const r = priceDentalPlan(cigna1000, { age: 40, zip: '27713', household: { children: 1 } });
+  assert.equal(r.kind === 'price' && r.monthly, 59.35);
+});
+
+test('Cigna family rounds each dependent to the cent (quoted Asheville DVH 66+40+2 kids = $174.14)', () => {
+  const dvhAsheville = {
+    household_pricing: 'sum_by_age' as const,
+    spouse_discount_pct: 15,
+    rates: [rate({ age_min: 18, age_max: 24, monthly_premium: 44.18 }), rate({ age_min: 25, age_max: 59, monthly_premium: 49.45 }), rate({ age_min: 60, monthly_premium: 57.01 })],
+  };
+  const r = priceDentalPlan(dvhAsheville, { age: 66, zip: '28801', household: { spouseAge: 40, children: 2 } });
+  assert.equal(r.kind === 'price' && r.monthly, 174.14);
+});
+
+test('Humana (adults-only per-person): couple sums, children are not guessed', () => {
+  const loyalty = { household_pricing: 'sum_by_age_adults' as const, spouse_discount_pct: null, rates: humanaLoyalty.rates };
+  const couple = priceDentalPlan(loyalty, { age: 66, zip: '27713', household: { spouseAge: 45, children: 0 } });
+  assert.equal(couple.kind === 'price' && couple.monthly, 87.98);
+  const kids = priceDentalPlan(loyalty, { age: 66, zip: '27713', household: { children: 1 } });
+  assert.deepEqual(kids, { kind: 'needs_quote', reason: 'children' });
 });
 
 test('per-person plan needs the spouse age', () => {

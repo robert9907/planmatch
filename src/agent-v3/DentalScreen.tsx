@@ -149,7 +149,7 @@ export function DentalScreen() {
             {hasSpouse && (
               <LabeledInput id="dental-spouse-age" label="Spouse age" value={spouseAgeText} onChange={setSpouseAgeText} inputMode="numeric" />
             )}
-            <LabeledInput id="dental-children" label="Children covered" value={childrenText} onChange={setChildrenText} inputMode="numeric" />
+            <LabeledInput id="dental-children" label="Children covered (under 19)" value={childrenText} onChange={setChildrenText} inputMode="numeric" />
             {(client.zip || client.dob) && (
               <div style={{ fontSize: 11, color: MUTED }}>Prefilled from the Client screen — edit freely.</div>
             )}
@@ -339,7 +339,7 @@ function PriceBlock({ price }: { price: PriceResult }) {
   }
   const msg =
     price.kind === 'no_tier' ? 'Household rate not loaded'
-    : price.kind === 'needs_quote' && price.reason === 'children' ? 'Children priced per person — quote with carrier'
+    : price.kind === 'needs_quote' && price.reason === 'children' ? 'Child rate not published — quote with carrier'
     : price.kind === 'needs_quote' ? 'Enter spouse age to price'
     : 'Rate not quoted for this age';
   return (
