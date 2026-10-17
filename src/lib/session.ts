@@ -46,7 +46,20 @@ function emptyBenefitFilters(): BenefitFilterState {
   };
 }
 
-function initialState(): SessionState & { benefitFilters: BenefitFilterState } {
+/** A dental plan the broker added to the client quote from the Dental screen.
+ *  The premium is what src/lib/dentalPricing.ts priced for the inputs on that
+ *  screen; the consumer API re-reads every plan fact from pm_dental_plan. */
+export interface QuoteDentalPick {
+  planId: string;
+  carrier: string;
+  planName: string;
+  monthlyPremium: number;
+  startingAt: boolean;
+  /** Who the premium covers, e.g. "You and your spouse". */
+  coveredLabel: string;
+}
+
+function initialState(): SessionState & { benefitFilters: BenefitFilterState; quoteDental: QuoteDentalPick[] } {
   return {
     sessionId: uid('ses'),
     startedAt: Date.now(),
@@ -67,11 +80,20 @@ function initialState(): SessionState & { benefitFilters: BenefitFilterState } {
     selectedFinalists: [],
     givebackPlanEnrolled: false,
     benefitFilters: emptyBenefitFilters(),
+    quoteDental: [],
   };
 }
 
+/** Most dental plans one quote can carry (mirrors MAX_DENTAL_PLANS in the
+ *  consumer api/_lib/quote-dental.ts). */
+export const MAX_QUOTE_DENTAL = 3;
+
 interface SessionStore extends SessionState {
   benefitFilters: BenefitFilterState;
+  quoteDental: QuoteDentalPick[];
+  /** Add (or refresh the price of) a dental plan on the quote. No-op past MAX_QUOTE_DENTAL. */
+  upsertQuoteDental: (pick: QuoteDentalPick) => void;
+  removeQuoteDental: (planId: string) => void;
   setIsAnnualReview: (flag: boolean) => void;
   updateClient: (patch: Partial<Client>) => void;
   addMedication: (med: Omit<Medication, 'id' | 'addedAt'>) => string;
@@ -101,6 +123,21 @@ export const useSession = create<SessionStore>()(
       ...initialState(),
 
       setIsAnnualReview: (flag) => set({ isAnnualReview: flag }),
+
+      upsertQuoteDental: (pick) =>
+        set((state) => {
+          const i = state.quoteDental.findIndex((d) => d.planId === pick.planId);
+          if (i >= 0) {
+            const next = state.quoteDental.slice();
+            next[i] = pick;
+            return { quoteDental: next };
+          }
+          if (state.quoteDental.length >= MAX_QUOTE_DENTAL) return state;
+          return { quoteDental: [...state.quoteDental, pick] };
+        }),
+
+      removeQuoteDental: (planId) =>
+        set((state) => ({ quoteDental: state.quoteDental.filter((d) => d.planId !== planId) })),
 
       updateClient: (patch) =>
         set((state) => ({ client: { ...state.client, ...patch } })),

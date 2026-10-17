@@ -6,20 +6,22 @@
 // repo: flat files, inline styles, zustand session; consumer repo:
 // screens/components/hooks subdirs, Tailwind, AgentContext).
 //
-// Pickup to 5 plans the brain ranked, write a personal note, optionally
-// override the prospect's phone number, POST to the consumer-host
-// /api/quotes (where pm_quotes lives), get back a /quote/:short_id URL.
+// Pick up to 5 plans the brain ranked (and optionally mark one as the top
+// pick), carry any dental plans added on the Dental screen, write a personal
+// note, choose text and/or email, POST to the consumer-host /api/quotes
+// (where pm_quotes lives), get back a /quote/:short_id URL. The consumer API
+// sends the text (AgentBase bridge) and the email (Resend).
 
 import { useMemo, useState, type CSSProperties } from 'react';
 import { useSession } from '@/lib/session';
+import { useTpmoCounts } from '@/hooks/useTpmoCounts';
 import type { LibraryRankPlan } from '@/lib/library-client';
 import { Btn } from './compare-v2/Button';
 
 const MAX_PLANS = 5;
-// Consumer-side host where pm_quotes lives and where the public
-// /quote/:id page is served. The agent surface (planmatch.vercel.app)
-// posts cross-origin — setCors() on api/quotes.ts allows it.
-const QUOTE_API_BASE = 'https://planmatch.generationhealth.me';
+// Sends go through this app's own server (api/quote-send.ts): it checks the
+// broker session and adds the secret the consumer quote API requires.
+const QUOTE_SEND_URL = '/api/quote-send';
 
 // Tokens mirror the rest of agent-v3.
 const NAVY = '#0d2f5e';
@@ -45,6 +47,9 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
   const client = session.client;
   const drugs = session.medications;
   const providers = session.providers;
+  const quoteDental = session.quoteDental;
+  const removeQuoteDental = session.removeQuoteDental;
+  const tpmo = useTpmoCounts();
 
   const defaultSelected = useMemo(() => {
     return rankedPlans.slice(0, 3).map((p) => p.plan_id);
@@ -53,16 +58,23 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>(defaultSelected);
   const [note, setNote] = useState<string>(buildDefaultNote(firstNameFrom(client.name)));
   const [phoneOverride, setPhoneOverride] = useState<string>(client.phone ?? '');
+  const [emailOverride, setEmailOverride] = useState<string>(client.email ?? '');
+  const [sendText, setSendText] = useState<boolean>(true);
+  const [sendEmail, setSendEmail] = useState<boolean>(true);
+  const [topPick, setTopPick] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<
     | { kind: 'idle' }
     | { kind: 'error'; message: string }
-    | { kind: 'sent'; url: string; shortId: string; smsSent: boolean; smsError?: string }
+    | { kind: 'sent'; url: string; shortId: string; smsSent: boolean; smsError?: string; emailSent: boolean; emailError?: string }
   >({ kind: 'idle' });
 
   const toggle = (id: string) => {
     setSelectedIds((cur) => {
-      if (cur.includes(id)) return cur.filter((x) => x !== id);
+      if (cur.includes(id)) {
+        if (topPick === id) setTopPick(null);
+        return cur.filter((x) => x !== id);
+      }
       if (cur.length >= MAX_PLANS) return cur;
       return [...cur, id];
     });
@@ -80,7 +92,12 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
     return out;
   })();
 
-  const canSend = !submitting && selectedIds.length > 0 && missingFields.length === 0;
+  const phone = phoneOverride.trim() || client.phone || '';
+  const email = emailOverride.trim();
+  const emailValid = !email || /^[^\s@<>"']+@[^\s@<>"']+\.[a-z]{2,}$/i.test(email);
+  const willText = sendText && phone.replace(/\D/g, '').length >= 10;
+  const willEmail = sendEmail && !!email && emailValid;
+  const canSend = !submitting && selectedIds.length > 0 && missingFields.length === 0 && emailValid;
 
   const onSend = async () => {
     if (!canSend) return;
@@ -88,7 +105,18 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
     setResult({ kind: 'idle' });
     const payload = {
       clientName: client.name.trim(),
-      clientPhone: phoneOverride.trim() || client.phone || null,
+      clientPhone: phone || null,
+      clientEmail: email || undefined,
+      send: { sms: willText, email: willEmail },
+      topPick: topPick ? tripleKey(parseTriple(topPick)) : undefined,
+      tpmoOrgCount: tpmo.status === 'ready' ? tpmo.counts.orgCount : undefined,
+      tpmoProductCount: tpmo.status === 'ready' ? tpmo.counts.productCount : undefined,
+      dentalPlans: quoteDental.map((d) => ({
+        planId: d.planId,
+        monthlyPremium: d.monthlyPremium,
+        startingAt: d.startingAt,
+        coveredLabel: d.coveredLabel,
+      })),
       countyName: client.county,
       stateCode: client.state,
       zip: client.zip || undefined,
@@ -113,8 +141,9 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
         })),
     };
     try {
-      const resp = await fetch(`${QUOTE_API_BASE}/api/quotes`, {
+      const resp = await fetch(QUOTE_SEND_URL, {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
@@ -123,6 +152,7 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
         url?: string;
         shortId?: string;
         sms?: { sent: boolean; error?: string };
+        email?: { sent: boolean; error?: string };
         error?: string;
       } | null;
       if (!resp.ok || !data?.success || !data.url || !data.shortId) {
@@ -135,6 +165,8 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
         shortId: data.shortId,
         smsSent: !!data.sms?.sent,
         smsError: data.sms?.error,
+        emailSent: !!data.email?.sent,
+        emailError: data.email?.error,
       });
       onQuoteSent?.(data.url, data.shortId);
     } catch (err) {
@@ -154,8 +186,8 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
         Send a quote
       </div>
       <div style={{ marginTop: 4, fontSize: 12, color: MUTED }}>
-        Pick up to {MAX_PLANS} plans, add a personal note, and text the prospect a
-        link to a frozen comparison page.
+        Pick up to {MAX_PLANS} plans, add a personal note, and text and/or email the
+        client a link to a frozen comparison page.
       </div>
 
       <FieldLabel>Plans</FieldLabel>
@@ -199,6 +231,27 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
                   {' · '}{p.star_rating != null ? `${p.star_rating.toFixed(1)}★` : 'Not yet rated'}
                 </div>
               </div>
+              {checked && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.preventDefault(); setTopPick((cur) => (cur === id ? null : id)); }}
+                  aria-pressed={topPick === id}
+                  style={{
+                    flex: 'none',
+                    alignSelf: 'center',
+                    padding: '4px 10px',
+                    borderRadius: 999,
+                    border: `1px solid ${NAVY}`,
+                    background: topPick === id ? NAVY : '#fff',
+                    color: topPick === id ? '#fff' : NAVY,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {topPick === id ? 'Top pick ✓' : 'Mark top pick'}
+                </button>
+              )}
             </label>
           );
         })}
@@ -206,6 +259,39 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
       <div style={{ marginTop: 4, fontSize: 11, color: MUTED }}>
         {selectedIds.length} of {MAX_PLANS} selected
       </div>
+
+      <FieldLabel>Dental plans</FieldLabel>
+      {quoteDental.length === 0 ? (
+        <div style={{ marginTop: 6, fontSize: 12, color: MUTED }}>
+          None. Add up to 3 from the Dental tab ("Add to client quote").
+        </div>
+      ) : (
+        <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {quoteDental.map((d) => (
+            <div
+              key={d.planId}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10, padding: 12,
+                borderRadius: 10, border: `1px solid ${BORDER}`, background: '#fff',
+              }}
+            >
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: TEXT }}>{d.carrier} {d.planName}</div>
+                <div style={{ fontSize: 11, color: MUTED }}>
+                  {d.startingAt ? 'From ' : ''}${d.monthlyPremium.toFixed(2)}/mo · {d.coveredLabel}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => removeQuoteDental(d.planId)}
+                style={{ background: 'transparent', border: 'none', color: MUTED, fontSize: 12, textDecoration: 'underline', cursor: 'pointer' }}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <FieldLabel>Personal note</FieldLabel>
       <textarea
@@ -216,16 +302,37 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
         placeholder="A short note that shows above the comparison on the page."
       />
 
-      <FieldLabel>Prospect phone</FieldLabel>
-      <input
-        type="tel"
-        value={phoneOverride}
-        onChange={(e) => setPhoneOverride(e.target.value)}
-        style={inputStyle}
-        placeholder="(828) 555-0100"
-      />
+      <FieldLabel>Send to</FieldLabel>
+      <label style={channelRow}>
+        <input type="checkbox" checked={sendText} onChange={(e) => setSendText(e.target.checked)} />
+        <span style={{ width: 44, fontSize: 12, color: TEXT, fontWeight: 600 }}>Text</span>
+        <input
+          type="tel"
+          aria-label="Client phone"
+          value={phoneOverride}
+          onChange={(e) => setPhoneOverride(e.target.value)}
+          style={{ ...inputStyle, marginTop: 0, flex: 1 }}
+          placeholder="(828) 555-0100"
+        />
+      </label>
+      <label style={channelRow}>
+        <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
+        <span style={{ width: 44, fontSize: 12, color: TEXT, fontWeight: 600 }}>Email</span>
+        <input
+          type="email"
+          aria-label="Client email"
+          value={emailOverride}
+          onChange={(e) => setEmailOverride(e.target.value)}
+          style={{ ...inputStyle, marginTop: 0, flex: 1 }}
+          placeholder="name@example.com"
+        />
+      </label>
+      {!emailValid && (
+        <div style={{ marginTop: 4, fontSize: 11, color: ERROR_TEXT }}>That email address doesn't look right.</div>
+      )}
       <div style={{ marginTop: 4, fontSize: 11, color: MUTED }}>
-        Leave blank to skip the SMS — the quote URL is still returned.
+        Uncheck both (or leave them blank) to just create the link.
+        {tpmo.status === 'error' && ' County TPMO counts unavailable — the page and email fall back to the statewide counts.'}
       </div>
 
       {result.kind === 'error' && (
@@ -258,9 +365,13 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
       >
         {submitting
           ? 'Sending…'
-          : phoneOverride.trim() || client.phone
-            ? `Text quote to ${displayPhone(phoneOverride.trim() || client.phone || '')}`
-            : 'Create quote link'}
+          : willText && willEmail
+            ? 'Text + email quote'
+            : willText
+              ? `Text quote to ${displayPhone(phone)}`
+              : willEmail
+                ? `Email quote to ${email}`
+                : 'Create quote link'}
       </Btn>
 
       {missingFields.length > 0 && (
@@ -273,6 +384,11 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────
+
+function tripleKey(t: { contract_id: string; plan_id: string; segment_id: string }): string {
+  // Same key the consumer API uses for contract_plan_segment.
+  return `${t.contract_id}_${t.plan_id}_${t.segment_id}`;
+}
 
 function parseTriple(planId: string): { contract_id: string; plan_id: string; segment_id: string } {
   // LibraryRankPlan.plan_id format: "<contract>-<plan>" or "<contract>-<plan>-<segment>".
@@ -312,6 +428,13 @@ const cardStyle: CSSProperties = {
   boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
 };
 
+const channelRow: CSSProperties = {
+  marginTop: 6,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+};
+
 const inputStyle: CSSProperties = {
   marginTop: 6,
   width: '100%',
@@ -346,7 +469,7 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 function SentSuccess({
   result, onReset,
 }: {
-  result: { url: string; shortId: string; smsSent: boolean; smsError?: string };
+  result: { url: string; shortId: string; smsSent: boolean; smsError?: string; emailSent: boolean; emailError?: string };
   onReset: () => void;
 }) {
   return (
@@ -366,8 +489,13 @@ function SentSuccess({
       </div>
       <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
         {result.smsSent
-          ? 'SMS delivered to the prospect via AgentBase.'
-          : `SMS skipped: ${result.smsError ?? 'no phone on file'}.`}
+          ? 'Text sent via AgentBase.'
+          : `Text not sent: ${result.smsError ?? 'no phone on file'}.`}
+      </div>
+      <div style={{ marginTop: 4, fontSize: 12, color: result.emailSent || result.emailError === 'not requested' || result.emailError === 'no client email provided' ? MUTED : ERROR_TEXT }}>
+        {result.emailSent
+          ? 'Email sent.'
+          : `Email not sent: ${result.emailError ?? 'no email on file'}.`}
       </div>
       <div
         style={{
