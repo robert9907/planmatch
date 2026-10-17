@@ -75,6 +75,7 @@ export interface DentalPlan {
   source_doc: string | null;
   source_url: string | null;
   captured_at: string;
+  implant_wait_months?: number | null;
   household_pricing?: HouseholdPricing;
   spouse_discount_pct?: number | null;
   rates: DentalRate[];
@@ -227,6 +228,22 @@ function priceOne(
     quotedAge: isPointAge(row) ? row.age_min : null,
     quotedZip: row.zip,
   };
+}
+
+// Missing-tooth rule (pm_dental_plan.missing_tooth_clause), stored as
+// "<status>: <plain-English detail>":
+//   No:  — replaces teeth already missing at enrollment
+//   Yes: — won't replace teeth missing/pulled before the plan started
+//   N/A: — plan doesn't cover tooth replacement at all
+//   anything else (Unconfirmed:, blank) — not confirmed; never treat as covered
+export type MissingToothStatus = 'replaces' | 'excludes' | 'na' | 'unknown';
+
+export function missingToothStatus(clause: string | null | undefined): MissingToothStatus {
+  if (!clause) return 'unknown';
+  if (/^No:/.test(clause)) return 'replaces';
+  if (/^Yes:/.test(clause)) return 'excludes';
+  if (/^N\/A:/.test(clause)) return 'na';
+  return 'unknown';
 }
 
 export function ageFromDob(dob: string | null | undefined, today = new Date()): number | null {
