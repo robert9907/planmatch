@@ -97,6 +97,74 @@ test('plan with no rates', () => {
   assert.deepEqual(priceDentalPlan({ rates: [] }, { age: 66, zip: '27713', tier: 'individual' }), { kind: 'no_rate' });
 });
 
+// ─── Households ──────────────────────────────────────────────────────
+// Fixtures are real 2026-10-17 quotes (Durham 27713 unless noted).
+// household.spouseAge: undefined = no spouse, null = spouse with age not entered.
+
+// Cigna Dental 1000, Durham area: 25–59 $33, 60+ $39. Spouse 15% off.
+const cigna1000 = {
+  household_pricing: 'sum_by_age' as const,
+  spouse_discount_pct: 15,
+  rates: [rate({ age_min: 18, age_max: 24, monthly_premium: 31 }), rate({ age_min: 25, age_max: 59, monthly_premium: 33 }), rate({ age_min: 60, monthly_premium: 39 })],
+};
+// Cigna DVH 3500 — checks spouse-discount rounding to the cent.
+const cignaDvh = { ...cigna1000, rates: [rate({ age_min: 25, age_max: 59, monthly_premium: 60.54 }), rate({ age_min: 60, monthly_premium: 70.16 })] };
+// Guardian Premier 2.0: exact sum, no discount.
+const guardianPremier = {
+  household_pricing: 'sum_by_age' as const,
+  spouse_discount_pct: null,
+  rates: [rate({ age_min: 18, age_max: 18, monthly_premium: 100.35 }), rate({ age_min: 19, age_max: 49, monthly_premium: 94.33 }), rate({ age_min: 50, age_max: 64, monthly_premium: 103.75 }), rate({ age_min: 65, monthly_premium: 114.13 })],
+};
+// Ameritas Care Lite, flat household tiers by area.
+const ameritasLite = {
+  household_pricing: 'tier' as const,
+  rates: [rate({ zip_prefixes: ['277'], monthly_premium: 31.79 }), rate({ zip_prefixes: ['277'], tier: 'self_plus_1', monthly_premium: 63.58 }), rate({ zip_prefixes: ['277'], tier: 'self_plus_2_or_more', monthly_premium: 101.73 })],
+};
+
+test('Cigna couple: primary full rate + spouse 15% off (quoted 66+40 = $67.05)', () => {
+  const r = priceDentalPlan(cigna1000, { age: 66, zip: '27713', household: { spouseAge: 40, children: 0 } });
+  assert.equal(r.kind === 'price' && r.monthly, 67.05);
+});
+
+test('Cigna couple order matters (quoted 40+66 = $66.15)', () => {
+  const r = priceDentalPlan(cigna1000, { age: 40, zip: '27713', household: { spouseAge: 66, children: 0 } });
+  assert.equal(r.kind === 'price' && r.monthly, 66.15);
+});
+
+test('Cigna spouse discount rounds to the cent (quoted DVH 66+40 = $121.62)', () => {
+  const r = priceDentalPlan(cignaDvh, { age: 66, zip: '27713', household: { spouseAge: 40, children: 0 } });
+  assert.equal(r.kind === 'price' && r.monthly, 121.62);
+});
+
+test('Guardian couple is the exact sum (quoted 66+40 = $208.46)', () => {
+  const r = priceDentalPlan(guardianPremier, { age: 66, zip: '27713', household: { spouseAge: 40, children: 0 } });
+  assert.equal(r.kind === 'price' && r.monthly, 208.46);
+});
+
+test('per-person plan with children is not guessed', () => {
+  const r = priceDentalPlan(guardianPremier, { age: 66, zip: '27713', household: { spouseAge: 64, children: 1 } });
+  assert.deepEqual(r, { kind: 'needs_quote', reason: 'children' });
+});
+
+test('per-person plan needs the spouse age', () => {
+  const r = priceDentalPlan(guardianPremier, { age: 66, zip: '27713', household: { spouseAge: null, children: 0 } });
+  assert.deepEqual(r, { kind: 'needs_quote', reason: 'spouse_age' });
+});
+
+test('tier plan: couple and family use the household tiers', () => {
+  const one = priceDentalPlan(ameritasLite, { age: 66, zip: '27713', household: { children: 0 } });
+  assert.equal(one.kind === 'price' && one.monthly, 31.79);
+  const couple = priceDentalPlan(ameritasLite, { age: 66, zip: '27713', household: { spouseAge: 40, children: 0 } });
+  assert.equal(couple.kind === 'price' && couple.monthly, 63.58);
+  const fam = priceDentalPlan(ameritasLite, { age: 40, zip: '27713', household: { spouseAge: 38, children: 2 } });
+  assert.equal(fam.kind === 'price' && fam.monthly, 101.73);
+});
+
+test('single person on a per-person plan is just their own rate', () => {
+  const r = priceDentalPlan(guardianPremier, { age: 66, zip: '27713', household: { children: 0 } });
+  assert.equal(r.kind === 'price' && r.monthly, 114.13);
+});
+
 test('ageFromDob handles both date formats and the birthday boundary', () => {
   const today = new Date(2026, 9, 17); // Oct 17 2026
   assert.equal(ageFromDob('1960-01-01', today), 66);

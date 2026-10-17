@@ -16,6 +16,15 @@
 
 export type DentalTier = 'individual' | 'self_plus_1' | 'self_plus_2_or_more' | 'family';
 
+// How a carrier prices more than one person (pm_dental_plan.household_pricing):
+//   tier       — flat household tiers in pm_dental_rate.tier (Ameritas, MetLife,
+//                Delta EHB). Missing column on older rows = tier.
+//   sum_by_age — each person pays their own age rate; couple = primary +
+//                spouse × (1 − spouse_discount_pct). Confirmed against carrier
+//                quotes 2026-10-17 (Guardian, Cigna, BCBS NC, Delta non-EHB).
+//                Children aren't modeled yet → needs_quote, never guessed.
+export type HouseholdPricing = 'tier' | 'sum_by_age';
+
 export interface DentalRate {
   zip: string | null;
   zip_prefixes: string[] | null;
@@ -57,6 +66,8 @@ export interface DentalPlan {
   source_doc: string | null;
   source_url: string | null;
   captured_at: string;
+  household_pricing?: HouseholdPricing;
+  spouse_discount_pct?: number | null;
   rates: DentalRate[];
 }
 
@@ -69,13 +80,29 @@ export type PriceResult =
   | { kind: 'price'; monthly: number; flags: PriceFlag[]; quotedAge: number | null; quotedZip: string | null }
   | { kind: 'ineligible'; minAge: number }   // client under the plan's minimum age
   | { kind: 'no_tier' }                      // plan has rates, but not for this household size
-  | { kind: 'no_rate' };                     // nothing quoted yet
+  | { kind: 'no_rate' }                      // nothing quoted yet
+  | { kind: 'needs_quote'; reason: 'children' | 'spouse_age' }; // per-person plan we can't price yet
+
+export interface Household {
+  /** undefined = no spouse; null = spouse covered but age not entered */
+  spouseAge?: number | null;
+  children: number;
+}
 
 export interface PriceInput {
   age: number | null;
   zip: string | null;
-  tier: DentalTier;
+  /** Legacy single-select tier. Ignored when `household` is given. */
+  tier?: DentalTier;
+  household?: Household;
 }
+
+export function householdTier(h: Household): DentalTier {
+  const size = 1 + (h.spouseAge !== undefined ? 1 : 0) + Math.max(0, h.children);
+  return size === 1 ? 'individual' : size === 2 ? 'self_plus_1' : 'self_plus_2_or_more';
+}
+
+const cents = (n: number) => Math.round(n * 100 + 1e-9) / 100;
 
 function zipMatches(r: DentalRate, zip: string | null): 'exact' | 'statewide' | 'other' {
   if (r.zip_prefixes && r.zip_prefixes.length) {
@@ -92,7 +119,35 @@ function ageMatches(r: DentalRate, age: number | null): boolean {
 
 const isPointAge = (r: DentalRate) => r.age_min != null && r.age_min === r.age_max;
 
-export function priceDentalPlan(plan: Pick<DentalPlan, 'rates'>, input: PriceInput): PriceResult {
+export function priceDentalPlan(
+  plan: Pick<DentalPlan, 'rates'> & Partial<Pick<DentalPlan, 'household_pricing' | 'spouse_discount_pct'>>,
+  input: PriceInput,
+): PriceResult {
+  const h = input.household;
+  if (h && plan.household_pricing === 'sum_by_age' && householdTier(h) !== 'individual') {
+    if (h.children > 0) return { kind: 'needs_quote', reason: 'children' };
+    if (h.spouseAge == null) return { kind: 'needs_quote', reason: 'spouse_age' };
+    const primary = priceOne(plan, { age: input.age, zip: input.zip, tier: 'individual' });
+    if (primary.kind !== 'price') return primary;
+    const spouse = priceOne(plan, { age: h.spouseAge, zip: input.zip, tier: 'individual' });
+    if (spouse.kind !== 'price') return { kind: 'needs_quote', reason: 'spouse_age' };
+    const disc = Number(plan.spouse_discount_pct ?? 0);
+    return {
+      kind: 'price',
+      monthly: cents(primary.monthly + cents(spouse.monthly * (1 - disc / 100))),
+      flags: [...new Set([...primary.flags, ...spouse.flags])],
+      quotedAge: primary.quotedAge,
+      quotedZip: primary.quotedZip,
+    };
+  }
+  const tier = h ? householdTier(h) : input.tier ?? 'individual';
+  return priceOne(plan, { age: input.age, zip: input.zip, tier });
+}
+
+function priceOne(
+  plan: Pick<DentalPlan, 'rates'>,
+  input: { age: number | null; zip: string | null; tier: DentalTier },
+): PriceResult {
   if (!plan.rates.length) return { kind: 'no_rate' };
   // Carriers name the 3+ household tier differently: MetLife "Self + 2 or
   // more", Delta "Family" (subscriber + 2 or more). Same household.
