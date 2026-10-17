@@ -19,10 +19,9 @@ import type { LibraryRankPlan } from '@/lib/library-client';
 import { Btn } from './compare-v2/Button';
 
 const MAX_PLANS = 5;
-// Consumer-side host where pm_quotes lives and where the public
-// /quote/:id page is served. The agent surface (planmatch.vercel.app)
-// posts cross-origin — setCors() on api/quotes.ts allows it.
-const QUOTE_API_BASE = 'https://planmatch.generationhealth.me';
+// Sends go through this app's own server (api/quote-send.ts): it checks the
+// broker session and adds the secret the consumer quote API requires.
+const QUOTE_SEND_URL = '/api/quote-send';
 
 // Tokens mirror the rest of agent-v3.
 const NAVY = '#0d2f5e';
@@ -142,8 +141,9 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
         })),
     };
     try {
-      const resp = await fetch(`${QUOTE_API_BASE}/api/quotes`, {
+      const resp = await fetch(QUOTE_SEND_URL, {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
