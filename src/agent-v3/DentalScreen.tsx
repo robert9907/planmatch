@@ -58,7 +58,7 @@ export function DentalScreen() {
   });
   const [hasSpouse, setHasSpouse] = useState(false);
   const [spouseAgeText, setSpouseAgeText] = useState('');
-  const [childrenText, setChildrenText] = useState('0');
+  const [childrenText, setChildrenText] = useState('');
   const [must, setMust] = useState<Record<MustHave, boolean>>({
     implants: false, implantNoWait: false, replacesMissing: false, major: false, noWait: false, insuranceOnly: false,
   });
@@ -88,8 +88,13 @@ export function DentalScreen() {
 
   const household = useMemo<Household>(() => {
     const spouseAge = /^\d{1,3}$/.test(spouseAgeText) ? Number(spouseAgeText) : null;
-    const children = /^\d{1,2}$/.test(childrenText) ? Number(childrenText) : 0;
-    return hasSpouse ? { spouseAge, children } : { children };
+    // "4, 10" → two children aged 4 and 10. A bare "?" counts a child whose age isn't known yet.
+    const childAges = childrenText
+      .split(/[\s,]+/)
+      .filter(Boolean)
+      .map((t) => (/^\d{1,2}$/.test(t) ? Number(t) : null));
+    const children = childAges.length;
+    return hasSpouse ? { spouseAge, children, childAges } : { children, childAges };
   }, [hasSpouse, spouseAgeText, childrenText]);
 
   const priced = useMemo(
@@ -154,7 +159,7 @@ export function DentalScreen() {
             {hasSpouse && (
               <LabeledInput id="dental-spouse-age" label="Spouse age" value={spouseAgeText} onChange={setSpouseAgeText} inputMode="numeric" />
             )}
-            <LabeledInput id="dental-children" label="Children covered (under 19)" value={childrenText} onChange={setChildrenText} inputMode="numeric" />
+            <LabeledInput id="dental-children" label="Children's ages (under 19, e.g. 4, 10)" value={childrenText} onChange={setChildrenText} />
             {(client.zip || client.dob) && (
               <div style={{ fontSize: 11, color: MUTED }}>Prefilled from the Client screen — edit freely.</div>
             )}
@@ -357,7 +362,8 @@ function PriceBlock({ price }: { price: PriceResult }) {
   }
   const msg =
     price.kind === 'no_tier' ? 'Household rate not loaded'
-    : price.kind === 'needs_quote' && price.reason === 'children' ? 'Child rate not published — quote with carrier'
+    : price.kind === 'needs_quote' && price.reason === 'child_ages' ? "Enter each child's age to price"
+    : price.kind === 'needs_quote' && price.reason === 'children' ? 'Child rate not available — quote with carrier'
     : price.kind === 'needs_quote' ? 'Enter spouse age to price'
     : 'Rate not quoted for this age';
   return (

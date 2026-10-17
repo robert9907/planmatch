@@ -183,6 +183,42 @@ test('Humana (adults-only per-person): couple sums, children are not guessed', (
   assert.deepEqual(kids, { kind: 'needs_quote', reason: 'children' });
 });
 
+// Aetna Dental Direct Core PPO, Durham area (rest-of-NC): 5-year bands incl. children.
+const aetnaCore = {
+  household_pricing: 'sum_by_age' as const,
+  spouse_discount_pct: null,
+  rates: [
+    rate({ age_min: 0, age_max: 4, monthly_premium: 26.93 }), rate({ age_min: 5, age_max: 9, monthly_premium: 48.06 }),
+    rate({ age_min: 10, age_max: 14, monthly_premium: 43.67 }), rate({ age_min: 15, age_max: 19, monthly_premium: 43.48 }),
+    rate({ age_min: 40, age_max: 44, monthly_premium: 40.27 }), rate({ age_min: 65, monthly_premium: 57.20 }),
+  ],
+};
+
+test('Aetna couple is the exact sum (quoted 66+40 Core = $97.47)', () => {
+  const r = priceDentalPlan(aetnaCore, { age: 66, zip: '27713', household: { spouseAge: 40, children: 0 } });
+  assert.equal(r.kind === 'price' && r.monthly, 97.47);
+});
+
+test('Aetna prices each child at their own age band', () => {
+  const r = priceDentalPlan(aetnaCore, { age: 66, zip: '27713', household: { spouseAge: 40, children: 2, childAges: [4, 10] } });
+  assert.equal(r.kind === 'price' && r.monthly, 168.07); // 57.20 + 40.27 + 26.93 + 43.67
+});
+
+test('Aetna needs the child ages; never assumes one', () => {
+  const r = priceDentalPlan(aetnaCore, { age: 66, zip: '27713', household: { children: 1 } });
+  assert.deepEqual(r, { kind: 'needs_quote', reason: 'child_ages' });
+});
+
+test('flat-child carriers ignore the child age (Guardian kid age 10 = age-18 rate)', () => {
+  const r = priceDentalPlan(guardianPremier, { age: 66, zip: '27713', household: { children: 1, childAges: [10] } });
+  assert.equal(r.kind === 'price' && r.monthly, 214.48);
+});
+
+test('a dependent 19 or older is not priced as a child', () => {
+  const r = priceDentalPlan(guardianPremier, { age: 66, zip: '27713', household: { children: 1, childAges: [21] } });
+  assert.deepEqual(r, { kind: 'needs_quote', reason: 'children' });
+});
+
 test('per-person plan needs the spouse age', () => {
   const r = priceDentalPlan(guardianPremier, { age: 66, zip: '27713', household: { spouseAge: null, children: 0 } });
   assert.deepEqual(r, { kind: 'needs_quote', reason: 'spouse_age' });
