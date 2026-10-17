@@ -14,7 +14,7 @@
 // (different age, different ZIP), we still show the quoted price but flag it
 // so the broker knows to re-quote before presenting it as the client's rate.
 
-export type DentalTier = 'individual' | 'self_plus_1' | 'self_plus_2_or_more' | 'family';
+export type DentalTier = 'individual' | 'self_plus_1' | 'self_plus_2_or_more' | 'family' | 'dependent';
 
 // How a carrier prices more than one person (pm_dental_plan.household_pricing):
 //   tier       — flat household tiers in pm_dental_rate.tier (Ameritas, MetLife,
@@ -22,8 +22,17 @@ export type DentalTier = 'individual' | 'self_plus_1' | 'self_plus_2_or_more' | 
 //   sum_by_age — each person pays their own age rate; couple = primary +
 //                spouse × (1 − spouse_discount_pct). Confirmed against carrier
 //                quotes 2026-10-17 (Guardian, Cigna, BCBS NC, Delta non-EHB).
-//                Children aren't modeled yet → needs_quote, never guessed.
-export type HouseholdPricing = 'tier' | 'sum_by_age';
+//                Children (under 19): each child pays the plan's age-18 rate,
+//                with the same dependent discount — confirmed by quotes for
+//                Guardian, Cigna (incl. a family of 4) and BCBS; Delta publishes
+//                its 0–18 rate equal to 18–64. spouse_discount_pct applies to
+//                every dependent (Cigna: spouse and children both 15%).
+//                A tier 'dependent' row, when present, prices every dependent
+//                instead (Guardian Select: flat rate, primary must be 50+).
+//   sum_by_age_adults — same as sum_by_age but only adults are confirmed
+//                (Humana: "per individual" rates, no child rate shown).
+//                Children → needs_quote.
+export type HouseholdPricing = 'tier' | 'sum_by_age' | 'sum_by_age_adults';
 
 export interface DentalRate {
   zip: string | null;
@@ -81,11 +90,12 @@ export type PriceResult =
   | { kind: 'ineligible'; minAge: number }   // client under the plan's minimum age
   | { kind: 'no_tier' }                      // plan has rates, but not for this household size
   | { kind: 'no_rate' }                      // nothing quoted yet
-  | { kind: 'needs_quote'; reason: 'children' | 'spouse_age' }; // per-person plan we can't price yet
+  | { kind: 'needs_quote'; reason: 'spouse_age' | 'children' }; // per-person plan we can't price
 
 export interface Household {
   /** undefined = no spouse; null = spouse covered but age not entered */
   spouseAge?: number | null;
+  /** children under 19 */
   children: number;
 }
 
@@ -103,6 +113,9 @@ export function householdTier(h: Household): DentalTier {
 }
 
 const cents = (n: number) => Math.round(n * 100 + 1e-9) / 100;
+
+// Per-person carriers charge a child under 19 their age-18 rate (see header).
+const CHILD_RATE_AGE = 18;
 
 function zipMatches(r: DentalRate, zip: string | null): 'exact' | 'statewide' | 'other' {
   if (r.zip_prefixes && r.zip_prefixes.length) {
@@ -124,21 +137,37 @@ export function priceDentalPlan(
   input: PriceInput,
 ): PriceResult {
   const h = input.household;
-  if (h && plan.household_pricing === 'sum_by_age' && householdTier(h) !== 'individual') {
-    if (h.children > 0) return { kind: 'needs_quote', reason: 'children' };
-    if (h.spouseAge == null) return { kind: 'needs_quote', reason: 'spouse_age' };
+  const perPerson = plan.household_pricing === 'sum_by_age' || plan.household_pricing === 'sum_by_age_adults';
+  if (h && perPerson && householdTier(h) !== 'individual') {
+    if (plan.household_pricing === 'sum_by_age_adults' && h.children > 0) return { kind: 'needs_quote', reason: 'children' };
+    if (h.spouseAge === null) return { kind: 'needs_quote', reason: 'spouse_age' };
     const primary = priceOne(plan, { age: input.age, zip: input.zip, tier: 'individual' });
     if (primary.kind !== 'price') return primary;
-    const spouse = priceOne(plan, { age: h.spouseAge, zip: input.zip, tier: 'individual' });
-    if (spouse.kind !== 'price') return { kind: 'needs_quote', reason: 'spouse_age' };
+    const hasDependentRow = plan.rates.some((r) => r.tier === 'dependent');
+    const dependent = (age: number) =>
+      hasDependentRow
+        ? priceOne(plan, { age: null, zip: input.zip, tier: 'dependent' })
+        : priceOne(plan, { age, zip: input.zip, tier: 'individual' });
+    const deps: PriceResult[] = [];
+    if (h.spouseAge !== undefined) {
+      const s = dependent(h.spouseAge);
+      if (s.kind !== 'price') return { kind: 'needs_quote', reason: 'spouse_age' };
+      deps.push(s);
+    }
+    for (let i = 0; i < h.children; i++) {
+      const c = dependent(CHILD_RATE_AGE);
+      if (c.kind !== 'price') return c;
+      deps.push(c);
+    }
     const disc = Number(plan.spouse_discount_pct ?? 0);
-    return {
-      kind: 'price',
-      monthly: cents(primary.monthly + cents(spouse.monthly * (1 - disc / 100))),
-      flags: [...new Set([...primary.flags, ...spouse.flags])],
-      quotedAge: primary.quotedAge,
-      quotedZip: primary.quotedZip,
-    };
+    let total = primary.monthly;
+    const flags = new Set(primary.flags);
+    for (const d of deps) {
+      if (d.kind !== 'price') continue;
+      total += cents(d.monthly * (1 - disc / 100));
+      d.flags.forEach((f) => flags.add(f));
+    }
+    return { kind: 'price', monthly: cents(total), flags: [...flags], quotedAge: primary.quotedAge, quotedZip: primary.quotedZip };
   }
   const tier = h ? householdTier(h) : input.tier ?? 'individual';
   return priceOne(plan, { age: input.age, zip: input.zip, tier });
