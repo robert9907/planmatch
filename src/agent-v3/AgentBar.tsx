@@ -48,7 +48,10 @@ export type ScreenId =
   | 'priorities'
   | 'compare'
   | 'compliance'
-  | 'enroll';
+  | 'enroll'
+  // Stand-alone tool, not a step in the MA flow — rendered after the
+  // flow nav behind a divider and deliberately NOT in SCREENS.
+  | 'dental';
 
 export const SCREENS: ScreenId[] = [
   'intake',
@@ -70,6 +73,7 @@ const LABELS: Record<ScreenId, string> = {
   compare: 'Compare',
   compliance: 'Compliance',
   enroll: 'Enroll',
+  dental: 'Dental',
 };
 
 interface Props {
@@ -330,6 +334,27 @@ export function AgentBar({
             {LABELS[s]}
           </button>
         ))}
+        <span
+          aria-hidden="true"
+          style={{ width: 1, alignSelf: 'stretch', background: 'rgba(131,240,249,0.3)', margin: '0 6px' }}
+        />
+        <button
+          type="button"
+          onClick={() => onNav('dental')}
+          title="Off-exchange individual dental quote (separate from the Medicare flow)"
+          style={{
+            background: screen === 'dental' ? '#83f0f9' : 'rgba(255,255,255,0.04)',
+            color: screen === 'dental' ? '#0d2f5e' : 'rgba(255,255,255,0.6)',
+            border: '1px solid rgba(131,240,249,0.3)',
+            borderRadius: 4,
+            padding: '4px 8px',
+            fontSize: 10,
+            fontWeight: screen === 'dental' ? 700 : 600,
+            cursor: 'pointer',
+          }}
+        >
+          {LABELS.dental}
+        </button>
       </div>
 
       {/* Right: Call (deep-link) + Screen Share + Readiness + AgentBase */}

@@ -58,6 +58,7 @@ import { AgentBar, type ScreenId } from './AgentBar';
 import { ComplianceScreen } from './ComplianceScreen';
 import { CompareScreen } from './CompareScreen';
 import { DisclaimersScreen } from './DisclaimersScreen';
+import { DentalScreen } from './DentalScreen';
 import { EnrollScreen } from './EnrollScreen';
 import { IntakeScreen } from './IntakeScreen';
 import { MedsScreen } from './MedsScreen';
@@ -1518,6 +1519,7 @@ const explanationsByPlanId = useMemo<
             onBack={() => setScreen('compliance')}
           />
         )}
+        {screen === 'dental' && <DentalScreen />}
       </div>
 
       {/* AgentBase hydration banner — only renders for clientId loads.
@@ -1538,7 +1540,9 @@ const explanationsByPlanId = useMemo<
           without a real pool the bench renders the wrong plans, so the
           banner is sticky and unmissable. Placed as a top strip so it
           shows across every screen, not just Compare. See Phase 1.10. */}
-      {(poolMissingGeo || poolTruncated) && (
+      {/* Not on Dental: that screen doesn't use the MA county pool, and
+          the fixed banner sits over its inputs. */}
+      {screen !== 'dental' && (poolMissingGeo || poolTruncated) && (
         <PoolIntegrityBanner
           missingGeo={poolMissingGeo}
           truncated={poolTruncated}
