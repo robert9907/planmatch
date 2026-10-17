@@ -1741,7 +1741,7 @@ function QuotePanel({
         <div>
           <div style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>Send a quote</div>
           <div style={{ marginTop: 2, fontSize: 11, color: MUTED }}>
-            Text the prospect a frozen comparison of up to 5 plans they can keep.
+            Text or email the client a frozen comparison of up to 5 plans (plus dental) they can keep.
           </div>
           {sourceIsFallback && (
             <div

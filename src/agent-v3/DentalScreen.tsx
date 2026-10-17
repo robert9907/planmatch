@@ -19,6 +19,7 @@ import {
   type Household,
   type PriceResult,
 } from '@/lib/dentalPricing';
+import { MAX_QUOTE_DENTAL, type QuoteDentalPick } from '@/lib/session';
 
 const NAVY = '#0d2f5e';
 const SEAFOAM = '#83f0f9';
@@ -44,6 +45,25 @@ function money(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
+/** A price we can put in front of the client: quoted for this client's own
+ *  age and ZIP. "Starting at" floors are allowed and labelled as such. */
+function quotablePrice(price: PriceResult): { monthly: number; startingAt: boolean } | null {
+  if (price.kind !== 'price') return null;
+  if (price.flags.includes('quoted_other_age') || price.flags.includes('quoted_other_zip')) return null;
+  return { monthly: price.monthly, startingAt: price.flags.includes('starting_at') };
+}
+
+/** Who the premium covers, in the client's words. */
+function coveredLabel(h: Household): string {
+  const spouse = h.spouseAge !== undefined;
+  const kids = h.children;
+  const kidText = kids === 1 ? '1 child' : `${kids} children`;
+  if (spouse && kids > 0) return `You, your spouse and ${kidText}`;
+  if (spouse) return 'You and your spouse';
+  if (kids > 0) return `You and ${kidText}`;
+  return 'Just you';
+}
+
 function yesNo(v: boolean | null): string {
   return v === true ? 'Covered' : v === false ? 'Not covered' : 'Not confirmed';
 }
@@ -65,6 +85,9 @@ export function DentalScreen() {
   const [carriersOff, setCarriersOff] = useState<Record<string, boolean>>({});
   const [compare, setCompare] = useState<string[]>([]);
   const [open, setOpen] = useState<string | null>(null);
+  const quoteDental = useSession((s) => s.quoteDental);
+  const upsertQuoteDental = useSession((s) => s.upsertQuoteDental);
+  const removeQuoteDental = useSession((s) => s.removeQuoteDental);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,6 +124,41 @@ export function DentalScreen() {
     () => plans.map((p) => ({ plan: p, price: priceDentalPlan(p, { age, zip: zip5, household }) })),
     [plans, age, zip5, household],
   );
+
+  // Keep quoted dental picks in step with the inputs: a changed age, ZIP or
+  // household re-prices them; a plan that can no longer be priced for this
+  // client drops off the quote rather than carrying a stale number.
+  const label = coveredLabel(household);
+  useEffect(() => {
+    if (load.status !== 'ready') return;
+    for (const pick of quoteDental) {
+      const hit = priced.find((x) => x.plan.id === pick.planId);
+      const q = hit ? quotablePrice(hit.price) : null;
+      if (!q) {
+        removeQuoteDental(pick.planId);
+      } else if (q.monthly !== pick.monthlyPremium || q.startingAt !== pick.startingAt || label !== pick.coveredLabel) {
+        upsertQuoteDental({ ...pick, monthlyPremium: q.monthly, startingAt: q.startingAt, coveredLabel: label });
+      }
+    }
+  }, [load.status, priced, label, quoteDental, upsertQuoteDental, removeQuoteDental]);
+
+  function toggleQuote(plan: DentalPlan, price: PriceResult) {
+    if (quoteDental.some((d) => d.planId === plan.id)) {
+      removeQuoteDental(plan.id);
+      return;
+    }
+    const q = quotablePrice(price);
+    if (!q) return;
+    const pick: QuoteDentalPick = {
+      planId: plan.id,
+      carrier: plan.carrier,
+      planName: plan.plan_name,
+      monthlyPremium: q.monthly,
+      startingAt: q.startingAt,
+      coveredLabel: label,
+    };
+    upsertQuoteDental(pick);
+  }
 
   const carriers = useMemo(() => {
     const counts = new Map<string, number>();
@@ -219,6 +277,14 @@ export function DentalScreen() {
             </div>
           )}
 
+          {quoteDental.length > 0 && (
+            <div role="status" style={{ background: '#ecfeff', border: `1px solid ${SEAFOAM}`, borderRadius: 10, padding: '10px 14px', fontSize: 13, color: NAVY, lineHeight: 1.5 }}>
+              <b>{quoteDental.length} dental {quoteDental.length === 1 ? 'plan' : 'plans'} on the client quote:</b>{' '}
+              {quoteDental.map((d) => `${d.carrier} ${d.planName}`).join(', ')}.
+              {' '}Send it from Compare → Send a quote.
+            </div>
+          )}
+
           {comparePlans.length >= 2 && (
             <CompareTable
               rows={comparePlans}
@@ -237,6 +303,13 @@ export function DentalScreen() {
               onCompare={() => toggleCompare(plan.id)}
               expanded={open === plan.id}
               onExpand={() => setOpen((o) => (o === plan.id ? null : plan.id))}
+              quote={
+                quoteDental.some((d) => d.planId === plan.id) ? 'in'
+                : !quotablePrice(price) ? 'cannot'
+                : quoteDental.length >= MAX_QUOTE_DENTAL ? 'full'
+                : 'can'
+              }
+              onQuote={() => toggleQuote(plan, price)}
             />
           ))}
 
@@ -261,7 +334,7 @@ function sortKey(p: PriceResult): number {
 // ─── Plan card ───────────────────────────────────────────────────────
 
 function PlanCard({
-  plan, price, age, zip, inCompare, onCompare, expanded, onExpand,
+  plan, price, age, zip, inCompare, onCompare, expanded, onExpand, quote, onQuote,
 }: {
   plan: DentalPlan;
   price: PriceResult;
@@ -271,6 +344,10 @@ function PlanCard({
   onCompare: () => void;
   expanded: boolean;
   onExpand: () => void;
+  /** in = on the client quote; can = addable; full = quote has the max;
+   *  cannot = no clean price for this client (re-quote / not priced). */
+  quote: 'in' | 'can' | 'full' | 'cannot';
+  onQuote: () => void;
 }) {
   const badges = priceBadges(plan, price, age, zip);
   return (
@@ -308,6 +385,26 @@ function PlanCard({
               {inCompare ? 'Comparing ✓' : 'Compare'}
             </button>
           </div>
+          <button
+            type="button"
+            onClick={onQuote}
+            disabled={quote === 'cannot' || quote === 'full'}
+            aria-pressed={quote === 'in'}
+            title={
+              quote === 'cannot' ? 'Needs a price quoted for this client’s age and ZIP before it can go on a quote'
+              : quote === 'full' ? `A quote holds up to ${MAX_QUOTE_DENTAL} dental plans`
+              : undefined
+            }
+            style={{
+              ...SMALL_BTN,
+              background: quote === 'in' ? NAVY : 'white',
+              color: quote === 'in' ? 'white' : NAVY,
+              opacity: quote === 'cannot' || quote === 'full' ? 0.4 : 1,
+              cursor: quote === 'cannot' || quote === 'full' ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {quote === 'in' ? 'On client quote ✓' : 'Add to client quote'}
+          </button>
         </div>
       </div>
 
