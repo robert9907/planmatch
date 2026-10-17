@@ -58,6 +58,7 @@ import { AgentBar, type ScreenId } from './AgentBar';
 import { ComplianceScreen } from './ComplianceScreen';
 import { CompareScreen } from './CompareScreen';
 import { DisclaimersScreen } from './DisclaimersScreen';
+import { DentalScreen } from './DentalScreen';
 import { EnrollScreen } from './EnrollScreen';
 import { IntakeScreen } from './IntakeScreen';
 import { MedsScreen } from './MedsScreen';
@@ -1518,6 +1519,7 @@ const explanationsByPlanId = useMemo<
             onBack={() => setScreen('compliance')}
           />
         )}
+        {screen === 'dental' && <DentalScreen />}
       </div>
 
       {/* AgentBase hydration banner — only renders for clientId loads.
