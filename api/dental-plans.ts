@@ -18,6 +18,7 @@ const PLAN_COLUMNS = [
   'implants', 'dentures', 'crowns', 'root_canals', 'periodontics', 'oral_surgery',
   'waiting_waiver', 'missing_tooth_clause', 'eligibility', 'extras',
   'covers_implants', 'covers_major', 'no_waiting',
+  'household_pricing', 'spouse_discount_pct',
   'source_doc', 'source_url', 'captured_at',
 ].join(',');
 
@@ -43,9 +44,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: 'application/json' },
     });
     if (!r.ok) throw new Error(`pm_dental_plan ${r.status}: ${(await r.text()).slice(0, 200)}`);
-    const plans = (await r.json()) as Array<{ rates: Array<{ monthly_premium: number | string }> }>;
-    // numeric(8,2) arrives as a string from PostgREST — normalize once here.
+    const plans = (await r.json()) as Array<{
+      spouse_discount_pct: number | string | null;
+      rates: Array<{ monthly_premium: number | string }>;
+    }>;
+    // numeric columns arrive as strings from PostgREST — normalize once here.
     for (const plan of plans) {
+      if (plan.spouse_discount_pct != null) plan.spouse_discount_pct = Number(plan.spouse_discount_pct);
       for (const rate of plan.rates ?? []) rate.monthly_premium = Number(rate.monthly_premium);
     }
     res.setHeader('Cache-Control', 'private, max-age=300');

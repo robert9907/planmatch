@@ -15,7 +15,7 @@ import {
   ageFromDob,
   priceDentalPlan,
   type DentalPlan,
-  type DentalTier,
+  type Household,
   type PriceResult,
 } from '@/lib/dentalPricing';
 
@@ -30,12 +30,6 @@ const MUST_HAVES: Array<{ key: MustHave; label: string }> = [
   { key: 'major', label: 'Covers major work' },
   { key: 'noWait', label: 'No waiting period' },
   { key: 'insuranceOnly', label: 'Insurance only (hide discount plans)' },
-];
-
-const TIERS: Array<{ value: DentalTier; label: string }> = [
-  { value: 'individual', label: 'Just the client' },
-  { value: 'self_plus_1', label: 'Client + 1' },
-  { value: 'self_plus_2_or_more', label: 'Client + 2 or more' },
 ];
 
 type LoadState =
@@ -59,7 +53,9 @@ export function DentalScreen() {
     const a = ageFromDob(client.dob);
     return a == null ? '' : String(a);
   });
-  const [tier, setTier] = useState<DentalTier>('individual');
+  const [hasSpouse, setHasSpouse] = useState(false);
+  const [spouseAgeText, setSpouseAgeText] = useState('');
+  const [childrenText, setChildrenText] = useState('0');
   const [must, setMust] = useState<Record<MustHave, boolean>>({
     implants: false, major: false, noWait: false, insuranceOnly: false,
   });
@@ -87,9 +83,15 @@ export function DentalScreen() {
   const zip5 = /^\d{5}$/.test(zip) ? zip : null;
   const plans = useMemo(() => (load.status === 'ready' ? load.plans : []), [load]);
 
+  const household = useMemo<Household>(() => {
+    const spouseAge = /^\d{1,3}$/.test(spouseAgeText) ? Number(spouseAgeText) : null;
+    const children = /^\d{1,2}$/.test(childrenText) ? Number(childrenText) : 0;
+    return hasSpouse ? { spouseAge, children } : { children };
+  }, [hasSpouse, spouseAgeText, childrenText]);
+
   const priced = useMemo(
-    () => plans.map((p) => ({ plan: p, price: priceDentalPlan(p, { age, zip: zip5, tier }) })),
-    [plans, age, zip5, tier],
+    () => plans.map((p) => ({ plan: p, price: priceDentalPlan(p, { age, zip: zip5, household }) })),
+    [plans, age, zip5, household],
   );
 
   const carriers = useMemo(() => {
@@ -143,12 +145,11 @@ export function DentalScreen() {
           <Panel title="Client">
             <LabeledInput id="dental-zip" label="ZIP code" value={zip} onChange={setZip} inputMode="numeric" />
             <LabeledInput id="dental-age" label="Age" value={ageText} onChange={setAgeText} inputMode="numeric" />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <label htmlFor="dental-tier" style={LABEL}>Who's covered</label>
-              <select id="dental-tier" value={tier} onChange={(e) => setTier(e.target.value as DentalTier)} style={INPUT}>
-                {TIERS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-              </select>
-            </div>
+            <ChipButton on={hasSpouse} onClick={() => setHasSpouse((v) => !v)} label="Add spouse / partner" />
+            {hasSpouse && (
+              <LabeledInput id="dental-spouse-age" label="Spouse age" value={spouseAgeText} onChange={setSpouseAgeText} inputMode="numeric" />
+            )}
+            <LabeledInput id="dental-children" label="Children covered" value={childrenText} onChange={setChildrenText} inputMode="numeric" />
             {(client.zip || client.dob) && (
               <div style={{ fontSize: 11, color: MUTED }}>Prefilled from the Client screen — edit freely.</div>
             )}
@@ -165,7 +166,7 @@ export function DentalScreen() {
             ))}
             {must.implants && (
               <div style={{ fontSize: 11, color: MUTED }}>
-                Plans whose implant coverage isn't confirmed (Blue Cross NC) are hidden, not assumed covered.
+                Plans whose implant coverage isn't confirmed are hidden, not assumed covered.
               </div>
             )}
           </Panel>
@@ -193,7 +194,10 @@ export function DentalScreen() {
             <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 20, fontWeight: 700, color: NAVY }}>
               {visible.length} {visible.length === 1 ? 'plan' : 'plans'}
               <span style={{ fontFamily: 'Inter, sans-serif', fontSize: 13, fontWeight: 500, color: MUTED }}>
-                {' '}· age {age ?? '—'} · ZIP {zip5 ?? '—'}
+                {' '}· age {age ?? '—'}
+                {hasSpouse && ` + spouse ${household.spouseAge ?? '—'}`}
+                {household.children > 0 && ` + ${household.children} ${household.children === 1 ? 'child' : 'children'}`}
+                {' '}· ZIP {zip5 ?? '—'}
               </span>
             </div>
           )}
@@ -333,7 +337,11 @@ function PriceBlock({ price }: { price: PriceResult }) {
       </div>
     );
   }
-  const msg = price.kind === 'no_tier' ? 'Household rate not loaded' : 'Rate not quoted for this age';
+  const msg =
+    price.kind === 'no_tier' ? 'Household rate not loaded'
+    : price.kind === 'needs_quote' && price.reason === 'children' ? 'Children priced per person — quote with carrier'
+    : price.kind === 'needs_quote' ? 'Enter spouse age to price'
+    : 'Rate not quoted for this age';
   return (
     <div>
       <div style={{ fontSize: 11, color: MUTED }}>Monthly premium</div>
