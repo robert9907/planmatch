@@ -69,6 +69,17 @@ const NOTE_BY_SOURCE: Readonly<Record<NetworkSource, Partial<Record<NetworkStatu
   },
 };
 
+// Map the library endpoint's 6-state status (consumer PR #105) to the agent's
+// 3-state model. not_listed (NPI absent from the carrier's MA directory) joins
+// out_of_network as a trusted negative that eliminates at Gate 1; no_data /
+// error / unknown stay 'unknown' (KEPT, "call to confirm"). Older endpoint
+// deploys only ever send in_network / out_of_network / unknown.
+export function libStatusToNetwork(libStatus: string): NetworkStatus {
+  if (libStatus === 'in_network') return 'in';
+  if (libStatus === 'out_of_network' || libStatus === 'not_listed') return 'out';
+  return 'unknown';
+}
+
 function makeResult(
   plan: Plan,
   status: NetworkStatus,
@@ -154,12 +165,7 @@ async function libraryBatch(
       continue;
     }
     inMatch += 1;
-    const status: NetworkStatus =
-      lib.status === 'in_network'
-        ? 'in'
-        : lib.status === 'out_of_network'
-          ? 'out'
-          : 'unknown';
+    const status: NetworkStatus = libStatusToNetwork(lib.status);
     const source: NetworkSource =
       lib.source === 'fhir_live'
         ? 'fhir_live'
