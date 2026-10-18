@@ -297,6 +297,13 @@ interface DrugRow {
   // True when the catalog year's formulary isn't published yet — no real tier
   // or cost. Render "formulary not yet published", never $0 / Tier / Not covered.
   costUnavailable?: boolean;
+  // Per-drug Part D utilization-management flags from the matched formulary
+  // row (Plan Finder parity). quantityLimitAmount/Days carry the filed limit.
+  priorAuth?: boolean;
+  stepTherapy?: boolean;
+  quantityLimit?: boolean;
+  quantityLimitAmount?: number | null;
+  quantityLimitDays?: number | null;
 }
 
 // Per-fill cost label for one drug on one plan. Uses the brain's
@@ -316,6 +323,37 @@ function drugMonthlyLabel(plan: Plan | null | undefined, r: DrugRow): string | n
   if (cs.copay != null) return `$${cs.copay}/mo`;
   if (cs.coinsurance != null) return `${cs.coinsurance}%`;
   return null;
+}
+
+// Per-drug utilization-management chip (Plan Finder parity). Returns the
+// compact abbreviation list ("PA·ST·QL") and a full tooltip including the
+// filed quantity-limit amount, or null when the drug has no restrictions.
+function drugUmBadge(r: DrugRow): { abbr: string; title: string } | null {
+  if (!r.priorAuth && !r.stepTherapy && !r.quantityLimit) return null;
+  const qlDetail = (() => {
+    if (!r.quantityLimit) return null;
+    const amt = r.quantityLimitAmount;
+    const days = r.quantityLimitDays;
+    if (amt != null && days != null) return `Quantity limit: ${amt} per ${days} days`;
+    if (amt != null) return `Quantity limit: ${amt}`;
+    if (days != null) return `Quantity limit: per ${days} days`;
+    return 'Quantity limit';
+  })();
+  const abbr = [
+    r.priorAuth ? 'PA' : null,
+    r.stepTherapy ? 'ST' : null,
+    r.quantityLimit ? 'QL' : null,
+  ]
+    .filter(Boolean)
+    .join('·');
+  const title = [
+    r.priorAuth ? 'Prior authorization' : null,
+    r.stepTherapy ? 'Step therapy' : null,
+    qlDetail,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  return { abbr, title };
 }
 
 // Old per-plan coveredCount(plan, rxcuis) read plan.formulary[rxcui],
@@ -3115,6 +3153,25 @@ function DrugBreakdown({
           const tierLabel = d.tier != null ? `Tier ${d.tier}` : 'Not covered';
           const copayLabel = drugMonthlyLabel(plan, d) ?? '—';
           const annualLabel = `${fmt(d.annualCost)}/yr`;
+          const um = drugUmBadge(d);
+          const umChip = um ? (
+            <span
+              title={um.title}
+              style={{
+                fontFamily: FONT_NUM,
+                fontSize: 9,
+                fontWeight: 700,
+                padding: '0 3px',
+                borderRadius: 3,
+                background: '#fef3c7',
+                color: '#92400e',
+                flexShrink: 0,
+                marginLeft: 4,
+              }}
+            >
+              {um.abbr}
+            </span>
+          ) : null;
           if (isCard) {
             return (
               <div
@@ -3130,15 +3187,25 @@ function DrugBreakdown({
               >
                 <span
                   style={{
-                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
-                    textOverflow: 'ellipsis',
                     minWidth: 0,
                   }}
-                  title={d.name}
                 >
-                  {d.name}
+                  <span
+                    style={{
+                      fontWeight: 600,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      minWidth: 0,
+                    }}
+                    title={d.name}
+                  >
+                    {d.name}
+                  </span>
+                  {umChip}
                 </span>
                 <span style={{ fontFamily: FONT_NUM, fontSize: 10, whiteSpace: 'nowrap' }}>
                   {d.covered ? `${tierLabel} · ${copayLabel}` : 'Not covered'}
@@ -3160,15 +3227,25 @@ function DrugBreakdown({
             >
               <span
                 style={{
-                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
-                  textOverflow: 'ellipsis',
                   minWidth: 0,
                 }}
-                title={d.name}
               >
-                {d.name}
+                <span
+                  style={{
+                    fontWeight: 600,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    minWidth: 0,
+                  }}
+                  title={d.name}
+                >
+                  {d.name}
+                </span>
+                {umChip}
               </span>
               <span style={{ color: d.covered ? MUTED : '#991b1b', fontSize: 10 }}>
                 {tierLabel}

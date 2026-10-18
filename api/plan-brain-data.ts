@@ -138,6 +138,9 @@ interface FormularyRow {
   coinsurance: number | null;
   prior_auth: boolean | null;
   step_therapy: boolean | null;
+  quantity_limit: boolean | null;
+  quantity_limit_amount: number | null;
+  quantity_limit_days: number | null;
 }
 
 interface NdcRow {
@@ -285,7 +288,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             sb
               .from('pm_formulary')
               .select(
-                'contract_id, plan_id, rxcui, drug_name, tier, copay, coinsurance, prior_auth, step_therapy',
+                'contract_id, plan_id, rxcui, drug_name, tier, copay, coinsurance, prior_auth, step_therapy, quantity_limit, quantity_limit_amount, quantity_limit_days',
               )
               // Year-scope: pm_formulary is year-aware. Without this a 2027 plan
               // gets its 2026 twin's tiers/copays — a real-looking drug price for

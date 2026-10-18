@@ -317,6 +317,17 @@ export interface BrainScore {
     // carries NO real tier or cost — render "formulary not yet published",
     // never $0/Tier/Not covered. Absent/false in every published-year row.
     costUnavailable?: boolean;
+    // Per-drug Part D utilization-management restrictions, read from the
+    // matched pm_formulary row (same FormularyCoverage that gives tier/
+    // copay). Surfaced so CompareScreen can flag "Prior authorization",
+    // "Step therapy", and "Quantity limit: N per D days" per drug per plan
+    // — Medicare Plan Finder parity. All false/null for Part B drugs and
+    // drugs with no matched formulary row.
+    priorAuth: boolean;
+    stepTherapy: boolean;
+    quantityLimit: boolean;
+    quantityLimitAmount: number | null;
+    quantityLimitDays: number | null;
   }>;
   /** Present ONLY when applyDualEligibleCostAdjustment ran (i.e.
    *  userProfile.medicaidLevel !== 'none' OR lisTier !== 'none').

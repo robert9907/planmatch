@@ -862,6 +862,13 @@ export function AgentV3App() {
     // no real tier or cost; render "formulary not yet published", never $0 /
     // Tier / Not covered.
     costUnavailable?: boolean;
+    // Per-drug Part D utilization-management flags from rank-plans (Plan
+    // Finder parity). quantityLimitAmount/Days carry the filed limit.
+    priorAuth?: boolean;
+    stepTherapy?: boolean;
+    quantityLimit?: boolean;
+    quantityLimitAmount?: number | null;
+    quantityLimitDays?: number | null;
   };
 
   // planById is keyed by the normalized triple form so the agent's
@@ -1110,6 +1117,11 @@ export function AgentV3App() {
         tier: number | null;
         copay: number | null;
         annual_cost: number;
+        prior_auth?: boolean;
+        step_therapy?: boolean;
+        quantity_limit?: boolean;
+        quantity_limit_amount?: number | null;
+        quantity_limit_days?: number | null;
       }>,
     ): DrugRow[] =>
       meds.map((m) =>
@@ -1133,6 +1145,14 @@ export function AgentV3App() {
               tier: m.tier,
               monthlyCopay: m.copay,
               annualCost: m.annual_cost,
+              // PA/ST/QL + QL amount from rank-plans medications[] (Plan
+              // Finder parity). Optional — absent until the consumer
+              // rank-plans deploy that surfaces them lands.
+              priorAuth: m.prior_auth === true,
+              stepTherapy: m.step_therapy === true,
+              quantityLimit: m.quantity_limit === true,
+              quantityLimitAmount: m.quantity_limit_amount ?? null,
+              quantityLimitDays: m.quantity_limit_days ?? null,
             },
       );
     for (const lp of ranked.result.top_plans) {
