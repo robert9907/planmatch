@@ -20,7 +20,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 import { supabase } from './_lib/supabase.js';
-import { expandRxcui } from './formulary.js';
+import { expandRxcui, rxNormName } from './formulary.js';
+import { parseDrugProfile, pickBestFormularyRow, type DrugProfile } from './_lib/formulary-sibling-match.js';
 import { resolvePlanCatalogYear } from './library/planCatalogYear.js';
 import { isFormularyPublished } from './_lib/formulary-published.js';
 import { getSellabilitySets, resolveSellability } from './_lib/sellability.js';
@@ -131,6 +132,7 @@ interface FormularyRow {
   contract_id: string;
   plan_id: string;
   rxcui: string;
+  drug_name: string | null;
   tier: number | null;
   copay: number | null;
   coinsurance: number | null;
@@ -222,13 +224,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     //                    QuoteDeliveryV4 looks up by.
     const expansionMap = new Map<string, string[]>();
     const expandedSet = new Set<string>();
+    // Profile each ORIGINAL drug (strength / dose form / brand / combo) so the
+    // sibling-matcher can pick the right formulary row when the exact rxcui
+    // isn't filed. RxNorm names are fetched in parallel with the expansion and
+    // cached across requests.
+    const origProfiles = new Map<string, DrugProfile>();
     if (rxcuis.length > 0) {
-      const expansions = await Promise.all(rxcuis.map(expandRxcui));
+      const [expansions, names] = await Promise.all([
+        Promise.all(rxcuis.map(expandRxcui)),
+        Promise.all(rxcuis.map(rxNormName)),
+      ]);
       for (let i = 0; i < rxcuis.length; i++) {
         const rx = rxcuis[i];
         const candidates = expansions[i].length > 0 ? expansions[i] : [rx];
         expansionMap.set(rx, candidates);
         for (const c of candidates) expandedSet.add(c);
+        origProfiles.set(rx, parseDrugProfile(names[i]));
       }
     }
     const expandedRxcuiList = [...expandedSet];
@@ -274,7 +285,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             sb
               .from('pm_formulary')
               .select(
-                'contract_id, plan_id, rxcui, tier, copay, coinsurance, prior_auth, step_therapy',
+                'contract_id, plan_id, rxcui, drug_name, tier, copay, coinsurance, prior_auth, step_therapy',
               )
               // Year-scope: pm_formulary is year-aware. Without this a 2027 plan
               // gets its 2026 twin's tiers/copays — a real-looking drug price for
@@ -399,10 +410,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // search hit might have started with 617310 directly — both
     // inputs claim the result).
     //
-    // For each original rxcui, prefer the row that matches it
-    // exactly; otherwise take the first expansion-match. This keeps
-    // tier accuracy highest when CMS files multiple strengths and
-    // we want the user's specific dose to win when present.
+    // For each (plan, original rxcui), collect every expansion-sibling row the
+    // plan files, then pick the ONE best row with pickBestFormularyRow:
+    //   • an exact-rxcui row always wins;
+    //   • a combination product is never a match for a single-ingredient
+    //     request (a combo-only plan → the drug is NOT COVERED — no slot);
+    //   • otherwise pick the sibling whose strength + dose form (tablet vs
+    //     solution, ER vs IR) + brand/generic best matches the user's drug.
+    // This replaces the old "first row wins unless exact" indexer, which let a
+    // tier-4 oral SOLUTION beat the tier-2 TABLET, or a tier-3 Janumet combo
+    // answer a plain-metformin request.
     const formularyByContractPlan: Record<string, Record<string, FormularyRow>> = {};
     const reverseMap = new Map<string, string[]>(); // candidate rxcui → originals that claim it
     for (const [orig, candidates] of expansionMap) {
@@ -412,18 +429,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         reverseMap.set(cand, list);
       }
     }
+    // Bucket rows by (planKey, orig) before picking.
+    const rowsByPlanOrig = new Map<string, Map<string, FormularyRow[]>>();
     for (const r of (formularyRes.data ?? []) as FormularyRow[]) {
       const key = `${r.contract_id}-${r.plan_id}`;
       const originals = reverseMap.get(r.rxcui) ?? [r.rxcui];
-      const slot = (formularyByContractPlan[key] ||= {});
+      let perPlan = rowsByPlanOrig.get(key);
+      if (!perPlan) { perPlan = new Map(); rowsByPlanOrig.set(key, perPlan); }
       for (const orig of originals) {
-        const existing = slot[orig];
-        // Prefer exact-match rows (orig === returned rxcui) over
-        // expansion siblings. Without this, an arbitrary expansion
-        // sibling could overwrite a real exact hit.
-        if (!existing || (orig === r.rxcui && existing.rxcui !== orig)) {
-          slot[orig] = r;
+        const list = perPlan.get(orig) ?? [];
+        list.push(r);
+        perPlan.set(orig, list);
+      }
+    }
+    const EMPTY_PROFILE: DrugProfile = { combo: false, brand: false, er: false, form: null, strengths: [] };
+    for (const [key, perPlan] of rowsByPlanOrig) {
+      const slot = (formularyByContractPlan[key] ||= {});
+      for (const [orig, rows] of perPlan) {
+        const pick = pickBestFormularyRow(orig, origProfiles.get(orig) ?? EMPTY_PROFILE, rows);
+        if (!pick.row) {
+          // Only combination products matched a single-ingredient request → the
+          // plan does not cover the requested drug. Leave the slot empty.
+          console.log('[plan-brain-data] combo-only, not covered', { plan: key, rxcui: orig, excludedCombos: pick.excludedCombos });
+          continue;
         }
+        if (pick.fallback) {
+          console.log('[plan-brain-data] dose-form fallback (ingredient+strength, closest oral solid)', {
+            plan: key, rxcui: orig, matched: pick.row.rxcui, name: pick.row.drug_name, tier: pick.row.tier,
+          });
+        }
+        slot[orig] = pick.row;
       }
     }
 

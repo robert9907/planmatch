@@ -244,6 +244,36 @@ async function isCombinationRxcui(rxcui: string): Promise<boolean> {
   }
 }
 
+// RxNorm display name for a rxcui (cached across requests, Fluid Compute
+// instance reuse). Used by plan-brain-data to profile the USER's drug
+// (strength / dose form / brand / combo) so the sibling-matcher can pick the
+// right formulary row. A failed fetch returns null WITHOUT caching so a later
+// request can retry.
+const nameCache = new Map<string, string | null>();
+export async function rxNormName(rxcui: string): Promise<string | null> {
+  const cached = nameCache.get(rxcui);
+  if (cached !== undefined) return cached;
+  const ctl = new AbortController();
+  const timeout = setTimeout(() => ctl.abort(), RELATED_TIMEOUT_MS);
+  try {
+    const res = await fetch(
+      `${RXNAV}/rxcui/${encodeURIComponent(rxcui)}/property.json?propName=RxNorm%20Name`,
+      { headers: { Accept: 'application/json' }, signal: ctl.signal },
+    );
+    if (!res.ok) return null;
+    const body = (await res.json()) as {
+      propConceptGroup?: { propConcept?: { propValue?: string }[] };
+    };
+    const name = body.propConceptGroup?.propConcept?.[0]?.propValue ?? null;
+    nameCache.set(rxcui, name);
+    return name;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function pickBestScored(
   current: ScoredRow | undefined,
   candidate: ScoredRow,
