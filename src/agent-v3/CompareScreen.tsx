@@ -3421,29 +3421,8 @@ function SlotCell({
     return { text: 'Ranked by brain score', tone: 'good' };
   })();
 
-  // Est. annual cost — premium × 12 + total drug cost from breakdown.
-  // Not LIS-adjusted here (mockup doesn't distinguish); DrugCostCard,
-  // if re-enabled, retains the strikethrough treatment.
-  const annualDrugSum =
-    drugBreakdown != null
-      ? drugBreakdown.reduce((s, d) => s + (d.annualCost ?? 0), 0)
-      : null;
-  const annualEst = annualEstimate(plan, annualDrugSum).total;
-
-  // "Cost pending" gate — when the client has captured meds but the
-  // brain's drug-cost pipeline emitted $0 for every drug on this plan
-  // AND the plan is a $0-premium D-SNP, annualEst mathematically
-  // resolves to $0. That reads as "this plan is free" when the truth
-  // is "we don't have data for this drug on this plan" (missing
-  // pm_drug_ndc row + missing pm_formulary row — see Part-3 report on
-  // fix/preview-extras-and-sbs-comparison for the underlying cause).
-  // Consumer approval to display as pending: 2026-08-06.
-  const costPending =
-    medications.length > 0 &&
-    plan.premium <= 0 &&
-    (annualDrugSum == null || annualDrugSum <= 0) &&
-    annualEst != null &&
-    annualEst <= 0;
+  // Board card shows the monthly premium only — no annual estimate
+  // (Rob, 2026-10-17: the client needs the premium, not a projection).
 
   // Pull display-formatted metric values from the shared Metric[] so
   // this card stays in sync with H2H formatting (safeCostShare, dental
@@ -3821,16 +3800,6 @@ function SlotCell({
               ? `$${plan.premium}/mo`
               : null
           }
-        />
-        <MetricLine
-          label="Est. annual cost"
-          value={
-            annualEst != null
-              ? `$${Math.round(annualEst).toLocaleString('en-US')}`
-              : '—'
-          }
-          pending={costPending || annualEst == null}
-          pendingLabel={costPending ? 'Cost pending' : undefined}
         />
         <MetricLine
           label="MOOP"
