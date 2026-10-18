@@ -82,6 +82,14 @@ function safeCostShare(s: string): string {
 // say out loud — carriers print the contract-plan pair on member cards
 // and Marx/CMS systems quote the same form, so strip the trailing
 // segment for any display surface.
+// Network type for the card header: landscape shape (HMO / HMO-POS /
+// Local PPO / Regional PPO / PFFS) plus the SNP type when there is one.
+function networkTypeLabel(plan: Plan): string {
+  const raw = (plan.plan_shape ?? '').trim();
+  const shape = raw.toUpperCase() === 'HMOPOS' ? 'HMO-POS' : raw;
+  return [shape, plan.snp_type ?? ''].filter(Boolean).join(' ');
+}
+
 function planIdShort(id: string): string {
   const parts = id.split('-');
   if (parts.length < 2) return id;
@@ -3568,12 +3576,9 @@ function SlotCell({
               fontWeight: 700,
               color: '#FFFFFF',
               lineHeight: 1.25,
-              // Always reserve two lines so headers match across cards.
-              minHeight: '2.5em',
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
-              overflow: 'hidden',
+              // Full name, never cut off (Rob, 2026-10-17). Reserve three
+              // lines so headers stay the same height across the board.
+              minHeight: '3.75em',
               wordBreak: 'break-word',
             }}
             title={plan.plan_name ?? ''}
@@ -3584,12 +3589,13 @@ function SlotCell({
             style={{
               margin: '3px 0 0',
               fontFamily: F.num,
-              fontSize: 10,
-              color: 'rgba(255,255,255,0.55)',
+              fontSize: 10.5,
+              color: 'rgba(255,255,255,0.85)',
               letterSpacing: 0.5,
             }}
           >
-            {planIdShort(plan.id)}
+            {plan.id}
+            {networkTypeLabel(plan) ? ` · ${networkTypeLabel(plan)}` : ''}
           </p>
           {/* Document cluster. "Benefits" moved up here from the
               action row: it opens the SoB drawer, the chip beside it
@@ -3734,7 +3740,7 @@ function SlotCell({
                   }}
                 >
                   <span
-                    style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, fontWeight: 600 }}
+                    style={{ minWidth: 0, fontWeight: 600, wordBreak: 'break-word' }}
                     title={p.name}
                   >
                     {p.name ?? 'Provider'}
