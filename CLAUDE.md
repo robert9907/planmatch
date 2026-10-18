@@ -91,7 +91,7 @@ anon+authenticated by default. RLS is the only gate. See
 
 ## The brain — don't change semantics without Rob's explicit approval
 
-- Gate 1: unknown = ELIMINATED in STRICT mode.
+- Gate 1 (providers): eliminates ONLY `providerNetworkState === 'out_of_network'`. `unverified`/unknown is KEPT (surfaced as "call to confirm") and ranked below confirmed in-network plans via the providersInNetworkCount tiebreaker — it is NOT eliminated. (`applyProviderGate`; mirrored in the consumer brain. A plan with no scraped network rows for the year reads as unknown, not out_of_network — see `api/provider-network-status.ts` year-fallback + medicare_gov-false→unknown. The old "unknown = ELIMINATED in STRICT mode" behavior was removed.)
 - Gate 3: hard elimination, 3-pick maximum.
 - Gate 4: pure cost = premium × 12 + drug costs − giveback.
 - The ref-latch (commit 2039a9e) stops brain re-runs from wiping the Compare workspace. Don't remove or route around it.
