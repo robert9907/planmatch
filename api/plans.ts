@@ -706,11 +706,20 @@ const DESC_DOLLAR_CATEGORIES: ReadonlySet<string> = new Set([
   'transportation',
   'food_card',
 ]);
-const DESC_DOLLAR_RE = /\$(\d[\d,]*)/g;
-function dollarFromDesc(desc: string | null | undefined): number | null {
+//
+// A dollar amount labelled as a cost the member PAYS ("$40 copay", "$50
+// co-pay", "$20 per visit", "$10 coinsurance") is never an allowance and is
+// skipped. Without this, "Preventive + comprehensive dental · $40 copay"
+// (no annual max filed) surfaced as a $40/yr dental maximum on 17 of 74
+// Durham plans (scripts/tests/plans-desc-dollar.test.ts).
+const DESC_DOLLAR_RE = /\$(\d[\d,]*)(?:\.\d+)?/g;
+const MEMBER_COST_AFTER_RE = /^\s*(?:co-?pay|copayment|coinsurance|per\s+visit|\/\s*visit)\b/i;
+export function dollarFromDesc(desc: string | null | undefined): number | null {
   if (typeof desc !== 'string' || !desc) return null;
   let max = 0;
   for (const m of desc.matchAll(DESC_DOLLAR_RE)) {
+    const after = desc.slice((m.index ?? 0) + m[0].length);
+    if (MEMBER_COST_AFTER_RE.test(after)) continue;
     const n = parseInt(m[1].replace(/,/g, ''), 10);
     if (Number.isFinite(n) && n > max) max = n;
   }
