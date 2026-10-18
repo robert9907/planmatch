@@ -25,7 +25,8 @@
     "provider:fhir-lookup": "tsx scripts/fhir-provider-lookup.ts",
     "test:persona-audit": "tsx scripts/cms-secret-shopper.ts",
     "audit:parity": "tsx scripts/parity-audit/run.ts",
-    "test:dental": "tsx --test scripts/tests/dental-pricing.test.ts"
+    "test:dental": "tsx --test scripts/tests/dental-pricing.test.ts",
+    "test:bench": "tsx --test scripts/tests/bench-eligibility.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",
