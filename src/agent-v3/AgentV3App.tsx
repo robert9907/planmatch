@@ -59,6 +59,7 @@ import { ComplianceScreen } from './ComplianceScreen';
 import { CompareScreen } from './CompareScreen';
 import { DisclaimersScreen } from './DisclaimersScreen';
 import { DentalScreen } from './DentalScreen';
+import { qualifiesForBench } from '@/lib/benchEligibility';
 import { EnrollScreen } from './EnrollScreen';
 import { IntakeScreen } from './IntakeScreen';
 import { MedsScreen } from './MedsScreen';
@@ -923,22 +924,26 @@ export function AgentV3App() {
     return m;
   }, [ranked.result, eligiblePlans]);
 
-  // Bench = the broker's workspace, not the brain's runners-up. The
-  // brain's filterPlanPool strips D-SNPs from clients flagged
-  // dsnpEligible !== true and MA-only plans from clients with meds —
-  // correct for the strict Top-4 board (don't recommend D-SNPs to non-
-  // dual clients) but wrong for the bench, where the broker needs to
-  // see and drag ANY county plan onto the board to compare. So we
-  // source bench from the FULL /api/plans response (eligiblePlans,
-  // fetched with planType=null) minus whatever's already in Top 4.
+  // Bench = the broker's workspace, not the brain's runners-up: every
+  // county plan the client QUALIFIES FOR (src/lib/benchEligibility.ts —
+  // MA/MAPD always; D-SNP only when dual, C-SNP only with a confirmed
+  // condition, I-SNP only institutional/HCBS; never PDP), minus what's
+  // already in Top 4. Rob, Oct 17 2026: don't show plans the client
+  // doesn't qualify for (D-SNPs were leading a non-dual client's bench).
   // Plans the brain didn't score won't have annualDrug / ribbon / gate
   // entries; CompareScreen already renders "—" for those, which reads
   // correctly as "unscored candidate."
   const benchPlans = useMemo<Plan[]>(() => {
     if (eligiblePlans.length === 0) return [];
     const topIds = new Set(scoredPlans.map((p) => p.id));
+    const benchClient = {
+      dsnpEligible: client.dsnpEligible,
+      csnpConditions: client.csnpConditions,
+      livingSetting: client.livingSetting,
+    };
     const out = eligiblePlans
       .filter((p) => !topIds.has(p.id))
+      .filter((p) => qualifiesForBench(p, benchClient))
       // Mark non-sellable bench plans so CompareScreen badges them and
       // enroll is blocked. The library sellability (UHC/Devoted/Wellcare
       // allowlist) supersedes the exclude-only non_commissionable tag.
@@ -961,7 +966,15 @@ export function AgentV3App() {
       );
     }
     return out;
-  }, [eligiblePlans, scoredPlans, ranked.result, librarySellableByAgentId]);
+  }, [
+    eligiblePlans,
+    scoredPlans,
+    ranked.result,
+    librarySellableByAgentId,
+    client.dsnpEligible,
+    client.csnpConditions,
+    client.livingSetting,
+  ]);
 
   // The by-plan-id maps below are keyed by the agent's Plan.id (NOT the
   // library's lp.plan_id) because CompareScreen looks them up as
