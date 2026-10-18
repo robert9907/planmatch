@@ -1,17 +1,19 @@
 // Which county plans may appear on the Compare bench for this client.
 //
-// Rob, Oct 17 2026: "I do not need to see plans this person does not
-// qualify for." The bench used to list EVERY county plan (D-SNPs, I-SNPs,
-// C-SNPs, PDPs) so the broker could drag anything onto the board — which put
-// dual-only plans in front of a non-dual client. Now the bench is the plans
-// the client can actually choose:
+// Rob, Oct 17 2026: "I need MAPD. If someone qualifies for MA (very rare)
+// we show those plans. If someone is on Medicare and Medicaid we show those
+// plans." So the bench is the plans the client can actually choose:
 //
-//   • Medicare Advantage (MA / MAPD, no SNP)      → always
-//   • D-SNP  → only when the client is marked dual (dsnpEligible === true,
-//              the same strict check the brain's filterPlanPool uses)
-//   • C-SNP  → only when a qualifying chronic condition is on file
-//              (csnpConditions — self-reported / broker-confirmed, never
-//              med-detection; mirrors the brain)
+//   • MAPD with drug coverage                     → always
+//   • MA-only (no drug coverage — Patriot No Rx, Eagle, USAA Giveback…)
+//            → only when Intake says VA / TRICARE drug coverage
+//              (hasVaDrugCoverage === true, the same switch the brain's
+//              MA-only filter reads). Plan type alone isn't enough: CMS
+//              landscape tags many no-Rx plans "MAPD", so the plan's
+//              has_drug_coverage flag decides.
+//   • D-SNP  → only when the client is on Medicare + Medicaid
+//              (dsnpEligible === true, or a Medicaid level on file)
+//   • C-SNP  → only with a confirmed chronic condition (csnpConditions)
 //   • I-SNP  → only when living setting is institutional / HCBS
 //   • PDP / Medigap → never (this is the Medicare Advantage compare board)
 //
@@ -20,7 +22,10 @@
 import type { Plan } from '@/types/plans';
 import type { Client } from '@/types/session';
 
-export type BenchClient = Pick<Client, 'dsnpEligible' | 'csnpConditions' | 'livingSetting'>;
+export type BenchClient = Pick<
+  Client,
+  'dsnpEligible' | 'csnpConditions' | 'livingSetting' | 'hasVaDrugCoverage' | 'medicaidLevel'
+>;
 
 type SnpKind = 'D' | 'C' | 'I' | null;
 
@@ -33,12 +38,22 @@ function snpKind(plan: Pick<Plan, 'plan_type' | 'snp_type'>): SnpKind {
   return null;
 }
 
-export function qualifiesForBench(plan: Pick<Plan, 'plan_type' | 'snp_type'>, client: BenchClient): boolean {
+export function isDual(client: BenchClient): boolean {
+  return client.dsnpEligible === true || (!!client.medicaidLevel && client.medicaidLevel !== 'none');
+}
+
+export function qualifiesForBench(
+  plan: Pick<Plan, 'plan_type' | 'snp_type'> & { has_drug_coverage?: boolean | null },
+  client: BenchClient,
+): boolean {
   const t = (plan.plan_type ?? '').toUpperCase();
   if (t === 'PDP' || t === 'MEDSUPP') return false;
+  // No drug coverage = MA-only, whatever the plan_type label says.
+  const maOnly = t === 'MA' || plan.has_drug_coverage === false;
+  if (maOnly && client.hasVaDrugCoverage !== true) return false;
   switch (snpKind(plan)) {
     case 'D':
-      return client.dsnpEligible === true;
+      return isDual(client);
     case 'C':
       return (client.csnpConditions ?? []).length > 0;
     case 'I':

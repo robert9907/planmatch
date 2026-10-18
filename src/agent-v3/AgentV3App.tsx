@@ -926,7 +926,8 @@ export function AgentV3App() {
 
   // Bench = the broker's workspace, not the brain's runners-up: every
   // county plan the client QUALIFIES FOR (src/lib/benchEligibility.ts —
-  // MA/MAPD always; D-SNP only when dual, C-SNP only with a confirmed
+  // MAPD with drugs always; MA-only only with VA/TRICARE drug coverage;
+  // D-SNP only when on Medicare + Medicaid; C-SNP only with a confirmed
   // condition, I-SNP only institutional/HCBS; never PDP), minus what's
   // already in Top 4. Rob, Oct 17 2026: don't show plans the client
   // doesn't qualify for (D-SNPs were leading a non-dual client's bench).
@@ -940,6 +941,8 @@ export function AgentV3App() {
       dsnpEligible: client.dsnpEligible,
       csnpConditions: client.csnpConditions,
       livingSetting: client.livingSetting,
+      hasVaDrugCoverage: client.hasVaDrugCoverage,
+      medicaidLevel: client.medicaidLevel,
     };
     const out = eligiblePlans
       .filter((p) => !topIds.has(p.id))
@@ -974,6 +977,8 @@ export function AgentV3App() {
     client.dsnpEligible,
     client.csnpConditions,
     client.livingSetting,
+    client.hasVaDrugCoverage,
+    client.medicaidLevel,
   ]);
 
   // The by-plan-id maps below are keyed by the agent's Plan.id (NOT the

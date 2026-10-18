@@ -20,13 +20,28 @@ const isnp = { plan_type: 'ISNP' as const, snp_type: 'I-SNP' };
 
 const standard = {};
 
-test('standard client: MA and MAPD only', () => {
+test('standard client: MAPD with drug coverage only', () => {
   assert.equal(qualifiesForBench(mapd, standard), true);
-  assert.equal(qualifiesForBench(ma, standard), true);
+  assert.equal(qualifiesForBench(ma, standard), false);
   assert.equal(qualifiesForBench(dsnp, standard), false);
   assert.equal(qualifiesForBench(csnp, standard), false);
   assert.equal(qualifiesForBench(isnp, standard), false);
   assert.equal(qualifiesForBench(pdp, standard), false);
+});
+
+test('MA-only plans (no drug coverage, even when tagged MAPD) only with VA/TRICARE drug coverage', () => {
+  // Durham CY2027: AARP Patriot No Rx, Aetna Eagle, Humana USAA Honor Giveback,
+  // HumanaChoice R0110-004 are plan_type MAPD with has_drug_coverage false.
+  const noRx = { plan_type: 'MAPD' as const, snp_type: null, has_drug_coverage: false };
+  assert.equal(qualifiesForBench(noRx, standard), false);
+  assert.equal(qualifiesForBench(noRx, { hasVaDrugCoverage: true }), true);
+  assert.equal(qualifiesForBench(ma, { hasVaDrugCoverage: true }), true);
+  assert.equal(qualifiesForBench({ ...mapd, has_drug_coverage: true }, standard), true);
+});
+
+test('D-SNP for Medicare + Medicaid: dual flag or a Medicaid level on file', () => {
+  assert.equal(qualifiesForBench(dsnp, { medicaidLevel: 'qmb' as never }), true);
+  assert.equal(qualifiesForBench(dsnp, { medicaidLevel: 'none' as never }), false);
 });
 
 test('D-SNP only for a client marked dual (strict true)', () => {
