@@ -3387,10 +3387,11 @@ function SlotCell({
       return { text: 'Drug coverage pending formulary verification', tone: 'warn' };
     }
     if (explanations) {
+      // Providers are gate 1 and lead the card (Rob, Oct 17 2026).
       const first =
-        explanations.gate3?.[0] ??
-        explanations.gate2?.[0] ??
         explanations.gate1?.[0] ??
+        explanations.gate2?.[0] ??
+        explanations.gate3?.[0] ??
         (explanations.gate4 || undefined);
       if (first != null) return { text: first, tone: toneForText(first) };
     }
@@ -3672,6 +3673,69 @@ function SlotCell({
           gap: 10,
         }}
       >
+        {/* Doctors — gate 1, always the first thing on the card. One
+            line per provider on file with this plan's network status;
+            a missing status is shown as not checked, never as in. */}
+        {providers.length > 0 && (
+          <div
+            aria-label="Doctors on this plan"
+            style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
+          >
+            <div
+              style={{
+                fontFamily: F.label,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: 0.5,
+                textTransform: 'uppercase',
+                color: MUTED,
+                display: 'flex',
+                justifyContent: 'space-between',
+              }}
+            >
+              <span>Doctors</span>
+              <span>
+                {providers.filter((p) => p.networkStatus?.[plan.id] === 'in').length}/
+                {providers.length} in network
+              </span>
+            </div>
+            {providers.map((p, idx) => {
+              const s = p.networkStatus?.[plan.id];
+              const tone =
+                s === 'in'
+                  ? { bg: T.mint100, fg: T.mint700, label: '✓ In network' }
+                  : s === 'out'
+                    ? { bg: 'rgba(239,68,68,0.12)', fg: CORAL, label: '✗ Out of network' }
+                    : { bg: T.amber100, fg: T.amber700, label: 'Not checked' };
+              return (
+                <div
+                  key={p.id ?? p.name ?? idx}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontSize: 11.5,
+                    fontFamily: F.label,
+                    padding: '5px 8px',
+                    borderRadius: 6,
+                    background: tone.bg,
+                    color: tone.fg,
+                  }}
+                >
+                  <span
+                    style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, fontWeight: 600 }}
+                    title={p.name}
+                  >
+                    {p.name ?? 'Provider'}
+                  </span>
+                  <span style={{ whiteSpace: 'nowrap', fontWeight: 700 }}>{tone.label}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         <div
           style={{
             fontSize: 11.5,
