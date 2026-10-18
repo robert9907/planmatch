@@ -40,9 +40,13 @@ export function planDisplay(plan: Plan): PlanDisplay {
         : 'None';
   const dentalMax = b.dental.annual_max > 0
     ? `${fmtMoney(b.dental.annual_max)}/yr`
-    : b.dental.preventive || b.dental.comprehensive
-      ? 'No annual cap filed'
-      : 'None';
+    // No max filed: say what the plan covers. "No annual cap filed" on a
+    // preventive-only plan read as unlimited dental (Rob, 2026-10-17).
+    : b.dental.comprehensive
+      ? 'No yearly max filed'
+      : b.dental.preventive
+        ? 'Preventive only'
+        : 'None';
 
   // Allowance amount === 1 is the importer's "offered, no Medicare.gov-
   // published ceiling" sentinel (api/plans.ts transformPbpRow rescue,
