@@ -1134,6 +1134,23 @@ export function CompareScreen({
     initSlots(pool, matchedPlanIds),
   );
 
+  // Re-seed the board when the brain's Top 4 changes (Rob, 2026-10-17:
+  // picking dental left the pre-dental board — BCBS with no dental — in
+  // place, because slots were captured on mount only). Only while the
+  // broker hasn't placed plans by hand, and only on a NON-empty result,
+  // so the ref-latch still protects the workspace from transient wipes.
+  const brokerEditedSlotsRef = useRef(false);
+  const topKey = scoredPlans.map((p) => p.id).join('|');
+  const lastSeededTopKeyRef = useRef(topKey);
+  useEffect(() => {
+    if (!topKey || topKey === lastSeededTopKeyRef.current) return;
+    lastSeededTopKeyRef.current = topKey;
+    if (brokerEditedSlotsRef.current) return;
+    setSlots(initSlots(pool, matchedPlanIds));
+    // pool / matchedPlanIds are read at the moment the Top 4 changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topKey]);
+
   // Reconcile: any slot whose plan is no longer in the pool becomes
   // null. Bench = pool minus slot occupants.
   // Reconciliation reads stablePool so a transient pool wipe doesn't
@@ -1340,6 +1357,7 @@ export function CompareScreen({
 
   // ── Grid mode handlers ─────────────────────────────────────
   function handleDrop(targetSlotIdx: number, draggedPlanId: string) {
+    brokerEditedSlotsRef.current = true;
     setSlots((s) => {
       const next = [...s];
       const fromSlotIdx = next.findIndex((p) => p?.id === draggedPlanId);
@@ -1361,6 +1379,7 @@ export function CompareScreen({
   }
 
   function clearSlot(slotIdx: number) {
+    brokerEditedSlotsRef.current = true;
     setSlots((s) => {
       const next = [...s];
       next[slotIdx] = null;
@@ -1369,6 +1388,7 @@ export function CompareScreen({
   }
 
   function fillEmptySlot(slotIdx: number) {
+    brokerEditedSlotsRef.current = true;
     // Fill from the FILTERED bench so "auto-fill" honors whichever
     // constraints the agent set — filling an empty D-SNP-only board
     // with a non-D-SNP plan would just get filtered out again on the
@@ -1388,6 +1408,7 @@ export function CompareScreen({
   // the bench automatically because the reconciliation memo recomputes
   // bench = pool − slot occupants).
   function addToBoard(plan: Plan) {
+    brokerEditedSlotsRef.current = true;
     setSlots((s) => {
       const next = [...s];
       // No-op if already on board.
@@ -3387,9 +3408,11 @@ function SlotCell({
       return { text: 'Drug coverage pending formulary verification', tone: 'warn' };
     }
     if (explanations) {
-      // Providers are gate 1 and lead the card (Rob, Oct 17 2026).
+      // Providers are gate 1 and lead the card (Rob, Oct 17 2026). When
+      // the Doctors block is showing, it already says this — skip the
+      // repeat so cards don't grow an extra row.
       const first =
-        explanations.gate1?.[0] ??
+        (providers.length > 0 ? undefined : explanations.gate1?.[0]) ??
         explanations.gate2?.[0] ??
         explanations.gate3?.[0] ??
         (explanations.gate4 || undefined);
@@ -3548,7 +3571,13 @@ function SlotCell({
               color: T.mintOnDark,
               textTransform: 'uppercase',
               letterSpacing: 0.4,
+              // One line so every card's header is the same height and
+              // the metric rows line up across the board.
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
             }}
+            title={plan.carrier ?? ''}
           >
             {plan.carrier}
           </p>
@@ -3560,6 +3589,8 @@ function SlotCell({
               fontWeight: 700,
               color: '#FFFFFF',
               lineHeight: 1.25,
+              // Always reserve two lines so headers match across cards.
+              minHeight: '2.5em',
               display: '-webkit-box',
               WebkitLineClamp: 2,
               WebkitBoxOrient: 'vertical',
