@@ -98,6 +98,21 @@ export function carrierForContractId(
   return map.get(contractId) ?? null;
 }
 
+// A trusted CARRIER-DIRECTORY source — the carrier's own feed answered. This is
+// isTrustedSource (network-row-precedence) MINUS broker_verified (a human
+// confirm, not a directory) and MINUS medicare_gov (Plan Finder, which
+// under-reports). Used to decide whether a carrier's sentinel is contradicted.
+export function isCarrierDirectorySource(source: string | null | undefined): boolean {
+  if (!source) return false;
+  return (
+    source.startsWith('fhir_') ||
+    source === 'healthteam' ||
+    source === 'insurelytix' ||
+    source === 'alignment' ||
+    source === 'healthspring'
+  );
+}
+
 // ─── Carrier sentinel expansion ────────────────────────────────────────
 
 /** A row-of-record slot in networkByPlan[tripleId][npi]. */
@@ -170,10 +185,16 @@ export function expandCarrierSentinels(args: {
     sentinelByNpiCarrier.set(row.npi, inner);
   }
 
-  // Carriers that returned ≥1 real per-plan row for an NPI — sentinel ignored.
+  // Carriers that returned a trusted DIRECTORY row for an NPI — only then is the
+  // carrier's own sentinel stale and ignored. A medicare_gov (Plan Finder) row
+  // must NOT count: Plan Finder under-reports in-network doctors, and a stale PF
+  // "not covered" carried over from last year would otherwise suppress the
+  // carrier's not_listed verdict (Klein on BCBS NC / Humana read "?" instead of
+  // ✗). A broker confirm is a human verdict, resolved by per-plan slot
+  // precedence, not a directory answer.
   const foundCarrierByNpi = new Map<string, Set<CarrierId>>();
   for (const r of realRows) {
-    if (r.source === 'broker_verified') continue; // broker isn't a carrier directory
+    if (!isCarrierDirectorySource(r.source)) continue;
     const cid = carrierForContractId(carrierMap, (r.plan_id ?? '').split('-')[0]);
     if (!cid) continue;
     const s = foundCarrierByNpi.get(r.npi) ?? new Set<CarrierId>();
