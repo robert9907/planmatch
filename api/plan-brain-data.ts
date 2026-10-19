@@ -27,6 +27,13 @@ import { isFormularyPublished } from './_lib/formulary-published.js';
 import { getSellabilitySets, resolveSellability } from './_lib/sellability.js';
 import { getSellableRules, getSellableFlags } from './_lib/sellable-rules.js';
 import { outranks, isTrustedSource } from './_lib/network-row-precedence.js';
+import {
+  loadContractToCarrierMap,
+  expandCarrierSentinels,
+  NPI_NOT_FOUND_PLAN_ID,
+  NPI_NO_MA_NETWORK_PLAN_ID,
+  type CarrierId,
+} from './_lib/fhir-plan-network.js';
 
 // PostgREST on this project caps every query at 1000 rows
 // (db-max-rows). The formulary fetch can easily exceed that — Durham
@@ -155,6 +162,16 @@ interface NetworkRow {
   source?: string | null;
   checked_at?: string | null;
   plan_year?: number | null;
+  verified_by?: string | null;
+}
+
+// A carrier-wide sentinel row (plan_id = __NPI_NOT_FOUND__ / __NPI_NO_MA_NETWORK__).
+interface SentinelRow {
+  plan_id: string;
+  npi: string;
+  source: string | null;
+  checked_at: string | null;
+  plan_year: number | null;
 }
 
 function splitTriple(id: string): { contract: string; plan: string; segment: string } | null {
@@ -248,7 +265,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // results. formularyPublished gates whether the client is allowed to
     // treat an empty/partial formulary read as real cost data (it is not
     // until CMS posts the year's SPUF drug file ~Oct 31).
-    const [benefitsRes, drugCacheRes, formularyRes, ndcRes, networkRes, formularyPublished] = await Promise.all([
+    const [benefitsRes, drugCacheRes, formularyRes, ndcRes, networkRes, sentinelRes, formularyPublished] = await Promise.all([
       // Paginated + filtered to the four real sources so the alt_
       // dedup below sees every candidate (a source-restricted query
       // truncated at PostgREST's 1000-row cap would silently drop the
@@ -306,13 +323,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       npis.length > 0
         ? sb
             .from('pm_provider_network_cache')
-            .select('plan_id, segment_id, npi, covered, source, checked_at, plan_year')
+            .select('plan_id, segment_id, npi, covered, source, checked_at, plan_year, verified_by')
             // Requested year + (for 2027+) the prior year, so a plan with no
             // requested-year row can carry over. The year-aware winner below
             // only uses the prior-year row when the requested year is silent.
             .in('plan_year', networkReadYears)
             .in('plan_id', contractPlans)
             .in('npi', npis)
+        : Promise.resolve({ data: [], error: null }),
+      // Carrier-WIDE sentinels for the requested NPIs. These live on the
+      // __NPI_NOT_FOUND__ / __NPI_NO_MA_NETWORK__ plan_ids (keyed on NPI, not
+      // a real plan) so the contractPlans-filtered read above never sees them
+      // — the gap that let a not_listed / out-of-network doctor survive Gate 1
+      // on the Compare server path. Expanded onto real plans below via the
+      // contract→carrier map. Same prior-year fallback window as the real read.
+      npis.length > 0
+        ? sb
+            .from('pm_provider_network_cache')
+            .select('plan_id, npi, source, checked_at, plan_year')
+            .in('plan_id', [NPI_NOT_FOUND_PLAN_ID, NPI_NO_MA_NETWORK_PLAN_ID])
+            // Requested year only — a stale prior-year "not found" must not
+            // eliminate the current year (the provider may have joined). Real
+            // rows carry over; a carrier-wide negative does not.
+            .eq('plan_year', catalogYear)
+            .in('npi', npis)
+            .eq('covered', false)
         : Promise.resolve({ data: [], error: null }),
       isFormularyPublished(sb, catalogYear),
     ]);
@@ -322,6 +357,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (formularyRes.error) throw formularyRes.error;
     if (ndcRes.error) throw ndcRes.error;
     if (networkRes.error) throw networkRes.error;
+    if (sentinelRes.error) throw sentinelRes.error;
 
     // ─── Source-priority dedup + alt_ projection ─────────────────
     // Mirror of the winner/alt logic in api/plans.ts (bestByKey +
@@ -472,6 +508,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const networkByPlan: Record<string, Record<string, NetworkRow>> = {};
     for (const r of (networkRes.data ?? []) as NetworkRow[]) {
+      // Drop unattributed broker_verified rows (empty/NULL verified_by) — a
+      // broker ✓ is only trusted when it carries the broker who made it.
+      // Legacy seeds and the bogus Klein H3449-024 rows have no verified_by;
+      // honoring them would resurrect a confirmation nobody made. Mirrors the
+      // consumer endpoint (library/provider-network.ts).
+      if (r.source === 'broker_verified' && !r.verified_by?.trim()) continue;
       const segNorm = (r.segment_id ?? '0').replace(/^0+/, '') || '0';
       const triple = `${r.plan_id}-${segNorm === '0' ? '000' : segNorm.padStart(3, '0')}`;
       const matched = matchToRequestedTriple(triple, ids) ?? triple;
@@ -499,6 +541,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       for (const [npi, row] of Object.entries(npiMap)) {
         if (row.covered !== true && !isTrustedSource(row.source)) delete npiMap[npi];
       }
+    }
+
+    // ─── Carrier sentinel expansion (Gate-1 fix) ───────────────────────
+    // A carrier directory can record a definitive carrier-WIDE verdict for an
+    // NPI as one sentinel row (keyed on the NPI, not a real plan):
+    //   __NPI_NOT_FOUND__      absent from the directory → not_listed      (✗)
+    //   __NPI_NO_MA_NETWORK__  found, no MA network      → out_of_network  (✗)
+    // Both are trusted carrier negatives that eliminate at Gate 1. Because the
+    // real read above is filtered to real plan_ids, these never reached the
+    // Compare server brain — so a not_listed doctor (BCBS NC / Humana / Devoted
+    // / HealthTeam) wrongly survived. Expand each sentinel onto this carrier's
+    // real requested plans as a synthetic trusted covered=false row.
+    //
+    // Precedence (mirror of consumer library/provider-network §3b–§4):
+    //   • a real per-plan row for (plan, npi) already won above — never overwrite it;
+    //   • a carrier that returned ANY real row for the NPI (foundCarrierByNpi)
+    //     contradicts its own sentinel → the stale sentinel is ignored carrier-wide;
+    //   • otherwise fill the empty (plan, npi) slot with the sentinel verdict.
+    // Attributed broker rows and real carrier rows therefore always beat a sentinel.
+    const sentinelRows = (sentinelRes.data ?? []) as SentinelRow[];
+    if (sentinelRows.length > 0) {
+      // contract → owning carrier, from pm_fhir_plan_network (same source the
+      // consumer resolves through — mirrored, not duplicated, in fhir-plan-network.ts).
+      let carrierMap: Map<string, CarrierId>;
+      try {
+        carrierMap = await loadContractToCarrierMap(sb, contracts, networkReadYears, catalogYear);
+      } catch (err) {
+        console.error('[plan-brain-data] contract→carrier map failed; sentinels not applied', err);
+        carrierMap = new Map();
+      }
+      expandCarrierSentinels({
+        networkByPlan,
+        sentinelRows,
+        realRows: (networkRes.data ?? []) as NetworkRow[],
+        carrierMap,
+        requestedIds: ids,
+        npis,
+        requestedYear: catalogYear,
+      });
     }
 
     // ─── Sellability — appointment/certification flags + rules + flags ──
