@@ -1110,6 +1110,11 @@ export function AgentV3App() {
         tier: number | null;
         copay: number | null;
         annual_cost: number;
+        prior_auth?: boolean | null;
+        step_therapy?: boolean | null;
+        quantity_limit?: boolean | null;
+        quantity_limit_amount?: number | null;
+        quantity_limit_days?: number | null;
       }>,
     ): DrugRow[] =>
       meds.map((m) =>
@@ -1133,6 +1138,13 @@ export function AgentV3App() {
               tier: m.tier,
               monthlyCopay: m.copay,
               annualCost: m.annual_cost,
+              // PA / ST / QL flags from rank-plans (consumer PR #107) — the
+              // Compare board's drug data comes from the rank-plans medications.
+              priorAuth: m.prior_auth === true,
+              stepTherapy: m.step_therapy === true,
+              quantityLimit: m.quantity_limit === true,
+              quantityLimitAmount: m.quantity_limit_amount ?? null,
+              quantityLimitDays: m.quantity_limit_days ?? null,
             },
       );
     for (const lp of ranked.result.top_plans) {
