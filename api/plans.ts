@@ -195,7 +195,7 @@ export interface CostShare {
 }
 
 interface PlanBenefits {
-  dental: { preventive: boolean; comprehensive: boolean; annual_max: number; description: string | null };
+  dental: { preventive: boolean; comprehensive: boolean; annual_max: number; description: string | null; medicare_covered: { copay: number | null; coinsurance: number | null; description: string | null } | null };
   vision: { exam: boolean; eyewear_allowance_year: number; description: string | null };
   hearing: { aid_allowance_year: number; exam: boolean; description: string | null };
   transportation: { rides_per_year: number; distance_miles: number; description: string | null };
@@ -1975,6 +1975,10 @@ export function buildBenefits(
   const dental = rows.find((r) => r.benefit_category === 'dental');
   const pmDentalMax = Math.max(toNum(dental?.max_coverage) ?? 0, toNum(dental?.coverage_amount) ?? 0);
   const dentalMax = pmDentalMax > 0 ? pmDentalMax : (pbpFallback?.dentalAnnualMax ?? 0);
+  // Medicare-covered dental (CMS PBP B16a) — a separate category from the
+  // routine allowance, carried through so agent dental == consumer dental
+  // (robert9907/plan-match #95 wrote both rows into the shared pm_plan_benefits).
+  const dentalMc = rows.find((r) => r.benefit_category === 'dental_medicare_covered');
 
   // Prefer a vision row that carries an eyewear allowance (real supplemental
   // vision) over a copay-only row (a routine eye-exam copay). Picking the
@@ -2060,6 +2064,13 @@ export function buildBenefits(
         (pbpFallback?.dentalAnnualMax
           ? `$${pbpFallback.dentalAnnualMax}/yr dental allowance`
           : null),
+      medicare_covered: dentalMc
+        ? {
+            copay: toNum(dentalMc.copay) ?? null,
+            coinsurance: toNum(dentalMc.coinsurance) ?? null,
+            description: dentalMc.benefit_description ?? null,
+          }
+        : null,
     },
     vision: {
       exam: Boolean(vision),

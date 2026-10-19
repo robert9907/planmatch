@@ -14,6 +14,17 @@ export interface DentalBenefit {
   comprehensive: boolean;
   annual_max: number;
   description?: string | null;
+  // Medicare-covered dental — medically-necessary, non-routine procedures
+  // (jaw repair, pre-radiation exams) filed in CMS PBP B16a. Distinct from
+  // the routine preventive/comprehensive allowance: no annual max, carries
+  // its own copay/coinsurance. Mirrors the consumer's
+  // `dental_medicare_covered` category (robert9907/plan-match #95) so agent
+  // dental == consumer dental per plan. Null when the plan files no B16a.
+  medicare_covered?: {
+    copay: number | null;
+    coinsurance: number | null;
+    description: string | null;
+  } | null;
 }
 
 export interface VisionBenefit {
