@@ -20,6 +20,7 @@ import {
   type PriceResult,
 } from '@/lib/dentalPricing';
 import { MAX_QUOTE_DENTAL, type QuoteDentalPick } from '@/lib/session';
+import { useProviderSearch, type ProviderSearchResult } from '@/hooks/useProviderSearch';
 
 const NAVY = '#0d2f5e';
 const SEAFOAM = '#83f0f9';
@@ -35,6 +36,51 @@ const MUST_HAVES: Array<{ key: MustHave; label: string }> = [
   { key: 'noWait', label: 'No waiting period' },
   { key: 'insuranceOnly', label: 'Insurance only (hide discount plans)' },
 ];
+
+/** Carrier find-a-dentist page for one dental network (pm_dental_network). */
+interface DentalNetwork {
+  carrier: string;
+  network: string;
+  directory_url: string;
+  directory_note: string | null;
+}
+
+type NetworkStatus = 'in_network' | 'not_in_network';
+
+/** The broker's recorded check of one dentist on one network. */
+interface NetworkCheck {
+  status: NetworkStatus;
+  verified_at: string;
+}
+
+/** What a plan card shows about the client's dentist. */
+interface DentistOnPlan {
+  dentistName: string;
+  directory: DentalNetwork | null;
+  check: NetworkCheck | null;
+  saving: boolean;
+  error: string | null;
+}
+
+function netKey(carrier: string, network: string | null): string {
+  return `${carrier}|${network ?? ''}`;
+}
+
+const DENTAL_SPECIALTY = /dent|orthodon|endodon|periodon|prosthodon|oral|maxillofacial/i;
+
+function dentistLabel(d: ProviderSearchResult): string {
+  return d.display_name;
+}
+
+function dentistAddress(d: ProviderSearchResult): string | null {
+  const parts = [d.practice_city, d.practice_state, d.practice_zip].filter(Boolean);
+  return parts.length ? parts.join(', ') : null;
+}
+
+function shortDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
 
 type LoadState =
   | { status: 'loading' }
@@ -88,6 +134,92 @@ export function DentalScreen() {
   const quoteDental = useSession((s) => s.quoteDental);
   const upsertQuoteDental = useSession((s) => s.upsertQuoteDental);
   const removeQuoteDental = useSession((s) => s.removeQuoteDental);
+
+  // ── Client's dentist + network checks ──
+  const [dentistQuery, setDentistQuery] = useState('');
+  const [dentist, setDentist] = useState<ProviderSearchResult | null>(null);
+  const [inNetworkOnly, setInNetworkOnly] = useState(false);
+  const [directories, setDirectories] = useState<Map<string, DentalNetwork>>(new Map());
+  const [checks, setChecks] = useState<Map<string, NetworkCheck>>(new Map());
+  const [checksError, setChecksError] = useState<string | null>(null);
+  const [saving, setSaving] = useState<Record<string, boolean>>({});
+  const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
+  const search = useProviderSearch(dentist ? '' : dentistQuery, 'NC');
+  const dentistResults = useMemo(
+    () => [...search.results].sort((a, b) =>
+      Number(DENTAL_SPECIALTY.test(b.specialty ?? '')) - Number(DENTAL_SPECIALTY.test(a.specialty ?? ''))),
+    [search.results],
+  );
+
+  // Directory links load once; checks reload whenever the dentist changes.
+  useEffect(() => {
+    let cancelled = false;
+    const npi = dentist?.npi;
+    setChecks(new Map());
+    setChecksError(null);
+    setSaveErrors({});
+    fetch(`/api/dental-network${npi ? `?npi=${npi}` : ''}`)
+      .then(async (r) => {
+        const body = await r.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!r.ok) {
+          setChecksError(body.error ?? `HTTP ${r.status}`);
+          return;
+        }
+        setDirectories(new Map((body.networks as DentalNetwork[]).map((n) => [netKey(n.carrier, n.network), n])));
+        setChecks(new Map(
+          (body.verifications as Array<{ carrier: string; network: string; status: NetworkStatus; verified_at: string }>)
+            .map((v) => [netKey(v.carrier, v.network), { status: v.status, verified_at: v.verified_at }]),
+        ));
+      })
+      .catch((e) => { if (!cancelled) setChecksError(String(e)); });
+    return () => { cancelled = true; };
+  }, [dentist?.npi]);
+
+  async function recordCheck(plan: DentalPlan, status: NetworkStatus | 'clear') {
+    if (!dentist || !plan.network) return;
+    const key = netKey(plan.carrier, plan.network);
+    setSaving((s) => ({ ...s, [key]: true }));
+    setSaveErrors((e) => { const n = { ...e }; delete n[key]; return n; });
+    try {
+      const r = await fetch('/api/dental-network', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          carrier: plan.carrier,
+          network: plan.network,
+          npi: dentist.npi,
+          dentist_name: dentistLabel(dentist),
+          practice_address: dentistAddress(dentist),
+          status,
+        }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
+      setChecks((m) => {
+        const next = new Map(m);
+        if (status === 'clear') next.delete(key);
+        else next.set(key, { status, verified_at: body.verification?.verified_at ?? new Date().toISOString() });
+        return next;
+      });
+    } catch (e) {
+      setSaveErrors((s) => ({ ...s, [key]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setSaving((s) => ({ ...s, [key]: false }));
+    }
+  }
+
+  function dentistOnPlan(plan: DentalPlan): DentistOnPlan | null {
+    if (!dentist) return null;
+    const key = netKey(plan.carrier, plan.network);
+    return {
+      dentistName: dentistLabel(dentist),
+      directory: directories.get(key) ?? null,
+      check: checks.get(key) ?? null,
+      saving: Boolean(saving[key]),
+      error: saveErrors[key] ?? null,
+    };
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -181,6 +313,7 @@ export function DentalScreen() {
       if (must.replacesMissing && missingToothStatus(plan.missing_tooth_clause) !== 'replaces') return false;
       if (must.major && plan.covers_major !== true) return false;
       if (must.noWait && plan.no_waiting !== true) return false;
+      if (dentist && inNetworkOnly && checks.get(netKey(plan.carrier, plan.network))?.status !== 'in_network') return false;
       return true;
     })
     .sort((a, b) => sortKey(a.price) - sortKey(b.price));
@@ -220,6 +353,62 @@ export function DentalScreen() {
             <LabeledInput id="dental-children" label="Children's ages (under 19, e.g. 4, 10)" value={childrenText} onChange={setChildrenText} />
             {(client.zip || client.dob) && (
               <div style={{ fontSize: 11, color: MUTED }}>Prefilled from the Client screen — edit freely.</div>
+            )}
+          </Panel>
+
+          <Panel title="Client's dentist">
+            {dentist ? (
+              <>
+                <div style={{ fontSize: 13, color: NAVY, lineHeight: 1.4 }}>
+                  <b>{dentistLabel(dentist)}</b>
+                  <div style={{ fontSize: 12, color: MUTED }}>
+                    {[dentist.specialty, dentistAddress(dentist), `NPI ${dentist.npi}`].filter(Boolean).join(' · ')}
+                  </div>
+                </div>
+                <ChipButton on={inNetworkOnly} onClick={() => setInNetworkOnly((v) => !v)} label="Only plans confirmed in network" />
+                {inNetworkOnly && (
+                  <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.45 }}>
+                    Plans not yet checked are hidden, not assumed in network.
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => { setDentist(null); setDentistQuery(''); setInNetworkOnly(false); }}
+                  style={SMALL_BTN}
+                >
+                  Change dentist
+                </button>
+              </>
+            ) : (
+              <>
+                <LabeledInput id="dental-dentist" label="Dentist or practice name" value={dentistQuery} onChange={setDentistQuery} />
+                {search.loading && <div style={{ fontSize: 12, color: MUTED }}>Searching…</div>}
+                {search.error && <div style={{ fontSize: 12, color: '#991b1b' }}>Search failed ({search.error}).</div>}
+                {dentistResults.length > 0 && (
+                  <ul role="listbox" aria-label="Dentist results" style={{ listStyle: 'none', margin: 0, padding: 0, maxHeight: 260, overflowY: 'auto', border: `1px solid ${LINE}`, borderRadius: 8 }}>
+                    {dentistResults.slice(0, 15).map((d) => (
+                      <li key={d.npi}>
+                        <button
+                          type="button"
+                          onClick={() => setDentist(d)}
+                          style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none', borderBottom: `1px solid ${LINE}`, background: 'white', cursor: 'pointer', color: NAVY }}
+                        >
+                          <div style={{ fontSize: 13, fontWeight: 700 }}>{dentistLabel(d)}</div>
+                          <div style={{ fontSize: 11, color: MUTED }}>
+                            {[d.specialty, dentistAddress(d)].filter(Boolean).join(' · ')}
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.45 }}>
+                  Pick the client's dentist to check each plan's network on the carrier's own site.
+                </div>
+              </>
+            )}
+            {checksError && (
+              <div style={{ fontSize: 12, color: '#991b1b' }}>Network checks didn't load ({checksError}).</div>
             )}
           </Panel>
 
@@ -287,6 +476,8 @@ export function DentalScreen() {
 
           {comparePlans.length >= 2 && (
             <CompareTable
+              dentistName={dentist ? dentistLabel(dentist) : null}
+              networkCheck={(p) => checks.get(netKey(p.carrier, p.network)) ?? null}
               rows={comparePlans}
               onClear={() => setCompare([])}
             />
@@ -310,6 +501,8 @@ export function DentalScreen() {
                 : 'can'
               }
               onQuote={() => toggleQuote(plan, price)}
+              dentistInfo={dentistOnPlan(plan)}
+              onCheck={(status) => recordCheck(plan, status)}
             />
           ))}
 
@@ -334,7 +527,7 @@ function sortKey(p: PriceResult): number {
 // ─── Plan card ───────────────────────────────────────────────────────
 
 function PlanCard({
-  plan, price, age, zip, inCompare, onCompare, expanded, onExpand, quote, onQuote,
+  plan, price, age, zip, inCompare, onCompare, expanded, onExpand, quote, onQuote, dentistInfo, onCheck,
 }: {
   plan: DentalPlan;
   price: PriceResult;
@@ -348,6 +541,9 @@ function PlanCard({
    *  cannot = no clean price for this client (re-quote / not priced). */
   quote: 'in' | 'can' | 'full' | 'cannot';
   onQuote: () => void;
+  /** null when no dentist is picked. */
+  dentistInfo: DentistOnPlan | null;
+  onCheck: (status: NetworkStatus | 'clear') => void;
 }) {
   const badges = priceBadges(plan, price, age, zip);
   return (
@@ -359,6 +555,7 @@ function PlanCard({
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
             {badges.map((b) => <Badge key={b.text} tone={b.tone}>{b.text}</Badge>)}
           </div>
+          {dentistInfo && <DentistNetworkRow info={dentistInfo} carrier={plan.carrier} onCheck={onCheck} />}
         </div>
 
         <dl style={{ flex: '2 1 330px', minWidth: 0, margin: 0, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px 16px', alignContent: 'start' }}>
@@ -428,6 +625,46 @@ function PlanCard({
   );
 }
 
+function DentistNetworkRow({ info, carrier, onCheck }: {
+  info: DentistOnPlan;
+  carrier: string;
+  onCheck: (status: NetworkStatus | 'clear') => void;
+}) {
+  const { check, directory } = info;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 4, paddingTop: 8, borderTop: `1px dashed ${LINE}` }}>
+      {check ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+          <Badge tone={check.status === 'in_network' ? 'green' : 'red'}>
+            {`${info.dentistName} · ${check.status === 'in_network' ? 'In network' : 'Not in network'}`}
+          </Badge>
+          <span style={{ fontSize: 11, color: MUTED }}>Broker checked {shortDate(check.verified_at)}</span>
+          <button type="button" onClick={() => onCheck('clear')} disabled={info.saving} style={LINK_BTN}>Undo</button>
+        </div>
+      ) : (
+        <>
+          <Badge tone="amber">{`${info.dentistName} · Network not checked`}</Badge>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+            {directory ? (
+              <a href={directory.directory_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700, color: NAVY }}>
+                Check on {carrier} ↗
+              </a>
+            ) : (
+              <span style={{ fontSize: 12, color: '#92400e' }}>No carrier directory link on file</span>
+            )}
+            <button type="button" onClick={() => onCheck('in_network')} disabled={info.saving} style={SMALL_BTN}>In network</button>
+            <button type="button" onClick={() => onCheck('not_in_network')} disabled={info.saving} style={SMALL_BTN}>Not in network</button>
+          </div>
+          {directory?.directory_note && (
+            <div style={{ fontSize: 11, color: MUTED }}>{directory.directory_note}</div>
+          )}
+        </>
+      )}
+      {info.error && <div style={{ fontSize: 12, color: '#991b1b' }}>Didn't save ({info.error}).</div>}
+    </div>
+  );
+}
+
 function priceBadges(plan: DentalPlan, price: PriceResult, age: number | null, zip: string | null): Array<{ text: string; tone: Tone }> {
   const out: Array<{ text: string; tone: Tone }> = [];
   if (!plan.is_insurance) out.push({ text: 'Discount plan · not insurance', tone: 'red' });
@@ -491,7 +728,12 @@ const COMPARE_ROWS: Array<{ label: string; get: (p: DentalPlan, pr: PriceResult)
   { label: 'Orthodontia', get: (p) => p.orthodontia },
 ];
 
-function CompareTable({ rows, onClear }: { rows: Array<{ plan: DentalPlan; price: PriceResult }>; onClear: () => void }) {
+function CompareTable({ rows, onClear, dentistName, networkCheck }: {
+  rows: Array<{ plan: DentalPlan; price: PriceResult }>;
+  onClear: () => void;
+  dentistName: string | null;
+  networkCheck: (p: DentalPlan) => NetworkCheck | null;
+}) {
   return (
     <section aria-label="Dental plan comparison" style={{ background: 'white', border: `2px solid ${NAVY}`, borderRadius: 12, padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
@@ -521,6 +763,16 @@ function CompareTable({ rows, onClear }: { rows: Array<{ plan: DentalPlan; price
                 })}
               </tr>
             ))}
+            {dentistName && (
+              <tr>
+                <th scope="row" style={{ ...TD, fontWeight: 700, color: '#334155' }}>{dentistName}</th>
+                {rows.map(({ plan }) => {
+                  const c = networkCheck(plan);
+                  const text = c?.status === 'in_network' ? 'In network' : c?.status === 'not_in_network' ? 'Not in network' : 'Not checked';
+                  return <td key={plan.id} style={{ ...TD, color: c?.status === 'in_network' ? '#065f46' : c ? '#991b1b' : '#92400e', fontWeight: 700 }}>{text}</td>;
+                })}
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -611,5 +863,6 @@ function Notice({ children, tone }: { children: ReactNode; tone?: 'error' }) {
 const LABEL: CSSProperties = { fontSize: 10, fontWeight: 600, color: MUTED, letterSpacing: 0.5, textTransform: 'uppercase' };
 const INPUT: CSSProperties = { height: 40, padding: '0 10px', border: '1px solid rgba(13,47,94,0.2)', borderRadius: 8, fontSize: 14, color: NAVY, background: 'white' };
 const SMALL_BTN: CSSProperties = { minHeight: 36, padding: '0 12px', borderRadius: 8, border: `1px solid ${NAVY}`, background: 'white', color: NAVY, fontSize: 12, fontWeight: 700, cursor: 'pointer' };
+const LINK_BTN: CSSProperties = { background: 'none', border: 'none', padding: 0, fontSize: 12, fontWeight: 700, color: NAVY, textDecoration: 'underline', cursor: 'pointer' };
 const TH: CSSProperties = { textAlign: 'left', padding: '8px 10px', borderBottom: `1px solid ${LINE}`, verticalAlign: 'bottom', fontWeight: 700 };
 const TD: CSSProperties = { textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid #eef2f7', verticalAlign: 'top' };
