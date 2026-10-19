@@ -121,6 +121,47 @@ test('__NPI_NO_MA_NETWORK__ resolves to a trusted covered=false (out_of_network)
   assert.equal(networkByPlan['H3449-024-000'][KLEIN].covered, false);
 });
 
+test('a stale medicare_gov row does NOT suppress a carrier sentinel (Klein BCBS/Humana "?" bug)', () => {
+  // Klein has only a prior-year medicare_gov covered=false row on BCBS/Humana
+  // (Plan Finder under-reports). That non-trusted row must NOT count as "the
+  // carrier answered" — the fhir_bcbsnc / fhir_humana not_listed sentinel must
+  // still eliminate. In plan-brain-data the medicare_gov covered=false slot is
+  // dropped before expansion, so the slot is empty here; the risk is purely
+  // foundCarrierByNpi wrongly including the carrier off the medicare_gov row.
+  const networkByPlan: Record<string, Record<string, NetworkSlotRow>> = {};
+  expandCarrierSentinels({
+    networkByPlan,
+    sentinelRows: [sentinel(KLEIN, 'fhir_bcbsnc'), sentinel(KLEIN, 'fhir_humana')],
+    realRows: [
+      { plan_id: 'H3449-012', npi: KLEIN, source: 'medicare_gov' }, // stale PF, must not count
+      { plan_id: 'H1036-167', npi: KLEIN, source: 'medicare_gov' },
+    ],
+    carrierMap: new Map<string, CarrierId>([['H3449', 'bcbsnc'], ['H1036', 'humana']]),
+    requestedIds: ['H3449-012-000', 'H1036-167-000'],
+    npis: [KLEIN],
+    requestedYear: YEAR,
+  });
+  assert.equal(networkByPlan['H3449-012-000'][KLEIN].covered, false, 'BCBS eliminated despite PF row');
+  assert.equal(networkByPlan['H1036-167-000'][KLEIN].covered, false, 'Humana eliminated despite PF row');
+});
+
+test('a real fhir in-network row DOES suppress the same-carrier sentinel carrier-wide', () => {
+  const networkByPlan: Record<string, Record<string, NetworkSlotRow>> = {
+    'H3449-012-000': { [KLEIN]: { plan_id: 'H3449-012', segment_id: '0', npi: KLEIN, covered: true, source: 'fhir_bcbsnc', plan_year: YEAR } },
+  };
+  expandCarrierSentinels({
+    networkByPlan,
+    sentinelRows: [sentinel(KLEIN, 'fhir_bcbsnc')],
+    realRows: [{ plan_id: 'H3449-012', npi: KLEIN, source: 'fhir_bcbsnc' }],
+    carrierMap: new Map<string, CarrierId>([['H3449', 'bcbsnc']]),
+    requestedIds: ['H3449-012-000', 'H3449-099-000'],
+    npis: [KLEIN],
+    requestedYear: YEAR,
+  });
+  assert.equal(networkByPlan['H3449-012-000'][KLEIN].covered, true);
+  assert.equal(networkByPlan['H3449-099-000']?.[KLEIN], undefined, 'trusted directory row suppresses carrier-wide');
+});
+
 test('a requested-year sentinel is preferred over a prior-year carry-over', () => {
   const networkByPlan: Record<string, Record<string, NetworkSlotRow>> = {};
   expandCarrierSentinels({
