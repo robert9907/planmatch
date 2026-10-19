@@ -26,6 +26,7 @@
     "test:persona-audit": "tsx scripts/cms-secret-shopper.ts",
     "audit:parity": "tsx scripts/parity-audit/run.ts",
     "test:dental": "tsx --test scripts/tests/dental-pricing.test.ts",
+    "test:dental-mc": "tsx --test scripts/tests/dental-medicare-covered.test.ts",
     "test:bench": "tsx --test scripts/tests/bench-eligibility.test.ts"
   },
   "dependencies": {
