@@ -895,6 +895,11 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
         annualCost: Math.round(est.yearlyCost),
         isBrand: est.isBrand,
         costUnavailable: est.costUnavailable === true,
+        priorAuth: cov?.prior_auth === true,
+        stepTherapy: cov?.step_therapy === true,
+        quantityLimit: cov?.quantity_limit === true,
+        quantityLimitAmount: cov?.quantity_limit_amount ?? null,
+        quantityLimitDays: cov?.quantity_limit_days ?? null,
       };
     });
 

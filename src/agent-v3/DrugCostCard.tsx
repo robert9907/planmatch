@@ -109,6 +109,12 @@ export interface DrugCostCardDrugRow {
   // True when the catalog year's formulary isn't published yet — no real tier
   // or cost. Render "formulary not yet published", never $0 / Tier / Not covered.
   costUnavailable?: boolean;
+  // 2027 utilization-management flags for this plan's row (PA / ST / QL).
+  priorAuth?: boolean;
+  stepTherapy?: boolean;
+  quantityLimit?: boolean;
+  quantityLimitAmount?: number | null;
+  quantityLimitDays?: number | null;
 }
 
 export interface DrugCostCardComparisonPlan {
@@ -235,6 +241,51 @@ function TierBadge({ tier }: { tier: number | null }) {
       }}
     >
       T{tier}
+    </span>
+  );
+}
+
+// PA / ST / QL utilization-management flags for a drug on this plan. QL carries
+// the filed limit amount + days in the tooltip when present.
+function UmBadge({ drug }: { drug: DrugCostCardDrugRow }) {
+  const labels = [
+    drug.priorAuth ? 'PA' : null,
+    drug.stepTherapy ? 'ST' : null,
+    drug.quantityLimit ? 'QL' : null,
+  ].filter(Boolean) as string[];
+  if (labels.length === 0) return null;
+  const title = [
+    drug.priorAuth ? 'Prior authorization' : null,
+    drug.stepTherapy ? 'Step therapy' : null,
+    drug.quantityLimit
+      ? `Quantity limit${
+          drug.quantityLimitAmount != null
+            ? `: ${drug.quantityLimitAmount}${
+                drug.quantityLimitDays != null ? ` per ${drug.quantityLimitDays} days` : ''
+              }`
+            : ''
+        }`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  return (
+    <span
+      title={title}
+      style={{
+        display: 'inline-block',
+        fontFamily: FONT_NUM,
+        fontSize: 10,
+        fontWeight: 700,
+        padding: '2px 6px',
+        borderRadius: 5,
+        background: 'rgba(180,83,9,0.12)',
+        color: '#92400e',
+        lineHeight: 1.1,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {labels.join(' ')}
     </span>
   );
 }
@@ -796,6 +847,7 @@ function DrugRowDropdown({
             {dose && <span style={{ color: MUTED, fontWeight: 400 }}>{dose}</span>}
             <TierBadge tier={drug.tier} />
             <DrugTypeBadge drugType={phaseHit?.drug_type} />
+            <UmBadge drug={drug} />
           </div>
         </div>
         <div
