@@ -38,6 +38,17 @@ export interface DrugFill {
    *  mail-order. Any positive integer is accepted; fills are spaced
    *  evenly across the year starting at startMonth. */
   fillsPerYear: number;
+  /** Per-drug cost-share override. When set, these phase shares are
+   *  used for this fill INSTEAD of plan.tierCostShares[tier]. Needed
+   *  for IRA-negotiated drugs (Eliquis, Jardiance, …): Medicare.gov
+   *  prices them at a drug-specific MFP cost-share that differs from
+   *  the plan's filed tier coinsurance (e.g. H5302-022 files Tier 3 at
+   *  24% but Eliquis actually bills ~17% off its negotiated price).
+   *  pm_drug_cost_cache carries the true per-fill initial member cost,
+   *  which the brain passes through here as an `initial` copay. The
+   *  deductible phase is left unset so the member still pays full gross
+   *  until the deductible is met. */
+  costShareOverride?: TierCostShares;
   /** IRA insulin cap applies (§11406). Member cost per fill is capped
    *  at insulinMonthlyCap regardless of phase. */
   isInsulin?: boolean;
@@ -249,8 +260,10 @@ function chargeFill(
   // Already catastrophic — member cost is $0 (IRA §11201, 2025+).
   if (state.troop >= params.troopCap) return result;
 
+  // Per-drug override (IRA-negotiated drugs) wins over the plan's filed
+  // tier cost-share. See DrugFill.costShareOverride.
   const tierShares: TierCostShares | undefined =
-    plan.tierCostShares[drug.tier];
+    drug.costShareOverride ?? plan.tierCostShares[drug.tier];
   const canUseDeductible = tierCanUseDeductible(drug.tier, plan);
 
   // ── Split fill across phases ────────────────────────────────────

@@ -132,6 +132,7 @@ interface DrugCacheRow {
   tier: number | null;
   full_cost: number | null;
   covered: boolean | null;
+  initial_cost: number | null;
   estimated_yearly_total: number | null;
 }
 
@@ -290,7 +291,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       rxcuis.length > 0
         ? sb
             .from('pm_drug_cost_cache')
-            .select('plan_id, segment_id, ndc, tier, full_cost, covered, estimated_yearly_total')
+            .select('plan_id, segment_id, ndc, tier, full_cost, covered, initial_cost, estimated_yearly_total')
             .in('plan_id', contractPlans)
         : Promise.resolve({ data: [], error: null }),
       // Query the EXPANDED rxcui set, not just the originals. The
