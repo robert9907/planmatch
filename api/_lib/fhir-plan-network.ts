@@ -38,26 +38,50 @@ export const FHIR_CARRIER_IDS: ReadonlyArray<CarrierId> = [
 export const NPI_NOT_FOUND_PLAN_ID = '__NPI_NOT_FOUND__';
 export const NPI_NO_MA_NETWORK_PLAN_ID = '__NPI_NO_MA_NETWORK__';
 
-interface PlanNetworkRow {
+export interface PlanNetworkRow {
   carrier_id: CarrierId;
   contract_id: string;
   plan_year: number | null;
 }
 
-// contract_id → owning carrier, from pm_fhir_plan_network (the same source the
-// consumer endpoint resolves through). Scoped to the given contracts + years.
+// Pure contract_id → owning carrier reducer over pm_fhir_plan_network rows.
 // First-write-wins per contract, but a row whose plan_year === requestedYear
 // upgrades an ownership first claimed by a fallback-year row (year-aware, like
-// the consumer map which is built per requested year).
+// the consumer map which is built per requested year). Kept PURE so the mirror
+// drift test (scripts/tests/carrier-map-mirror.test.ts) can compare it to the
+// consumer's documented algorithm on the same rows without a DB. Any change
+// here MUST stay in lockstep with the consumer's loadContractToCarrierMap
+// (robert9907/plan-match api/_lib/fhir-provider.ts) — the daily cron
+// /api/audit-carrier-map-mirror alerts if the live data could make them differ.
+export function buildContractToCarrierMap(
+  rows: ReadonlyArray<PlanNetworkRow>,
+  requestedYear: number,
+): Map<string, CarrierId> {
+  const map = new Map<string, CarrierId>();
+  const ownedYear = new Map<string, number | null>();
+  for (const r of rows) {
+    if (!FHIR_CARRIER_IDS.includes(r.carrier_id)) continue;
+    if (!map.has(r.contract_id)) {
+      map.set(r.contract_id, r.carrier_id);
+      ownedYear.set(r.contract_id, r.plan_year);
+    } else if (r.plan_year === requestedYear && ownedYear.get(r.contract_id) !== requestedYear) {
+      map.set(r.contract_id, r.carrier_id);
+      ownedYear.set(r.contract_id, r.plan_year);
+    }
+  }
+  return map;
+}
+
+// contract_id → owning carrier, from pm_fhir_plan_network (the same source the
+// consumer endpoint resolves through). Scoped to the given contracts + years.
 export async function loadContractToCarrierMap(
   sb: SupabaseClient,
   contracts: string[],
   years: number[],
   requestedYear: number,
 ): Promise<Map<string, CarrierId>> {
-  const map = new Map<string, CarrierId>();
-  if (contracts.length === 0) return map;
-  const ownedYear = new Map<string, number | null>();
+  if (contracts.length === 0) return new Map<string, CarrierId>();
+  const all: PlanNetworkRow[] = [];
   const pageSize = 1000;
   let from = 0;
   // Paginate — a county's worth of contracts can carry thousands of
@@ -76,19 +100,11 @@ export async function loadContractToCarrierMap(
       .range(from, from + pageSize - 1);
     if (error) throw error;
     const rows = (data ?? []) as PlanNetworkRow[];
-    for (const r of rows) {
-      if (!map.has(r.contract_id)) {
-        map.set(r.contract_id, r.carrier_id);
-        ownedYear.set(r.contract_id, r.plan_year);
-      } else if (r.plan_year === requestedYear && ownedYear.get(r.contract_id) !== requestedYear) {
-        map.set(r.contract_id, r.carrier_id);
-        ownedYear.set(r.contract_id, r.plan_year);
-      }
-    }
+    all.push(...rows);
     if (rows.length < pageSize) break;
     from += pageSize;
   }
-  return map;
+  return buildContractToCarrierMap(all, requestedYear);
 }
 
 export function carrierForContractId(
