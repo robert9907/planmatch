@@ -111,7 +111,11 @@ export interface LibraryProviderPlan {
   plan_id: string; // triple "<contract>-<plan>-<segment>"
   plan_name: string;
   carrier: string;
-  status: 'in_network' | 'out_of_network' | 'unknown';
+  // 6-state model (consumer PR #105). not_listed = NPI absent from the
+  // carrier directory (✗, eliminates); no_data = no feed for this carrier
+  // (grey, kept); error = live lookup failed (kept). Older deploys of the
+  // endpoint only ever send in_network/out_of_network/unknown.
+  status: 'in_network' | 'out_of_network' | 'not_listed' | 'no_data' | 'error' | 'unknown';
   source: 'fhir_live' | 'cache' | 'medicare_gov' | 'unknown';
   last_verified: string | null;
   /** Raw winning cache source ('broker_verified' | 'fhir_*' | 'healthspring'

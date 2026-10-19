@@ -88,16 +88,30 @@ export function ProviderNetworkProof({
           if (!r.npi) return r;
           const hit = resp.by_npi?.[r.npi]?.plans?.find((x) => x.plan_id === plan.id)
             ?? resp.by_npi?.[r.npi]?.plans?.[0];
-          if (!hit || hit.status === 'unknown') return r;
+          // Only a definite answer (in-network, or a trusted negative) updates
+          // the row. no_data / error / unknown stay "not confirmed — call the
+          // office", the same safe default as before.
+          if (
+            !hit ||
+            (hit.status !== 'in_network' &&
+              hit.status !== 'out_of_network' &&
+              hit.status !== 'not_listed')
+          ) {
+            return r;
+          }
           // Exact cross-surface label when the library sends the raw winning
           // source (+ prior-year carry); otherwise the collapsed-enum map.
+          // not_listed carries no source_raw, so it reads "not in the carrier's
+          // Medicare directory".
           const sourceLabel =
-            hit.source_raw != null
-              ? provenanceLabel(hit.source_raw, hit.fallback_year ?? null)
-              : SOURCE_LABEL[hit.source] ?? 'saved verification';
+            hit.status === 'not_listed'
+              ? "not in the carrier's Medicare directory"
+              : hit.source_raw != null
+                ? provenanceLabel(hit.source_raw, hit.fallback_year ?? null)
+                : SOURCE_LABEL[hit.source] ?? 'saved verification';
           return {
             ...r,
-            status: hit.status,
+            status: hit.status === 'in_network' ? 'in_network' : 'out_of_network',
             sourceLabel,
             checkedAt: hit.last_verified,
           };
