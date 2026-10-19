@@ -9,8 +9,24 @@ export interface ExtractedMedication {
   prescribing_physician: string | null;
   pharmacy_name: string | null;
   pharmacy_phone: string | null;
+  /** Pharmacy place as printed — sharpens the NPPES match. */
+  pharmacy_city?: string | null;
+  pharmacy_state?: string | null;
+  pharmacy_zip?: string | null;
+  /** Server-added: the label's pharmacy matched to NPPES and filed in
+   *  AgentBase's providers directory (pharmacy_id = providers.id). */
+  pharmacy_npi?: string | null;
+  pharmacy_id?: number | null;
+  pharmacy_address?: string | null;
+  /** Client answered "Is this your pharmacy?" on the Snap Link page. */
+  pharmacy_confirmed?: boolean;
+  /** Client said "Not my doctor" for this label's prescriber. */
+  prescriber_declined?: boolean;
   refills_remaining: number | string | null;
   last_filled: string | null;
+  /** QTY dispensed — usually printed under the barcode. */
+  quantity?: number | string | null;
+  days_supply?: number | string | null;
   ndc_code: string | null;
   confidence: 'high' | 'medium' | 'low';
 }
@@ -86,8 +102,38 @@ export interface CaptureSubmitResponse {
   item_id: string;
   extracted: ExtractedItem[];
   guidance?: CaptureGuidance;
+  /** What this photo read, for the "Is this your pharmacy / doctor?"
+   *  check at the end of the visit. */
+  snap?: SnapSummary;
   /** @deprecated Capture photos are no longer stored. Present only on
    *  items written before that change. */
   image_url?: string;
   error?: string;
+}
+
+export interface SnapPharmacyRead {
+  name: string | null;
+  npi: string | null;
+  address: string | null;
+  phone: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+}
+
+export interface SnapSummary {
+  med_names: string[];
+  pharmacy: SnapPharmacyRead | null;
+  prescribers: string[];
+}
+
+export interface PharmacyChoice {
+  npi?: string | null;
+  name: string;
+  address1?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  phone?: string | null;
+  mailOrder?: boolean;
 }

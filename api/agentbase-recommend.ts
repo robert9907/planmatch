@@ -88,6 +88,9 @@ interface RecommendBody {
     frequency?: string | null;
     /** "30" or "90" — drives client_medications.refill_days. */
     refill_days?: string | null;
+    /** Scanned-bottle facts; fill a blank on the CRM row only. */
+    quantity?: string | null;
+    pharmacy_id?: number | null;
     tier_on_recommended_plan: number | null;
     monthly_cost: number | null;
     pa_required: boolean;

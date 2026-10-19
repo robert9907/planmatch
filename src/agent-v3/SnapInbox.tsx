@@ -59,13 +59,20 @@ export function SnapInbox({ capture, accept }: Props) {
           form: extracted.form ?? undefined,
           frequency: extracted.dosage_instructions ?? undefined,
           prescribingPhysician: extracted.prescribing_physician ?? undefined,
+          // Bottle scan: quantity (barcode side) and the pharmacy, matched
+          // to NPPES and filed in AgentBase's directory — round-trips to
+          // client_medications.pharmacy_id on the next CRM sync.
+          ...(extracted.quantity != null && String(extracted.quantity).trim()
+            ? { quantity: String(extracted.quantity).trim() }
+            : {}),
+          ...(extracted.pharmacy_id != null ? { pharmacyId: extracted.pharmacy_id } : {}),
           source: 'capture',
           confidence: extracted.confidence,
         });
         // Auto-seed a provider row from the prescriber name so the
-        // Providers tab fills in without a second tap. Matches the
-        // existing CapturePanel behavior (and Phase 4 of the spec).
-        if (extracted.prescribing_physician) {
+        // Providers tab fills in without a second tap — unless the client
+        // said "Not my doctor" on the Snap Link page.
+        if (extracted.prescribing_physician && !extracted.prescriber_declined) {
           addProvider({
             name: extracted.prescribing_physician,
             source: 'from_med',
@@ -241,7 +248,16 @@ function summarize(row: IncomingQueueItem, accept: 'medication' | 'provider'): S
   for (const e of row.extracted) {
     if (!matchesAccept(e, accept)) continue;
     if (e.type === 'medication') {
-      const parts = [e.strength, e.form, e.dosage_instructions].filter(Boolean);
+      const pharmacy = e.pharmacy_name
+        ? `${e.pharmacy_confirmed ? '✓ ' : ''}${e.pharmacy_name}${e.pharmacy_npi ? '' : ' (unmatched)'}`
+        : null;
+      const parts = [
+        e.strength,
+        e.form,
+        e.quantity != null && String(e.quantity).trim() ? `Qty ${e.quantity}` : null,
+        e.dosage_instructions,
+        pharmacy,
+      ].filter(Boolean);
       const sub = parts.length > 0 ? parts.join(' · ') : null;
       return {
         title: e.drug_name || 'Unreadable label',

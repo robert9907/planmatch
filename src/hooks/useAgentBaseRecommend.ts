@@ -66,6 +66,10 @@ export interface SyncInput {
     /** "30" or "90" — derived from the broker's pharmacy-fill toggle.
      *  Lands in client_medications.refill_days. */
     refill_days: string | null;
+    /** Quantity per fill and AgentBase providers.id of the pharmacy —
+     *  set on scanned bottles; fill a blank on the CRM row only. */
+    quantity?: string | null;
+    pharmacy_id?: number | null;
     tier_on_recommended_plan: number | null;
     monthly_cost: number | null;
     /** PA/ST flags — only set when the caller has real per-drug
