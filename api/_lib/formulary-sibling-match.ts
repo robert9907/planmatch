@@ -20,6 +20,11 @@
 export interface DrugProfile {
   combo: boolean;
   brand: boolean;
+  /** Brand name from the RxNorm `[Brand]` bracket, normalized lowercase
+   *  (e.g. "ozempic", "xarelto"). null for generic rows. Used to enforce
+   *  brand exactness: a brand request must never match a DIFFERENT brand of
+   *  the same molecule (Ozempic → never Wegovy). */
+  brandName: string | null;
   er: boolean;
   form: 'tablet' | 'capsule' | 'solution' | 'injection' | 'patch' | 'other' | null;
   strengths: string[]; // normalized, e.g. ["600 MG"], ["50 MG/ML"]
@@ -59,9 +64,11 @@ export function parseDrugProfile(name: string | null | undefined): DrugProfile {
     : /\bcapsule\b/.test(lower) ? 'capsule'
     : /\btablet\b/.test(lower) ? 'tablet'
     : null;
+  const brandMatch = n.match(/\[([^\]]+)\]/);
   return {
     combo: isComboName(n),
-    brand: /\[[^\]]+\]/.test(n),
+    brand: brandMatch != null,
+    brandName: brandMatch ? brandMatch[1].trim().toLowerCase() : null,
     er: /extended release|extended-release|24 hr|12 hr|\ber\b|\bxr\b|\bsr\b|modified .*release|once-daily/i.test(n),
     form,
     strengths: normStrengths(n),
@@ -73,6 +80,17 @@ export function parseDrugProfile(name: string | null | undefined): DrugProfile {
 function scoreRow(orig: DrugProfile, rowName: string): { score: number; strengthHit: boolean; formHit: boolean } | null {
   const rp = parseDrugProfile(rowName);
   if (rp.combo && !orig.combo) return null; // rule 1 — never match a combo
+  // Rule 1b (Rob, 2026-10-19) — brand exactness. A brand request must never
+  // resolve to a DIFFERENT brand of the same molecule (Ozempic → never
+  // Wegovy, NovoLog → never Fiasp). A plan that files only another brand /
+  // the generic shows the requested brand NOT COVERED as entered — we do not
+  // substitute. Exact rxcui still wins in pickBestFormularyRow before scoring.
+  // (Same-brand strength/form siblings are kept.) Only applies when we know
+  // the requested brand name; a generic request is unaffected.
+  if (orig.brand) {
+    if (!rp.brand) return null; // a generic row is not "that brand"
+    if (orig.brandName && rp.brandName && rp.brandName !== orig.brandName) return null; // different brand
+  }
   let score = 0;
   // Strength — the strongest discriminator (600 MG tablet vs 50 MG/ML solution).
   const strengthHit = orig.strengths.length === 0 || orig.strengths.every((s) => rp.strengths.includes(s));

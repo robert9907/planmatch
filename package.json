@@ -27,7 +27,8 @@
     "audit:parity": "tsx scripts/parity-audit/run.ts",
     "test:dental": "tsx --test scripts/tests/dental-pricing.test.ts",
     "test:dental-mc": "tsx --test scripts/tests/dental-medicare-covered.test.ts",
-    "test:bench": "tsx --test scripts/tests/bench-eligibility.test.ts"
+    "test:bench": "tsx --test scripts/tests/bench-eligibility.test.ts",
+    "test:brand": "tsx --test scripts/tests/exact-brand-match.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",

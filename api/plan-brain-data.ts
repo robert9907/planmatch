@@ -445,7 +445,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         perPlan.set(orig, list);
       }
     }
-    const EMPTY_PROFILE: DrugProfile = { combo: false, brand: false, er: false, form: null, strengths: [] };
+    const EMPTY_PROFILE: DrugProfile = { combo: false, brand: false, brandName: null, er: false, form: null, strengths: [] };
     for (const [key, perPlan] of rowsByPlanOrig) {
       const slot = (formularyByContractPlan[key] ||= {});
       for (const [orig, rows] of perPlan) {
