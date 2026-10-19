@@ -297,6 +297,12 @@ interface DrugRow {
   // True when the catalog year's formulary isn't published yet — no real tier
   // or cost. Render "formulary not yet published", never $0 / Tier / Not covered.
   costUnavailable?: boolean;
+  // 2027 utilization-management flags for this plan's row (PA / ST / QL).
+  priorAuth?: boolean;
+  stepTherapy?: boolean;
+  quantityLimit?: boolean;
+  quantityLimitAmount?: number | null;
+  quantityLimitDays?: number | null;
 }
 
 // Per-fill cost label for one drug on one plan. Uses the brain's

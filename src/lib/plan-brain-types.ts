@@ -317,6 +317,14 @@ export interface BrainScore {
     // carries NO real tier or cost — render "formulary not yet published",
     // never $0/Tier/Not covered. Absent/false in every published-year row.
     costUnavailable?: boolean;
+    // 2027 formulary utilization-management flags for THIS plan's row, so the
+    // UI can show PA / ST / QL per drug (QL carries the filed limit amount +
+    // days when present). All false/null when the drug isn't covered here.
+    priorAuth: boolean;
+    stepTherapy: boolean;
+    quantityLimit: boolean;
+    quantityLimitAmount: number | null;
+    quantityLimitDays: number | null;
   }>;
   /** Present ONLY when applyDualEligibleCostAdjustment ran (i.e.
    *  userProfile.medicaidLevel !== 'none' OR lisTier !== 'none').

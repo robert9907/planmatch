@@ -109,6 +109,9 @@ export interface FormularyRow {
   coinsurance: number | null;
   prior_auth: boolean | null;
   step_therapy: boolean | null;
+  quantity_limit: boolean | null;
+  quantity_limit_amount: number | null;
+  quantity_limit_days: number | null;
 }
 export interface NdcRow {
   rxcui: string;
@@ -535,9 +538,9 @@ function formularyToBrain(row: FormularyRow): FormularyCoverage {
     coinsurance: row.coinsurance,
     prior_auth: row.prior_auth === true,
     step_therapy: row.step_therapy === true,
-    quantity_limit: false,
-    quantity_limit_amount: null,
-    quantity_limit_days: null,
+    quantity_limit: row.quantity_limit === true,
+    quantity_limit_amount: row.quantity_limit_amount ?? null,
+    quantity_limit_days: row.quantity_limit_days ?? null,
     match_type: 'rxcui',
   };
 }
