@@ -292,6 +292,9 @@ export interface BenefitRow {
   copay: number | null;
   coinsurance: number | null;
   max_coverage: number | null;
+  // pm_plan_benefits.food_category — set on 'meals' rows (food_card /
+  // flex_card_food / food_card_unverified / none). Absent on synth rows.
+  food_category?: string | null;
   // ── Displaced cost-share (the "other" filing) ───────────────────
   // Two independent merges below pick ONE cost-share per (triple,
   // category): the pbp source-priority dedup (medicare_gov 5 >
@@ -1091,7 +1094,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await sb
         .from('pm_plan_benefits')
         .select(
-          'id, contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage',
+          'id, contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage, food_category',
         )
         // Federal base layer is year-aware (pm_plan_benefits has plan_year, and
         // is 2026-only today). Scope to the catalog year so a 2027 plan doesn't
@@ -2012,11 +2015,22 @@ export function buildBenefits(
   // meals benefits); surface it as > 0 so the filter's Any tier
   // passes, but the specific dollar tiers won't. Same scraper-fallback
   // logic as OTC for plans missing structured rows.
-  const foodCard = rows.find((r) => r.benefit_category === 'food_card');
-  const pmFoodCardMonthly = toNum(foodCard?.coverage_amount) ?? 0;
-  const foodCardMonthly = pmFoodCardMonthly > 0
+  // pm_plan_benefits files the healthy-food card under benefit_category
+  // 'meals' with food_category set (CMS B13i SSBCI food & produce, plus
+  // Section D combined allowances). Read those alongside any legacy
+  // 'food_card' row. A food row with no filed dollar cap is CMS-confirmed
+  // presence → 1 (the "Included" marker), same as the pbp rescue below.
+  const FOOD_CATEGORIES = new Set(['food_card', 'flex_card_food', 'food_card_unverified']);
+  const foodCard =
+    rows.find((r) => r.benefit_category === 'food_card') ??
+    rows.find((r) => r.benefit_category === 'meals' && FOOD_CATEGORIES.has(r.food_category ?? ''));
+  const pmFoodCardAmount = toNum(foodCard?.coverage_amount) ?? 0;
+  const pmFoodCardMonthly = pmFoodCardAmount > 0
+    ? pmFoodCardAmount
+    : (foodCard && foodCard.benefit_category === 'meals' && (foodCard.benefit_description ?? '').trim() !== '' ? 1 : 0);
+  const foodCardMonthly = pmFoodCardMonthly > 1
     ? pmFoodCardMonthly
-    : (pbpFallback?.foodCardMonthly ?? 0);
+    : ((pbpFallback?.foodCardMonthly ?? 0) > 0 ? (pbpFallback?.foodCardMonthly ?? 0) : pmFoodCardMonthly);
 
   // b10b → transportation. coverage_amount is either a dollar cap OR
   // the presence marker (1). The schema's transportation.rides_per_year

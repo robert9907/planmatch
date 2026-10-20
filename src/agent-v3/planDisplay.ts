@@ -8,6 +8,7 @@
 
 import type { Plan } from '@/types/plans';
 import { fitnessProgramForCarrier } from '@/lib/fitness-program';
+import { sharedAllowanceSuffix } from '@/lib/extractBenefitValue';
 
 export interface PlanDisplay {
   dental: string;
@@ -86,7 +87,7 @@ export function planDisplay(plan: Plan): PlanDisplay {
   const otcDesc = b.otc.description?.trim();
   const otcMonthly = otcQuarterly > 1 ? Math.round(otcQuarterly / 3) : 0;
   const otcText = otcQuarterly > 1
-    ? `$${otcMonthly}/mo`
+    ? `$${otcMonthly}/mo${sharedAllowanceSuffix(otcDesc)}`
     : otcQuarterly === 1
       ? (otcDesc || 'Included')
       : '$0/mo';
@@ -94,7 +95,7 @@ export function planDisplay(plan: Plan): PlanDisplay {
   const foodMonthly = b.food_card.allowance_per_month;
   const foodDesc = b.food_card.description?.trim();
   const meals = foodMonthly > 1
-    ? `$${foodMonthly}/mo`
+    ? `$${foodMonthly}/mo${sharedAllowanceSuffix(foodDesc)}`
     : foodMonthly === 1
       ? (foodDesc || 'Included')
       : 'None';
