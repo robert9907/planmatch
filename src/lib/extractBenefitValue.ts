@@ -313,8 +313,15 @@ export function formatHearing(
  *   • Otherwise convert monthly × 3 → "$X/qtr"
  *   • Empty → "—"
  */
+// A CMS Section D combined allowance (one pool shared by OTC, food,
+// utilities…) is filed on BOTH the OTC and the food row. Label it so the
+// two cells don't read as two separate pots of money.
+export function sharedAllowanceSuffix(description: string | null | undefined): string {
+  return /combined/i.test(description ?? '') ? ' (shared)' : '';
+}
+
 export function formatOtc(structuredQuarterly: number, description: string | null | undefined): string {
-  if (structuredQuarterly > 1) return `$${structuredQuarterly.toLocaleString()}/qtr`;
+  if (structuredQuarterly > 1) return `$${structuredQuarterly.toLocaleString()}/qtr${sharedAllowanceSuffix(description)}`;
   if (structuredQuarterly === 1) {
     // "Offered, no published ceiling" sentinel (see commit d6a3952).
     const trimmed = description?.trim();
@@ -336,7 +343,7 @@ export function formatOtc(structuredQuarterly: number, description: string | nul
  *   • "—" otherwise
  */
 export function formatFoodCard(structuredMonthly: number, description: string | null | undefined): string {
-  if (structuredMonthly > 1) return `$${structuredMonthly}/mo`;
+  if (structuredMonthly > 1) return `$${structuredMonthly}/mo${sharedAllowanceSuffix(description)}`;
   if (structuredMonthly === 1) {
     // "Offered, no published ceiling" sentinel. Prefer the filed
     // description text ("Combined with OTC card above" etc.) over the
