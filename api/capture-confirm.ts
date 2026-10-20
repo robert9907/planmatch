@@ -6,6 +6,7 @@
 //   med_names: string[],                  // the bottles read this visit
 //   pharmacy: { npi?, name, address1?, city?, state?, zip?, phone?, mailOrder? } | null,
 //   declined_prescribers: string[],       // "Not my doctor"
+//   prescriber_readings?: string[],       // every bottle's prescriber, as printed
 // }
 //
 // AgentBase session (sent from a client card):
@@ -26,6 +27,8 @@ import { badRequest, cors, notFound, sendJson, serverError } from './_lib/http.j
 import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
 import { resolvePharmacyId } from './_lib/snapPharmacy.js';
 import { parsePrescriber, sameLast } from './_lib/snapPrescriber.js';
+import { planPrescribers } from './_lib/snapPrescriberLinks.js';
+import { upsertProvidersForClient } from './_lib/agentbaseDedup.js';
 
 interface ConfirmBody {
   token?: string;
@@ -41,6 +44,7 @@ interface ConfirmBody {
     mailOrder?: boolean;
   } | null;
   declined_prescribers?: unknown;
+  prescriber_readings?: unknown;
 }
 
 function strList(v: unknown, max = 20): string[] {
@@ -62,6 +66,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!token) return badRequest(res, 'token is required');
     const medNames = strList(body.med_names, 40);
     const declined = strList(body.declined_prescribers, 10);
+    const readings = strList(body.prescriber_readings, 40);
     const ph = body.pharmacy && typeof body.pharmacy.name === 'string' && body.pharmacy.name.trim()
       ? { ...body.pharmacy, name: body.pharmacy.name.trim().slice(0, 160) }
       : null;
@@ -79,7 +84,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const ab = agentbaseSupabase();
     const pharmacyId = ph ? await resolvePharmacyId(ab, ph) : null;
-    const result = { pharmacy_meds_updated: 0, prescriber_links_removed: 0 };
+    const result = { pharmacy_meds_updated: 0, prescriber_links_removed: 0, prescriber_links_added: 0 };
 
     if (session.agentbase_client_id) {
       const clientId = session.agentbase_client_id;
@@ -118,6 +123,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const { error } = await ab.from('client_providers').delete().eq('id', l.id).is('verified_at', null);
             if (!error) result.prescriber_links_removed += 1;
           }
+        }
+      }
+
+      // Each photo was looked up on its own, and one bottle often prints
+      // only part of the name ("Edwards FNP"). Now that the whole visit is
+      // in, merge every reading by last name and look each person up
+      // again — skipping anyone the client said isn't their doctor.
+      const declinedParsed = declined.map((d) => parsePrescriber(d)).filter((p): p is NonNullable<typeof p> => p != null);
+      const keep = readings.filter((r) => {
+        const p = parsePrescriber(r);
+        return p && !declinedParsed.some((d) => sameLast(d, p));
+      });
+      if (keep.length > 0) {
+        const { data: clientRow } = await ab.from('clients').select('state').eq('id', clientId).maybeSingle();
+        const providers = await planPrescribers(
+          ab,
+          clientId,
+          keep,
+          ((clientRow as { state?: string | null } | null)?.state ?? null),
+          { zip: ph?.zip ?? null },
+        );
+        if (providers.length > 0) {
+          const prov = await upsertProvidersForClient(ab, clientId, providers, { source: 'snap', verifiedAt: null });
+          result.prescriber_links_added = prov.links_inserted;
         }
       }
     } else {
