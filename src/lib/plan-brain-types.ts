@@ -563,6 +563,12 @@ export interface DrugCostCacheEntry {
   ndc: string;
   tier: number | null;
   full_cost: number | null;
+  // Post-deductible member cost for one 30-day fill as Medicare.gov priced
+  // it (the drug-specific MFP cost-share for IRA-negotiated drugs, which
+  // can differ from the plan's filed tier coinsurance). Fed to partDTimeline
+  // as a per-drug `initial` copay override so the shared-deductible / OOP-cap
+  // math reproduces Plan Finder. Absent/null on older cache rows.
+  initial_cost?: number | null;
   estimated_yearly_total: number | null;
   covered: boolean;
 }

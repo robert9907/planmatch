@@ -326,6 +326,11 @@ interface DrugInfo {
   confirmedUncovered: boolean;
   isInsulin: boolean;
   cacheOverride: number | null;
+  /** Post-deductible member cost for one fill from pm_drug_cost_cache
+   *  (initial_cost). When set, passed to partDTimeline as a per-drug
+   *  `initial` copay override so IRA-negotiated drugs price off their
+   *  real MFP cost-share instead of the plan's filed tier coinsurance. */
+  initialCostOverride?: number | null;
 }
 
 
@@ -376,6 +381,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
 
     let cacheOverride: number | null = null;
     let cachedFullCost: number | null = null;
+    let cachedInitialCost: number | null = null;
     let cachedTier: number | null = null;
     let cachedCovered: boolean | null = null;
     if (d.rxcui && args.cache && args.rxcuiToNdc) {
@@ -385,7 +391,21 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
         cachedTier = hit.tier;
         cachedCovered = hit.covered;
         cachedFullCost = hit.full_cost;
-        if (hit.estimated_yearly_total != null) {
+        cachedInitialCost = hit.initial_cost ?? null;
+        // estimated_yearly_total is the per-NDC yearly Medicare.gov returns
+        // *in the context of the ~29-drug scrape basket*, where the Part D
+        // deductible is pre-consumed by the other (cheaper) basket drugs.
+        // That allocation is wrong for a user's actual — usually smaller —
+        // drug list: Eliquis on H5302-022 scrapes at $277/yr basket-share
+        // but costs $931 standalone on a 2-drug list (C09 Gerald Banks).
+        // So prefer the basket-independent full_cost (negotiated 30-day
+        // price) through partDTimeline below, which re-applies THIS user's
+        // shared deductible + $2,400 OOP cap. Fall back to the pre-computed
+        // yearly only when no usable full_cost exists (older cache rows).
+        if (
+          (cachedFullCost == null || cachedFullCost <= 0) &&
+          hit.estimated_yearly_total != null
+        ) {
           const yearly = isInsulin
             ? Math.min(hit.estimated_yearly_total, INSULIN_MONTHLY_CAP * 12)
             : hit.estimated_yearly_total;
@@ -447,6 +467,11 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       confirmedUncovered: cachedCovered === false,
       isInsulin,
       cacheOverride: null,
+      // Only an authoritative cache initial_cost paired with a usable
+      // full_cost (gross) drives the per-drug timeline override; without
+      // a real gross price there's nothing to burn the deductible with.
+      initialCostOverride:
+        cachedInitialCost != null && retailMonthly > 0 ? cachedInitialCost : null,
     };
   });
 
@@ -517,6 +542,17 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       monthlyGrossCost: info.retailMonthly,
       fillsPerYear: 12,
       isInsulin: info.isInsulin,
+      // IRA-negotiated drugs: price the initial phase off the cache's
+      // real per-fill member cost, not the plan's filed tier coinsurance
+      // (which can be materially higher for selected drugs). Deductible
+      // phase intentionally left to the full-gross fallback.
+      ...(info.initialCostOverride != null
+        ? {
+            costShareOverride: {
+              initial: { type: 'copay' as const, amount: info.initialCostOverride },
+            },
+          }
+        : {}),
     });
   });
 
