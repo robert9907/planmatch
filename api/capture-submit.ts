@@ -20,6 +20,7 @@ import { resolveSnapRxcui } from './_lib/snapRxcui.js';
 import { daysSupply, nextRefillDate, quantityText } from './_lib/snapRefill.js';
 import { lookupTier } from './_lib/snapTier.js';
 import { mergeParts, parsePrescriber, resolveParts, sameLast, type PrescriberName } from './_lib/snapPrescriber.js';
+import { matchPharmacy, resolvePharmacyId } from './_lib/snapPharmacy.js';
 
 export const config = {
   api: {
@@ -103,6 +104,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       | undefined;
     let medsWritten = 0;
     let providersWritten = 0;
+
+    // The label's pharmacy → NPPES match → AgentBase providers directory.
+    // Written onto each med as pharmacy_id (fills a blank only) and handed
+    // back to the phone for the "Is this your pharmacy?" check.
+    await enrichPharmacies(extracted);
     if (session.agentbase_client_id && extracted.length > 0) {
       try {
         const { meds, providers } = mapExtractedToUpsertInputs(extracted);
@@ -227,11 +233,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // the same bottle (only ever once: a multi-photo read never asks).
     const meds = extracted.filter((e) => e.type === 'medication');
     const bottleCount = meds.length;
-    const needsMore =
-      images.length === 1 &&
-      bottleCount === 1 &&
-      meds[0].type === 'medication' &&
-      (meds[0].quantity == null || meds[0].last_filled == null);
+    // Two photos per bottle: the front label, then the barcode side —
+    // most pharmacies print the dispensed quantity under the barcode, so
+    // a single bottle read from one photo always asks for the second.
+    const needsMore = images.length === 1 && bottleCount === 1 && meds[0].type === 'medication';
     const readable = extracted.some((e) => e.type !== 'unknown');
 
     sendJson(res, 200, {
@@ -245,6 +250,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         needs_more: needsMore,
         readable,
       },
+      // For the "Is this your pharmacy / doctor?" check at the end.
+      snap: snapSummary(extracted),
     });
   } catch (err) {
     serverError(res, err);
@@ -286,6 +293,7 @@ function mapExtractedToUpsertInputs(items: ExtractedItem[]): {
         quantity: quantityText(it.quantity),
         refill_days: days != null ? String(days) : null,
         refill_date: nextRefillDate(it.last_filled, days),
+        pharmacy_id: it.pharmacy_id ?? null,
       });
     } else if (it.type === 'provider' && it.provider_name) {
       providers.push({
@@ -440,4 +448,56 @@ async function planPrescribers(
     }
   }
   return out;
+}
+
+// ─── Pharmacy + prescriber summary for the confirm step ─────────────
+
+const pharmacyCache = new Map<string, Awaited<ReturnType<typeof matchPharmacy>>>();
+
+async function enrichPharmacies(items: ExtractedItem[]): Promise<void> {
+  for (const it of items) {
+    if (it.type !== 'medication' || !it.pharmacy_name) continue;
+    const key = [it.pharmacy_name, it.pharmacy_phone, it.pharmacy_zip].join('|').toLowerCase();
+    let match = pharmacyCache.get(key);
+    if (match === undefined) {
+      match = await matchPharmacy({
+        name: it.pharmacy_name,
+        phone: it.pharmacy_phone,
+        city: it.pharmacy_city ?? null,
+        state: it.pharmacy_state ?? null,
+        zip: it.pharmacy_zip ?? null,
+      }).catch(() => null);
+      pharmacyCache.set(key, match);
+    }
+    if (!match) continue;
+    it.pharmacy_npi = match.npi;
+    it.pharmacy_address = [match.address1, match.city, match.state].filter(Boolean).join(', ') || null;
+    try {
+      it.pharmacy_id = await resolvePharmacyId(agentbaseSupabase(), match);
+    } catch {
+      it.pharmacy_id = null;
+    }
+  }
+}
+
+function snapSummary(items: ExtractedItem[]) {
+  const meds = items.filter((e): e is Extract<ExtractedItem, { type: 'medication' }> => e.type === 'medication');
+  return {
+    med_names: meds.map((m) => m.drug_name).filter(Boolean),
+    pharmacy: meds.find((m) => m.pharmacy_name)
+      ? (() => {
+          const m = meds.find((x) => x.pharmacy_name)!;
+          return {
+            name: m.pharmacy_name,
+            npi: m.pharmacy_npi ?? null,
+            address: m.pharmacy_address ?? null,
+            phone: m.pharmacy_phone ?? null,
+            city: m.pharmacy_city ?? null,
+            state: m.pharmacy_state ?? null,
+            zip: m.pharmacy_zip ?? null,
+          };
+        })()
+      : null,
+    prescribers: meds.map((m) => m.prescribing_physician).filter((p): p is string => Boolean(p && p.trim())),
+  };
 }

@@ -104,6 +104,9 @@ export async function buildAgentV3SyncInput(args: BuildArgs): Promise<SyncInput 
     form: m.form ?? null,
     frequency: m.frequency ?? null,
     refill_days: null,
+    // Bottle-scan facts (Snap Link) — fill-only on the CRM row.
+    quantity: m.quantity ?? null,
+    pharmacy_id: m.pharmacyId ?? null,
     tier_on_recommended_plan: null,
     monthly_cost: null,
   }));

@@ -1,4 +1,5 @@
 import type {
+  PharmacyChoice,
   CaptureItem,
   CapturePollResponse,
   CaptureStartResponse,
@@ -51,6 +52,44 @@ export function submitCapture(input: {
   images?: { image_base64: string; mime_type: string }[];
 }): Promise<CaptureSubmitResponse> {
   return postJson('/api/capture-submit', input);
+}
+
+export function confirmCapture(input: {
+  token: string;
+  med_names: string[];
+  pharmacy: PharmacyChoice | null;
+  declined_prescribers: string[];
+}): Promise<{ ok: true }> {
+  return postJson('/api/capture-confirm', input);
+}
+
+// Pharmacies for the "Change" picker — the shared Plan Match NPPES lookup.
+const PHARMACY_MATCH_URL = 'https://planmatch.generationhealth.me/api/pharmacy-match';
+
+export interface PharmacyCandidate {
+  npi: string;
+  name: string;
+  address1: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  phone: string | null;
+  mailOrder: boolean;
+}
+
+export async function searchPharmacies(opts: { q?: string; zip?: string; state?: string | null }): Promise<PharmacyCandidate[]> {
+  const p = new URLSearchParams({ mode: 'list' });
+  if (opts.q && opts.q.trim().length >= 2) p.set('q', opts.q.trim());
+  else if (opts.zip) p.set('zip', opts.zip);
+  if (opts.state) p.set('state', opts.state);
+  try {
+    const r = await fetch(`${PHARMACY_MATCH_URL}?${p.toString()}`);
+    if (!r.ok) return [];
+    const body = (await r.json()) as { candidates?: PharmacyCandidate[] };
+    return Array.isArray(body.candidates) ? body.candidates : [];
+  } catch {
+    return [];
+  }
 }
 
 export async function fileToBase64(file: File): Promise<{ base64: string; mimeType: string }> {

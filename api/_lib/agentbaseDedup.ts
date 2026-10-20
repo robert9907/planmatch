@@ -28,6 +28,8 @@ export interface IncomingMedication {
   quantity?: string | null;
   /** Next refill date, YYYY-MM-DD. */
   refill_date?: string | null;
+  /** AgentBase providers.id of the dispensing pharmacy (bottle scan). */
+  pharmacy_id?: number | null;
   tier_on_recommended_plan?: number | null;
 }
 
@@ -57,6 +59,9 @@ export interface ProviderUpsertSummary {
   directory_reused: number;
   links_inserted: number;
   links_skipped_dup: number;
+  /** Not linked: AgentBase's client_providers_require_npi guard
+   *  refuses a doctor with no verified NPI. Expected, not a failure. */
+  links_need_npi: number;
   failed: number;
 }
 
@@ -115,7 +120,7 @@ export async function upsertMedicationsForClient(
   // Fields the helper is authorized to write on client_medications.
   // Snap-on-verified rows only allow the subset whose existing value
   // is null (see MED_MATCH branch below).
-  const MED_WRITE_COLS = ['name', 'dose', 'form', 'frequency', 'rxcui', 'refill_days', 'tier', 'quantity', 'refill_date'] as const;
+  const MED_WRITE_COLS = ['name', 'dose', 'form', 'frequency', 'rxcui', 'refill_days', 'tier', 'quantity', 'refill_date', 'pharmacy_id'] as const;
   const MED_SELECT = `id, verified_at, ${MED_WRITE_COLS.join(', ')}`;
   type ExistingMed = {
     id: number;
@@ -131,6 +136,9 @@ export async function upsertMedicationsForClient(
           .select(MED_SELECT)
           .eq('client_id', clientId)
           .eq('rxcui', m.rxcui)
+          // A med the broker deleted is not a match — matching it
+          // "updated" an invisible row and the scan vanished.
+          .is('deleted_at', null)
           .limit(1)
           .maybeSingle();
         if (error) throw error;
@@ -142,6 +150,7 @@ export async function upsertMedicationsForClient(
           .select(MED_SELECT)
           .eq('client_id', clientId)
           .ilike('name', m.name)
+          .is('deleted_at', null)
           .limit(1)
           .maybeSingle();
         if (error) throw error;
@@ -169,6 +178,7 @@ export async function upsertMedicationsForClient(
         tier: tierNum,
         quantity: m.quantity ?? null,
         refill_date: m.refill_date ?? null,
+        pharmacy_id: m.pharmacy_id ?? null,
       };
 
       if (existing) {
@@ -189,7 +199,10 @@ export async function upsertMedicationsForClient(
           // quantity / refill_date only ever fill in — a caller that
           // doesn't know them (the quoting flow, a label without a QTY)
           // must not blank what the broker already has.
-          if (v == null && (col === 'quantity' || col === 'refill_date')) continue;
+          if (v == null && (col === 'quantity' || col === 'refill_date' || col === 'pharmacy_id')) continue;
+          // A label's pharmacy only fills a blank — the broker's (or the
+          // client's confirmed) pharmacy on file always wins.
+          if (col === 'pharmacy_id' && existing.pharmacy_id != null) continue;
           if (snapProtect) {
             if (v != null && existing[col] == null) patch[col] = v;
           } else {
@@ -221,7 +234,31 @@ export async function upsertMedicationsForClient(
         if (!insErr) {
           summary.inserted += 1;
         } else if (insErr.code === '23505') {
-          summary.skipped_dup += 1;
+          // The per-client unique name index also covers deleted rows.
+          // If the collision is a med the broker deleted, a fresh scan
+          // or pick of it means it's current again: bring that row back
+          // carrying the new values (stale ones from before the delete
+          // don't survive) instead of silently dropping the scan.
+          const { data: gone, error: goneErr } = await sb
+            .from('client_medications')
+            .select('id')
+            .eq('client_id', clientId)
+            .ilike('name', String(insertRow.name ?? ''))
+            .not('deleted_at', 'is', null)
+            .limit(1)
+            .maybeSingle();
+          if (goneErr) throw goneErr;
+          if (gone) {
+            const { error: revErr } = await sb
+              .from('client_medications')
+              .update({ ...insertRow, deleted_at: null })
+              .eq('id', (gone as { id: number }).id)
+              .not('deleted_at', 'is', null);
+            if (revErr) throw revErr;
+            summary.inserted += 1;
+          } else {
+            summary.skipped_dup += 1;
+          }
         } else {
           throw insErr;
         }
@@ -254,6 +291,7 @@ export async function upsertProvidersForClient(
     directory_reused: 0,
     links_inserted: 0,
     links_skipped_dup: 0,
+    links_need_npi: 0,
     failed: 0,
   };
 
@@ -440,6 +478,11 @@ export async function upsertProvidersForClient(
       summary.links_inserted += 1;
     } else if (insLinkErr.code === '23505') {
       summary.links_skipped_dup += 1;
+    } else if (insLinkErr.code === '23514' && /NPI/i.test(insLinkErr.message ?? '')) {
+      summary.links_need_npi += 1;
+      console.warn('[agentbaseDedup] link skipped — provider has no NPI', {
+        client_id: clientId, provider_id: providerId,
+      });
     } else {
       summary.failed += 1;
       console.error('[agentbaseDedup] link insert failed', {

@@ -50,6 +50,19 @@ export interface ExtractedMedication {
   prescribing_physician: string | null;
   pharmacy_name: string | null;
   pharmacy_phone: string | null;
+  /** Pharmacy place as printed — sharpens the NPPES match. */
+  pharmacy_city?: string | null;
+  pharmacy_state?: string | null;
+  pharmacy_zip?: string | null;
+  /** Server-added: the label's pharmacy matched to NPPES and filed in
+   *  AgentBase's providers directory (pharmacy_id = providers.id). */
+  pharmacy_npi?: string | null;
+  pharmacy_id?: number | null;
+  pharmacy_address?: string | null;
+  /** Client answered "Is this your pharmacy?" on the Snap Link page. */
+  pharmacy_confirmed?: boolean;
+  /** Client said "Not my doctor" for this label's prescriber. */
+  prescriber_declined?: boolean;
   refills_remaining: number | string | null;
   last_filled: string | null;
   /** QTY printed on the label. Optional: rows written before it existed lack it. */

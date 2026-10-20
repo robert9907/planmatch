@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ExtractedItem } from '@/types/capture';
-import { fileToJpegBase64, submitCapture } from '@/lib/captureApi';
+import type { ExtractedItem, PharmacyChoice, SnapPharmacyRead } from '@/types/capture';
+import {
+  confirmCapture,
+  fileToJpegBase64,
+  searchPharmacies,
+  submitCapture,
+  type PharmacyCandidate,
+} from '@/lib/captureApi';
 
 // The Snap Link page. Built for a 67-year-old on an old phone: one
 // instruction per screen, big type, big buttons, no jargon ("label",
@@ -15,6 +21,8 @@ type Step =
   | 'many' // several bottles in one photo → one at a time
   | 'blurry' // nothing readable → try again
   | 'failed' // didn't send (signal) → try again
+  | 'confirm' // is this your pharmacy? is this your doctor?
+  | 'pick-pharmacy' // a different pharmacy
   | 'card-ask' // last thing: Medicare card?
   | 'card-got'
   | 'finish';
@@ -35,6 +43,14 @@ export function CaptureApp() {
   const [savedCount, setSavedCount] = useState(0);
   const [cardDone, setCardDone] = useState(false);
   const [failMessage, setFailMessage] = useState<string>('');
+  // Collected across the visit for the pharmacy / doctor check at the end.
+  const [medNames, setMedNames] = useState<string[]>([]);
+  const [pharmacyRead, setPharmacyRead] = useState<SnapPharmacyRead | null>(null);
+  const [prescribers, setPrescribers] = useState<string[]>([]);
+  const [pharmacyAnswer, setPharmacyAnswer] = useState<'ask' | 'yes' | 'changed'>('ask');
+  const [chosenPharmacy, setChosenPharmacy] = useState<PharmacyChoice | null>(null);
+  const [doctorAnswers, setDoctorAnswers] = useState<Record<string, 'yes' | 'no'>>({});
+  const [confirmSending, setConfirmSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraFor = useRef<CameraFor>('bottle');
   // The first photo of a bottle is held in memory (never stored) in case
@@ -139,6 +155,27 @@ export function CaptureApp() {
             },
       );
       pending.current = null;
+      if (resp.snap) {
+        const snap = resp.snap;
+        if (snap.med_names.length) {
+          setMedNames((prev) => Array.from(new Set([...prev, ...snap.med_names])));
+        }
+        if (snap.pharmacy?.name) {
+          setPharmacyRead((prev) => (!prev || (!prev.npi && snap.pharmacy?.npi) ? snap.pharmacy : prev));
+        }
+        if (snap.prescribers.length) {
+          setPrescribers((prev) => {
+            const seen = new Set(prev.map((x) => lastName(x)));
+            const add = snap.prescribers.filter((x) => {
+              const k = lastName(x);
+              if (!k || seen.has(k)) return false;
+              seen.add(k);
+              return true;
+            });
+            return add.length ? [...prev, ...add] : prev;
+          });
+        }
+      }
       const g = resp.guidance;
       const readable = g ? g.readable : resp.extracted.some((x) => x.type !== 'unknown');
 
@@ -201,8 +238,46 @@ export function CaptureApp() {
 
   function allDone() {
     firstPhoto.current = null;
+    if ((pharmacyRead?.name || prescribers.length > 0) && pharmacyAnswer === 'ask') {
+      setStep('confirm');
+      return;
+    }
     setStep(cardDone ? 'finish' : 'card-ask');
   }
+
+  async function sendConfirm() {
+    setConfirmSending(true);
+    const pharmacy: PharmacyChoice | null =
+      pharmacyAnswer === 'changed'
+        ? chosenPharmacy
+        : pharmacyAnswer === 'yes' && pharmacyRead?.name
+        ? {
+            npi: pharmacyRead.npi,
+            name: titleCase(pharmacyRead.name),
+            city: pharmacyRead.city,
+            state: pharmacyRead.state,
+            zip: pharmacyRead.zip,
+            phone: pharmacyRead.phone,
+          }
+        : null;
+    try {
+      await confirmCapture({
+        token: token!,
+        med_names: medNames,
+        pharmacy,
+        declined_prescribers: prescribers.filter((p) => doctorAnswers[p] === 'no'),
+      });
+    } catch {
+      // The bottles are already saved; a missed answer is not worth
+      // stranding the client on an error screen.
+    } finally {
+      setConfirmSending(false);
+      setStep(cardDone ? 'finish' : 'card-ask');
+    }
+  }
+
+  const doctorsAnswered = prescribers.every((p) => doctorAnswers[p]);
+  const pharmacyAnswered = !pharmacyRead?.name || pharmacyAnswer !== 'ask';
 
   return (
     <Shell>
@@ -247,13 +322,14 @@ export function CaptureApp() {
 
       {step === 'more' && (
         <div>
-          <h1 style={h1}>Almost done</h1>
+          <h1 style={h1}>Now turn it to the barcode</h1>
           {label && <p style={big}>{label}</p>}
           <p style={para}>
-            Turn the bottle a little and take one more picture of the <strong>same bottle</strong>.
+            Turn the <strong>same bottle</strong> around to the side with the barcode and take one more picture.
+            The number under the barcode tells us how many pills you get.
           </p>
           <TurnBottle />
-          <BigButton onClick={() => openCamera('more')}>Take one more picture</BigButton>
+          <BigButton onClick={() => openCamera('more')}>Take a picture of the barcode side</BigButton>
           <QuietButton
             onClick={() => {
               firstPhoto.current = null;
@@ -304,6 +380,65 @@ export function CaptureApp() {
         </div>
       )}
 
+      {step === 'confirm' && (
+        <div>
+          <h1 style={h1}>Just two quick checks</h1>
+          {pharmacyRead?.name && (
+            <div style={card}>
+              <p style={eyebrow}>IS THIS YOUR PHARMACY?</p>
+              <p style={big}>
+                {pharmacyAnswer === 'changed' && chosenPharmacy ? chosenPharmacy.name : titleCase(pharmacyRead.name)}
+              </p>
+              {pharmacyAnswer !== 'changed' && pharmacyRead.address && <p style={para}>{pharmacyRead.address}</p>}
+              {pharmacyAnswer === 'changed' && chosenPharmacy?.address1 && (
+                <p style={para}>{[chosenPharmacy.address1, chosenPharmacy.city].filter(Boolean).join(', ')}</p>
+              )}
+              {pharmacyRead.npi && pharmacyAnswer === 'ask' && <p style={tag}>✓ Found on the national pharmacy list</p>}
+              {pharmacyAnswer === 'ask' ? (
+                <>
+                  <BigButton onClick={() => setPharmacyAnswer('yes')}>Yes, that's my pharmacy</BigButton>
+                  <SecondButton onClick={() => setStep('pick-pharmacy')}>No, it's a different one</SecondButton>
+                </>
+              ) : (
+                <SavedRow onClick={() => setPharmacyAnswer('ask')}>Pharmacy saved</SavedRow>
+              )}
+            </div>
+          )}
+          {prescribers.map((p) => (
+            <div key={p} style={card}>
+              <p style={eyebrow}>IS THIS YOUR DOCTOR?</p>
+              <p style={big}>{prettyPerson(p)}</p>
+              {!doctorAnswers[p] ? (
+                <>
+                  <BigButton onClick={() => setDoctorAnswers((a) => ({ ...a, [p]: 'yes' }))}>Yes, that's my doctor</BigButton>
+                  <SecondButton onClick={() => setDoctorAnswers((a) => ({ ...a, [p]: 'no' }))}>Not my doctor</SecondButton>
+                </>
+              ) : (
+                <SavedRow onClick={() => setDoctorAnswers((a) => { const n = { ...a }; delete n[p]; return n; })}>
+                  {doctorAnswers[p] === 'yes' ? 'Doctor saved' : "Got it — we'll leave them off"}
+                </SavedRow>
+              )}
+            </div>
+          ))}
+          {pharmacyAnswered && doctorsAnswered && (
+            <BigButton onClick={() => void sendConfirm()}>{confirmSending ? 'Saving…' : 'Continue'}</BigButton>
+          )}
+        </div>
+      )}
+
+      {step === 'pick-pharmacy' && (
+        <PharmacyPicker
+          state={pharmacyRead?.state ?? null}
+          zip={pharmacyRead?.zip ?? null}
+          onBack={() => setStep('confirm')}
+          onPick={(ph) => {
+            setChosenPharmacy(ph);
+            setPharmacyAnswer('changed');
+            setStep('confirm');
+          }}
+        />
+      )}
+
       {step === 'card-ask' && (
         <div>
           <h1 style={h1}>One last thing</h1>
@@ -327,10 +462,153 @@ export function CaptureApp() {
           <Check />
           <h1 style={h1}>{firstName ? `Thank you, ${firstName}!` : 'Thank you!'}</h1>
           <p style={para}>Rob has everything you sent. You can close this page now.</p>
+          <Lockdown />
           <QuietButton onClick={() => setStep('start')}>I have another bottle</QuietButton>
         </Center>
       )}
     </Shell>
+  );
+}
+
+// "KOMBIZ KLEIN DO" → "Kombiz Klein, DO" — the credential stays capitals.
+const CREDENTIALS = new Set(['MD', 'DO', 'NP', 'PA', 'PA-C', 'FNP', 'APRN', 'DNP', 'DPM', 'OD', 'DDS', 'DMD', 'RN', 'PHD', 'PHARMD']);
+function prettyPerson(raw: string): string {
+  const words = raw.replace(/,/g, ' ').split(/\s+/).filter(Boolean);
+  const creds: string[] = [];
+  while (words.length > 1 && CREDENTIALS.has(words[words.length - 1].replace(/\./g, '').toUpperCase())) {
+    creds.unshift(words.pop()!.replace(/\./g, '').toUpperCase());
+  }
+  const name = words
+    .map((w) => (w.length <= 2 && w.endsWith('.') ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+    .join(' ');
+  return creds.length ? `${name}, ${creds.join(', ')}` : name;
+}
+
+function lastName(raw: string): string {
+  const parts = raw
+    .replace(/^(dr\.?|doctor)\s+/i, '')
+    .replace(/,.*$/, '')
+    .split(/\s+/)
+    .filter(Boolean);
+  return (parts[parts.length - 1] ?? '').toLowerCase().replace(/[^a-z]/g, '');
+}
+
+function PharmacyPicker({
+  state,
+  zip,
+  onBack,
+  onPick,
+}: {
+  state: string | null;
+  zip: string | null;
+  onBack: () => void;
+  onPick: (p: PharmacyChoice) => void;
+}) {
+  const [q, setQ] = useState('');
+  const [rows, setRows] = useState<PharmacyCandidate[]>([]);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    const text = q.trim();
+    if (text.length < 2 && !zip) return;
+    let cancelled = false;
+    setLoading(true);
+    const t = window.setTimeout(() => {
+      void searchPharmacies({ q: text, zip: zip ?? undefined, state }).then((r) => {
+        if (!cancelled) {
+          setRows(r.slice(0, 8));
+          setLoading(false);
+        }
+      });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [q, zip, state]);
+  return (
+    <div>
+      <QuietButton onClick={onBack}>← Back</QuietButton>
+      <h1 style={h1}>Where do you get your medicine?</h1>
+      <label style={{ display: 'block' }}>
+        <span style={para}>Type the name of your pharmacy</span>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          autoComplete="off"
+          style={{
+            display: 'block',
+            width: '100%',
+            minHeight: 60,
+            marginTop: 8,
+            padding: '12px 16px',
+            fontSize: 22,
+            borderRadius: 14,
+            border: '2px solid var(--w3)',
+            boxSizing: 'border-box',
+          }}
+        />
+      </label>
+      {loading && <p style={para}>Looking…</p>}
+      {rows.map((r) => (
+        <SecondButton
+          key={r.npi}
+          onClick={() =>
+            onPick({ npi: r.npi, name: r.name, address1: r.address1, city: r.city, state: r.state, zip: r.zip, phone: r.phone, mailOrder: r.mailOrder })
+          }
+        >
+          {r.name}
+          {r.address1 ? <span style={{ display: 'block', fontSize: 18, fontWeight: 400 }}>{[r.address1, r.city].filter(Boolean).join(', ')}</span> : null}
+        </SecondButton>
+      ))}
+      <SecondButton onClick={() => onPick({ name: 'Mail order pharmacy', mailOrder: true })}>
+        I get my medicine by mail
+      </SecondButton>
+    </div>
+  );
+}
+
+function SavedRow({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{ ...secondBtn, background: 'var(--sm)', border: 'none', color: 'var(--ink)' }}
+    >
+      ✓ {children}
+    </button>
+  );
+}
+
+// The phone → lock picture: the client's information is locked down.
+function Lockdown() {
+  return (
+    <div
+      style={{
+        marginTop: 22,
+        borderRadius: 18,
+        background: '#0E2C55',
+        color: '#fff',
+        padding: 18,
+        textAlign: 'left',
+      }}
+    >
+      <style>{'@keyframes snapflow{0%{transform:translateX(-30px);opacity:0}30%{opacity:1}100%{transform:translateX(170px);opacity:0}}'}</style>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <span aria-hidden style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(255,255,255,0.14)', display: 'grid', placeItems: 'center' }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="7" y="2" width="10" height="20" rx="2.5" /><path d="M11 18h2" /></svg>
+        </span>
+        <span style={{ flex: 1, position: 'relative', height: 4, margin: '0 12px', borderRadius: 2, background: 'rgba(255,255,255,0.15)', overflow: 'hidden' }}>
+          <span style={{ position: 'absolute', top: 0, left: 0, width: 30, height: 4, borderRadius: 2, background: '#00CEA1', animation: 'snapflow 1.8s ease-in-out infinite' }} />
+        </span>
+        <span aria-hidden style={{ width: 44, height: 44, borderRadius: 12, background: '#C8A24A', display: 'grid', placeItems: 'center' }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0E2C55" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 018 0v4" /></svg>
+        </span>
+      </div>
+      <p style={{ fontSize: 21, fontWeight: 700, margin: '14px 0 6px' }}>Your information is on lockdown</p>
+      <p style={{ fontSize: 18, lineHeight: 1.4, color: '#C9D6EA', margin: 0 }}>
+        Encrypted the moment it leaves your phone, and only shared with Rob.
+      </p>
+    </div>
   );
 }
 
@@ -592,6 +870,30 @@ const secondBtn: React.CSSProperties = {
   background: 'var(--wh)',
   color: 'var(--ink)',
   border: '2px solid var(--w3)',
+};
+
+const card: React.CSSProperties = {
+  background: 'var(--wh)',
+  border: '2px solid var(--w2)',
+  borderRadius: 18,
+  padding: 18,
+  margin: '0 0 18px',
+};
+
+const eyebrow: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  color: 'var(--i2)',
+  margin: '0 0 6px',
+};
+
+const tag: React.CSSProperties = {
+  display: 'inline-block',
+  fontSize: 17,
+  fontWeight: 600,
+  color: 'var(--sage)',
+  margin: '0 0 4px',
 };
 
 const quietBtn: React.CSSProperties = {
