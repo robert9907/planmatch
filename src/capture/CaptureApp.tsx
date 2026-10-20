@@ -47,6 +47,9 @@ export function CaptureApp() {
   const [medNames, setMedNames] = useState<string[]>([]);
   const [pharmacyRead, setPharmacyRead] = useState<SnapPharmacyRead | null>(null);
   const [prescribers, setPrescribers] = useState<string[]>([]);
+  // Every bottle's prescriber as printed — the server merges them by last
+  // name at the end of the visit (one bottle often prints only part).
+  const [prescriberReadings, setPrescriberReadings] = useState<string[]>([]);
   const [pharmacyAnswer, setPharmacyAnswer] = useState<'ask' | 'yes' | 'changed'>('ask');
   const [chosenPharmacy, setChosenPharmacy] = useState<PharmacyChoice | null>(null);
   const [doctorAnswers, setDoctorAnswers] = useState<Record<string, 'yes' | 'no'>>({});
@@ -164,6 +167,7 @@ export function CaptureApp() {
           setPharmacyRead((prev) => (!prev || (!prev.npi && snap.pharmacy?.npi) ? snap.pharmacy : prev));
         }
         if (snap.prescribers.length) {
+          setPrescriberReadings((prev) => Array.from(new Set([...prev, ...snap.prescribers])));
           setPrescribers((prev) => {
             const seen = new Set(prev.map((x) => lastName(x)));
             const add = snap.prescribers.filter((x) => {
@@ -266,6 +270,7 @@ export function CaptureApp() {
         med_names: medNames,
         pharmacy,
         declined_prescribers: prescribers.filter((p) => doctorAnswers[p] === 'no'),
+        prescriber_readings: prescriberReadings,
       });
     } catch {
       // The bottles are already saved; a missed answer is not worth

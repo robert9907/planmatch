@@ -20,6 +20,8 @@ export interface PrescriberName {
   /** Cleaned display name as printed (no "Dr.", credentials kept separately). */
   display: string;
   first: string | null;
+  /** Middle name or initial when the label prints one ("Robin Arlene Edwards"). */
+  middle?: string | null;
   last: string | null;
   credential: string | null;
 }
@@ -29,6 +31,7 @@ export function parsePrescriber(raw: string | null | undefined): PrescriberName 
   if (!s) return null;
   s = s.replace(/^(dr\.?|doctor)\s+/i, '');
   let first: string | null = null;
+  let middle: string | null = null;
   let last: string | null = null;
   let credential: string | null = null;
 
@@ -46,17 +49,20 @@ export function parsePrescriber(raw: string | null | undefined): PrescriberName 
   if (/^[^,\s]+\s*,/.test(s) && nameParts.length >= 2) {
     last = nameParts[0];
     first = nameParts[1];
+    if (nameParts.length >= 3) middle = nameParts[2];
   } else if (nameParts.length >= 2) {
     first = nameParts[0];
     last = nameParts[nameParts.length - 1];
+    if (nameParts.length >= 3) middle = nameParts[1];
   } else {
     last = nameParts[0];
   }
   const tc = (w: string | null) => (w ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w);
   first = tc(first);
+  middle = tc(middle);
   last = tc(last);
   const display = [first, last].filter(Boolean).join(' ') + (credential ? `, ${credential}` : '');
-  return { display, first, last, credential };
+  return { display, first, middle, last, credential };
 }
 
 export interface ResolvedPrescriber {
@@ -69,7 +75,7 @@ export interface ResolvedPrescriber {
 
 interface NppesResult {
   number: string;
-  basic?: { first_name?: string; last_name?: string; credential?: string };
+  basic?: { first_name?: string; middle_name?: string; last_name?: string; credential?: string };
   taxonomies?: { desc?: string; primary?: boolean }[];
   addresses?: {
     address_purpose?: string;
@@ -88,7 +94,7 @@ async function nppes(first: string, last: string, state: string | null): Promise
     first_name: first,
     last_name: last,
     use_first_name_alias: 'false',
-    limit: '5',
+    limit: '50',
   });
   if (state) params.set('state', state);
   const ctl = new AbortController();
@@ -140,9 +146,28 @@ function credentialFits(credential: string | null, taxonomy: string): boolean {
   return true;
 }
 
+/** Where the label says the client fills — the pharmacy's ZIP. A
+ *  prescriber is almost always near the pharmacy, so it breaks a tie
+ *  between same-name people in the state. */
+export interface PrescriberNear {
+  zip?: string | null;
+}
+
+function locationZip(r: NppesResult): string {
+  const loc = r.addresses?.find((a) => a.address_purpose === 'LOCATION') ?? r.addresses?.[0];
+  return (loc?.postal_code ?? '').slice(0, 5);
+}
+
 /** Resolve a parsed prescriber. Exactly one NPPES match in the client's
- *  state (after the credential tie-break) → full record; else name only. */
-export async function resolveParts(p: PrescriberName, clientState: string | null): Promise<ResolvedPrescriber> {
+ *  state → full record; else name only. Same-name people are told apart,
+ *  in order, by the label's credential, its middle name / initial, and the
+ *  pharmacy's area (same 3-digit ZIP). Each tie-break is used only if it
+ *  narrows to exactly one person; it never guesses between two. */
+export async function resolveParts(
+  p: PrescriberName,
+  clientState: string | null,
+  near?: PrescriberNear,
+): Promise<ResolvedPrescriber> {
   const nameOnly: ResolvedPrescriber = { name: p.display, npi: null, specialty: null, phone: null, address: null };
   const state = (clientState ?? '').trim().toUpperCase().slice(0, 2) || null;
   if (!p.first || !p.last || !state) return nameOnly;
@@ -150,6 +175,9 @@ export async function resolveParts(p: PrescriberName, clientState: string | null
   // Labels print both "First Last" and "Last First" — try both orders.
   const [a, b] = await Promise.all([nppes(p.first, p.last, state), nppes(p.last, p.first, state)]);
   if (a === null || b === null) return nameOnly;
+  // A full page means more people than we saw — a tie-break could pick
+  // from a partial list, so don't trust it.
+  if (a.length >= 50 || b.length >= 50) return nameOnly;
   const byNpi = new Map<string, NppesResult>();
   for (const r of [...a, ...b]) if (r?.number) byNpi.set(r.number, r);
   let hits = [...byNpi.values()];
@@ -158,6 +186,19 @@ export async function resolveParts(p: PrescriberName, clientState: string | null
       const tax = r.taxonomies?.find((t) => t.primary) ?? r.taxonomies?.[0];
       return credentialFits(p.credential, tax?.desc ?? '');
     });
+  }
+  const mid = (p.middle ?? '').replace(/\./g, '').toLowerCase();
+  if (hits.length > 1 && mid) {
+    const byMiddle = hits.filter((r) => {
+      const m = (r.basic?.middle_name ?? '').replace(/\./g, '').toLowerCase();
+      return m && (mid.length === 1 ? m.startsWith(mid) : m === mid);
+    });
+    if (byMiddle.length >= 1) hits = byMiddle;
+  }
+  const zip3 = (near?.zip ?? '').replace(/\D/g, '').slice(0, 3);
+  if (hits.length > 1 && zip3.length === 3) {
+    const byArea = hits.filter((r) => locationZip(r).startsWith(zip3));
+    if (byArea.length >= 1) hits = byArea;
   }
   if (hits.length !== 1) return nameOnly;
   return toResolved(hits[0]);
@@ -175,10 +216,11 @@ export async function resolvePrescriber(
  *  bottle, "Edwards F.N.P." on another): keep whichever parts each has. */
 export function mergeParts(a: PrescriberName, b: PrescriberName): PrescriberName {
   const first = a.first ?? b.first;
+  const middle = a.middle ?? b.middle ?? null;
   const last = a.last ?? b.last;
   const credential = a.credential ?? b.credential;
   const display = [first, last].filter(Boolean).join(' ') + (credential ? `, ${credential}` : '');
-  return { display, first, last, credential };
+  return { display, first, middle, last, credential };
 }
 
 export const sameLast = (a: PrescriberName, b: PrescriberName) =>
