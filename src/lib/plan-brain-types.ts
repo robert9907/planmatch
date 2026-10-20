@@ -602,6 +602,10 @@ export interface BrainInputs {
   // back to a tier-based heuristic.
   drugCostCacheByPlanKey?: Map<string, Map<string, DrugCostCacheEntry>>;
   rxcuiToNdc?: Map<string, string>;
+  /** Per-plan IRA-selected-drug cost-share by tier (preferred pharmacy),
+   *  keyed `${contract}-${plan}-${segment}`. Used only in the MFP fallback
+   *  (IRA drug with no cache row). From pbp_mrx_tier (mrx_tier_ira_rspfd_*). */
+  iraCostShareByPlanKey?: Map<string, Map<number, { type: 'copay' | 'coinsurance'; amount: number }>>;
   // Optional: per-plan provider coverage, keyed on
   // `${contract_id}-${plan_id}` (no segment, mirrors formulary keying).
   providerNetworkByPlanKey?: Map<string, Map<string, ProviderNetworkCacheEntry>>;

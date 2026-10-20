@@ -98,6 +98,7 @@ export interface DrugCostCacheRow {
   tier: number | null;
   full_cost: number | null;
   covered: boolean | null;
+  initial_cost: number | null;
   estimated_yearly_total: number | null;
 }
 export interface FormularyRow {
@@ -136,6 +137,9 @@ export interface PlanBrainData {
   formularyPublished?: boolean;
   benefitsByPlan: Record<string, BenefitRow[]>;
   drugCostCache: Record<string, Record<string, DrugCostCacheRow>>;
+  /** Per-plan IRA-selected-drug cost-share by tier (preferred pharmacy),
+   *  keyed by triple id. Coinsurance as a 0..1 fraction. MFP-fallback only. */
+  iraCostShareByPlan?: Record<string, Record<string, { type: 'copay' | 'coinsurance'; amount: number }>>;
   formularyByContractPlan: Record<string, Record<string, FormularyRow>>;
   ndcByRxcui: Record<string, NdcRow>;
   networkByPlan: Record<string, Record<string, ProviderNetworkRow>>;
@@ -675,45 +679,51 @@ export function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
   }
 
   // ── drugCostCacheByPlanKey (triple-id → ndc → entry) ──────────────
-  const drugCostCacheByPlanKey = new Map<
-    string,
-    Map<
-      string,
-      {
-        ndc: string;
-        tier: number | null;
-        full_cost: number | null;
-        estimated_yearly_total: number | null;
-        covered: boolean;
-      }
-    >
-  >();
+  type CacheEntry = {
+    ndc: string;
+    tier: number | null;
+    full_cost: number | null;
+    // Real per-fill member cost from pm_drug_cost_cache — drives the brain's
+    // IRA-drug pricing (partDTimeline initial-phase override). Dropping it
+    // here silently reverts the cost-engine fix on the agent surface.
+    initial_cost: number | null;
+    estimated_yearly_total: number | null;
+    covered: boolean;
+  };
+  const drugCostCacheByPlanKey = new Map<string, Map<string, CacheEntry>>();
   for (const [tripleId, ndcMap] of Object.entries(data.drugCostCache)) {
     const parts = tripleId.split('-');
     const contract = parts[0] ?? '';
     const planNum = parts[1] ?? '';
     const segRaw = (parts[2] ?? '0').replace(/^0+/, '') || '0';
     const key = `${contract}-${planNum}-${segRaw}`;
-    const inner = new Map<
-      string,
-      {
-        ndc: string;
-        tier: number | null;
-        full_cost: number | null;
-        estimated_yearly_total: number | null;
-        covered: boolean;
-      }
-    >();
+    const inner = new Map<string, CacheEntry>();
     for (const [ndc, row] of Object.entries(ndcMap)) {
       inner.set(ndc, {
         ndc,
         tier: row.tier,
         full_cost: row.full_cost,
+        initial_cost: row.initial_cost,
         estimated_yearly_total: row.estimated_yearly_total,
         covered: row.covered === true,
       });
     }
     drugCostCacheByPlanKey.set(key, inner);
+  }
+
+  // ── iraCostShareByPlanKey (triple-id → tier → IRA cost-share) ──────
+  // Feeds the MFP fallback: an IRA-negotiated drug with no cache row is
+  // priced at its Maximum Fair Price with the plan's IRA cost-share.
+  const iraCostShareByPlanKey = new Map<
+    string,
+    Map<number, { type: 'copay' | 'coinsurance'; amount: number }>
+  >();
+  for (const [tripleId, tierMap] of Object.entries(data.iraCostShareByPlan ?? {})) {
+    const parts = tripleId.split('-');
+    const key = `${parts[0] ?? ''}-${parts[1] ?? ''}-${(parts[2] ?? '0').replace(/^0+/, '') || '0'}`;
+    const inner = new Map<number, { type: 'copay' | 'coinsurance'; amount: number }>();
+    for (const [tier, share] of Object.entries(tierMap)) inner.set(Number(tier), share);
+    iraCostShareByPlanKey.set(key, inner);
   }
 
   // ── rxcuiToNdc bridge ─────────────────────────────────────────────
@@ -783,6 +793,7 @@ export function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
     county: county || null,
     drugCostCacheByPlanKey,
     rxcuiToNdc,
+    iraCostShareByPlanKey,
     providerNetworkByPlanKey,
     mapdContractPlanIds,
     weightsOverride: args.weightsOverride ?? undefined,

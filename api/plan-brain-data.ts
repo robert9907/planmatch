@@ -444,6 +444,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       (drugCostCache[matched] ||= {})[r.ndc] = r;
     }
 
+    // iraCostShareByPlan — the plan's IRA-selected-drug cost-share per tier
+    // (preferred pharmacy) from pbp_mrx_tier. Feeds the brain's MFP fallback:
+    // an IRA-negotiated drug with no cache row is priced at its Maximum Fair
+    // Price with this cost-share instead of the retail notional. Keyed like
+    // drugCostCache (matched triple). Prefer coinsurance; else the IRA copay.
+    const iraCostShareByPlan: Record<
+      string,
+      Record<string, { type: 'copay' | 'coinsurance'; amount: number }>
+    > = {};
+    {
+      const contracts = [...new Set(triples.map((t) => t.contract))];
+      const { data: iraRows } = contracts.length
+        ? await sb
+            .from('pbp_mrx_tier')
+            .select(
+              'pbp_a_hnumber, pbp_a_plan_identifier, segment_id, mrx_tier_id, mrx_tier_ira_rspfd_coins_1m, mrx_tier_ira_rspfd_copay_1m',
+            )
+            .in('pbp_a_hnumber', contracts)
+        : { data: [] };
+      for (const r of (iraRows ?? []) as Array<{
+        pbp_a_hnumber: string;
+        pbp_a_plan_identifier: string;
+        segment_id: string | null;
+        mrx_tier_id: string | number;
+        mrx_tier_ira_rspfd_coins_1m: number | null;
+        mrx_tier_ira_rspfd_copay_1m: number | null;
+      }>) {
+        const tier = Number(r.mrx_tier_id);
+        if (!Number.isFinite(tier)) continue;
+        const share =
+          r.mrx_tier_ira_rspfd_coins_1m != null && r.mrx_tier_ira_rspfd_coins_1m > 0
+            ? { type: 'coinsurance' as const, amount: r.mrx_tier_ira_rspfd_coins_1m / 100 }
+            : r.mrx_tier_ira_rspfd_copay_1m != null
+              ? { type: 'copay' as const, amount: r.mrx_tier_ira_rspfd_copay_1m }
+              : null;
+        if (!share) continue;
+        const segNorm = (r.segment_id ?? '0').replace(/^0+/, '') || '0';
+        const triple = `${r.pbp_a_hnumber}-${r.pbp_a_plan_identifier}-${segNorm === '0' ? '000' : segNorm.padStart(3, '0')}`;
+        const matched = matchToRequestedTriple(triple, ids) ?? triple;
+        const slot = (iraCostShareByPlan[matched] ||= {});
+        if (!(tier in slot)) slot[tier] = share;
+      }
+    }
+
     // Index formulary rows back to the ORIGINAL input rxcuis. Each
     // returned row may satisfy multiple inputs (e.g. atorvastatin
     // 80 MG SCD 617318 expansion includes 617310, and a different med
@@ -663,6 +707,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       formularyPublished,
       benefitsByPlan,
       drugCostCache,
+      iraCostShareByPlan,
       formularyByContractPlan,
       ndcByRxcui,
       networkByPlan,
