@@ -6,6 +6,7 @@ import type { FormularyCoverage } from './brain-foreign-types';
 import type { Utilization, UtilizationProfile, UserProfile, DrugCostCacheEntry } from './plan-brain-types';
 import type { PlanBenefits } from '../types/plans';
 import { dominantConditionProfile, type ConditionProfile, type ConditionSupply } from './condition-profiles';
+import { mfpForDrug } from './mfp-prices';
 import {
   partDTimeline,
   type DrugFill,
@@ -314,6 +315,12 @@ interface EstimateBundleInput {
   drugDeductible: number | null;
   cache?: Map<string, DrugCostCacheEntry>;
   rxcuiToNdc?: Map<string, string>;
+  /** Plan's IRA-selected-drug cost-share per formulary tier (preferred
+   *  pharmacy), coinsurance as a 0..1 fraction. Used ONLY in the MFP
+   *  fallback (IRA-negotiated drug with no cache row): price at the CMS
+   *  Maximum Fair Price with this cost-share instead of the retail notional.
+   *  From pbp_mrx_tier (mrx_tier_ira_rspfd_*). */
+  iraCostShareByTier?: Map<number, { type: 'copay' | 'coinsurance'; amount: number }>;
 }
 
 interface DrugInfo {
@@ -331,6 +338,10 @@ interface DrugInfo {
    *  `initial` copay override so IRA-negotiated drugs price off their
    *  real MFP cost-share instead of the plan's filed tier coinsurance. */
   initialCostOverride?: number | null;
+  /** MFP-fallback cost-share: when a drug has no cache row but is priced
+   *  at its CMS Maximum Fair Price, this is the plan's IRA cost-share for
+   *  the tier (preferred pharmacy). null when not MFP-priced. */
+  mfpCostShare?: { type: 'copay' | 'coinsurance'; amount: number } | null;
 }
 
 
@@ -445,10 +456,22 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       };
     }
 
+    // MFP fallback: no cache row, but the drug is an IRA-negotiated drug →
+    // price it at its CMS Maximum Fair Price (the negotiated ceiling) with
+    // the plan's IRA cost-share, instead of the retail notional. Lands within
+    // ~5% of Plan Finder vs ~+20% retail. The cache still wins when present.
+    const noCacheGross = !(cachedFullCost && cachedFullCost > 0);
+    const mfpGross = noCacheGross ? mfpForDrug(d.name, BUNDLE_PLAN_YEAR) : null;
     const retailMonthly =
       cachedFullCost && cachedFullCost > 0
         ? cachedFullCost
-        : NOTIONAL_TIER_FULL_COST[effectiveTier ?? 3] ?? NOTIONAL_TIER_FULL_COST[3];
+        : mfpGross ??
+          NOTIONAL_TIER_FULL_COST[effectiveTier ?? 3] ??
+          NOTIONAL_TIER_FULL_COST[3];
+    const mfpCostShare =
+      mfpGross != null && effectiveTier != null
+        ? args.iraCostShareByTier?.get(effectiveTier) ?? null
+        : null;
     const tierBenefit = benefitByCategory(args.benefits, `rx_tier_${effectiveTier}`);
     let postDeductibleMonthly = 0;
     if (tierBenefit?.copay != null) postDeductibleMonthly = tierBenefit.copay;
@@ -472,6 +495,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       // a real gross price there's nothing to burn the deductible with.
       initialCostOverride:
         cachedInitialCost != null && retailMonthly > 0 ? cachedInitialCost : null,
+      mfpCostShare,
     };
   });
 
@@ -542,16 +566,18 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       monthlyGrossCost: info.retailMonthly,
       fillsPerYear: 12,
       isInsulin: info.isInsulin,
-      // IRA-negotiated drugs: price the initial phase off the cache's
-      // real per-fill member cost, not the plan's filed tier coinsurance
-      // (which can be materially higher for selected drugs). Deductible
-      // phase intentionally left to the full-gross fallback.
+      // IRA-negotiated drugs: price the initial phase off the real
+      // cost-share, not the plan's filed tier coinsurance. Cache initial_cost
+      // (a copay) wins; otherwise the MFP-fallback IRA cost-share. Deductible
+      // phase intentionally left to the full-gross fallback either way.
       ...(info.initialCostOverride != null
         ? {
             costShareOverride: {
               initial: { type: 'copay' as const, amount: info.initialCostOverride },
             },
           }
+        : info.mfpCostShare != null
+        ? { costShareOverride: { initial: info.mfpCostShare } }
         : {}),
     });
   });
