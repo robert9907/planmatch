@@ -87,15 +87,21 @@ interface NppesResult {
   }[];
 }
 
-async function nppes(first: string, last: string, state: string | null): Promise<NppesResult[] | null> {
+async function nppes(
+  first: string,
+  last: string | null,
+  state: string | null,
+  postalPrefix?: string,
+): Promise<NppesResult[] | null> {
   const params = new URLSearchParams({
     version: '2.1',
     enumeration_type: 'NPI-1',
     first_name: first,
-    last_name: last,
     use_first_name_alias: 'false',
     limit: '50',
   });
+  if (last) params.set('last_name', last);
+  if (postalPrefix) params.set('postal_code', `${postalPrefix}*`);
   if (state) params.set('state', state);
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
@@ -181,6 +187,23 @@ export async function resolveParts(
   const byNpi = new Map<string, NppesResult>();
   for (const r of [...a, ...b]) if (r?.number) byNpi.set(r.number, r);
   let hits = [...byNpi.values()];
+
+  // Some labels print first + middle and drop the last name ("DR. ROBIN
+  // ARLENE"). Nobody by that first/last → look for that first name near the
+  // pharmacy whose MIDDLE name is the second word. Accepted only when that
+  // is exactly one person.
+  const zip3Near = (near?.zip ?? '').replace(/\D/g, '').slice(0, 3);
+  if (hits.length === 0 && !p.middle && zip3Near.length === 3) {
+    const pool = await nppes(p.first, null, state, zip3Near);
+    if (pool && pool.length < 50) {
+      const want = p.last.replace(/\./g, '').toLowerCase();
+      const byMiddle = pool.filter((r) => {
+        const m = (r.basic?.middle_name ?? '').replace(/\./g, '').toLowerCase();
+        return m && (want.length === 1 ? m.startsWith(want) : m === want);
+      });
+      if (byMiddle.length === 1) return toResolved(byMiddle[0]);
+    }
+  }
   if (hits.length > 1 && p.credential) {
     hits = hits.filter((r) => {
       const tax = r.taxonomies?.find((t) => t.primary) ?? r.taxonomies?.[0];
