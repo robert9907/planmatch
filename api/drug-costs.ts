@@ -309,13 +309,53 @@ function fetchDrugCostsShared(
   return p;
 }
 
+interface ContextLike<P> {
+  newPage(): Promise<P>;
+  close(): Promise<unknown>;
+}
+interface BrowserLike<P> {
+  newContext(opts?: Record<string, unknown>): Promise<ContextLike<P>>;
+}
+
+const STALE_BROWSER_RE = /has been closed|Target closed|browser has disconnected/i;
+
+/** Open a context + page on the shared browser. A warm instance's browser
+ *  can go stale between requests ("Target page, context or browser has been
+ *  closed"); relaunch once and retry rather than failing the request. */
+export async function openPageWithRelaunch<P>(
+  acquire: (fresh: boolean) => Promise<BrowserLike<P>>,
+): Promise<{ ctx: ContextLike<P>; page: P }> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const browser = await acquire(attempt > 0);
+    let ctx: ContextLike<P> | null = null;
+    try {
+      ctx = await browser.newContext({ userAgent: USER_AGENT, locale: 'en-US' });
+      const page = await ctx.newPage();
+      return { ctx, page };
+    } catch (err) {
+      await ctx?.close().catch(() => {});
+      if (attempt === 0 && STALE_BROWSER_RE.test((err as Error).message)) {
+        console.warn('[drug-costs] shared browser was stale — relaunching');
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('drug-costs: could not open a browser page');
+}
+
 async function fetchDrugCosts(
   body: DrugCostBody,
 ): Promise<{ source: 'live' | 'rate_limited'; costs: PlanDrugCost[] }> {
-  const browser = await getBrowser();
-  const ctx = await browser.newContext({ userAgent: USER_AGENT, locale: 'en-US' });
+  const { ctx, page } = await openPageWithRelaunch(async (fresh) => {
+    if (fresh) {
+      const old = browserPromise;
+      browserPromise = null;
+      await old?.then((b) => b.close()).catch(() => {});
+    }
+    return getBrowser();
+  });
   try {
-    const page = await ctx.newPage();
 
     await page.goto(WARM_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     // Akamai's _abck sensor script runs async post-DOMContentLoaded.
