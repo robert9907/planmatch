@@ -96,6 +96,9 @@ export interface PlanDrugCost {
   segment_id: string;
   monthly_cost: number | null;
   annual_cost: number | null;
+  /** NDCs medicare.gov did not price for this plan even after alternates.
+   *  When non-empty, monthly/annual are null (the total would omit them). */
+  unpriced_ndcs?: string[];
 }
 
 export interface DrugCostResponse {
@@ -129,19 +132,27 @@ export async function resolveRxcuisToNdcs(
 export async function fetchDrugCosts(params: {
   plans: DrugCostPlanInput[];
   ndcs: string[];               // one representative NDC per prescription
+  /** Per prescription (aligned with `ndcs`): other NDCs for the same drug,
+   *  tried in order when medicare.gov doesn't recognize the first. */
+  alternates?: string[][];
   mode: PharmacyMode;
   /** Client's LIS tier. Omitted / undefined is treated as 'none' — the
    *  API receives LIS_NO_HELP and cache buckets remain separate from
    *  subsidized-client requests (api/drug-costs.ts:201 keys on lis). */
   lisTier?: LisTier;
 }): Promise<DrugCostResponse> {
-  const { plans, ndcs, mode, lisTier } = params;
+  const { plans, ndcs, alternates, mode, lisTier } = params;
   if (plans.length === 0 || ndcs.length === 0) {
     return { source: 'skipped', costs: [] };
   }
   const frequency = mode === 'mail' ? 'FREQUENCY_90_DAYS' : 'FREQUENCY_30_DAYS';
   const quantity = mode === 'mail' ? '90' : '30';
-  const prescriptions = ndcs.map((ndc) => ({ ndc, frequency, quantity }));
+  const prescriptions = ndcs.map((ndc, i) => ({
+    ndc,
+    frequency,
+    quantity,
+    alternates: alternates?.[i] ?? [],
+  }));
   const res = await fetch('/api/drug-costs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

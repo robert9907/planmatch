@@ -61,6 +61,48 @@ interface PrescriptionInput {
   ndc: string;
   quantity: string;
   frequency: 'FREQUENCY_30_DAYS' | 'FREQUENCY_90_DAYS';
+  /** Other NDCs for the same drug, in order. medicare.gov silently drops an
+   *  NDC it doesn't recognize; the next alternate is tried in its place. */
+  alternates?: string[];
+}
+
+/** One prescription's current NDC plus the alternates not yet tried. */
+export interface NdcSlot {
+  ndc: string;
+  alternates: string[];
+}
+
+const MAX_ALTERNATES = 5;
+const MAX_NDC_ROUNDS = 3;
+
+/** Swap every slot whose NDC medicare.gov did not price for its next
+ *  alternate. Returns true when anything changed (another round is worth it). */
+export function swapUnpricedNdcs(slots: NdcSlot[], priced: Set<string>): boolean {
+  let changed = false;
+  for (const slot of slots) {
+    if (priced.has(slot.ndc)) continue;
+    const next = slot.alternates.shift();
+    if (next) {
+      slot.ndc = next;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/** NDCs medicare.gov priced anywhere in a response (recognition is a drug-
+ *  database property, not plan-specific). */
+function pricedNdcs(data: Record<string, unknown>): Set<string> {
+  const out = new Set<string>();
+  const plans = (Array.isArray(data.plans) ? data.plans : []) as Array<Record<string, unknown>>;
+  for (const p of plans) {
+    for (const c of (Array.isArray(p.costs) ? p.costs : []) as Array<Record<string, unknown>>) {
+      for (const d of (Array.isArray(c.drug_costs) ? c.drug_costs : []) as Array<Record<string, unknown>>) {
+        if (typeof d.ndc === 'string') out.add(d.ndc);
+      }
+    }
+  }
+  return out;
 }
 interface DrugCostBody {
   plans: PlanInput[];
@@ -77,6 +119,9 @@ interface PlanDrugCost {
   monthly_cost: number | null;
   annual_cost: number | null;
   deductible: unknown;
+  /** Requested NDCs this plan's response did not price. Non-empty means the
+   *  total would leave those drugs out, so annual/monthly are null. */
+  unpriced_ndcs: string[];
   raw: unknown;
 }
 
@@ -98,6 +143,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }));
   const prescriptions: PrescriptionInput[] = raw.prescriptions.map((p) => ({
     ndc: String((p as PrescriptionInput).ndc ?? ''),
+    alternates: (Array.isArray((p as PrescriptionInput).alternates)
+      ? ((p as PrescriptionInput).alternates as unknown[]).map(String)
+      : []
+    )
+      .filter((n, i, arr) => /^\d{11}$/.test(n) && n !== String((p as PrescriptionInput).ndc ?? '') && arr.indexOf(n) === i)
+      .slice(0, MAX_ALTERNATES),
     quantity: String((p as PrescriptionInput).quantity ?? '30'),
     frequency:
       (p as PrescriptionInput).frequency === 'FREQUENCY_90_DAYS'
@@ -117,7 +168,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   };
   // v2: parser rewrite (2026-10-20). Entries cached by the old parser hold
   // blank plan ids / null totals; versioning the key skips them.
-  const cacheKey = sha256(`v2::${canonicalize(body)}`);
+  const cacheKey = sha256(`v3::${canonicalize(body)}`);
   const sb = supabase();
 
   // ─── Cache hit? ────────────────────────────────────────────────────
@@ -196,7 +247,7 @@ function canonicalize(body: DrugCostBody): string {
     .sort()
     .join('|');
   const rx = [...body.prescriptions]
-    .map((p) => `${p.ndc}:${p.quantity}:${p.frequency}`)
+    .map((p) => `${p.ndc}:${p.quantity}:${p.frequency}:${(p.alternates ?? []).join('+')}`)
     .sort()
     .join(',');
   const npis = [...body.npis].sort().join(',');
@@ -271,10 +322,22 @@ async function fetchDrugCosts(
     // Real-browser sensors complete within ~3s — 6s is a safety buffer.
     await page.waitForTimeout(COOKIE_WARM_MS);
 
+    // Working NDC per prescription. Recognition is plan-independent, so once
+    // a batch settles which NDC medicare.gov prices, later batches reuse it.
+    const slots: NdcSlot[] = body.prescriptions.map((p) => ({
+      ndc: p.ndc,
+      alternates: [...(p.alternates ?? [])],
+    }));
+    const requested = () => slots.map((slot) => slot.ndc);
+
     const post = async (plans: PlanInput[]) => {
       const reqBody = {
         npis: body.npis,
-        prescriptions: body.prescriptions,
+        prescriptions: slots.map((slot, k) => ({
+          ndc: slot.ndc,
+          quantity: body.prescriptions[k].quantity,
+          frequency: body.prescriptions[k].frequency,
+        })),
         lis: body.lis,
         full_year: false,
         retailOnly: body.retail_only,
@@ -328,7 +391,7 @@ async function fetchDrugCosts(
           const one = await post([plan]);
           if (one.status() === 429) { anyRateLimited = true; break; }
           if (!one.ok()) continue;
-          costs.push(...extractCosts((await one.json()) as Record<string, unknown>, body.retail_only));
+          costs.push(...extractCosts((await one.json()) as Record<string, unknown>, body.retail_only, requested()));
         }
         if (anyRateLimited) break;
         continue;
@@ -337,8 +400,20 @@ async function fetchDrugCosts(
         const preview = (await resp.text()).slice(0, 300);
         throw new Error(`medicare.gov ${status}: ${preview}`);
       }
-      const data = (await resp.json()) as Record<string, unknown>;
-      costs.push(...extractCosts(data, body.retail_only));
+      let data = (await resp.json()) as Record<string, unknown>;
+      // medicare.gov silently drops an NDC it doesn't recognize and totals
+      // the rest. Swap each unpriced NDC for its next alternate and re-ask,
+      // so the drug is counted instead of quietly left out.
+      for (let round = 0; round < MAX_NDC_ROUNDS; round++) {
+        if (!swapUnpricedNdcs(slots, pricedNdcs(data))) break;
+        console.info(`[drug-costs] unpriced NDC — retrying with alternates: ${requested().join(',')}`);
+        const retry = await post(batches[i]);
+        if (retry.status() === 429) { anyRateLimited = true; break; }
+        if (!retry.ok()) break;
+        data = (await retry.json()) as Record<string, unknown>;
+      }
+      costs.push(...extractCosts(data, body.retail_only, requested()));
+      if (anyRateLimited) break;
     }
 
     return {
@@ -360,17 +435,25 @@ async function fetchDrugCosts(
 // keys. Surface the raw plan object too so the frontend can introspect
 // if a future call shows a new shape.
 
-export function extractCosts(data: Record<string, unknown>, retailOnly: boolean): PlanDrugCost[] {
+export function extractCosts(
+  data: Record<string, unknown>,
+  retailOnly: boolean,
+  requestedNdcs: string[] = [],
+): PlanDrugCost[] {
   const list =
     (Array.isArray(data.plans) && (data.plans as unknown[])) ||
     (Array.isArray(data.plan_costs) && (data.plan_costs as unknown[])) ||
     [];
-  return list.map((p) => extractPlanCost(p as Record<string, unknown>, retailOnly));
+  return list.map((p) => extractPlanCost(p as Record<string, unknown>, retailOnly, requestedNdcs));
 }
 
 const numeric = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
-function extractPlanCost(p: Record<string, unknown>, retailOnly: boolean): PlanDrugCost {
+function extractPlanCost(
+  p: Record<string, unknown>,
+  retailOnly: boolean,
+  requestedNdcs: string[],
+): PlanDrugCost {
   // Current (2027) shape: { plan: {contract_id, plan_id, segment_id},
   // costs: [{ mail_order, drug_costs[], estimated_yearly_total,
   // phase_information: {deductible_amount} }], lowest_retail_total,
@@ -411,9 +494,19 @@ function extractPlanCost(p: Record<string, unknown>, retailOnly: boolean): PlanD
     numeric(yearCosts?.avg_monthly_cost) ??
     numeric(yearCosts?.monthly_cost) ??
     null;
-  const annual = totals.length > 0 ? Math.min(...totals) : legacyAnnual;
-  const mo = annual != null ? annual / 12 : legacyMonthly;
-  const yr = annual ?? (legacyMonthly != null ? legacyMonthly * 12 : null);
+  // Every requested drug must be priced for this plan; otherwise the total
+  // silently leaves drugs out, so it is unknown rather than too low.
+  const pricedHere = new Set<string>();
+  for (const c of pharmacyCosts) {
+    for (const d of (Array.isArray(c.drug_costs) ? c.drug_costs : []) as Array<Record<string, unknown>>) {
+      if (typeof d.ndc === 'string') pricedHere.add(d.ndc);
+    }
+  }
+  const unpriced = requestedNdcs.filter((n) => !pricedHere.has(n));
+
+  const annual = unpriced.length > 0 ? null : totals.length > 0 ? Math.min(...totals) : legacyAnnual;
+  const mo = unpriced.length > 0 ? null : annual != null ? annual / 12 : legacyMonthly;
+  const yr = unpriced.length > 0 ? null : annual ?? (legacyMonthly != null ? legacyMonthly * 12 : null);
 
   const phase = pharmacyCosts[0]?.phase_information as Record<string, unknown> | undefined;
   return {
@@ -423,6 +516,7 @@ function extractPlanCost(p: Record<string, unknown>, retailOnly: boolean): PlanD
     monthly_cost: mo,
     annual_cost: yr,
     deductible: numeric(phase?.deductible_amount) ?? p.deductible ?? yearCosts?.deductible ?? null,
+    unpriced_ndcs: unpriced,
     raw: p,
   };
 }
