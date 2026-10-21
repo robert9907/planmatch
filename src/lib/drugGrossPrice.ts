@@ -41,6 +41,12 @@ export interface QuantityInput {
 /** Units the client uses in 30 days. Tablets/capsules come from the sig
  *  (doses/day × 30); other forms keep the filed package quantity. */
 export function monthlyQuantity(m: QuantityInput): number {
+  // medicare.gov's quantity is an int32 — a fractional package (42.5 g of
+  // cream) fails the whole request. Round up to whole units.
+  return Math.max(1, Math.ceil(rawMonthlyQuantity(m)));
+}
+
+function rawMonthlyQuantity(m: QuantityInput): number {
   const label = `${m.name ?? ''} ${m.form ?? ''}`;
   const qty = Number.parseFloat(String(m.quantity ?? '').replace(/[^\d.]/g, ''));
   const hasQty = Number.isFinite(qty) && qty > 0;
