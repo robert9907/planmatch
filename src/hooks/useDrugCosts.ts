@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Plan } from '@/types/plans';
 import type { Medication } from '@/types/session';
 import type { LisTier } from '@/lib/dual-eligible';
+import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear';
 import {
   fetchDrugCosts,
   resolveRxcuisToNdcs,
@@ -95,7 +96,11 @@ export function useDrugCosts(
           setState({ ...INITIAL, source: 'no_ndcs' });
           return;
         }
-        const contractYear = String(new Date().getFullYear());
+        // The plans' catalog year (PY2027 after the Oct 15 cutover, or the
+        // ?plan_year= override) — NOT the calendar year. Sending 2026 for a
+        // 2027 catalog made medicare.gov 404 "Plan not found" on every plan
+        // that is new for 2027, failing the whole drug-cost call.
+        const contractYear = String(resolvePlanCatalogYear());
         const planInputs = finalists.map((p) => ({
           contract_id: p.contract_id,
           plan_id: p.plan_number,

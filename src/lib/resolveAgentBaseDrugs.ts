@@ -216,9 +216,12 @@ function displayFromPicked(d: RxNormDrug): string {
  *  drugs no longer wait behind each other. Each searchDrug fetch is
  *  wrapped with a 5s timeout inside library-client.ts, so a stuck query
  *  yields a null-rxcui result instead of freezing the entire hydration. */
+type DrugSearchFn = (query: string, signal?: AbortSignal) => Promise<RxNormDrug[]>;
+
 async function resolveOne(
   input: AgentBaseDrugInput,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  search: DrugSearchFn,
 ): Promise<ResolvedAgentBaseDrug> {
   const originalName = input.name;
   const inputDose = input.dose?.trim() || null;
@@ -267,17 +270,26 @@ async function resolveOne(
   }
   for (const v of variants) push(v);
 
+  // When the CRM row carries a strength, only a pick AT that strength is
+  // accepted. A query whose results hold no matching strength (e.g.
+  // "oxycodone 5 MG" → only OxyContin 10/15/20 MG ER) is skipped and the
+  // next variant is tried; if none match, the row stays unresolved and
+  // shows the yellow "tap to re-search" warning. Falling back to the
+  // nearest wrong-strength row put "Oxycontin 10 MG" on a client who takes
+  // oxycodone 5 mg (Janet Moses, 2026-10-20) — a different drug at double
+  // the dose, priced against the wrong formulary rows.
+  const requireStrength = parseStrengthMg(strength) != null;
   let best: PickedDrug | null = null;
   try {
     for (const q of queries) {
       if (signal?.aborted) break;
-      const results = await searchDrug(q, signal);
+      const results = await search(q, signal);
       if (results.length === 0) continue;
       const picked = pickBestAgent(results, strength, originalName);
-      if (picked?.drug.rxcui) {
-        best = picked;
-        break;
-      }
+      if (!picked?.drug.rxcui) continue;
+      if (requireStrength && !picked.strengthMatched) continue;
+      best = picked;
+      break;
     }
   } catch {
     // Transient error (fetch failure, 5s library timeout, abort) —
@@ -323,6 +335,8 @@ async function resolveOne(
 export async function resolveAgentBaseDrugs(
   inputs: AgentBaseDrugInput[],
   signal?: AbortSignal,
+  /** Injectable for tests; production always uses the library search. */
+  search: DrugSearchFn = searchDrug,
 ): Promise<ResolvedAgentBaseDrug[]> {
-  return Promise.all(inputs.map((input) => resolveOne(input, signal)));
+  return Promise.all(inputs.map((input) => resolveOne(input, signal, search)));
 }
