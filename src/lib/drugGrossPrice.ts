@@ -145,6 +145,7 @@ export async function fetchGrossMonthlyPrices(
         quantity: String(monthlyQuantity(d)),
         frequency: 'FREQUENCY_30_DAYS',
         alternates: ndcsByRxcui[d.rxcui].slice(1, 6),
+        rxcui: d.rxcui,
       })),
       retail_only: false,
       lis: 'LIS_NO_HELP',

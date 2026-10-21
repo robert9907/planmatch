@@ -32,6 +32,7 @@ import { supabase } from './_lib/supabase.js';
 export const config = { maxDuration: 60 };
 
 const ENDPOINT = 'https://www.medicare.gov/api/v1/data/plan-compare/drugs/cost';
+const FORMS_BASE = 'https://www.medicare.gov/api/v1/data/plan-compare/drugs';
 const WARM_URL = 'https://www.medicare.gov/plan-compare/';
 const COOKIE_WARM_MS = 6_000;
 const USER_AGENT =
@@ -64,12 +65,56 @@ interface PrescriptionInput {
   /** Other NDCs for the same drug, in order. medicare.gov silently drops an
    *  NDC it doesn't recognize; the next alternate is tried in its place. */
   alternates?: string[];
+  /** RxNorm id of the exact drug. Used to ask medicare.gov which NDC it
+   *  prices for this drug, so a repackager code it doesn't know is never
+   *  the one we send. */
+  rxcui?: string;
 }
 
-/** One prescription's current NDC plus the alternates not yet tried. */
+/** One prescription's current NDC plus the alternates not yet tried.
+ *  `origin` is the NDC the caller sent; responses are reported back under it. */
 export interface NdcSlot {
   ndc: string;
   alternates: string[];
+  origin?: string;
+}
+
+interface FormsResponse {
+  dosages?: Array<{ rxcui?: string; packages?: Array<{ ndc?: string }> }>;
+}
+
+/** The NDC medicare.gov itself uses for this exact rxcui (first package of
+ *  the matching dosage). Null when it lists no dosage for that rxcui — never
+ *  borrowed from a different strength. */
+export function medicareNdcFor(forms: FormsResponse | null | undefined, rxcui: string): string | null {
+  const dosage = forms?.dosages?.find((d) => String(d.rxcui ?? '') === rxcui);
+  const ndc = dosage?.packages?.map((p) => String(p.ndc ?? '')).find((n) => /^\d{11}$/.test(n));
+  return ndc ?? null;
+}
+
+/** Make medicare.gov's NDC the one sent; the caller's NDC becomes the first
+ *  alternate. */
+export function preferNdc(slot: NdcSlot, ndc: string): void {
+  if (slot.ndc === ndc) return;
+  slot.alternates = [slot.ndc, ...slot.alternates.filter((n) => n !== ndc)];
+  slot.ndc = ndc;
+}
+
+/** Report every drug cost under the NDC the caller sent, so callers that key
+ *  results by their own NDCs still find a drug priced under a substitute. */
+export function restoreOriginNdcs(data: Record<string, unknown>, slots: NdcSlot[]): void {
+  const back = new Map<string, string>();
+  for (const s of slots) if (s.origin && s.origin !== s.ndc) back.set(s.ndc, s.origin);
+  if (back.size === 0) return;
+  const plans = (Array.isArray(data.plans) ? data.plans : []) as Array<Record<string, unknown>>;
+  for (const p of plans) {
+    for (const c of (Array.isArray(p.costs) ? p.costs : []) as Array<Record<string, unknown>>) {
+      for (const d of (Array.isArray(c.drug_costs) ? c.drug_costs : []) as Array<Record<string, unknown>>) {
+        const o = typeof d.ndc === 'string' ? back.get(d.ndc) : undefined;
+        if (o) d.ndc = o;
+      }
+    }
+  }
 }
 
 const MAX_ALTERNATES = 5;
@@ -151,6 +196,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .slice(0, MAX_ALTERNATES),
     // medicare.gov's quantity is an int32; a fractional value (42.5 g of
     // cream) fails the whole request, so round up.
+    rxcui: /^\d+$/.test(String((p as PrescriptionInput).rxcui ?? '')) ? String((p as PrescriptionInput).rxcui) : undefined,
     quantity: String(Math.max(1, Math.ceil(Number((p as PrescriptionInput).quantity ?? '30') || 30))),
     frequency:
       (p as PrescriptionInput).frequency === 'FREQUENCY_90_DAYS'
@@ -170,7 +216,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   };
   // v2: parser rewrite (2026-10-20). Entries cached by the old parser hold
   // blank plan ids / null totals; versioning the key skips them.
-  const cacheKey = sha256(`v3::${canonicalize(body)}`);
+  // v4: medicare.gov's own NDC per rxcui (2026-10-21).
+  const cacheKey = sha256(`v4::${canonicalize(body)}`);
   const sb = supabase();
 
   // ─── Cache hit? ────────────────────────────────────────────────────
@@ -249,7 +296,7 @@ function canonicalize(body: DrugCostBody): string {
     .sort()
     .join('|');
   const rx = [...body.prescriptions]
-    .map((p) => `${p.ndc}:${p.quantity}:${p.frequency}:${(p.alternates ?? []).join('+')}`)
+    .map((p) => `${p.ndc}:${p.quantity}:${p.frequency}:${(p.alternates ?? []).join('+')}:${p.rxcui ?? ''}`)
     .sort()
     .join(',');
   const npis = [...body.npis].sort().join(',');
@@ -320,8 +367,40 @@ async function fetchDrugCosts(
     const slots: NdcSlot[] = body.prescriptions.map((p) => ({
       ndc: p.ndc,
       alternates: [...(p.alternates ?? [])],
+      origin: p.ndc,
     }));
-    const requested = () => slots.map((slot) => slot.ndc);
+    const origins = () => slots.map((slot) => slot.origin ?? slot.ndc);
+
+    const apiHeaders = {
+      Accept: 'application/json',
+      Referer: 'https://www.medicare.gov/plan-compare/',
+      'fe-ver': FE_VER,
+      'sec-fetch-dest': 'empty',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-site': 'same-origin',
+    };
+
+    // Send the NDC medicare.gov itself lists for each rxcui. RxNorm's NDC
+    // list is mostly repackager codes medicare.gov doesn't recognize
+    // (hydrocodone-APAP 10-325: 313 codes, medicare.gov's is #50), so
+    // guessing from that list left common generics unpriced.
+    const year = body.plans[0]?.contract_year ?? String(new Date().getFullYear());
+    await Promise.all(
+      body.prescriptions.map(async (p, k) => {
+        if (!p.rxcui) return;
+        try {
+          const r = await page.request.get(
+            `${FORMS_BASE}/${encodeURIComponent(p.rxcui)}/forms?year=${encodeURIComponent(year)}`,
+            { headers: apiHeaders },
+          );
+          if (!r.ok()) return;
+          const ndc = medicareNdcFor((await r.json()) as FormsResponse, p.rxcui);
+          if (ndc) preferNdc(slots[k], ndc);
+        } catch {
+          // Lookup failure leaves the caller's NDCs in place.
+        }
+      }),
+    );
 
     const post = async (plans: PlanInput[]) => {
       const reqBody = {
@@ -384,7 +463,9 @@ async function fetchDrugCosts(
           const one = await post([plan]);
           if (one.status() === 429) { anyRateLimited = true; break; }
           if (!one.ok()) continue;
-          costs.push(...extractCosts((await one.json()) as Record<string, unknown>, retailOnly, requested()));
+          const oneData = (await one.json()) as Record<string, unknown>;
+          restoreOriginNdcs(oneData, slots);
+          costs.push(...extractCosts(oneData, retailOnly, origins()));
         }
         if (anyRateLimited) break;
         continue;
@@ -404,13 +485,14 @@ async function fetchDrugCosts(
         // the alternates. Only swap when some drugs priced and others didn't.
         if (priced.size === 0) break;
         if (!swapUnpricedNdcs(slots, priced)) break;
-        console.info(`[drug-costs] unpriced NDC — retrying with alternates: ${requested().join(',')}`);
+        console.info(`[drug-costs] unpriced NDC — retrying with alternates: ${slots.map((x) => x.ndc).join(',')}`);
         const retry = await post(batches[i]);
         if (retry.status() === 429) { anyRateLimited = true; break; }
         if (!retry.ok()) break;
         data = (await retry.json()) as Record<string, unknown>;
       }
-      costs.push(...extractCosts(data, retailOnly, requested()));
+      restoreOriginNdcs(data, slots);
+      costs.push(...extractCosts(data, retailOnly, origins()));
       if (anyRateLimited) break;
     }
 
