@@ -27,7 +27,25 @@ export interface DrugProfile {
   brandName: string | null;
   er: boolean;
   form: 'tablet' | 'capsule' | 'solution' | 'injection' | 'patch' | 'other' | null;
+  /** Non-systemic route of administration. null = oral / injected /
+   *  transdermal. undefined = the request's name is unknown, so route is
+   *  not enforced. A sibling never crosses a known route — see rule 1c. */
+  route?: DrugRoute | null;
   strengths: string[]; // normalized, e.g. ["600 MG"], ["50 MG/ML"]
+}
+
+export type DrugRoute = 'ophthalmic' | 'otic' | 'nasal' | 'inhaled' | 'vaginal' | 'rectal' | 'topical';
+
+export function parseDrugRoute(name: string | null | undefined): DrugRoute | null {
+  const l = (name ?? '').toLowerCase();
+  if (/ophthalmic|\beye drops?\b/.test(l)) return 'ophthalmic';
+  if (/\botic\b/.test(l)) return 'otic';
+  if (/\bnasal\b/.test(l)) return 'nasal';
+  if (/\binhaler\b|\binhalation\b|\bnebuliz/.test(l)) return 'inhaled';
+  if (/\bvaginal\b/.test(l)) return 'vaginal';
+  if (/\brectal\b|\bsuppository\b/.test(l)) return 'rectal';
+  if (/\btopical\b|\bointment\b|\bcream\b|\blotion\b|\bshampoo\b|\bfoam\b|\bgel\b/.test(l)) return 'topical';
+  return null;
 }
 
 export interface FormularyRowLike {
@@ -47,9 +65,15 @@ function normStrengths(name: string): string[] {
   const re = /(\d+(?:\.\d+)?)\s*(MG|MCG|ML|UNT|%)(\s*\/\s*ML)?/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(name)) !== null) {
-    const unit = m[2].toUpperCase();
+    let unit = m[2].toUpperCase();
+    let value = Number(m[1]);
+    // 50 MCG and 0.05 MG are the same strength — normalize MCG to MG.
+    if (unit === 'MCG') {
+      unit = 'MG';
+      value = Number((value / 1000).toPrecision(12));
+    }
     const perMl = m[3] ? '/ML' : '';
-    out.push(`${m[1]} ${unit}${perMl}`);
+    out.push(`${value} ${unit}${perMl}`);
   }
   return out;
 }
@@ -71,6 +95,7 @@ export function parseDrugProfile(name: string | null | undefined): DrugProfile {
     brandName: brandMatch ? brandMatch[1].trim().toLowerCase() : null,
     er: /extended release|extended-release|24 hr|12 hr|\ber\b|\bxr\b|\bsr\b|modified .*release|once-daily/i.test(n),
     form,
+    route: parseDrugRoute(n),
     strengths: normStrengths(n),
   };
 }
@@ -80,12 +105,16 @@ export function parseDrugProfile(name: string | null | undefined): DrugProfile {
 function scoreRow(orig: DrugProfile, rowName: string): { score: number; strengthHit: boolean; formHit: boolean } | null {
   const rp = parseDrugProfile(rowName);
   if (rp.combo && !orig.combo) return null; // rule 1 — never match a combo
+  // Rule 1c (Rob, 2026-10-20) — never cross route. An inhaler is not a nasal
+  // spray or an ointment; a tablet is not a cream. A plan that files the
+  // ingredient only in another route shows the requested drug NOT COVERED.
+  if (orig.route !== undefined && orig.route !== rp.route) return null;
   // Rule 1b (Rob, 2026-10-19) — brand exactness. A brand request must never
   // resolve to a DIFFERENT brand of the same molecule (Ozempic → never
   // Wegovy, NovoLog → never Fiasp). A plan that files only another brand /
   // the generic shows the requested brand NOT COVERED as entered — we do not
   // substitute. Exact rxcui still wins in pickBestFormularyRow before scoring.
-  // (Same-brand strength/form siblings are kept.) Only applies when we know
+  // (Same-brand form siblings at the SAME strength are kept — rule 1d.) Only applies when we know
   // the requested brand name; a generic request is unaffected.
   if (orig.brand) {
     if (!rp.brand) return null; // a generic row is not "that brand"
@@ -94,7 +123,12 @@ function scoreRow(orig: DrugProfile, rowName: string): { score: number; strength
   let score = 0;
   // Strength — the strongest discriminator (600 MG tablet vs 50 MG/ML solution).
   const strengthHit = orig.strengths.length === 0 || orig.strengths.every((s) => rp.strengths.includes(s));
-  if (strengthHit) score += 1000;
+  // Rule 1d (Rob, 2026-10-20) — a different strength is a different drug.
+  // When the request carries a strength, a sibling at another strength is
+  // excluded: the plan shows NOT COVERED rather than pricing the 220 mcg
+  // inhaler for someone on 50 mcg. Exact rxcui still wins before scoring.
+  if (!strengthHit) return null;
+  score += 1000;
   // Dose form.
   let formHit = false;
   if (orig.form) {

@@ -32,7 +32,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // instead of blowing up.
     if (!data) {
       res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300');
-      return sendJson(res, 200, { zip: zipRaw, county: null, state: null });
+      return sendJson(res, 200, { zip: zipRaw, county: null, state: null, counties: [] });
+    }
+
+    // Every county the ZIP touches (pm_zip_county_all). A ZIP can span
+    // several counties (30530 → Banks, Jackson, Madison, Franklin); the
+    // single `county` above is only the default. Callers keep a county the
+    // broker already set when it is one of these instead of overwriting it.
+    let counties: string[] = [data.county];
+    const all = await sb
+      .from('pm_zip_county_all')
+      .select('county, is_dominant')
+      .eq('zip', zipRaw);
+    if (!all.error && Array.isArray(all.data) && all.data.length > 0) {
+      const rows = all.data as Array<{ county: string; is_dominant: boolean | null }>;
+      counties = [
+        ...rows.filter((r) => r.is_dominant).map((r) => r.county),
+        ...rows.filter((r) => !r.is_dominant).map((r) => r.county),
+      ].filter((c, i, arr) => c && arr.indexOf(c) === i);
+      if (!counties.includes(data.county)) counties.unshift(data.county);
     }
 
     res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400');
@@ -40,6 +58,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       zip: zipRaw,
       county: data.county,
       state: data.state,
+      counties,
     });
   } catch (err) {
     return serverError(res, err);

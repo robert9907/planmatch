@@ -27,11 +27,12 @@ test('parseDrugProfile extracts the brand name', () => {
 });
 
 test('Ozempic request → never Wegovy (even when Wegovy is lower tier)', () => {
-  // Non-exact: user rxcui not on plan; plan files Wegovy (tier 2) + Ozempic (tier 3).
+  // Non-exact: user rxcui not on plan; plan files Wegovy (tier 2) + a
+  // different-strength Ozempic pen (tier 3). Neither is the drug as entered
+  // (Rob, 2026-10-20: a different strength is a different drug) → NOT COVERED,
+  // and above all never Wegovy.
   const pick = pickBestFormularyRow('0000000', ozempicProfile, [WEGOVY, OZEMPIC_OTHER]);
-  assert.ok(pick.row, 'an Ozempic row is matched');
-  assert.equal(pick.row!.rxcui, OZEMPIC_OTHER.rxcui);
-  assert.notEqual(pick.row!.rxcui, WEGOVY.rxcui);
+  assert.equal(pick.row, null);
 });
 
 test('Ozempic request, plan files ONLY Wegovy → NOT COVERED (never Wegovy)', () => {
@@ -60,8 +61,10 @@ test('exact rxcui still wins regardless of brand guard', () => {
   assert.equal(pick.row!.rxcui, OZEMPIC.rxcui);
 });
 
-test('same-brand strength sibling is still matched', () => {
-  // User wants Ozempic 0.68; plan files a different Ozempic strength only.
+test('same-brand DIFFERENT strength → NOT COVERED (Rob, 2026-10-20)', () => {
+  // User wants Ozempic 0.68 MG/ML; plan files only the 1.34 MG/ML pen.
+  // Superseded the 2026-10-19 "same-brand strength sibling is kept" behavior:
+  // a different strength is a different drug.
   const pick = pickBestFormularyRow('0000000', ozempicProfile, [OZEMPIC_OTHER]);
-  assert.equal(pick.row!.rxcui, OZEMPIC_OTHER.rxcui);
+  assert.equal(pick.row, null);
 });
