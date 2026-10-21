@@ -30,6 +30,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Plan } from '@/types/plans';
 import type { Client, Medication, Provider } from '@/types/session';
 import { runPlanBrain } from '@/lib/plan-brain';
+import { fetchGrossMonthlyPrices, monthlyQuantity } from '@/lib/drugGrossPrice';
 import { checkProviderNetwork } from '@/lib/library-client';
 import type {
   BrainInputs,
@@ -393,6 +394,10 @@ interface Args {
 
 interface State {
   result: PlanBrainResult | null;
+  /** Live Medicare.gov gross monthly price per rxcui (null until fetched
+   *  or on failure). Shared with useRankedPlans so the Compare cards price
+   *  drugs off the same real prices. */
+  grossMonthlyByRxcui: Map<string, number> | null;
   /** Raw aggregated Brain data — exposes per-drug, per-medical, and
    *  per-network rows so a consumer (e.g. the v4 quote table) can
    *  render exact dollar values instead of just the composite score.
@@ -579,6 +584,8 @@ export interface AdapterArgs {
   conditionProfile?: ConditionKey | null;
   userPriorities?: string[];
   weightsOverride?: BrainWeights | null;
+  /** rxcui → live Medicare.gov gross monthly price (see drugGrossPrice). */
+  grossMonthlyByRxcui?: Map<string, number>;
 }
 
 // Exported for Node-side smoke harnesses only. Do not use from React
@@ -794,6 +801,7 @@ export function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
     drugCostCacheByPlanKey,
     rxcuiToNdc,
     iraCostShareByPlanKey,
+    grossMonthlyByRxcui: args.grossMonthlyByRxcui,
     providerNetworkByPlanKey,
     mapdContractPlanIds,
     weightsOverride: args.weightsOverride ?? undefined,
@@ -1363,6 +1371,61 @@ export function usePlanBrain(args: Args): State {
     // 00b984f closed for its own effect.
   }, [planIds, rxcuis, npis, client.state, client.county]);
 
+  // ── Live Medicare.gov gross prices for the client's drugs ─────────
+  // pm_drug_cost_cache only covers ~73 NDCs; without this every other drug
+  // was priced at a flat per-tier notional. One live lookup per drug set
+  // (cached 24h server-side) gives the brain real prices; it re-runs when
+  // they land. Failure leaves the old fallback in place.
+  const grossKey = useMemo(
+    () =>
+      medications
+        .filter((m) => m.rxcui)
+        .map((m) => `${m.rxcui}:${monthlyQuantity(m)}`)
+        .sort()
+        .join(','),
+    [medications],
+  );
+  const samplePlanKey = useMemo(() => {
+    const seen = new Set<string>();
+    const picks: string[] = [];
+    for (const p of plans) {
+      if (!p.has_drug_coverage || seen.has(p.contract_id)) continue;
+      seen.add(p.contract_id);
+      picks.push(p.id);
+      if (picks.length >= 3) break;
+    }
+    return picks.join(',');
+  }, [plans]);
+  const [grossMonthlyByRxcui, setGrossMonthlyByRxcui] = useState<Map<string, number> | null>(null);
+  useEffect(() => {
+    setGrossMonthlyByRxcui(null);
+    if (!grossKey || !samplePlanKey) return;
+    const controller = new AbortController();
+    const samples = samplePlanKey.split(',').map((id) => {
+      const [contract_id, plan_number, seg] = id.split('-');
+      return { contract_id, plan_number, segment_id: String(Number(seg ?? '0')) };
+    });
+    fetchGrossMonthlyPrices(
+      medications
+        .filter((m): m is Medication & { rxcui: string } => !!m.rxcui)
+        .map((m) => ({ rxcui: m.rxcui, name: m.name, form: m.form, quantity: m.quantity, frequency: m.frequency, refillDays: m.refillDays })),
+      samples,
+      controller.signal,
+    )
+      .then((m) => {
+        if (controller.signal.aborted) return;
+        console.info(`[plan-brain] live gross prices for ${m.size} drug(s)`);
+        setGrossMonthlyByRxcui(m);
+      })
+      .catch((err) => {
+        if ((err as { name?: string })?.name === 'AbortError') return;
+        console.warn('[plan-brain] live gross prices failed (falling back):', (err as Error).message);
+      });
+    return () => controller.abort();
+    // grossKey/samplePlanKey capture the drug set, quantities and plans.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grossKey, samplePlanKey]);
+
   const ready = !loading && data !== null && plans.length > 0;
 
   // Build a lookup so adaptScored can resolve PmPlanRow → original Plan.
@@ -1397,6 +1460,7 @@ export function usePlanBrain(args: Args): State {
       conditionProfile,
       userPriorities,
       weightsOverride,
+      grossMonthlyByRxcui: grossMonthlyByRxcui ?? undefined,
     });
     const out = runPlanBrain(brainInputs);
     const compat = adaptBrainOutput(out, agentPlanByTriple);
@@ -1417,7 +1481,8 @@ export function usePlanBrain(args: Args): State {
     userPriorities,
     weightOverride,
     agentPlanByTriple,
+    grossMonthlyByRxcui,
   ]);
 
-  return { result, data, loading, error, ready, unresolvedProviderNames };
+  return { result, data, loading, error, ready, unresolvedProviderNames, grossMonthlyByRxcui };
 }

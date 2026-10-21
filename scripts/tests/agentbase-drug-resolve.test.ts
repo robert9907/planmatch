@@ -69,3 +69,60 @@ test('a CRM row that already carries an rxcui is trusted unchanged', async () =>
   assert.equal(r.rxcui, '905199');
   assert.equal(r.hadInputRxcui, true);
 });
+
+// Regression (2026-10-21 — Cynthia Kline, AgentBase #394). Search results
+// below are verbatim from /api/library/drug-search.
+import { parseStrengths, strengthsMatch } from '../../src/lib/resolveAgentBaseDrugs';
+
+const table: Record<string, RxNormDrug[]> = {
+  'fluticasone propionate nasal spray': [
+    drug('1797907', 'fluticasone propionate 0.05 MG/ACTUAT Metered Dose Nasal Spray', null, '0.05 MG/ACTUAT'),
+    drug('1946583', 'fluticasone propionate 0.093 MG/ACTUAT Metered Dose Nasal Spray', null, '0.093 MG/ACTUAT'),
+  ],
+  'hydrocodone 10 mg / acetaminophen 325 mg': [
+    drug('856999', 'acetaminophen 325 MG / hydrocodone bitartrate 10 MG Oral Tablet', null, '325 MG'),
+    drug('857001', 'acetaminophen 325 MG / hydrocodone bitartrate 10 MG Oral Tablet [Norco]', 'Norco', '325 MG'),
+  ],
+  'hydrocodone acetaminophen': [
+    drug('856987', 'acetaminophen 300 MG / hydrocodone bitartrate 5 MG Oral Tablet', null, '300 MG'),
+  ],
+  'estradiol vaginal cream': [
+    drug('310169', 'estradiol 0.1 MG/ML Vaginal Cream', null, '0.1 MG/ML'),
+    drug('890918', 'estradiol 0.1 MG/ML Vaginal Cream [Estrace]', 'Estrace', '0.1 MG/ML'),
+  ],
+  zepbound: [
+    drug('2669706', '0.5 ML tirzepatide 5 MG/ML Auto-Injector [Zepbound]', 'Zepbound', '5 MG/ML'),
+    drug('2669709', '0.5 ML tirzepatide 10 MG/ML Auto-Injector [Zepbound]', 'Zepbound', '10 MG/ML'),
+  ],
+};
+const realSearch = async (q: string): Promise<RxNormDrug[]> => table[q.toLowerCase()] ?? [];
+
+test('fluticasone nasal spray, USP 50 mcg → the 0.05 MG/ACTUAT nasal spray', async () => {
+  const [r] = await resolveAgentBaseDrugs([{ id: 'f', name: 'Fluticasone Propionate Nasal Spray, USP', dose: '50 mcg' }], undefined, realSearch);
+  assert.equal(r.rxcui, '1797907');
+});
+
+test('hydrocodone-acetaminophen "10-325" → 10/325, never 5/300', async () => {
+  const [r] = await resolveAgentBaseDrugs([{ id: 'h', name: 'HYDROcodone-ACETAMINOPHEN', dose: '10-325' }], undefined, realSearch);
+  assert.equal(r.rxcui, '856999');
+  assert.equal(r.strengthMatched, true);
+});
+
+test('estradiol cream 0.01% → 0.1 MG/ML vaginal cream', async () => {
+  const [r] = await resolveAgentBaseDrugs([{ id: 'e', name: 'Estradiol Vaginal Cream', dose: '0.01%' }], undefined, realSearch);
+  assert.equal(r.rxcui, '310169');
+});
+
+test('Zepbound "5 mg/0.5 mL" → the 10 MG/ML Zepbound pen', async () => {
+  const [r] = await resolveAgentBaseDrugs([{ id: 'z', name: 'ZEPBOUND', dose: '5 mg/0.5 mL' }], undefined, realSearch);
+  assert.equal(r.rxcui, '2669709');
+});
+
+test('strength parsing: units, ratios, percent', () => {
+  assert.ok(strengthsMatch(parseStrengths('50 mcg'), parseStrengths('fluticasone propionate 0.05 MG/ACTUAT Nasal Spray')));
+  assert.ok(strengthsMatch(parseStrengths('5 mg/0.5 mL'), parseStrengths('0.5 ML tirzepatide 10 MG/ML Auto-Injector')));
+  assert.ok(!strengthsMatch(parseStrengths('5 mg/0.5 mL'), parseStrengths('0.5 ML tirzepatide 5 MG/ML Auto-Injector')));
+  assert.ok(strengthsMatch(parseStrengths('0.01%'), parseStrengths('estradiol 0.1 MG/ML Vaginal Cream')));
+  assert.ok(!strengthsMatch(parseStrengths('10-325', true), parseStrengths('acetaminophen 300 MG / hydrocodone bitartrate 5 MG')));
+  assert.ok(strengthsMatch(parseStrengths('20MG'), parseStrengths('atorvastatin 20 MG Oral Tablet')));
+});

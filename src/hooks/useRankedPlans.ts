@@ -72,6 +72,9 @@ export interface UseRankedPlansArgs {
    *  Only meaningful when enrollmentPeriod === 'SEP'. Never comes from
    *  a raw CMS-code dropdown. */
   sepReasonCode?: SepReasonCode;
+  /** Live Medicare.gov gross monthly prices (from usePlanBrain). The
+   *  ranking re-runs when they arrive. */
+  grossMonthlyByRxcui?: Map<string, number> | null;
 }
 
 export interface UseRankedPlansState {
@@ -119,7 +122,15 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     dsnpEligible,
     enrollmentPeriod,
     sepReasonCode,
+    grossMonthlyByRxcui,
   } = args;
+  const grossKey = useMemo(
+    () =>
+      grossMonthlyByRxcui
+        ? [...grossMonthlyByRxcui.entries()].sort().map(([k, v]) => `${k}:${v}`).join(',')
+        : '',
+    [grossMonthlyByRxcui],
+  );
 
   const [state, setState] = useState<UseRankedPlansState>(EMPTY_STATE);
 
@@ -231,6 +242,10 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
         lis_tier: normalizeLisTierForClient(client),
         medicaid_level: client.medicaidLevel,
         living_setting: client.livingSetting,
+        grossMonthlyByRxcui:
+          grossMonthlyByRxcui && grossMonthlyByRxcui.size > 0
+            ? Object.fromEntries(grossMonthlyByRxcui)
+            : undefined,
       },
       ctrl.signal,
     )
@@ -263,7 +278,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     // medsKey / provsKey / extrasKey deliberately gate on serialized
     // content, not array identity — see notes above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [county, zip, state_, medsKey, provsKey, extrasKey, csnpKey, currentPlanId, dsnpEligible, enrollmentPeriod, sepReasonCode, client.lisTier, client.medicaidLevel, client.livingSetting]);
+  }, [county, zip, state_, medsKey, provsKey, extrasKey, csnpKey, currentPlanId, dsnpEligible, enrollmentPeriod, sepReasonCode, client.lisTier, client.medicaidLevel, client.livingSetting, grossKey]);
 
   return state;
 }
