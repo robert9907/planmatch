@@ -115,7 +115,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     lis: typeof raw.lis === 'string' ? raw.lis : 'LIS_NO_HELP',
     npis: Array.isArray(raw.npis) ? raw.npis.map(String) : [],
   };
-  const cacheKey = sha256(canonicalize(body));
+  // v2: parser rewrite (2026-10-20). Entries cached by the old parser hold
+  // blank plan ids / null totals; versioning the key skips them.
+  const cacheKey = sha256(`v2::${canonicalize(body)}`);
   const sb = supabase();
 
   // ─── Cache hit? ────────────────────────────────────────────────────
@@ -143,7 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // ─── Live fetch ────────────────────────────────────────────────────
   let result: { source: 'live' | 'rate_limited'; costs: PlanDrugCost[] };
   try {
-    result = await fetchDrugCosts(body);
+    result = await fetchDrugCostsShared(cacheKey, body);
   } catch (err) {
     const expires = new Date(Date.now() + ERROR_TTL_SEC * 1000).toISOString();
     try {
@@ -207,23 +209,61 @@ function sha256(s: string): string {
 
 // ─── Playwright fetch ──────────────────────────────────────────────────
 
+// One Chromium per warm instance, reused across invocations. Launching a
+// fresh browser per request let concurrent requests (agent-v3 fires several
+// identical cost calls at once) exhaust the instance — page.goto failed with
+// net::ERR_INSUFFICIENT_RESOURCES for every client (2026-10-20).
+type PwBrowser = import('playwright-core').Browser;
+let browserPromise: Promise<PwBrowser> | null = null;
+
+async function getBrowser(): Promise<PwBrowser> {
+  if (browserPromise) {
+    const b = await browserPromise.catch(() => null);
+    if (b && b.isConnected()) return b;
+    browserPromise = null;
+  }
+  browserPromise = (async () => {
+    const { chromium } = await import('playwright-core');
+    const sparticuz = (await import('@sparticuz/chromium')).default;
+    const executablePath = await sparticuz.executablePath();
+    return chromium.launch({ args: sparticuz.args, executablePath, headless: true });
+  })();
+  try {
+    return await browserPromise;
+  } catch (err) {
+    browserPromise = null;
+    throw err;
+  }
+}
+
+// Serialize medicare.gov sessions within an instance (one page at a time).
+let queue: Promise<unknown> = Promise.resolve();
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const run = queue.then(fn, fn);
+  queue = run.catch(() => undefined);
+  return run;
+}
+
+// Identical requests that arrive together share one live fetch.
+const inFlight = new Map<string, Promise<{ source: 'live' | 'rate_limited'; costs: PlanDrugCost[] }>>();
+
+function fetchDrugCostsShared(
+  key: string,
+  body: DrugCostBody,
+): Promise<{ source: 'live' | 'rate_limited'; costs: PlanDrugCost[] }> {
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+  const p = serialized(() => fetchDrugCosts(body)).finally(() => inFlight.delete(key));
+  inFlight.set(key, p);
+  return p;
+}
+
 async function fetchDrugCosts(
   body: DrugCostBody,
 ): Promise<{ source: 'live' | 'rate_limited'; costs: PlanDrugCost[] }> {
-  // Dynamic import keeps the module out of the Vite client bundle and
-  // lets local dev run without @sparticuz/chromium when the binary is
-  // already on PATH.
-  const { chromium } = await import('playwright-core');
-  const sparticuz = (await import('@sparticuz/chromium')).default;
-  const executablePath = await sparticuz.executablePath();
-
-  const browser = await chromium.launch({
-    args: sparticuz.args,
-    executablePath,
-    headless: true,
-  });
+  const browser = await getBrowser();
+  const ctx = await browser.newContext({ userAgent: USER_AGENT, locale: 'en-US' });
   try {
-    const ctx = await browser.newContext({ userAgent: USER_AGENT, locale: 'en-US' });
     const page = await ctx.newPage();
 
     await page.goto(WARM_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
@@ -231,24 +271,14 @@ async function fetchDrugCosts(
     // Real-browser sensors complete within ~3s — 6s is a safety buffer.
     await page.waitForTimeout(COOKIE_WARM_MS);
 
-    const batches: PlanInput[][] = [];
-    for (let i = 0; i < body.plans.length; i += MAX_PLANS_PER_BATCH) {
-      batches.push(body.plans.slice(i, i + MAX_PLANS_PER_BATCH));
-    }
-
-    const costs: PlanDrugCost[] = [];
-    let anyRateLimited = false;
-
-    for (let i = 0; i < batches.length; i++) {
-      if (i > 0) await page.waitForTimeout(BATCH_DELAY_MS);
-
+    const post = async (plans: PlanInput[]) => {
       const reqBody = {
         npis: body.npis,
         prescriptions: body.prescriptions,
         lis: body.lis,
         full_year: false,
         retailOnly: body.retail_only,
-        plans: batches[i],
+        plans,
       };
       const traceId = [...Array(32)]
         .map(() => Math.floor(Math.random() * 16).toString(16))
@@ -256,8 +286,7 @@ async function fetchDrugCosts(
       const spanId = [...Array(16)]
         .map(() => Math.floor(Math.random() * 16).toString(16))
         .join('');
-
-      const resp = await page.request.post(ENDPOINT, {
+      return page.request.post(ENDPOINT, {
         data: reqBody,
         headers: {
           'Content-Type': 'application/json',
@@ -271,18 +300,45 @@ async function fetchDrugCosts(
           traceparent: `00-${traceId}-${spanId}-01`,
         },
       });
+    };
+
+    const batches: PlanInput[][] = [];
+    for (let i = 0; i < body.plans.length; i += MAX_PLANS_PER_BATCH) {
+      batches.push(body.plans.slice(i, i + MAX_PLANS_PER_BATCH));
+    }
+
+    const costs: PlanDrugCost[] = [];
+    let anyRateLimited = false;
+
+    for (let i = 0; i < batches.length; i++) {
+      if (i > 0) await page.waitForTimeout(BATCH_DELAY_MS);
+      const resp = await post(batches[i]);
       const status = resp.status();
       if (status === 429) {
         anyRateLimited = true;
         console.warn('[drug-costs] 429 from medicare.gov — caching short-TTL and bailing');
         break;
       }
+      // medicare.gov 404s the WHOLE batch ("Plan not found") when any one
+      // plan is unknown to it. Retry plan-by-plan so the rest still price;
+      // an unknown plan is simply left out (its cost stays unknown).
+      if (status === 404 && batches[i].length > 1) {
+        console.warn(`[drug-costs] batch 404 — retrying ${batches[i].length} plans individually`);
+        for (const plan of batches[i]) {
+          const one = await post([plan]);
+          if (one.status() === 429) { anyRateLimited = true; break; }
+          if (!one.ok()) continue;
+          costs.push(...extractCosts((await one.json()) as Record<string, unknown>, body.retail_only));
+        }
+        if (anyRateLimited) break;
+        continue;
+      }
       if (!resp.ok()) {
         const preview = (await resp.text()).slice(0, 300);
         throw new Error(`medicare.gov ${status}: ${preview}`);
       }
       const data = (await resp.json()) as Record<string, unknown>;
-      costs.push(...extractCosts(data));
+      costs.push(...extractCosts(data, body.retail_only));
     }
 
     return {
@@ -290,7 +346,7 @@ async function fetchDrugCosts(
       costs,
     };
   } finally {
-    await browser.close().catch(() => {});
+    await ctx.close().catch(() => {});
   }
 }
 
@@ -304,27 +360,43 @@ async function fetchDrugCosts(
 // keys. Surface the raw plan object too so the frontend can introspect
 // if a future call shows a new shape.
 
-function extractCosts(data: Record<string, unknown>): PlanDrugCost[] {
+export function extractCosts(data: Record<string, unknown>, retailOnly: boolean): PlanDrugCost[] {
   const list =
     (Array.isArray(data.plans) && (data.plans as unknown[])) ||
     (Array.isArray(data.plan_costs) && (data.plan_costs as unknown[])) ||
     [];
-  return list.map((p) => extractPlanCost(p as Record<string, unknown>));
+  return list.map((p) => extractPlanCost(p as Record<string, unknown>, retailOnly));
 }
 
-function extractPlanCost(p: Record<string, unknown>): PlanDrugCost {
+const numeric = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+function extractPlanCost(p: Record<string, unknown>, retailOnly: boolean): PlanDrugCost {
+  // Current (2027) shape: { plan: {contract_id, plan_id, segment_id},
+  // costs: [{ mail_order, drug_costs[], estimated_yearly_total,
+  // phase_information: {deductible_amount} }], lowest_retail_total,
+  // lowest_mail_total, lowest_retail_valid, lowest_mail_valid }.
+  // Legacy flat fields are still read as a fallback.
+  const plan = (p.plan && typeof p.plan === 'object' ? p.plan : p) as Record<string, unknown>;
   const yearCosts = (p.plan_year_costs ?? p.planYearCosts) as Record<string, unknown> | undefined;
-  const numeric = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const pharmacyCosts = (Array.isArray(p.costs) ? p.costs : []) as Array<Record<string, unknown>>;
 
-  const monthly =
-    numeric(p.monthly_cost) ??
-    numeric(p.avg_monthly_cost) ??
-    numeric(p.monthly_drug_cost) ??
-    numeric(yearCosts?.avg_monthly_cost) ??
-    numeric(yearCosts?.monthly_cost) ??
-    null;
-
-  const annual =
+  // Annual: lowest VALID total for the allowed channels. An invalid / unpriced
+  // channel reports 0 — that is "no price", never "$0", so it is skipped and
+  // the plan stays unknown (null) rather than looking free.
+  const totals: number[] = [];
+  const retail = numeric(p.lowest_retail_total);
+  const mail = numeric(p.lowest_mail_total);
+  if (p.lowest_retail_valid === true && retail != null) totals.push(retail);
+  if (!retailOnly && p.lowest_mail_valid === true && mail != null) totals.push(mail);
+  if (totals.length === 0) {
+    for (const c of pharmacyCosts) {
+      if (retailOnly && c.mail_order === true) continue;
+      const priced = Array.isArray(c.drug_costs) && c.drug_costs.length > 0;
+      const yr = numeric(c.estimated_yearly_total);
+      if (priced && yr != null) totals.push(yr);
+    }
+  }
+  const legacyAnnual =
     numeric(p.annual_cost) ??
     numeric(p.annual_drug_cost) ??
     numeric(p.total_drug_cost) ??
@@ -332,18 +404,25 @@ function extractPlanCost(p: Record<string, unknown>): PlanDrugCost {
     numeric(yearCosts?.total_cost) ??
     numeric(yearCosts?.annual_cost) ??
     null;
+  const legacyMonthly =
+    numeric(p.monthly_cost) ??
+    numeric(p.avg_monthly_cost) ??
+    numeric(p.monthly_drug_cost) ??
+    numeric(yearCosts?.avg_monthly_cost) ??
+    numeric(yearCosts?.monthly_cost) ??
+    null;
+  const annual = totals.length > 0 ? Math.min(...totals) : legacyAnnual;
+  const mo = annual != null ? annual / 12 : legacyMonthly;
+  const yr = annual ?? (legacyMonthly != null ? legacyMonthly * 12 : null);
 
-  // If we only got one of monthly/annual, derive the other.
-  const mo = monthly ?? (annual != null ? annual / 12 : null);
-  const yr = annual ?? (monthly != null ? monthly * 12 : null);
-
+  const phase = pharmacyCosts[0]?.phase_information as Record<string, unknown> | undefined;
   return {
-    contract_id: String(p.contract_id ?? (p as { contractId?: unknown }).contractId ?? ''),
-    plan_id: String(p.plan_id ?? (p as { planId?: unknown }).planId ?? ''),
-    segment_id: String(p.segment_id ?? (p as { segmentId?: unknown }).segmentId ?? '0'),
+    contract_id: String(plan.contract_id ?? (plan as { contractId?: unknown }).contractId ?? ''),
+    plan_id: String(plan.plan_id ?? (plan as { planId?: unknown }).planId ?? ''),
+    segment_id: String(plan.segment_id ?? (plan as { segmentId?: unknown }).segmentId ?? '0'),
     monthly_cost: mo,
     annual_cost: yr,
-    deductible: p.deductible ?? yearCosts?.deductible ?? null,
+    deductible: numeric(phase?.deductible_amount) ?? p.deductible ?? yearCosts?.deductible ?? null,
     raw: p,
   };
 }
