@@ -57,6 +57,7 @@ import { useDrugPhases, type DrugPhaseHit } from '@/hooks/useDrugPhases';
 // back by restoring their callsites in this file.
 import type { DrugCostCardComparisonPlan } from './DrugCostCard';
 import { QuoteBuilder } from './QuoteBuilder';
+import { contractPlanSegment, type HeadToHeadQuote } from './headToHeadQuote';
 import { TOKENS as T, FONT as F } from './compare-v2/tokens';
 import { Btn } from './compare-v2/Button';
 // QuickPreviewDrawer no longer rendered from CompareScreen — bench
@@ -4478,6 +4479,31 @@ function H2HView({
   const baselineLabel = baselineIsCurrent ? 'Current' : 'Top Pick';
   const baselineColor = baselineIsCurrent ? CORAL : GOLD;
 
+  // Frozen copy of exactly what's on screen, for the client quote.
+  const headToHeadQuote: HeadToHeadQuote = {
+    baseline_label: baselineLabel,
+    current: h2hPlanRef(baseline),
+    challenger: h2hPlanRef(challenger),
+    rows: METRIC_GROUP_ORDER.flatMap((g) =>
+      metrics
+        .filter((m) => m.group === g)
+        .map((m) => {
+          const dir = deltaVs(m, challenger, baseline);
+          return {
+            group: METRIC_GROUP_LABEL[g],
+            label: m.label,
+            current: m.format(baseline),
+            challenger: m.format(challenger),
+            dir,
+            delta: dir === 'better' || dir === 'worse' ? deltaText(m, challenger, baseline) : null,
+          };
+        }),
+    ),
+    challenger_wins: wins,
+    current_wins: losses,
+    annual_savings: savings > 0 ? savings : null,
+  };
+
   return (
     <Container wide>
       <Header
@@ -4933,6 +4959,8 @@ function H2HView({
         </div>
       </div>
 
+      <H2HSendPanel key={challenger.id} challenger={challenger} headToHead={headToHeadQuote} />
+
       <div
         style={{
           display: 'flex',
@@ -4976,6 +5004,63 @@ function H2HView({
         </button>
       </div>
     </Container>
+  );
+}
+
+function h2hPlanRef(p: Plan): HeadToHeadQuote['current'] {
+  return {
+    carrier: p.carrier,
+    plan_name: p.plan_name,
+    plan_id_display: planIdShort(p.id),
+    contract_plan_segment: contractPlanSegment(p.id),
+    sbf_url: p.sbf_url || null,
+  };
+}
+
+// "Send this comparison" — collapsed under the verdict bar; opens the
+// quote builder in Head-to-Head mode (texts/emails the frozen comparison).
+function H2HSendPanel({ challenger, headToHead }: { challenger: Plan; headToHead: HeadToHeadQuote }) {
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <div
+        style={{
+          marginTop: 14,
+          padding: 14,
+          background: 'white',
+          border: `1px solid ${BORDER}`,
+          borderRadius: 12,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 16,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>Send this comparison</div>
+          <div style={{ marginTop: 2, fontSize: 11, color: MUTED }}>
+            Text and/or email {headToHead.baseline_label.toLowerCase()} vs {challenger.carrier} to the client, exactly as shown.
+          </div>
+        </div>
+        <Btn tier="primary" size="sm" onClick={() => setOpen(true)}>
+          Text / email it
+        </Btn>
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          style={{ background: 'transparent', border: 'none', color: MUTED, fontSize: 12, textDecoration: 'underline', cursor: 'pointer' }}
+        >
+          Hide
+        </button>
+      </div>
+      <QuoteBuilder rankedPlans={[planToLibraryRankPlan(challenger)]} headToHead={headToHead} />
+    </div>
   );
 }
 
