@@ -1077,7 +1077,7 @@ export function AgentV3App() {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p) out[p.id] = lp.meds_covered;
     }
-    for (const lp of ranked.result.bench_plans) {
+    for (const lp of [...ranked.result.bench_plans, ...(ranked.result.current_plan ? [ranked.result.current_plan] : [])]) {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p) out[p.id] = lp.meds_covered;
     }
@@ -1091,7 +1091,7 @@ export function AgentV3App() {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p) out[p.id] = lp.meds_total;
     }
-    for (const lp of ranked.result.bench_plans) {
+    for (const lp of [...ranked.result.bench_plans, ...(ranked.result.current_plan ? [ranked.result.current_plan] : [])]) {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p) out[p.id] = lp.meds_total;
     }
@@ -1169,6 +1169,13 @@ export function AgentV3App() {
     for (const lp of ranked.result.bench_plans) {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p) out[p.id] = [...adapt(lp.medications), ...unmatched];
+    }
+    // Current plan: priced separately (never ranked) so its card shows real
+    // per-drug costs instead of "not priced".
+    const cur = ranked.result.current_plan;
+    if (cur) {
+      const p = planById.get(normalizePlanId(cur.plan_id));
+      if (p) out[p.id] = [...adapt(cur.medications), ...unmatched];
     }
     return out;
   }, [ranked.result, planById, medications]);
