@@ -100,3 +100,38 @@ test('nothing priced at all → no NDC is treated as unrecognized', () => {
   assert.equal(swapUnpricedNdcs(slots, new Set(['00904744761'])), false);
   assert.equal(slots[0].ndc, '00904744761');
 });
+
+// Regression (2026-10-21, Cynthia Kline #394): hydrocodone-APAP 10-325 has
+// 313 RxNorm NDCs, mostly repackagers medicare.gov doesn't recognize; its
+// own NDC (42858020350) was #50, so the drug was never priced. The server
+// now asks medicare.gov's /drugs/{rxcui}/forms which NDC to send.
+import { medicareNdcFor, preferNdc, restoreOriginNdcs, type NdcSlot } from '../../api/drug-costs';
+
+const forms = {
+  dosages: [
+    { rxcui: '856999', packages: [{ ndc: '42858020350' }] },
+    { rxcui: '857002', packages: [{ ndc: '72189040730' }] },
+  ],
+};
+
+test("medicare.gov's NDC is taken from the exact rxcui's dosage", () => {
+  assert.equal(medicareNdcFor(forms, '856999'), '42858020350');
+  assert.equal(medicareNdcFor(forms, '857002'), '72189040730');
+  // Never borrowed from another strength.
+  assert.equal(medicareNdcFor(forms, '857005'), null);
+  assert.equal(medicareNdcFor(null, '856999'), null);
+});
+
+test("medicare.gov's NDC is sent first; the caller's becomes the first alternate", () => {
+  const slot: NdcSlot = { ndc: '00245041201', alternates: ['00245041211', '42858020350'], origin: '00245041201' };
+  preferNdc(slot, '42858020350');
+  assert.equal(slot.ndc, '42858020350');
+  assert.deepEqual(slot.alternates, ['00245041201', '00245041211']);
+});
+
+test("costs are reported under the caller's NDC", () => {
+  const slots: NdcSlot[] = [{ ndc: '42858020350', alternates: [], origin: '00245041201' }];
+  const data = { plans: [{ costs: [{ drug_costs: [{ ndc: '42858020350', full_cost: 20 }] }] }] };
+  restoreOriginNdcs(data, slots);
+  assert.equal(data.plans[0].costs[0].drug_costs[0].ndc, '00245041201');
+});

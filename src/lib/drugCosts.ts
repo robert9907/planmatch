@@ -135,13 +135,16 @@ export async function fetchDrugCosts(params: {
   /** Per prescription (aligned with `ndcs`): other NDCs for the same drug,
    *  tried in order when medicare.gov doesn't recognize the first. */
   alternates?: string[][];
+  /** Per prescription (aligned with `ndcs`): the drug's rxcui, so the server
+   *  can send medicare.gov's own NDC for it. */
+  rxcuis?: string[];
   mode: PharmacyMode;
   /** Client's LIS tier. Omitted / undefined is treated as 'none' — the
    *  API receives LIS_NO_HELP and cache buckets remain separate from
    *  subsidized-client requests (api/drug-costs.ts:201 keys on lis). */
   lisTier?: LisTier;
 }): Promise<DrugCostResponse> {
-  const { plans, ndcs, alternates, mode, lisTier } = params;
+  const { plans, ndcs, alternates, rxcuis, mode, lisTier } = params;
   if (plans.length === 0 || ndcs.length === 0) {
     return { source: 'skipped', costs: [] };
   }
@@ -152,6 +155,7 @@ export async function fetchDrugCosts(params: {
     frequency,
     quantity,
     alternates: alternates?.[i] ?? [],
+    rxcui: rxcuis?.[i],
   }));
   const res = await fetch('/api/drug-costs', {
     method: 'POST',

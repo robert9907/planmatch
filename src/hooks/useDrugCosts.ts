@@ -114,6 +114,7 @@ export function useDrugCosts(
           plans: planInputs,
           ndcs: repNdcs,
           alternates: altNdcs,
+          rxcuis: priced,
           mode,
           lisTier,
         });
