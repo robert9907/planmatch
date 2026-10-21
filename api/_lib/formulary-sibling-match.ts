@@ -26,8 +26,26 @@ export interface DrugProfile {
    *  the same molecule (Ozempic → never Wegovy). */
   brandName: string | null;
   er: boolean;
-  form: 'tablet' | 'capsule' | 'solution' | 'injection' | 'patch' | 'other' | null;
+  form: 'tablet' | 'capsule' | 'solution' | 'injection' | 'patch' | 'inhaler' | 'other' | null;
+  /** Non-systemic route of administration. null = oral / injected /
+   *  transdermal. undefined = the request's name is unknown, so route is
+   *  not enforced. A sibling never crosses a known route — see rule 1c. */
+  route?: DrugRoute | null;
   strengths: string[]; // normalized, e.g. ["600 MG"], ["50 MG/ML"]
+}
+
+export type DrugRoute = 'ophthalmic' | 'otic' | 'nasal' | 'inhaled' | 'vaginal' | 'rectal' | 'topical';
+
+export function parseDrugRoute(name: string | null | undefined): DrugRoute | null {
+  const l = (name ?? '').toLowerCase();
+  if (/ophthalmic|\beye drops?\b/.test(l)) return 'ophthalmic';
+  if (/\botic\b/.test(l)) return 'otic';
+  if (/\bnasal\b/.test(l)) return 'nasal';
+  if (/\binhaler\b|\binhalation\b|\bnebuliz/.test(l)) return 'inhaled';
+  if (/\bvaginal\b/.test(l)) return 'vaginal';
+  if (/\brectal\b|\bsuppository\b/.test(l)) return 'rectal';
+  if (/\btopical\b|\bointment\b|\bcream\b|\blotion\b|\bshampoo\b|\bfoam\b|\bgel\b/.test(l)) return 'topical';
+  return null;
 }
 
 export interface FormularyRowLike {
@@ -58,7 +76,14 @@ export function parseDrugProfile(name: string | null | undefined): DrugProfile {
   const n = (name ?? '').trim();
   const lower = n.toLowerCase();
   const form: DrugProfile['form'] =
+    // Nebulizer "Inhalation Solution"/"Inhalation Suspension" is a solution
+    // first — it must NOT fold into the aerosol/powder inhaler bucket below
+    // (an HFA request is not a nebule, and vice versa).
     /oral solution|\bsolution\b|oral suspension|\bsuspension\b|\belixir\b|\bsyrup\b/.test(lower) ? 'solution'
+    // Metered-dose / dry-powder / soft-mist inhalers (HFA, Ellipta, Respimat,
+    // Diskus, Flexhaler, HandiHaler, …). "Inhalation Powder/Aerosol/Spray" and
+    // "Metered/Dry… Inhaler" land here; nebulizer solutions were caught above.
+    : /metered dose inhaler|dry powder inhaler|breath activated|\binhaler\b|inhalation (?:spray|aerosol|powder)|\baerosol\b|\bhfa\b|\brespimat\b|\bellipta\b|\bdiskus\b|flexhaler|handihaler|twisthaler|neohaler|respiclick|digihaler/.test(lower) ? 'inhaler'
     : /injection|injectable|\bprefilled\b|\bpen\b|\bvial\b|\bcartridge\b|flextouch|flexpen|solostar/.test(lower) ? 'injection'
     : /\bpatch\b|transdermal/.test(lower) ? 'patch'
     : /\bcapsule\b/.test(lower) ? 'capsule'
@@ -71,6 +96,7 @@ export function parseDrugProfile(name: string | null | undefined): DrugProfile {
     brandName: brandMatch ? brandMatch[1].trim().toLowerCase() : null,
     er: /extended release|extended-release|24 hr|12 hr|\ber\b|\bxr\b|\bsr\b|modified .*release|once-daily/i.test(n),
     form,
+    route: parseDrugRoute(n),
     strengths: normStrengths(n),
   };
 }
@@ -80,6 +106,10 @@ export function parseDrugProfile(name: string | null | undefined): DrugProfile {
 function scoreRow(orig: DrugProfile, rowName: string): { score: number; strengthHit: boolean; formHit: boolean } | null {
   const rp = parseDrugProfile(rowName);
   if (rp.combo && !orig.combo) return null; // rule 1 — never match a combo
+  // Rule 1c (Rob, 2026-10-20) — never cross route. An inhaler is not a nasal
+  // spray or an ointment; a tablet is not a cream. A plan that files the
+  // ingredient only in another route shows the requested drug NOT COVERED.
+  if (orig.route !== undefined && orig.route !== rp.route) return null;
   // Rule 1b (Rob, 2026-10-19) — brand exactness. A brand request must never
   // resolve to a DIFFERENT brand of the same molecule (Ozempic → never
   // Wegovy, NovoLog → never Fiasp). A plan that files only another brand /
