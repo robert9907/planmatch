@@ -233,7 +233,9 @@ export function IntakeScreen({
       setZipError(null);
       try {
         console.info(`[intake] zip-county fetch zip=${client.zip}`);
-        const res = await fetch(`/api/zip-county?zip=${client.zip}`, {
+        // &v=2: responses cached before `counties` existed (max-age 1h) would
+        // otherwise skip the keep-AgentBase-county check below.
+        const res = await fetch(`/api/zip-county?zip=${client.zip}&v=2`, {
           signal: ctl.signal,
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
