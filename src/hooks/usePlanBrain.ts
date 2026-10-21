@@ -394,6 +394,10 @@ interface Args {
 
 interface State {
   result: PlanBrainResult | null;
+  /** Live Medicare.gov gross monthly price per rxcui (null until fetched
+   *  or on failure). Shared with useRankedPlans so the Compare cards price
+   *  drugs off the same real prices. */
+  grossMonthlyByRxcui: Map<string, number> | null;
   /** Raw aggregated Brain data — exposes per-drug, per-medical, and
    *  per-network rows so a consumer (e.g. the v4 quote table) can
    *  render exact dollar values instead of just the composite score.
@@ -1480,5 +1484,5 @@ export function usePlanBrain(args: Args): State {
     grossMonthlyByRxcui,
   ]);
 
-  return { result, data, loading, error, ready, unresolvedProviderNames };
+  return { result, data, loading, error, ready, unresolvedProviderNames, grossMonthlyByRxcui };
 }

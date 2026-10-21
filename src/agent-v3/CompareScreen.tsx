@@ -297,6 +297,9 @@ interface DrugRow {
   // True when the catalog year's formulary isn't published yet — no real tier
   // or cost. Render "formulary not yet published", never $0 / Tier / Not covered.
   costUnavailable?: boolean;
+  // The client's med never matched a drug code, so no plan could price it.
+  // Render "Not matched — re-search on Meds", never "Not covered".
+  unmatched?: boolean;
   // 2027 utilization-management flags for this plan's row (PA / ST / QL).
   priorAuth?: boolean;
   stepTherapy?: boolean;
@@ -432,6 +435,7 @@ function buildMetrics(args: {
     format: (p: Plan) => {
       const r = drugRowFor(p, med);
       if (!r) return 'Not priced';
+      if (r.unmatched) return 'Not matched — re-search on Meds';
       if (r.costUnavailable) return 'Formulary not yet published';
       if (!r.covered) return 'Not covered';
       const tier = r.tier != null ? `Tier ${r.tier}` : 'Covered';
@@ -3028,7 +3032,8 @@ function DrugBreakdown({
   if (breakdown.length === 0) return null;
   const covered = breakdown.filter((d) => d.covered).length;
   const total = coveredDrugAnnual(breakdown);
-  const notCovered = breakdown.filter((d) => !d.covered && !d.costUnavailable).length;
+  const notCovered = breakdown.filter((d) => !d.covered && !d.costUnavailable && !d.unmatched).length;
+  const unmatchedCount = breakdown.filter((d) => d.unmatched).length;
   const isCompact = variant === 'compact';
   const isCard = variant === 'card';
   // Every drug lacks a published formulary → no honest total exists. The total
@@ -3130,7 +3135,7 @@ function DrugBreakdown({
               </div>
             );
           }
-          const tierLabel = d.tier != null ? `Tier ${d.tier}` : 'Not covered';
+          const tierLabel = d.unmatched ? 'Not matched' : d.tier != null ? `Tier ${d.tier}` : 'Not covered';
           const copayLabel = perMonth(d.annualCost);
           if (isCard) {
             return (
@@ -3158,7 +3163,7 @@ function DrugBreakdown({
                   {d.name}
                 </span>
                 <span style={{ fontFamily: FONT_NUM, fontSize: 10, whiteSpace: 'nowrap' }}>
-                  {d.covered ? `${tierLabel} · ${copayLabel}` : 'Not covered'}
+                  {d.unmatched ? 'Not matched' : d.covered ? `${tierLabel} · ${copayLabel}` : 'Not covered'}
                 </span>
               </div>
             );
@@ -3217,6 +3222,11 @@ function DrugBreakdown({
       {notCovered > 0 && !allUnavail && (
         <div style={{ fontSize: 10, color: '#991b1b', marginTop: 2, textAlign: 'right' }}>
           {notCovered} not covered — not included in total
+        </div>
+      )}
+      {unmatchedCount > 0 && !allUnavail && (
+        <div style={{ fontSize: 10, color: '#92400e', marginTop: 2, textAlign: 'right' }}>
+          {unmatchedCount} not matched — re-search on Meds to price
         </div>
       )}
     </div>

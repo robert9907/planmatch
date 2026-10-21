@@ -404,6 +404,10 @@ export interface LibraryRankInput {
   /** Community vs institutional/HCBS. Only affects auto-deeming for
    *  FBDE beneficiaries. Same forward-compat status as lis_tier. */
   living_setting?: LivingSetting;
+  /** rxcui → live Medicare.gov gross monthly price for the client's
+   *  quantity (src/lib/drugGrossPrice). Prices drugs pm_drug_cost_cache
+   *  doesn't carry instead of the flat per-tier notional. */
+  grossMonthlyByRxcui?: Record<string, number>;
 }
 
 export async function rankPlans(

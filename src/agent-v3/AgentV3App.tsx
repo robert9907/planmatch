@@ -671,6 +671,7 @@ export function AgentV3App() {
     // stays strict — broker can drag any D-SNP onto the board manually
     // if the situation warrants it.
     dsnpEligible: client.dsnpEligible,
+    grossMonthlyByRxcui: brain.grossMonthlyByRxcui,
   });
 
   // The Compare screen's drug costs come from the library's rank-plans
@@ -1147,16 +1148,30 @@ export function AgentV3App() {
               quantityLimitDays: m.quantity_limit_days ?? null,
             },
       );
+    // Meds that never matched a drug code aren't sent to rank-plans, so
+    // they'd vanish from every card (Cynthia Kline's fluticasone spray).
+    // List them on each plan as unmatched instead of dropping them.
+    const unmatched: DrugRow[] = medications
+      .filter((m) => !m.rxcui)
+      .map((m) => ({
+        rxcui: '',
+        name: m.name,
+        covered: false,
+        tier: null,
+        monthlyCopay: null,
+        annualCost: 0,
+        unmatched: true,
+      }));
     for (const lp of ranked.result.top_plans) {
       const p = planById.get(normalizePlanId(lp.plan_id));
-      if (p) out[p.id] = adapt(lp.medications);
+      if (p) out[p.id] = [...adapt(lp.medications), ...unmatched];
     }
     for (const lp of ranked.result.bench_plans) {
       const p = planById.get(normalizePlanId(lp.plan_id));
-      if (p) out[p.id] = adapt(lp.medications);
+      if (p) out[p.id] = [...adapt(lp.medications), ...unmatched];
     }
     return out;
-  }, [ranked.result, planById]);
+  }, [ranked.result, planById, medications]);
 
   // ── Per-plan gate explanations (CompareScreen "Why this plan" pills) ─
   // Sourced from the LOCAL brain (usePlanBrain), not the library response.
