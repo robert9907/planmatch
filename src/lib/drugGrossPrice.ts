@@ -11,6 +11,7 @@
 import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear';
 
 const SOLID_RE = /\b(tablet|tab|capsule|cap)s?\b/i;
+const PACKAGE_RE = /\b(cream|ointment|gel|lotion|spray|inhaler|pen|injector|kit)\b/i;
 const NON_SOLID_RE = /\b(cream|ointment|gel|lotion|spray|inhaler|inhalation|solution|suspension|injection|injector|pen|patch|drops?|vial|kit)\b/i;
 
 /** Doses per day from a free-text sig; null when it can't be read. */
@@ -51,8 +52,11 @@ function rawMonthlyQuantity(m: QuantityInput): number {
   const qty = Number.parseFloat(String(m.quantity ?? '').replace(/[^\d.]/g, ''));
   const hasQty = Number.isFinite(qty) && qty > 0;
   if (NON_SOLID_RE.test(label) && !SOLID_RE.test(label)) {
+    // medicare.gov counts these in PACKAGES (tubes, bottles, inhalers, pen
+    // boxes), not grams/mL: quantity 43 on estradiol cream priced 43 tubes
+    // ($2,736/mo). One package covers a month.
+    if (PACKAGE_RE.test(label)) return 1;
     if (hasQty) return qty;
-    if (/\bnasal\b|\bspray\b/i.test(label)) return 16; // one 16 g bottle
     return 1;
   }
   const perDay = m.frequency ? dosesPerDay(m.frequency) : null;
