@@ -325,6 +325,9 @@ export interface LibraryRankPlan {
 export interface LibraryRankResult {
   top_plans: LibraryRankPlan[];
   bench_plans: LibraryRankPlan[];
+  /** The client's current plan, priced but never ranked (the brain keeps it
+   *  out of the pool). Null/absent when none is on file. */
+  current_plan?: LibraryRankPlan | null;
   total_plans_in_county: number;
   gate1_survivors: number;
   gate2_survivors: number;
