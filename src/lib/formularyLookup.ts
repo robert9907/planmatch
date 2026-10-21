@@ -291,16 +291,50 @@ export async function bulkLookupFormulary(
     chunks.push(realContracts.slice(i, i + CONSUMER_CONTRACTIDS_CAP));
   }
 
-  const settled = await Promise.allSettled(
-    chunks.map((chunk) => fetchBulkChunkWithRetry(chunk, realRxcuis, scopedNames)),
-  );
+  // Per chunk: try all rxcuis together; if that still fails after the
+  // retry, fall back to one request per rxcui so a single drug whose
+  // lookup errors (e.g. a fallback query that times out) can't blank
+  // every other drug's row. Each successful request marks its
+  // (contract, rxcui) pairs as answered — that's what lets the Meds
+  // screen say "Not covered" (checked, zero rows) instead of
+  // "No formulary data" (never checked).
+  const fetchChunk = async (chunk: string[]): Promise<LibraryPostResponse[]> => {
+    try {
+      const resp = await fetchBulkChunkWithRetry(chunk, realRxcuis, scopedNames);
+      markAnswered(chunk, realRxcuis);
+      return [resp];
+    } catch (err) {
+      if (realRxcuis.length <= 1) throw err;
+      console.warn('[formularyLookup] chunk failed after retry, isolating per drug:', err);
+      const perDrug = await Promise.allSettled(
+        realRxcuis.map(async (rx) => {
+          const one = scopedNames?.[rx] ? { [rx]: scopedNames[rx] } : undefined;
+          const resp = await fetchBulkChunk(chunk, [rx], one);
+          markAnswered(chunk, [rx]);
+          return resp;
+        }),
+      );
+      const ok: LibraryPostResponse[] = [];
+      perDrug.forEach((r, i) => {
+        if (r.status === 'fulfilled') ok.push(r.value);
+        else console.warn(`[formularyLookup] rxcui ${realRxcuis[i]} failed:`, r.reason);
+      });
+      return ok;
+    }
+  };
 
+  const settled = await Promise.allSettled(chunks.map(fetchChunk));
+
+  const responses: LibraryPostResponse[] = [];
   for (const result of settled) {
     if (result.status !== 'fulfilled') {
       console.warn('[formularyLookup] chunk failed after retry:', result.reason);
       continue;
     }
-    for (const m of result.value.matches ?? []) {
+    responses.push(...result.value);
+  }
+  for (const resp of responses) {
+    for (const m of resp.matches ?? []) {
       const hit = rowToHit(m);
       // Agent has historically keyed the cache on `contractId_planId`
       // (underscore). The endpoint returns `contractId_planId` in
@@ -313,9 +347,30 @@ export async function bulkLookupFormulary(
   return out;
 }
 
+// contract_id::rxcui pairs whose bulk lookup returned successfully —
+// whether or not any rows came back. Distinguishes "looked it up, zero
+// rows = not on any formulary" from "the lookup never landed".
+const answered = new Set<string>();
+
+function markAnswered(contractIds: string[], rxcuis: string[]): void {
+  for (const c of contractIds) for (const rx of rxcuis) answered.add(`${c}::${rx}`);
+}
+
+/** True when every given contract's formulary lookup for this rxcui
+ *  completed successfully. With no cache hits, that means the drug is
+ *  genuinely on none of those plans' formularies. */
+export function isFormularyAnswered(
+  contractIds: string[],
+  rxcui: string | null | undefined,
+): boolean {
+  if (!rxcui || contractIds.length === 0) return false;
+  return contractIds.every((c) => answered.has(`${c}::${rxcui}`));
+}
+
 /** Flush the cache — call from a "retry all network checks" button. */
 export function clearFormularyCache(): void {
   cache.clear();
+  answered.clear();
 }
 
 /**

@@ -39,6 +39,7 @@ import { useSession } from '@/hooks/useSession';
 import {
   bulkLookupFormulary,
   getCachedFormulary,
+  isFormularyAnswered,
 } from '@/lib/formularyLookup';
 import { monthlyCostFromFormulary } from '@/lib/drugCosts';
 import { fetchPlansForClient } from '@/lib/planCatalog';
@@ -448,7 +449,12 @@ function perDrugBest(
     bestTier,
     coveredPlans: covered,
     totalPlans: plans.length,
-    ready: anyHit,
+    // A lookup that completed for every contract with zero rows is a real
+    // answer — the drug is on none of these formularies — and renders as
+    // "Not covered", not as a spinner / "No formulary data".
+    ready:
+      anyHit ||
+      isFormularyAnswered([...new Set(plans.map((p) => p.contract_id))], med.rxcui),
   };
 }
 
