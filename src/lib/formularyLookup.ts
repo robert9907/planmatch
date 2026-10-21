@@ -35,6 +35,7 @@
 // receive so the existing UI math (which expects fraction) still
 // works.
 
+import { settleWithConcurrency } from './concurrency';
 import type { FormularyTier } from '@/types/plans';
 import { planYearOverride } from '../../api/library/planYearOverride';
 
@@ -306,14 +307,15 @@ export async function bulkLookupFormulary(
     } catch (err) {
       if (realRxcuis.length <= 1) throw err;
       console.warn('[formularyLookup] chunk failed after retry, isolating per drug:', err);
-      const perDrug = await Promise.allSettled(
-        realRxcuis.map(async (rx) => {
-          const one = scopedNames?.[rx] ? { [rx]: scopedNames[rx] } : undefined;
-          const resp = await fetchBulkChunk(chunk, [rx], one);
-          markAnswered(chunk, [rx]);
-          return resp;
-        }),
-      );
+      // Two at a time, not all at once: firing every drug in parallel
+      // (12 drugs × chunks ≈ 24 queries) saturated the database and made
+      // rank-plans fail with statement timeouts (Cynthia Kline, 2026-10-21).
+      const perDrug = await settleWithConcurrency(realRxcuis, PER_DRUG_CONCURRENCY, async (rx) => {
+        const one = scopedNames?.[rx] ? { [rx]: scopedNames[rx] } : undefined;
+        const resp = await fetchBulkChunk(chunk, [rx], one);
+        markAnswered(chunk, [rx]);
+        return resp;
+      });
       const ok: LibraryPostResponse[] = [];
       perDrug.forEach((r, i) => {
         if (r.status === 'fulfilled') ok.push(r.value);
@@ -346,6 +348,9 @@ export async function bulkLookupFormulary(
   }
   return out;
 }
+
+const PER_DRUG_CONCURRENCY = 2;
+
 
 // contract_id::rxcui pairs whose bulk lookup returned successfully —
 // whether or not any rows came back. Distinguishes "looked it up, zero
