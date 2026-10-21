@@ -52,3 +52,40 @@ test('no priced drugs (unknown NDC) → unknown (null), never $0', () => {
   assert.equal(a.contract_id, 'H5141');
   assert.equal(a.annual_cost, null);
 });
+
+// Regression (Rob, 2026-10-20 — Janet Moses): medicare.gov silently drops an
+// NDC it doesn't recognize and reports the total WITHOUT that drug. Her first
+// oxycodone NDC (00378611201) is one: H5216-154 read $0/yr instead of $98.40.
+// A plan whose response is missing a requested drug has no real total.
+import { swapUnpricedNdcs, type NdcSlot } from '../../api/drug-costs';
+
+test('a requested drug missing from the response → total unknown, drug listed', () => {
+  const [a] = extractCosts(fixture, false, ['00406055201', '81520020030', '00378611201']);
+  assert.equal(a.annual_cost, null);
+  assert.equal(a.monthly_cost, null);
+  assert.deepEqual(a.unpriced_ndcs, ['00378611201']);
+});
+
+test('every requested drug priced → total kept', () => {
+  const [a] = extractCosts(fixture, false, ['00406055201', '81520020030']);
+  assert.equal(a.annual_cost, 10126.92);
+  assert.deepEqual(a.unpriced_ndcs, []);
+});
+
+test('unpriced NDC is swapped for the next alternate; priced ones are left alone', () => {
+  const slots: NdcSlot[] = [
+    { ndc: '00904744761', alternates: ['11111111111'] },
+    { ndc: '00378611201', alternates: ['00406055201', '00406055223'] },
+  ];
+  const changed = swapUnpricedNdcs(slots, new Set(['00904744761']));
+  assert.equal(changed, true);
+  assert.equal(slots[0].ndc, '00904744761');
+  assert.equal(slots[1].ndc, '00406055201');
+  assert.deepEqual(slots[1].alternates, ['00406055223']);
+});
+
+test('no alternates left → nothing to swap', () => {
+  const slots: NdcSlot[] = [{ ndc: '00378611201', alternates: [] }];
+  assert.equal(swapUnpricedNdcs(slots, new Set()), false);
+  assert.equal(slots[0].ndc, '00378611201');
+});
