@@ -89,3 +89,30 @@ test('no alternates left → nothing to swap', () => {
   assert.equal(swapUnpricedNdcs(slots, new Set()), false);
   assert.equal(slots[0].ndc, '00378611201');
 });
+
+// Regression (2026-10-20): a warm instance's shared Chromium can go stale
+// between requests ("Target page, context or browser has been closed").
+// Opening the page must relaunch the browser once instead of failing.
+import { openPageWithRelaunch } from '../../api/drug-costs';
+
+test('stale shared browser → relaunch once and succeed', async () => {
+  let launches = 0;
+  const page = { id: 'p' };
+  const healthy = { newContext: async () => ({ newPage: async () => page, close: async () => {} }) };
+  const stale = {
+    newContext: async () => ({
+      newPage: async () => { throw new Error('browserContext.newPage: Target page, context or browser has been closed'); },
+      close: async () => {},
+    }),
+  };
+  const got = await openPageWithRelaunch(async (fresh) => { launches++; return fresh ? healthy : stale; });
+  assert.equal(got.page, page);
+  assert.equal(launches, 2);
+});
+
+test('a non-stale error is not retried', async () => {
+  let launches = 0;
+  const broken = { newContext: async () => { throw new Error('something else'); } };
+  await assert.rejects(openPageWithRelaunch(async () => { launches++; return broken; }), /something else/);
+  assert.equal(launches, 1);
+});
