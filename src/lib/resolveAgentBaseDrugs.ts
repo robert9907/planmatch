@@ -23,6 +23,76 @@
 
 import { searchDrug, type RxNormDrug } from './rxnorm';
 import { buildNameVariants } from '@/hooks/useResolveRxcuis';
+import { parseDrugRoute } from '../../api/_lib/formulary-sibling-match';
+
+/** One strength on a label, normalized: amount in MG (or UNT) per unit.
+ *  per 'each' = per tablet/capsule; 'ml' / 'g' / 'actuat' / 'hr' = ratio;
+ *  'pct' = a percent written as mg per g/mL (0.01% → 0.1). */
+export interface Strength {
+  v: number;
+  u: 'mg' | 'unt';
+  per: 'each' | 'ml' | 'g' | 'mg' | 'actuat' | 'hr' | 'pct';
+}
+
+function amountToMg(n: number, unit: string): { v: number; u: 'mg' | 'unt' } {
+  const x = unit.toLowerCase();
+  if (x === 'mcg') return { v: n / 1000, u: 'mg' };
+  if (x === 'g') return { v: n * 1000, u: 'mg' };
+  if (x.startsWith('un')) return { v: n, u: 'unt' };
+  return { v: n, u: 'mg' };
+}
+
+/** Every strength on a dose or RxNorm label. Handles "20MG", "50 mcg",
+ *  "10 MG/ML", "5 mg/0.5 mL" (→ 10 per mL), "0.05 MG/ACTUAT", "0.01%",
+ *  and unit-less combo doses "10-325" / "10/325" (→ 10 MG + 325 MG). */
+export function parseStrengths(text: string, _comboHint = false): Strength[] {
+  const t = text ?? '';
+  const combo = t.match(/^\s*(\d*\.?\d+)\s*[-/]\s*(\d*\.?\d+)\s*(mg)?\s*$/i);
+  if (combo) {
+    return [
+      { v: Number(combo[1]), u: 'mg', per: 'each' },
+      { v: Number(combo[2]), u: 'mg', per: 'each' },
+    ];
+  }
+  const out: Strength[] = [];
+  let rest = t;
+  const ratio = /(\d*\.?\d+)\s*(mg|mcg|g|unt|units?)\s*\/\s*(\d*\.?\d+)?\s*(ml|gm|g|mg|actuat|hr|h)\b/gi;
+  rest = rest.replace(ratio, (_m, n, unit, denom, per) => {
+    const a = amountToMg(Number(n), unit);
+    const d = denom ? Number(denom) : 1;
+    const p = per.toLowerCase();
+    const perKey: Strength['per'] =
+      p === 'ml' ? 'ml' : p === 'gm' || p === 'g' ? 'g' : p === 'mg' ? 'mg' : p === 'actuat' ? 'actuat' : 'hr';
+    if (d > 0) out.push({ v: a.v / d, u: a.u, per: perKey });
+    return ' ';
+  });
+  rest = rest.replace(/(\d*\.?\d+)\s*%/g, (_m, n) => {
+    out.push({ v: Number(n) * 10, u: 'mg', per: 'pct' });
+    return ' ';
+  });
+  for (const m of rest.matchAll(/(\d*\.?\d+)\s*(mg|mcg|g|unt|units?)\b/gi)) {
+    const a = amountToMg(Number(m[1]), m[2]);
+    out.push({ v: a.v, u: a.u, per: 'each' });
+  }
+  return out;
+}
+
+function close(a: number, b: number): boolean {
+  return Math.abs(a - b) <= 1e-4 * Math.max(1, Math.abs(a), Math.abs(b));
+}
+
+function compatiblePer(target: Strength['per'], cand: Strength['per']): boolean {
+  if (target === cand) return true;
+  if (target === 'each' && cand === 'actuat') return true; // "50 mcg" per spray
+  if (target === 'pct' && (cand === 'g' || cand === 'ml')) return true;
+  return false;
+}
+
+/** True when every target strength appears on the candidate label. */
+export function strengthsMatch(target: Strength[], cand: Strength[]): boolean {
+  if (target.length === 0) return true;
+  return target.every((t) => cand.some((c) => c.u === t.u && compatiblePer(t.per, c.per) && close(t.v, c.v)));
+}
 
 export interface AgentBaseDrugInput {
   /** CRM row primary key (client_medications.id). Optional — callers
@@ -106,19 +176,6 @@ function normalizeStrength(raw: string): string | null {
   return `${m[1]} ${m[2].toUpperCase()}`;
 }
 
-/** Parse a strength value normalized to MG for comparison. Mirror of
- *  parseStrengthMg in useResolveRxcuis — copied here so this module
- *  stays independent of the hook's export surface. */
-function parseStrengthMg(raw: string): number | null {
-  const m = raw.match(/(\d+(?:\.\d+)?)\s*(MG|MCG|G|ML|%)/i);
-  if (!m) return null;
-  const v = Number(m[1]);
-  if (!Number.isFinite(v)) return null;
-  const unit = m[2].toUpperCase();
-  if (unit === 'MCG') return v / 1000;
-  if (unit === 'G') return v * 1000;
-  return v;
-}
 
 /** Pick the best candidate from a search-result list, biased toward
  *  the monotherapy generic when the input doesn't reference a brand
@@ -151,24 +208,19 @@ interface PickedDrug {
 
 function pickBestAgent(
   results: RxNormDrug[],
-  rawStrength: string,
+  target: Strength[],
   rawInputName: string,
 ): PickedDrug | null {
   if (results.length === 0) return null;
-  const target = parseStrengthMg(rawStrength);
   const inputLower = rawInputName.toLowerCase();
 
   // Filter to strength-matched rows when a target strength exists.
-  // Falls back to the full result set when no candidate matches, so
-  // callers still get a result (potentially wrong-strength) rather
-  // than nothing.
-  const filtered = target != null
-    ? results.filter((r) => {
-        const s = parseStrengthMg(r.name);
-        return s != null && Math.abs(s - target) < 0.0001;
-      })
+  // Falls back to the full result set when no candidate matches; the
+  // caller rejects that fallback whenever a strength was filed.
+  const filtered = target.length > 0
+    ? results.filter((r) => strengthsMatch(target, parseStrengths(r.name)))
     : results;
-  const strengthMatched = target != null && filtered.length > 0;
+  const strengthMatched = target.length > 0 && filtered.length > 0;
   const pool = filtered.length > 0 ? filtered : results;
 
   const scored = pool.map((r) => {
@@ -202,7 +254,9 @@ function pickBestAgent(
  *  the form field. */
 function displayFromPicked(d: RxNormDrug): string {
   if (d.brand_name) {
-    const s = d.strength ? ` ${d.strength}` : '';
+    // A pen's "strength" can come back as its fill volume ("0.5 ML");
+    // only append a real dose strength.
+    const s = d.strength && /MG|MCG|UNT|%/i.test(d.strength) ? ` ${d.strength}` : '';
     return `${d.brand_name}${s}`.trim();
   }
   if (d.generic_name) return d.generic_name.trim();
@@ -248,7 +302,18 @@ async function resolveOne(
   // sentinel pickBest uses to fall through to results[0].
   const strength =
     inputDose ?? extractStrengthFromName(originalName) ?? '';
-  const variants = buildNameVariants(originalName);
+  // Strengths to require: from the dose column when it parses, else from
+  // the name. "10-325" (no unit) is a two-ingredient combo strength.
+  const fromDose = inputDose ? parseStrengths(inputDose) : [];
+  const target = fromDose.length > 0 ? fromDose : parseStrengths(originalName);
+  // "Fluticasone Propionate Nasal Spray, USP" finds nothing in drug-search;
+  // without the "USP" / punctuation it finds the nasal spray.
+  const cleanedName = originalName.replace(/\bUSP\b/gi, ' ').replace(/[,;]/g, ' ').replace(/\s+/g, ' ').trim();
+  const variants = [
+    ...(cleanedName !== originalName ? buildNameVariants(cleanedName) : []),
+    ...buildNameVariants(originalName),
+  ];
+  const route = parseDrugRoute(`${originalName} ${inputForm ?? ''}`);
   const normalized = normalizeStrength(strength);
   const queries: string[] = [];
   const seen = new Set<string>();
@@ -264,6 +329,12 @@ async function resolveOne(
   // intermediate variant carrying a residual dose-form token, so
   // pickBestAgent routes ambiguous cases to the canonical monotherapy
   // generic instead of the brand equivalent.
+  // Combo dose ("HYDROcodone-ACETAMINOPHEN" + "10-325"): spell both
+  // strengths out — drug-search returns the exact 10/325 product for it.
+  const ingredients = cleanedName.split(/\s*[-/]\s*/).filter((x) => /[a-z]/i.test(x));
+  if (ingredients.length === 2 && target.length === 2 && target.every((t) => t.per === 'each')) {
+    push(`${ingredients[0]} ${target[0].v} MG / ${ingredients[1]} ${target[1].v} MG`);
+  }
   if (normalized) {
     const byLength = [...variants].sort((a, b) => a.length - b.length);
     for (const v of byLength) push(`${v} ${normalized}`);
@@ -278,14 +349,17 @@ async function resolveOne(
   // nearest wrong-strength row put "Oxycontin 10 MG" on a client who takes
   // oxycodone 5 mg (Janet Moses, 2026-10-20) — a different drug at double
   // the dose, priced against the wrong formulary rows.
-  const requireStrength = parseStrengthMg(strength) != null;
+  const requireStrength = target.length > 0;
   let best: PickedDrug | null = null;
   try {
     for (const q of queries) {
       if (signal?.aborted) break;
-      const results = await search(q, signal);
+      let results = await search(q, signal);
+      // Never cross route: a nasal spray request can't land on an inhaler
+      // or a topical cream of the same ingredient.
+      if (route != null) results = results.filter((r) => parseDrugRoute(r.name) === route);
       if (results.length === 0) continue;
-      const picked = pickBestAgent(results, strength, originalName);
+      const picked = pickBestAgent(results, target, originalName);
       if (!picked?.drug.rxcui) continue;
       if (requireStrength && !picked.strengthMatched) continue;
       best = picked;
