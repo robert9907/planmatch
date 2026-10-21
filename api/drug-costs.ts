@@ -149,7 +149,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     )
       .filter((n, i, arr) => /^\d{11}$/.test(n) && n !== String((p as PrescriptionInput).ndc ?? '') && arr.indexOf(n) === i)
       .slice(0, MAX_ALTERNATES),
-    quantity: String((p as PrescriptionInput).quantity ?? '30'),
+    // medicare.gov's quantity is an int32; a fractional value (42.5 g of
+    // cream) fails the whole request, so round up.
+    quantity: String(Math.max(1, Math.ceil(Number((p as PrescriptionInput).quantity ?? '30') || 30))),
     frequency:
       (p as PrescriptionInput).frequency === 'FREQUENCY_90_DAYS'
         ? 'FREQUENCY_90_DAYS'

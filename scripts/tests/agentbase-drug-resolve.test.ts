@@ -126,3 +126,15 @@ test('strength parsing: units, ratios, percent', () => {
   assert.ok(!strengthsMatch(parseStrengths('10-325', true), parseStrengths('acetaminophen 300 MG / hydrocodone bitartrate 5 MG')));
   assert.ok(strengthsMatch(parseStrengths('20MG'), parseStrengths('atorvastatin 20 MG Oral Tablet')));
 });
+
+// Regression (2026-10-21, live): drug-search 500s on a query with a comma
+// ("Fluticasone Propionate Nasal Spray, USP 50 MCG"). One failing query must
+// not abort the remaining variants.
+test('a failing search query does not stop the remaining variants', async () => {
+  const flaky = async (q: string): Promise<RxNormDrug[]> => {
+    if (q.includes(',')) throw new Error('library/drug-search 500');
+    return table[q.toLowerCase()] ?? [];
+  };
+  const [r] = await resolveAgentBaseDrugs([{ id: 'f', name: 'Fluticasone Propionate Nasal Spray, USP', dose: '50 mcg' }], undefined, flaky);
+  assert.equal(r.rxcui, '1797907');
+});

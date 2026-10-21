@@ -24,7 +24,7 @@ test('monthly quantity falls back to the fill size and refill days', () => {
 });
 
 test('non-tablet forms keep the filed package quantity', () => {
-  assert.equal(monthlyQuantity({ name: 'Estradiol Vaginal Cream', quantity: '42.5', frequency: 'Insert 1 gram vaginally at bedtime 3 times a week' }), 42.5);
+  assert.equal(monthlyQuantity({ name: 'Estradiol Vaginal Cream', quantity: '42.5', frequency: 'Insert 1 gram vaginally at bedtime 3 times a week' }), 43);
   assert.equal(monthlyQuantity({ name: 'Fluticasone Propionate Nasal Spray, USP', quantity: '' }), 16);
 });
 
@@ -70,4 +70,11 @@ test('uncovered drug is penalized at its real gross price, not the notional', ()
   });
   assert.equal(z.covered, false);
   assert.equal(z.yearlyCost, 1086 * 12);
+});
+
+// Regression (2026-10-21, live): medicare.gov rejects a non-integer quantity
+// ("invalid value for int32 field quantity: 42.5") and fails every drug.
+test('monthly quantity is always a whole number', () => {
+  assert.equal(monthlyQuantity({ name: 'Estradiol Vaginal Cream', quantity: '42.5' }), 43);
+  assert.ok(Number.isInteger(monthlyQuantity({ quantity: '45', refillDays: 28 })));
 });

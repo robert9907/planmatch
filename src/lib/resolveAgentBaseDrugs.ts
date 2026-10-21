@@ -354,7 +354,15 @@ async function resolveOne(
   try {
     for (const q of queries) {
       if (signal?.aborted) break;
-      let results = await search(q, signal);
+      // One failing query (drug-search 500s on some punctuation) must not
+      // abort the remaining variants — skip it and keep going.
+      let results: RxNormDrug[];
+      try {
+        results = await search(q, signal);
+      } catch {
+        if (signal?.aborted) break;
+        continue;
+      }
       // Never cross route: a nasal spray request can't land on an inhaler
       // or a topical cream of the same ingredient.
       if (route != null) results = results.filter((r) => parseDrugRoute(r.name) === route);
