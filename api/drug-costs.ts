@@ -260,31 +260,17 @@ function sha256(s: string): string {
 
 // ─── Playwright fetch ──────────────────────────────────────────────────
 
-// One Chromium per warm instance, reused across invocations. Launching a
-// fresh browser per request let concurrent requests (agent-v3 fires several
-// identical cost calls at once) exhaust the instance — page.goto failed with
-// net::ERR_INSUFFICIENT_RESOURCES for every client (2026-10-20).
-type PwBrowser = import('playwright-core').Browser;
-let browserPromise: Promise<PwBrowser> | null = null;
-
-async function getBrowser(): Promise<PwBrowser> {
-  if (browserPromise) {
-    const b = await browserPromise.catch(() => null);
-    if (b && b.isConnected()) return b;
-    browserPromise = null;
-  }
-  browserPromise = (async () => {
-    const { chromium } = await import('playwright-core');
-    const sparticuz = (await import('@sparticuz/chromium')).default;
-    const executablePath = await sparticuz.executablePath();
-    return chromium.launch({ args: sparticuz.args, executablePath, headless: true });
-  })();
-  try {
-    return await browserPromise;
-  } catch (err) {
-    browserPromise = null;
-    throw err;
-  }
+// A fresh Chromium per medicare.gov session, closed afterwards. A browser
+// shared across invocations died between requests on Vercel (sparticuz runs
+// Chromium single-process; closing a context takes the browser down) and a
+// relaunch in the same instance failed the same way (2026-10-21). Sessions
+// are serialized per instance and identical requests share one fetch, which
+// is what fixed the ERR_INSUFFICIENT_RESOURCES overload — not the sharing.
+async function launchBrowser() {
+  const { chromium } = await import('playwright-core');
+  const sparticuz = (await import('@sparticuz/chromium')).default;
+  const executablePath = await sparticuz.executablePath();
+  return chromium.launch({ args: sparticuz.args, executablePath, headless: true });
 }
 
 // Serialize medicare.gov sessions within an instance (one page at a time).
@@ -309,58 +295,23 @@ function fetchDrugCostsShared(
   return p;
 }
 
-interface ContextLike<P> {
-  newPage(): Promise<P>;
-  close(): Promise<unknown>;
-}
-interface BrowserLike<P> {
-  newContext(opts?: Record<string, unknown>): Promise<ContextLike<P>>;
-}
-
-const STALE_BROWSER_RE = /has been closed|Target closed|browser has disconnected/i;
-
-/** Open a context + page on the shared browser. A warm instance's browser
- *  can go stale between requests ("Target page, context or browser has been
- *  closed"); relaunch once and retry rather than failing the request. */
-export async function openPageWithRelaunch<P>(
-  acquire: (fresh: boolean) => Promise<BrowserLike<P>>,
-): Promise<{ ctx: ContextLike<P>; page: P }> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const browser = await acquire(attempt > 0);
-    let ctx: ContextLike<P> | null = null;
-    try {
-      ctx = await browser.newContext({ userAgent: USER_AGENT, locale: 'en-US' });
-      const page = await ctx.newPage();
-      return { ctx, page };
-    } catch (err) {
-      await ctx?.close().catch(() => {});
-      if (attempt === 0 && STALE_BROWSER_RE.test((err as Error).message)) {
-        console.warn('[drug-costs] shared browser was stale — relaunching');
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw new Error('drug-costs: could not open a browser page');
-}
-
 async function fetchDrugCosts(
   body: DrugCostBody,
 ): Promise<{ source: 'live' | 'rate_limited'; costs: PlanDrugCost[] }> {
-  const { ctx, page } = await openPageWithRelaunch(async (fresh) => {
-    if (fresh) {
-      const old = browserPromise;
-      browserPromise = null;
-      await old?.then((b) => b.close()).catch(() => {});
-    }
-    return getBrowser();
-  });
+  const browser = await launchBrowser();
+  const ctx = await browser.newContext({ userAgent: USER_AGENT, locale: 'en-US' });
+  const page = await ctx.newPage();
   try {
 
     await page.goto(WARM_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     // Akamai's _abck sensor script runs async post-DOMContentLoaded.
     // Real-browser sensors complete within ~3s — 6s is a safety buffer.
     await page.waitForTimeout(COOKIE_WARM_MS);
+
+    // medicare.gov only prices retail for a chosen pharmacy (npis). With no
+    // pharmacy, a retail-only request prices nothing, so ask for both
+    // channels and take the lowest valid total.
+    const retailOnly = body.retail_only && body.npis.length > 0;
 
     // Working NDC per prescription. Recognition is plan-independent, so once
     // a batch settles which NDC medicare.gov prices, later batches reuse it.
@@ -380,7 +331,7 @@ async function fetchDrugCosts(
         })),
         lis: body.lis,
         full_year: false,
-        retailOnly: body.retail_only,
+        retailOnly: retailOnly,
         plans,
       };
       const traceId = [...Array(32)]
@@ -431,7 +382,7 @@ async function fetchDrugCosts(
           const one = await post([plan]);
           if (one.status() === 429) { anyRateLimited = true; break; }
           if (!one.ok()) continue;
-          costs.push(...extractCosts((await one.json()) as Record<string, unknown>, body.retail_only, requested()));
+          costs.push(...extractCosts((await one.json()) as Record<string, unknown>, retailOnly, requested()));
         }
         if (anyRateLimited) break;
         continue;
@@ -445,14 +396,19 @@ async function fetchDrugCosts(
       // the rest. Swap each unpriced NDC for its next alternate and re-ask,
       // so the drug is counted instead of quietly left out.
       for (let round = 0; round < MAX_NDC_ROUNDS; round++) {
-        if (!swapUnpricedNdcs(slots, pricedNdcs(data))) break;
+        const priced = pricedNdcs(data);
+        // Nothing priced at all is not an NDC-recognition problem (e.g. no
+        // pharmacy for a retail price) — swapping every NDC would just burn
+        // the alternates. Only swap when some drugs priced and others didn't.
+        if (priced.size === 0) break;
+        if (!swapUnpricedNdcs(slots, priced)) break;
         console.info(`[drug-costs] unpriced NDC — retrying with alternates: ${requested().join(',')}`);
         const retry = await post(batches[i]);
         if (retry.status() === 429) { anyRateLimited = true; break; }
         if (!retry.ok()) break;
         data = (await retry.json()) as Record<string, unknown>;
       }
-      costs.push(...extractCosts(data, body.retail_only, requested()));
+      costs.push(...extractCosts(data, retailOnly, requested()));
       if (anyRateLimited) break;
     }
 
@@ -461,7 +417,7 @@ async function fetchDrugCosts(
       costs,
     };
   } finally {
-    await ctx.close().catch(() => {});
+    await browser.close().catch(() => {});
   }
 }
 
