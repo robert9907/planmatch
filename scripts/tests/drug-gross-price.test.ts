@@ -23,9 +23,17 @@ test('monthly quantity falls back to the fill size and refill days', () => {
   assert.equal(monthlyQuantity({}), 30);
 });
 
-test('non-tablet forms keep the filed package quantity', () => {
-  assert.equal(monthlyQuantity({ name: 'Estradiol Vaginal Cream', quantity: '42.5', frequency: 'Insert 1 gram vaginally at bedtime 3 times a week' }), 43);
-  assert.equal(monthlyQuantity({ name: 'Fluticasone Propionate Nasal Spray, USP', quantity: '' }), 16);
+// Regression (2026-10-21, Cynthia Kline #394): medicare.gov counts creams,
+// sprays and pens in packages — quantity 43 priced 43 tubes of estradiol.
+test('packaged forms price one package per month', () => {
+  assert.equal(monthlyQuantity({ name: 'Estradiol Vaginal Cream', quantity: '42.5', frequency: 'Insert 1 gram vaginally at bedtime 3 times a week' }), 1);
+  assert.equal(monthlyQuantity({ name: 'Fluticasone Propionate Nasal Spray, USP', quantity: '16' }), 1);
+  assert.equal(monthlyQuantity({ name: 'Zepbound 5 MG/0.5ML Pen', quantity: '2' }), 1);
+  assert.equal(monthlyQuantity({ name: 'Albuterol Inhaler', quantity: '' }), 1);
+});
+
+test('liquids keep the filed quantity', () => {
+  assert.equal(monthlyQuantity({ name: 'Amoxicillin Oral Suspension', quantity: '150' }), 150);
 });
 
 test('gross price per rxcui = median full_cost across plans, matched through alternates', () => {
@@ -75,6 +83,6 @@ test('uncovered drug is penalized at its real gross price, not the notional', ()
 // Regression (2026-10-21, live): medicare.gov rejects a non-integer quantity
 // ("invalid value for int32 field quantity: 42.5") and fails every drug.
 test('monthly quantity is always a whole number', () => {
-  assert.equal(monthlyQuantity({ name: 'Estradiol Vaginal Cream', quantity: '42.5' }), 43);
+  assert.equal(monthlyQuantity({ name: 'Amoxicillin Oral Suspension', quantity: '42.5' }), 43);
   assert.ok(Number.isInteger(monthlyQuantity({ quantity: '45', refillDays: 28 })));
 });
