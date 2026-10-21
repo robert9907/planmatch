@@ -9,7 +9,7 @@ import { parseDrugProfile, pickBestFormularyRow } from '../../api/_lib/formulary
 const row = (rxcui: string, drug_name: string, tier: number | null) => ({ rxcui, drug_name, tier });
 
 test('parseDrugProfile — combo / brand / er / form / strength', () => {
-  assert.deepEqual(parseDrugProfile('gabapentin 600 MG'), { combo: false, brand: false, er: false, form: null, strengths: ['600 MG'] });
+  assert.deepEqual(parseDrugProfile('gabapentin 600 MG'), { combo: false, brand: false, brandName: null, er: false, form: null, route: null, strengths: ['600 MG'] });
   const janumet = parseDrugProfile('24 HR metformin hydrochloride 1000 MG / sitagliptin phosphate 50 MG Extended Release Oral Tablet [Janumet]');
   assert.equal(janumet.combo, true);
   assert.equal(janumet.brand, true);
