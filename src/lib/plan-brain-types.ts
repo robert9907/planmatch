@@ -606,6 +606,9 @@ export interface BrainInputs {
    *  keyed `${contract}-${plan}-${segment}`. Used only in the MFP fallback
    *  (IRA drug with no cache row). From pbp_mrx_tier (mrx_tier_ira_rspfd_*). */
   iraCostShareByPlanKey?: Map<string, Map<number, { type: 'copay' | 'coinsurance'; amount: number }>>;
+  /** rxcui → live Medicare.gov gross monthly price for the client's
+   *  quantity. See EstimateBundleInput.grossMonthlyByRxcui. */
+  grossMonthlyByRxcui?: Map<string, number>;
   // Optional: per-plan provider coverage, keyed on
   // `${contract_id}-${plan_id}` (no segment, mirrors formulary keying).
   providerNetworkByPlanKey?: Map<string, Map<string, ProviderNetworkCacheEntry>>;
