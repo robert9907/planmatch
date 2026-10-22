@@ -246,9 +246,11 @@ export function estimateDrugYearlyCost(d: EstimateDrugInput): DrugYearlyEstimate
   const cov = d.rxcui ? d.formulary.get(d.rxcui) : undefined;
   const tier = cov?.tier ?? null;
 
-  // Cache path
+  // Cache path. Bridge via the user's rxcui, falling back to the matched
+  // formulary rxcui (cov.rxcui — the on-formulary sibling the scrape cached)
+  // when the user's own rxcui has no pm_drug_ndc row.
   if (d.rxcui && d.cache && d.rxcuiToNdc) {
-    const ndc = d.rxcuiToNdc.get(d.rxcui);
+    const ndc = d.rxcuiToNdc.get(d.rxcui) ?? (cov?.rxcui ? d.rxcuiToNdc.get(cov.rxcui) : undefined);
     const hit = ndc ? d.cache.get(ndc) : undefined;
     if (hit) {
       const yearly = hit.estimated_yearly_total ?? estimateFromTier(hit.tier ?? tier, hit.full_cost ?? null, d.benefits);
@@ -402,7 +404,13 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
     let cachedTier: number | null = null;
     let cachedCovered: boolean | null = null;
     if (d.rxcui && args.cache && args.rxcuiToNdc) {
-      const ndc = args.rxcuiToNdc.get(d.rxcui);
+      // Bridge the user's rxcui to a cached NDC. The user's own rxcui often
+      // has no pm_drug_ndc row (drug-search hands back one HFA/strength
+      // sibling, the scrape cached another); fall back to the MATCHED
+      // formulary rxcui (cov.rxcui — the on-formulary sibling this plan
+      // actually files), which is the rxcui the scrape resolved. Same
+      // ingredient+strength+form, so its cached price is this drug's price.
+      const ndc = args.rxcuiToNdc.get(d.rxcui) ?? (cov?.rxcui ? args.rxcuiToNdc.get(cov.rxcui) : undefined);
       const hit = ndc ? args.cache.get(ndc) : undefined;
       if (hit) {
         cachedTier = hit.tier;

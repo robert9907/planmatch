@@ -322,7 +322,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? sb
             .from('pm_drug_ndc')
             .select('rxcui, ndc, default_quantity_30, default_quantity_90')
-            .in('rxcui', rxcuis)
+            // Expanded set, not just the user's input rxcuis. pm_drug_ndc
+            // carries the NDC bridge for the rxcui the medicare.gov scrape
+            // resolved (e.g. albuterol-HFA SCD 2123076 → NDC 50090413700),
+            // which is usually a sibling of what drug-search hands the user
+            // (801092 / 2123111). Loading the whole expansion lets the cost
+            // path bridge via the matched formulary rxcui when the user's own
+            // rxcui has no pm_drug_ndc row — otherwise the drug-cost cache
+            // never hits and a covered drug falls to full-retail fallback.
+            .in('rxcui', expandedRxcuiList.length > 0 ? expandedRxcuiList : rxcuis)
         : Promise.resolve({ data: [], error: null }),
       npis.length > 0
         ? sb
