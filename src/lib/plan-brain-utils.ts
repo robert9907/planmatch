@@ -457,8 +457,16 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       // No tier from cache OR formulary AND no cache override saying
       // covered=true. cachedCovered === false ⇒ confirmed uncovered;
       // cachedCovered == null ⇒ unknown (no evidence either way).
+      // Price an uncovered drug at its REAL Plan Finder cash first — the
+      // cache's full_cost (negotiated 30-day fill) × 12 fills via retailMonthly
+      // below. folic acid: $2.43 → $29.16/yr, matching Plan Finder, instead of
+      // the flat NOTIONAL_TIER_FULL_COST[3]×12 ≈ $4,200 (145× too high). The
+      // notional stays only as the no-cache fallback so a plan that omits the
+      // drug still carries a cost penalty (Gate-4 missing-drug signal).
       const retailMonthly =
-        (d.rxcui ? args.grossMonthlyByRxcui?.get(d.rxcui) : undefined) ?? NOTIONAL_TIER_FULL_COST[3];
+        (cachedFullCost && cachedFullCost > 0 ? cachedFullCost : undefined) ??
+        (d.rxcui ? args.grossMonthlyByRxcui?.get(d.rxcui) : undefined) ??
+        NOTIONAL_TIER_FULL_COST[3];
       return {
         input: d,
         tier: null,
