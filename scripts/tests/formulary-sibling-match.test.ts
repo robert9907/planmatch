@@ -105,3 +105,43 @@ test('insulin degludec never matches glargine/aspart (rxcui-expansion + combo gu
   const r = pickBestFormularyRow('1670008', orig, []); // plan files no degludec sibling
   assert.equal(r.row, null);
 });
+
+// ── Inhaler dose-form + route (Rob, 2026-10-20; both surfaces) ──────────
+// C08 Denise Holloway albuterol HFA: PF covers it $0 on H5302-012. The HFA
+// metered-dose inhaler must win over the nebulizer Inhalation Solution and
+// the oral tablet; and an inhaler never crosses to a nasal spray / topical.
+test('parseDrugProfile — inhaler form + inhaled route; nebulizer solution stays solution', () => {
+  const hfa = parseDrugProfile('NDA020983 200 ACTUAT albuterol 0.09 MG/ACTUAT Metered Dose Inhaler');
+  assert.equal(hfa.form, 'inhaler');
+  assert.equal(hfa.route, 'inhaled');
+  const dpi = parseDrugProfile('200 ACTUAT albuterol 0.09 MG/ACTUAT Dry Powder Inhaler');
+  assert.equal(dpi.form, 'inhaler');
+  const neb = parseDrugProfile('albuterol 0.83 MG/ML Inhalation Solution');
+  assert.equal(neb.form, 'solution');
+  assert.equal(neb.route, 'inhaled');
+});
+
+test('C08 albuterol HFA → metered-dose inhaler, not the nebulizer solution or oral tablet', () => {
+  const hfa = parseDrugProfile('NDA020983 200 ACTUAT albuterol 0.09 MG/ACTUAT Metered Dose Inhaler');
+  const rows = [
+    row('2123076', 'NDA020983 200 ACTUAT albuterol 0.09 MG/ACTUAT Metered Dose Inhaler', 2),
+    row('630208', 'albuterol 0.83 MG/ML Inhalation Solution', 2),
+    row('197316', 'albuterol 2 MG Oral Tablet', 4),
+  ];
+  const r = pickBestFormularyRow('__nonexact__', hfa, rows);
+  assert.equal(r.row?.rxcui, '2123076');
+  assert.equal(r.fallback, false);
+  // exact rxcui still wins outright
+  assert.equal(pickBestFormularyRow('2123076', hfa, rows).row?.rxcui, '2123076');
+});
+
+test('inhaler never crosses route to a nasal spray / ointment', () => {
+  const diskus = parseDrugProfile('60 ACTUAT fluticasone propionate 0.05 MG/ACTUAT Dry Powder Inhaler');
+  const nasal = row('N', 'fluticasone propionate 0.05 MG/ACTUAT Metered Dose Nasal Spray', 1);
+  const ointment = row('T', 'fluticasone propionate 0.00005 MG/MG Topical Ointment', 2);
+  assert.equal(pickBestFormularyRow('896018', diskus, [nasal, ointment]).row, null);
+  // Same ingredient + same strength, inhaler form — a legit sibling (rule 1d
+  // excludes a DIFFERENT strength, so match the request's 0.05 MG/ACTUAT).
+  const hfa = row('H', '120 ACTUAT fluticasone propionate 0.05 MG/ACTUAT Metered Dose Inhaler', 3);
+  assert.equal(pickBestFormularyRow('896018', diskus, [nasal, hfa]).row?.rxcui, 'H');
+});

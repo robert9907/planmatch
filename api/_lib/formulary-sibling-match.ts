@@ -26,7 +26,7 @@ export interface DrugProfile {
    *  the same molecule (Ozempic → never Wegovy). */
   brandName: string | null;
   er: boolean;
-  form: 'tablet' | 'capsule' | 'solution' | 'injection' | 'patch' | 'other' | null;
+  form: 'tablet' | 'capsule' | 'solution' | 'injection' | 'patch' | 'inhaler' | 'other' | null;
   /** Non-systemic route of administration. null = oral / injected /
    *  transdermal. undefined = the request's name is unknown, so route is
    *  not enforced. A sibling never crosses a known route — see rule 1c. */
@@ -82,7 +82,14 @@ export function parseDrugProfile(name: string | null | undefined): DrugProfile {
   const n = (name ?? '').trim();
   const lower = n.toLowerCase();
   const form: DrugProfile['form'] =
+    // Nebulizer "Inhalation Solution"/"Inhalation Suspension" is a solution
+    // first — it must NOT fold into the aerosol/powder inhaler bucket below
+    // (an HFA request is not a nebule, and vice versa).
     /oral solution|\bsolution\b|oral suspension|\bsuspension\b|\belixir\b|\bsyrup\b/.test(lower) ? 'solution'
+    // Metered-dose / dry-powder / soft-mist inhalers (HFA, Ellipta, Respimat,
+    // Diskus, Flexhaler, HandiHaler, …). "Inhalation Powder/Aerosol/Spray" and
+    // "Metered/Dry… Inhaler" land here; nebulizer solutions were caught above.
+    : /metered dose inhaler|dry powder inhaler|breath activated|\binhaler\b|inhalation (?:spray|aerosol|powder)|\baerosol\b|\bhfa\b|\brespimat\b|\bellipta\b|\bdiskus\b|flexhaler|handihaler|twisthaler|neohaler|respiclick|digihaler/.test(lower) ? 'inhaler'
     : /injection|injectable|\bprefilled\b|\bpen\b|\bvial\b|\bcartridge\b|flextouch|flexpen|solostar/.test(lower) ? 'injection'
     : /\bpatch\b|transdermal/.test(lower) ? 'patch'
     : /\bcapsule\b/.test(lower) ? 'capsule'
