@@ -739,6 +739,7 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
           cache: planDrugCache,
           rxcuiToNdc: input.rxcuiToNdc,
           iraCostShareByTier: input.iraCostShareByPlanKey?.get(planKeyWithSegment(row)),
+          grossMonthlyByRxcui: input.grossMonthlyByRxcui,
         });
     const totalAnnualDrugCost = drugEstimates.reduce((s, x) => s + x.yearlyCost, 0);
     const coveredCount = drugEstimates.filter((x) => x.covered).length;

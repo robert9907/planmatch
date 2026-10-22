@@ -327,11 +327,8 @@ export function MedsScreen({ onNext, onBack, clientView, capture, formularyUnava
           )}
           {bestAnnualTotal != null ? (
             <>
-              💰 Best total annual drug spend across plans:{' '}
-              <b>{fmt(bestAnnualTotal)}/yr</b>{' '}
-              <span style={{ opacity: 0.6 }}>
-                (live from pm_drug_cost_cache)
-              </span>
+              💰 Lowest monthly drug cost across plans:{' '}
+              <b>{fmt(Math.round(bestAnnualTotal / 12))}/mo</b>
             </>
           ) : drugCosts.loading ? (
             <>💰 Calculating live total annual drug spend…</>
@@ -615,8 +612,8 @@ function MedRow({
             <div style={{ fontSize: 14, fontWeight: 800, color: '#0d2f5e' }}>
               {estAnnual != null ? (
                 <>
-                  {fmt(estAnnual)}
-                  <span style={{ fontSize: 10, color: '#94a3b8' }}>/yr est</span>
+                  {fmt(Math.round(estAnnual / 12))}
+                  <span style={{ fontSize: 10, color: '#94a3b8' }}>/mo est</span>
                 </>
               ) : (
                 <span style={{ fontSize: 11, color: '#64748b' }}>copay TBD</span>

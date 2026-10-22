@@ -233,17 +233,33 @@ export function IntakeScreen({
       setZipError(null);
       try {
         console.info(`[intake] zip-county fetch zip=${client.zip}`);
-        const res = await fetch(`/api/zip-county?zip=${client.zip}`, {
+        // &v=2: responses cached before `counties` existed (max-age 1h) would
+        // otherwise skip the keep-AgentBase-county check below.
+        const res = await fetch(`/api/zip-county?zip=${client.zip}&v=2`, {
           signal: ctl.signal,
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const body = (await res.json()) as { county?: string; state?: StateCode };
+        const body = (await res.json()) as {
+          county?: string;
+          state?: StateCode;
+          counties?: string[];
+        };
         if (ctl.signal.aborted) return;
         console.info(
-          `[intake] zip-county response zip=${client.zip} → county=${body.county ?? 'null'} state=${body.state ?? 'null'}`,
+          `[intake] zip-county response zip=${client.zip} → county=${body.county ?? 'null'} state=${body.state ?? 'null'} counties=${(body.counties ?? []).join('|')}`,
         );
         const patch: Partial<typeof client> = {};
-        if (body.county) patch.county = body.county;
+        // A ZIP can span several counties. Keep the county already on the
+        // client (AgentBase / broker entry) when it is one of this ZIP's
+        // counties; only fall back to the ZIP's default county otherwise.
+        // Overwriting it put Janet Moses (AgentBase: Jackson) in Banks
+        // County's plan pool from ZIP 30530 (2026-10-20).
+        const current = client.county?.trim().toLowerCase();
+        const keepCurrent =
+          Boolean(current) &&
+          (body.counties ?? []).some((c) => c.trim().toLowerCase() === current) &&
+          (!body.state || body.state === client.state);
+        if (body.county && !keepCurrent) patch.county = body.county;
         if (body.state) patch.state = body.state;
         if (Object.keys(patch).length > 0) updateClient(patch);
       } catch (err) {

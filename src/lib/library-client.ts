@@ -325,6 +325,9 @@ export interface LibraryRankPlan {
 export interface LibraryRankResult {
   top_plans: LibraryRankPlan[];
   bench_plans: LibraryRankPlan[];
+  /** The client's current plan, priced but never ranked (the brain keeps it
+   *  out of the pool). Null/absent when none is on file. */
+  current_plan?: LibraryRankPlan | null;
   total_plans_in_county: number;
   gate1_survivors: number;
   gate2_survivors: number;
@@ -404,6 +407,10 @@ export interface LibraryRankInput {
   /** Community vs institutional/HCBS. Only affects auto-deeming for
    *  FBDE beneficiaries. Same forward-compat status as lis_tier. */
   living_setting?: LivingSetting;
+  /** rxcui → live Medicare.gov gross monthly price for the client's
+   *  quantity (src/lib/drugGrossPrice). Prices drugs pm_drug_cost_cache
+   *  doesn't carry instead of the flat per-tier notional. */
+  grossMonthlyByRxcui?: Record<string, number>;
 }
 
 export async function rankPlans(

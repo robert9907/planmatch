@@ -17,6 +17,7 @@ import { useSession } from '@/lib/session';
 import { useTpmoCounts } from '@/hooks/useTpmoCounts';
 import type { LibraryRankPlan } from '@/lib/library-client';
 import { Btn } from './compare-v2/Button';
+import type { HeadToHeadQuote } from './headToHeadQuote';
 
 const MAX_PLANS = 5;
 // Sends go through this app's own server (api/quote-send.ts): it checks the
@@ -40,9 +41,13 @@ interface QuoteBuilderProps {
   rankedPlans: LibraryRankPlan[];
   /** Called with the quote URL + shortId after a successful send. */
   onQuoteSent?: (url: string, shortId: string) => void;
+  /** Head-to-Head mode: send the frozen Current-vs-Challenger comparison.
+   *  The plan picker is replaced by the fixed pair; rankedPlans must hold
+   *  just the challenger. */
+  headToHead?: HeadToHeadQuote;
 }
 
-export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
+export function QuoteBuilder({ rankedPlans, onQuoteSent, headToHead }: QuoteBuilderProps) {
   const session = useSession();
   const client = session.client;
   const drugs = session.medications;
@@ -52,11 +57,18 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
   const tpmo = useTpmoCounts();
 
   const defaultSelected = useMemo(() => {
-    return rankedPlans.slice(0, 3).map((p) => p.plan_id);
-  }, [rankedPlans]);
+    return rankedPlans.slice(0, headToHead ? 1 : 3).map((p) => p.plan_id);
+  }, [rankedPlans, headToHead]);
 
-  const [selectedIds, setSelectedIds] = useState<string[]>(defaultSelected);
-  const [note, setNote] = useState<string>(buildDefaultNote(firstNameFrom(client.name)));
+  const [pickedIds, setSelectedIds] = useState<string[]>(defaultSelected);
+  // Head-to-Head: the challenger is always the one plan on the quote, even
+  // when the broker swaps challengers with the panel open.
+  const selectedIds = headToHead ? defaultSelected : pickedIds;
+  const [note, setNote] = useState<string>(
+    headToHead
+      ? buildHeadToHeadNote(firstNameFrom(client.name), headToHead)
+      : buildDefaultNote(firstNameFrom(client.name)),
+  );
   const [phoneOverride, setPhoneOverride] = useState<string>(client.phone ?? '');
   const [emailOverride, setEmailOverride] = useState<string>(client.email ?? '');
   const [sendText, setSendText] = useState<boolean>(true);
@@ -108,7 +120,10 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
       clientPhone: phone || null,
       clientEmail: email || undefined,
       send: { sms: willText, email: willEmail },
-      topPick: topPick ? tripleKey(parseTriple(topPick)) : undefined,
+      topPick: headToHead
+        ? tripleKey(parseTriple(selectedIds[0]))
+        : topPick ? tripleKey(parseTriple(topPick)) : undefined,
+      headToHead: headToHead ?? undefined,
       tpmoOrgCount: tpmo.status === 'ready' ? tpmo.counts.orgCount : undefined,
       tpmoProductCount: tpmo.status === 'ready' ? tpmo.counts.productCount : undefined,
       dentalPlans: quoteDental.map((d) => ({
@@ -182,83 +197,123 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent }: QuoteBuilderProps) {
 
   return (
     <div style={cardStyle}>
-      <div style={{ fontSize: 18, fontWeight: 600, color: NAVY, fontFamily: 'Fraunces, Georgia, serif' }}>
-        Send a quote
-      </div>
-      <div style={{ marginTop: 4, fontSize: 12, color: MUTED }}>
-        Pick up to {MAX_PLANS} plans, add a personal note, and text and/or email the
-        client a link to a frozen comparison page.
-      </div>
-
-      <FieldLabel>Plans</FieldLabel>
-      <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {rankedPlans.map((p) => {
-          const id = p.plan_id;
-          const checked = selectedIds.includes(id);
-          const disabled = !checked && selectedIds.length >= MAX_PLANS;
-          return (
-            <label
-              key={id}
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 10,
-                padding: 12,
-                borderRadius: 10,
-                border: `1px solid ${checked ? BRAND_BLUE : BORDER}`,
-                background: checked ? `${BRAND_BLUE}0d` : '#fff',
-                cursor: disabled ? 'not-allowed' : 'pointer',
-                opacity: disabled ? 0.4 : 1,
-                transition: 'background 120ms ease, border-color 120ms ease',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={checked}
-                disabled={disabled}
-                onChange={() => toggle(id)}
-                style={{ marginTop: 2 }}
-              />
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 500, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {p.plan_name}
-                </div>
-                <div style={{ fontSize: 11, color: MUTED, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {p.carrier ?? 'Carrier n/a'}
-                  {' · '}
-                  {p.plan_type ?? '—'}
-                  {' · '}${p.premium.toFixed(2)}/mo
-                  {' · '}{p.star_rating != null ? `${p.star_rating.toFixed(1)}★` : 'Not yet rated'}
-                </div>
+      {headToHead ? (
+        <>
+          <div style={{ fontSize: 18, fontWeight: 600, color: NAVY, fontFamily: 'Fraunces, Georgia, serif' }}>
+            Send this comparison
+          </div>
+          <div style={{ marginTop: 4, fontSize: 12, color: MUTED }}>
+            Texts and/or emails the client a link to this exact Head to Head, frozen as it is now.
+          </div>
+          <FieldLabel>Comparison</FieldLabel>
+          <div
+            style={{
+              marginTop: 6, padding: 12, borderRadius: 10, border: `1px solid ${BORDER}`,
+              display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 10, alignItems: 'center',
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: 0.6 }}>
+                {headToHead.baseline_label}
               </div>
-              {checked && (
-                <button
-                  type="button"
-                  onClick={(e) => { e.preventDefault(); setTopPick((cur) => (cur === id ? null : id)); }}
-                  aria-pressed={topPick === id}
-                  style={{
-                    flex: 'none',
-                    alignSelf: 'center',
-                    padding: '4px 10px',
-                    borderRadius: 999,
-                    border: `1px solid ${NAVY}`,
-                    background: topPick === id ? NAVY : '#fff',
-                    color: topPick === id ? '#fff' : NAVY,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {topPick === id ? 'Top pick ✓' : 'Mark top pick'}
-                </button>
-              )}
-            </label>
-          );
-        })}
-      </div>
-      <div style={{ marginTop: 4, fontSize: 11, color: MUTED }}>
-        {selectedIds.length} of {MAX_PLANS} selected
-      </div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>{headToHead.current.carrier}</div>
+              <div style={{ fontSize: 11, color: MUTED }}>{headToHead.current.plan_name}</div>
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 800, color: NAVY }}>VS</div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: 0.6 }}>
+                Challenger
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>{headToHead.challenger.carrier}</div>
+              <div style={{ fontSize: 11, color: MUTED }}>{headToHead.challenger.plan_name}</div>
+            </div>
+          </div>
+          <div style={{ marginTop: 4, fontSize: 11, color: MUTED }}>
+            {headToHead.rows.length} rows · {headToHead.challenger.carrier} wins {headToHead.challenger_wins}
+            {headToHead.annual_savings ? ` · saves ~$${Math.round(headToHead.annual_savings).toLocaleString()}/yr` : ''}
+          </div>
+        </>
+      ) : (
+        <>
+        <div style={{ fontSize: 18, fontWeight: 600, color: NAVY, fontFamily: 'Fraunces, Georgia, serif' }}>
+          Send a quote
+        </div>
+        <div style={{ marginTop: 4, fontSize: 12, color: MUTED }}>
+          Pick up to {MAX_PLANS} plans, add a personal note, and text and/or email the
+          client a link to a frozen comparison page.
+        </div>
+
+        <FieldLabel>Plans</FieldLabel>
+        <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {rankedPlans.map((p) => {
+            const id = p.plan_id;
+            const checked = selectedIds.includes(id);
+            const disabled = !checked && selectedIds.length >= MAX_PLANS;
+            return (
+              <label
+                key={id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  padding: 12,
+                  borderRadius: 10,
+                  border: `1px solid ${checked ? BRAND_BLUE : BORDER}`,
+                  background: checked ? `${BRAND_BLUE}0d` : '#fff',
+                  cursor: disabled ? 'not-allowed' : 'pointer',
+                  opacity: disabled ? 0.4 : 1,
+                  transition: 'background 120ms ease, border-color 120ms ease',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={disabled}
+                  onChange={() => toggle(id)}
+                  style={{ marginTop: 2 }}
+                />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {p.plan_name}
+                  </div>
+                  <div style={{ fontSize: 11, color: MUTED, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {p.carrier ?? 'Carrier n/a'}
+                    {' · '}
+                    {p.plan_type ?? '—'}
+                    {' · '}${p.premium.toFixed(2)}/mo
+                    {' · '}{p.star_rating != null ? `${p.star_rating.toFixed(1)}★` : 'Not yet rated'}
+                  </div>
+                </div>
+                {checked && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.preventDefault(); setTopPick((cur) => (cur === id ? null : id)); }}
+                    aria-pressed={topPick === id}
+                    style={{
+                      flex: 'none',
+                      alignSelf: 'center',
+                      padding: '4px 10px',
+                      borderRadius: 999,
+                      border: `1px solid ${NAVY}`,
+                      background: topPick === id ? NAVY : '#fff',
+                      color: topPick === id ? '#fff' : NAVY,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {topPick === id ? 'Top pick ✓' : 'Mark top pick'}
+                  </button>
+                )}
+              </label>
+            );
+          })}
+        </div>
+        <div style={{ marginTop: 4, fontSize: 11, color: MUTED }}>
+          {selectedIds.length} of {MAX_PLANS} selected
+        </div>
+        </>
+      )}
 
       <FieldLabel>Dental plans</FieldLabel>
       {quoteDental.length === 0 ? (
@@ -408,6 +463,14 @@ function firstNameFrom(name: string | undefined | null): string | null {
 function buildDefaultNote(firstName: string | null): string {
   const greeting = firstName ? `Hi ${firstName}` : 'Hi there';
   return `${greeting}, here are the plans we talked about. Tap into a plan for full benefits, and call or text me if anything looks off.`;
+}
+
+function buildHeadToHeadNote(firstName: string | null, h2h: HeadToHeadQuote): string {
+  const greeting = firstName ? `Hi ${firstName}` : 'Hi there';
+  const savings = h2h.annual_savings && h2h.annual_savings > 0
+    ? ` It's an estimated $${Math.round(h2h.annual_savings).toLocaleString()} a year less for you.`
+    : '';
+  return `${greeting}, here's your current plan side by side with ${h2h.challenger.plan_name.toLowerCase().startsWith(h2h.challenger.carrier.toLowerCase()) ? h2h.challenger.plan_name : `${h2h.challenger.carrier} ${h2h.challenger.plan_name}`}.${savings} Call or text me if anything looks off.`;
 }
 
 function displayPhone(raw: string): string {

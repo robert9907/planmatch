@@ -176,6 +176,7 @@ export function buildAgentV3LisMaps(args: {
 
   for (const lp of ranked.top_plans) processPlan(lp);
   for (const lp of ranked.bench_plans) processPlan(lp);
+  if (ranked.current_plan) processPlan(ranked.current_plan);
 
   return { annualDrugByPlanId, dualEligibleByPlanId };
 }

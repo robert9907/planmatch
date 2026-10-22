@@ -321,6 +321,12 @@ interface EstimateBundleInput {
    *  Maximum Fair Price with this cost-share instead of the retail notional.
    *  From pbp_mrx_tier (mrx_tier_ira_rspfd_*). */
   iraCostShareByTier?: Map<number, { type: 'copay' | 'coinsurance'; amount: number }>;
+  /** rxcui → Medicare.gov gross (full_cost) price for the client's monthly
+   *  quantity, fetched live. Used when this plan has no cache row for the
+   *  drug, ahead of the MFP and flat per-tier notional fallbacks — the
+   *  notional ($200/mo for Tier 3) inflated generics like gabapentin and
+   *  pushed every plan to the Part D cap (Cynthia Kline, 2026-10-21). */
+  grossMonthlyByRxcui?: Map<string, number>;
 }
 
 interface DrugInfo {
@@ -443,7 +449,8 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       // No tier from cache OR formulary AND no cache override saying
       // covered=true. cachedCovered === false ⇒ confirmed uncovered;
       // cachedCovered == null ⇒ unknown (no evidence either way).
-      const retailMonthly = NOTIONAL_TIER_FULL_COST[3];
+      const retailMonthly =
+        (d.rxcui ? args.grossMonthlyByRxcui?.get(d.rxcui) : undefined) ?? NOTIONAL_TIER_FULL_COST[3];
       return {
         input: d,
         tier: null,
@@ -462,10 +469,12 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
     // ~5% of Plan Finder vs ~+20% retail. The cache still wins when present.
     const noCacheGross = !(cachedFullCost && cachedFullCost > 0);
     const mfpGross = noCacheGross ? mfpForDrug(d.name, BUNDLE_PLAN_YEAR) : null;
+    const liveGross = d.rxcui ? args.grossMonthlyByRxcui?.get(d.rxcui) : undefined;
     const retailMonthly =
       cachedFullCost && cachedFullCost > 0
         ? cachedFullCost
-        : mfpGross ??
+        : liveGross ??
+          mfpGross ??
           NOTIONAL_TIER_FULL_COST[effectiveTier ?? 3] ??
           NOTIONAL_TIER_FULL_COST[3];
     const mfpCostShare =

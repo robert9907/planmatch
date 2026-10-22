@@ -140,6 +140,8 @@ test('inhaler never crosses route to a nasal spray / ointment', () => {
   const nasal = row('N', 'fluticasone propionate 0.05 MG/ACTUAT Metered Dose Nasal Spray', 1);
   const ointment = row('T', 'fluticasone propionate 0.00005 MG/MG Topical Ointment', 2);
   assert.equal(pickBestFormularyRow('896018', diskus, [nasal, ointment]).row, null);
-  const hfa = row('H', '120 ACTUAT fluticasone propionate 0.044 MG/ACTUAT Metered Dose Inhaler', 3);
+  // Same ingredient + same strength, inhaler form — a legit sibling (rule 1d
+  // excludes a DIFFERENT strength, so match the request's 0.05 MG/ACTUAT).
+  const hfa = row('H', '120 ACTUAT fluticasone propionate 0.05 MG/ACTUAT Metered Dose Inhaler', 3);
   assert.equal(pickBestFormularyRow('896018', diskus, [nasal, hfa]).row?.rxcui, 'H');
 });

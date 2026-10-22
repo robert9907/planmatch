@@ -65,9 +65,15 @@ function normStrengths(name: string): string[] {
   const re = /(\d+(?:\.\d+)?)\s*(MG|MCG|ML|UNT|%)(\s*\/\s*ML)?/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(name)) !== null) {
-    const unit = m[2].toUpperCase();
+    let unit = m[2].toUpperCase();
+    let value = Number(m[1]);
+    // 50 MCG and 0.05 MG are the same strength — normalize MCG to MG.
+    if (unit === 'MCG') {
+      unit = 'MG';
+      value = Number((value / 1000).toPrecision(12));
+    }
     const perMl = m[3] ? '/ML' : '';
-    out.push(`${m[1]} ${unit}${perMl}`);
+    out.push(`${value} ${unit}${perMl}`);
   }
   return out;
 }
@@ -115,7 +121,7 @@ function scoreRow(orig: DrugProfile, rowName: string): { score: number; strength
   // Wegovy, NovoLog → never Fiasp). A plan that files only another brand /
   // the generic shows the requested brand NOT COVERED as entered — we do not
   // substitute. Exact rxcui still wins in pickBestFormularyRow before scoring.
-  // (Same-brand strength/form siblings are kept.) Only applies when we know
+  // (Same-brand form siblings at the SAME strength are kept — rule 1d.) Only applies when we know
   // the requested brand name; a generic request is unaffected.
   if (orig.brand) {
     if (!rp.brand) return null; // a generic row is not "that brand"
@@ -124,7 +130,12 @@ function scoreRow(orig: DrugProfile, rowName: string): { score: number; strength
   let score = 0;
   // Strength — the strongest discriminator (600 MG tablet vs 50 MG/ML solution).
   const strengthHit = orig.strengths.length === 0 || orig.strengths.every((s) => rp.strengths.includes(s));
-  if (strengthHit) score += 1000;
+  // Rule 1d (Rob, 2026-10-20) — a different strength is a different drug.
+  // When the request carries a strength, a sibling at another strength is
+  // excluded: the plan shows NOT COVERED rather than pricing the 220 mcg
+  // inhaler for someone on 50 mcg. Exact rxcui still wins before scoring.
+  if (!strengthHit) return null;
+  score += 1000;
   // Dose form.
   let formHit = false;
   if (orig.form) {

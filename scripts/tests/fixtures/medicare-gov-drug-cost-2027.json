@@ -1,0 +1,368 @@
+{
+ "plans": [
+  {
+   "plan": {
+    "contract_id": "H5141",
+    "plan_id": "063",
+    "segment_id": "0",
+    "contract_year": "2027"
+   },
+   "costs": [
+    {
+     "npi": "",
+     "drug_costs": [
+      {
+       "ndc": "00406055201",
+       "quantity": 270,
+       "frequency": "FREQUENCY_90_DAYS",
+       "full_cost": 43.2,
+       "deductible_cost": 0,
+       "initial_cost": 0,
+       "gap_cost": 43.2,
+       "catastrophic_cost": 0,
+       "covered": true,
+       "has_deductible": true,
+       "coverage_reason": "COVERED",
+       "default_price_used": false,
+       "cost_sharing_overide": false,
+       "estimated_yearly_total": 0,
+       "tier": 2
+      },
+      {
+       "ndc": "81520020030",
+       "quantity": 90,
+       "frequency": "FREQUENCY_90_DAYS",
+       "full_cost": 2531.728,
+       "deductible_cost": 2531.73,
+       "initial_cost": 2531.73,
+       "gap_cost": 2531.73,
+       "catastrophic_cost": 2531.73,
+       "covered": false,
+       "has_deductible": true,
+       "coverage_reason": "NOT_IN_FORMULARY",
+       "default_price_used": true,
+       "cost_sharing_overide": false,
+       "estimated_yearly_total": 10126.92,
+       "tier": null
+      }
+     ],
+     "estimated_monthly_costs": [
+      {
+       "date": "2027-01-01",
+       "deductible": 2531.73,
+       "initial": 0,
+       "gap": 0,
+       "catastrophic": 0,
+       "total": 2531.73
+      },
+      {
+       "date": "2027-04-01",
+       "deductible": 2531.73,
+       "initial": 0,
+       "gap": 0,
+       "catastrophic": 0,
+       "total": 2531.73
+      },
+      {
+       "date": "2027-07-01",
+       "deductible": 2531.73,
+       "initial": 0,
+       "gap": 0,
+       "catastrophic": 0,
+       "total": 2531.73
+      },
+      {
+       "date": "2027-10-01",
+       "deductible": 2531.73,
+       "initial": 0,
+       "gap": 0,
+       "catastrophic": 0,
+       "total": 2531.73
+      }
+     ],
+     "in_network": true,
+     "phase_information": {
+      "deductible_amount": 425,
+      "initial_coverage_start": "",
+      "gap_start": "",
+      "catastrophic_start": ""
+     },
+     "estimated_yearly_total": 10126.92,
+     "preferred": false,
+     "mail_order": true,
+     "ltc": false,
+     "medicare_prescription_payment_plan": {
+      "estimated_monthly_costs": [
+       {
+        "date": "2027-01-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-02-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-03-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-04-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-05-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-06-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-07-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-08-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-09-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-10-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-11-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-12-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       }
+      ],
+      "estimated_yearly_mppp_cost": 0,
+      "estimated_yearly_part_d_only_cost": 0,
+      "meets_annual_cap": false
+     }
+    }
+   ],
+   "lowest_retail_total": 0,
+   "lowest_mail_total": 10126.92,
+   "excluded_drugs": [],
+   "restrictions": [
+    {
+     "ndc": "00406055201",
+     "conditions": [],
+     "opioid": true,
+     "home_infusion": false,
+     "partial_gap": false,
+     "free_first_fill": false,
+     "limited_distribution": false,
+     "vaccine": false,
+     "insulin_price_cap": false,
+     "acip": false,
+     "is_paxlovid": false
+    }
+   ],
+   "lowest_retail_valid": false,
+   "lowest_mail_valid": true,
+   "cumulative_meets_annual_cap": false
+  },
+  {
+   "plan": {
+    "contract_id": "H3291",
+    "plan_id": "003",
+    "segment_id": "0",
+    "contract_year": "2027"
+   },
+   "costs": [
+    {
+     "npi": "",
+     "drug_costs": [
+      {
+       "ndc": "00406055201",
+       "quantity": 270,
+       "frequency": "FREQUENCY_90_DAYS",
+       "full_cost": 132.3,
+       "deductible_cost": 0,
+       "initial_cost": 0,
+       "gap_cost": 132.3,
+       "catastrophic_cost": 0,
+       "covered": true,
+       "has_deductible": true,
+       "coverage_reason": "COVERED",
+       "default_price_used": false,
+       "cost_sharing_overide": false,
+       "estimated_yearly_total": 0,
+       "tier": 1
+      },
+      {
+       "ndc": "81520020030",
+       "quantity": 90,
+       "frequency": "FREQUENCY_90_DAYS",
+       "full_cost": 2530.728,
+       "deductible_cost": 2530.73,
+       "initial_cost": 2530.73,
+       "gap_cost": 2530.73,
+       "catastrophic_cost": 2530.73,
+       "covered": false,
+       "has_deductible": true,
+       "coverage_reason": "NOT_IN_FORMULARY",
+       "default_price_used": true,
+       "cost_sharing_overide": false,
+       "estimated_yearly_total": 10122.92,
+       "tier": null
+      }
+     ],
+     "estimated_monthly_costs": [
+      {
+       "date": "2027-01-01",
+       "deductible": 2530.73,
+       "initial": 0,
+       "gap": 0,
+       "catastrophic": 0,
+       "total": 2530.73
+      },
+      {
+       "date": "2027-04-01",
+       "deductible": 2530.73,
+       "initial": 0,
+       "gap": 0,
+       "catastrophic": 0,
+       "total": 2530.73
+      },
+      {
+       "date": "2027-07-01",
+       "deductible": 0,
+       "initial": 2530.73,
+       "gap": 0,
+       "catastrophic": 0,
+       "total": 2530.73
+      },
+      {
+       "date": "2027-10-01",
+       "deductible": 0,
+       "initial": 2530.73,
+       "gap": 0,
+       "catastrophic": 0,
+       "total": 2530.73
+      }
+     ],
+     "in_network": true,
+     "phase_information": {
+      "deductible_amount": 350,
+      "initial_coverage_start": "2027-07-01",
+      "gap_start": "",
+      "catastrophic_start": ""
+     },
+     "estimated_yearly_total": 10122.92,
+     "preferred": false,
+     "mail_order": true,
+     "ltc": false,
+     "medicare_prescription_payment_plan": {
+      "estimated_monthly_costs": [
+       {
+        "date": "2027-01-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-02-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-03-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-04-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-05-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-06-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-07-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-08-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-09-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-10-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-11-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       },
+       {
+        "date": "2027-12-01",
+        "mppp_total": 0,
+        "part_d_only_total": 0
+       }
+      ],
+      "estimated_yearly_mppp_cost": 0,
+      "estimated_yearly_part_d_only_cost": 0,
+      "meets_annual_cap": false
+     }
+    }
+   ],
+   "lowest_retail_total": 0,
+   "lowest_mail_total": 10122.92,
+   "excluded_drugs": [],
+   "restrictions": [
+    {
+     "ndc": "00406055201",
+     "conditions": [],
+     "opioid": true,
+     "home_infusion": false,
+     "partial_gap": false,
+     "free_first_fill": false,
+     "limited_distribution": false,
+     "vaccine": false,
+     "insulin_price_cap": false,
+     "acip": false,
+     "is_paxlovid": false
+    }
+   ],
+   "lowest_retail_valid": false,
+   "lowest_mail_valid": true,
+   "cumulative_meets_annual_cap": false
+  }
+ ]
+}

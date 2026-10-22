@@ -89,9 +89,12 @@ export function useDrugCosts(
       try {
         const ndcsByRxcui = await resolveRxcuisToNdcs(rxcuis);
         if (cancelled) return;
-        const repNdcs = rxcuis
-          .map((rx) => ndcsByRxcui[rx]?.[0])
-          .filter((s): s is string => typeof s === 'string' && s.length > 0);
+        // First NDC per drug, plus the next few as alternates — medicare.gov
+        // silently drops an NDC it doesn't recognize, so the server swaps in
+        // the next one instead of leaving the drug out of the total.
+        const priced = rxcuis.filter((rx) => (ndcsByRxcui[rx]?.length ?? 0) > 0);
+        const repNdcs = priced.map((rx) => ndcsByRxcui[rx][0]);
+        const altNdcs = priced.map((rx) => ndcsByRxcui[rx].slice(1, 6));
         if (repNdcs.length === 0) {
           setState({ ...INITIAL, source: 'no_ndcs' });
           return;
@@ -110,6 +113,8 @@ export function useDrugCosts(
         const result = await fetchDrugCosts({
           plans: planInputs,
           ndcs: repNdcs,
+          alternates: altNdcs,
+          rxcuis: priced,
           mode,
           lisTier,
         });

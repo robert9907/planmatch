@@ -57,6 +57,7 @@ import { useDrugPhases, type DrugPhaseHit } from '@/hooks/useDrugPhases';
 // back by restoring their callsites in this file.
 import type { DrugCostCardComparisonPlan } from './DrugCostCard';
 import { QuoteBuilder } from './QuoteBuilder';
+import { contractPlanSegment, type HeadToHeadQuote } from './headToHeadQuote';
 import { TOKENS as T, FONT as F } from './compare-v2/tokens';
 import { Btn } from './compare-v2/Button';
 // QuickPreviewDrawer no longer rendered from CompareScreen — bench
@@ -297,6 +298,9 @@ interface DrugRow {
   // True when the catalog year's formulary isn't published yet — no real tier
   // or cost. Render "formulary not yet published", never $0 / Tier / Not covered.
   costUnavailable?: boolean;
+  // The client's med never matched a drug code, so no plan could price it.
+  // Render "Not matched — re-search on Meds", never "Not covered".
+  unmatched?: boolean;
   // 2027 utilization-management flags for this plan's row (PA / ST / QL).
   priorAuth?: boolean;
   stepTherapy?: boolean;
@@ -311,18 +315,19 @@ interface DrugRow {
 // SAME plan's filed CMS cost-share for that drug's tier — the numbers
 // the Rx Tier rows show. Copay → "$X/mo", coinsurance → "N%".
 // Never borrowed from another plan; null when nothing is filed.
-function drugMonthlyLabel(plan: Plan | null | undefined, r: DrugRow): string | null {
-  if (r.monthlyCopay != null) return `$${r.monthlyCopay}/mo`;
-  if (!plan || r.tier == null) return null;
-  const tiers = plan.benefits?.rx_tiers as unknown as
-    | Record<string, { copay: number | null; coinsurance: number | null } | undefined>
-    | undefined;
-  const cs = tiers?.[`tier_${r.tier}`];
-  if (!cs) return null;
-  if (cs.copay != null) return `$${cs.copay}/mo`;
-  if (cs.coinsurance != null) return `${cs.coinsurance}%`;
-  return null;
+// Drug costs are quoted per month (Rob, 2026-10-21): the brain's annual
+// figure (deductible + cost-share + cap over the year) averaged to a month.
+function perMonth(annual: number): string {
+  return `${fmt(Math.round(annual / 12))}/mo`;
 }
+
+/** Monthly drug cost for the drugs this plan covers. Not-covered drugs are
+ *  left out of the quoted total (they're listed as "Not covered" instead of
+ *  being folded in at a retail guess). */
+function coveredDrugAnnual(rows: ReadonlyArray<DrugRow>): number {
+  return rows.reduce((sum, d) => sum + (d.covered && !d.costUnavailable ? d.annualCost : 0), 0);
+}
+
 
 // Old per-plan coveredCount(plan, rxcuis) read plan.formulary[rxcui],
 // which is always `{}` in agent-v3 (plan.formulary is populated lazily
@@ -431,12 +436,11 @@ function buildMetrics(args: {
     format: (p: Plan) => {
       const r = drugRowFor(p, med);
       if (!r) return 'Not priced';
+      if (r.unmatched) return 'Not matched — re-search on Meds';
       if (r.costUnavailable) return 'Formulary not yet published';
       if (!r.covered) return 'Not covered';
       const tier = r.tier != null ? `Tier ${r.tier}` : 'Covered';
-      const moLabel = drugMonthlyLabel(p, r);
-      const mo = moLabel ? ` · ${moLabel}` : '';
-      return `${tier}${mo} · ${fmt(r.annualCost)}/yr`;
+      return `${tier} · ${perMonth(r.annualCost)}`;
     },
     numeric: (p: Plan) => {
       const r = drugRowFor(p, med);
@@ -445,7 +449,11 @@ function buildMetrics(args: {
     higherIsBetter: false,
     group: 'drug_coverage' as MetricGroup,
   }));
-  const drug = (p: Plan) => annualDrugByPlanId[p.id] ?? null;
+  const drug = (p: Plan) => {
+    const rows = drugBreakdownByPlanId[p.id];
+    if (rows && rows.length > 0) return coveredDrugAnnual(rows);
+    return annualDrugByPlanId[p.id] ?? null;
+  };
   const drugsCovered = (p: Plan) => drugsCoveredByPlanId[p.id];
   const drugsTotal = (p: Plan) => drugsTotalByPlanId[p.id];
 
@@ -468,14 +476,14 @@ function buildMetrics(args: {
     },
     {
       key: 'drugs',
-      label: 'Drug cost / yr',
+      label: 'Drug cost / mo',
       // Compact summary. The LIS-adjusted breakdown + strike + savings
       // badge + phase breakdown live in DrugCostCard (rendered below
       // the metric grid inside SlotCell), keeping the metric row a
       // single scannable line.
       format: (p) => {
         const v = drug(p);
-        return v == null ? '—' : `${fmt(v)}/yr`;
+        return v == null ? '—' : perMonth(v);
       },
       numeric: drug,
       higherIsBetter: false,
@@ -2573,7 +2581,16 @@ function BenchCard({
           }
         />
         <BMetric label="MOOP" value={fmt(plan.moop_in_network)} />
-        <BMetric label="Drug/yr" value={drug == null ? '—' : fmt(drug)} />
+        <BMetric
+          label="Drug/mo"
+          value={
+            drugBreakdown && drugBreakdown.length > 0
+              ? perMonth(coveredDrugAnnual(drugBreakdown))
+              : drug == null
+                ? '—'
+                : perMonth(drug)
+          }
+        />
         <BMetric
           label="Stars"
           value={plan.star_rating > 0 ? `${plan.star_rating}` : '—'}
@@ -3003,7 +3020,6 @@ function ProviderList({
 function DrugBreakdown({
   breakdown,
   variant = 'full',
-  plan,
 }: {
   breakdown: ReadonlyArray<DrugRow>;
   /** The plan these rows are for — lets a blank per-drug copay fall
@@ -3016,7 +3032,9 @@ function DrugBreakdown({
 }) {
   if (breakdown.length === 0) return null;
   const covered = breakdown.filter((d) => d.covered).length;
-  const total = breakdown.reduce((sum, d) => sum + d.annualCost, 0);
+  const total = coveredDrugAnnual(breakdown);
+  const notCovered = breakdown.filter((d) => !d.covered && !d.costUnavailable && !d.unmatched).length;
+  const unmatchedCount = breakdown.filter((d) => d.unmatched).length;
   const isCompact = variant === 'compact';
   const isCard = variant === 'card';
   // Every drug lacks a published formulary → no honest total exists. The total
@@ -3049,7 +3067,7 @@ function DrugBreakdown({
             fontStyle: allUnavail ? 'italic' : 'normal',
           }}
         >
-          {allUnavail ? 'formulary not yet published' : `${fmt(total)}/yr (${covered}/${breakdown.length} covered)`}
+          {allUnavail ? 'formulary not yet published' : `${perMonth(total)} (${covered}/${breakdown.length} covered)`}
         </span>
       </div>
     );
@@ -3118,9 +3136,8 @@ function DrugBreakdown({
               </div>
             );
           }
-          const tierLabel = d.tier != null ? `Tier ${d.tier}` : 'Not covered';
-          const copayLabel = drugMonthlyLabel(plan, d) ?? '—';
-          const annualLabel = `${fmt(d.annualCost)}/yr`;
+          const tierLabel = d.unmatched ? 'Not matched' : d.tier != null ? `Tier ${d.tier}` : 'Not covered';
+          const copayLabel = perMonth(d.annualCost);
           if (isCard) {
             return (
               <div
@@ -3147,7 +3164,7 @@ function DrugBreakdown({
                   {d.name}
                 </span>
                 <span style={{ fontFamily: FONT_NUM, fontSize: 10, whiteSpace: 'nowrap' }}>
-                  {d.covered ? `${tierLabel} · ${copayLabel}` : 'Not covered'}
+                  {d.unmatched ? 'Not matched' : d.covered ? `${tierLabel} · ${copayLabel}` : 'Not covered'}
                 </span>
               </div>
             );
@@ -3157,7 +3174,7 @@ function DrugBreakdown({
               key={d.rxcui || d.name}
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'minmax(0, 1fr) 60px 70px 70px',
+                gridTemplateColumns: 'minmax(0, 1fr) 60px 70px',
                 alignItems: 'center',
                 gap: 6,
                 fontSize: 11,
@@ -3179,18 +3196,8 @@ function DrugBreakdown({
               <span style={{ color: d.covered ? MUTED : '#991b1b', fontSize: 10 }}>
                 {tierLabel}
               </span>
-              <span style={{ fontFamily: FONT_NUM, fontSize: 10, textAlign: 'right' }}>
-                {copayLabel}
-              </span>
-              <span
-                style={{
-                  fontFamily: FONT_NUM,
-                  fontSize: 10,
-                  fontWeight: 700,
-                  textAlign: 'right',
-                }}
-              >
-                {annualLabel}
+              <span style={{ fontFamily: FONT_NUM, fontSize: 10, fontWeight: 700, textAlign: 'right' }}>
+                {d.covered ? copayLabel : '—'}
               </span>
             </div>
           );
@@ -3210,9 +3217,19 @@ function DrugBreakdown({
       >
         <span>Total drug cost</span>
         <span style={{ fontFamily: FONT_NUM, fontStyle: allUnavail ? 'italic' : 'normal', color: allUnavail ? MUTED : TEXT }}>
-          {allUnavail ? 'not yet published' : `${fmt(total)}/yr`}
+          {allUnavail ? 'not yet published' : perMonth(total)}
         </span>
       </div>
+      {notCovered > 0 && !allUnavail && (
+        <div style={{ fontSize: 10, color: '#991b1b', marginTop: 2, textAlign: 'right' }}>
+          {notCovered} not covered — not included in total
+        </div>
+      )}
+      {unmatchedCount > 0 && !allUnavail && (
+        <div style={{ fontSize: 10, color: '#92400e', marginTop: 2, textAlign: 'right' }}>
+          {unmatchedCount} not matched — re-search on Meds to price
+        </div>
+      )}
     </div>
   );
 }
@@ -4462,6 +4479,31 @@ function H2HView({
   const baselineLabel = baselineIsCurrent ? 'Current' : 'Top Pick';
   const baselineColor = baselineIsCurrent ? CORAL : GOLD;
 
+  // Frozen copy of exactly what's on screen, for the client quote.
+  const headToHeadQuote: HeadToHeadQuote = {
+    baseline_label: baselineLabel,
+    current: h2hPlanRef(baseline),
+    challenger: h2hPlanRef(challenger),
+    rows: METRIC_GROUP_ORDER.flatMap((g) =>
+      metrics
+        .filter((m) => m.group === g)
+        .map((m) => {
+          const dir = deltaVs(m, challenger, baseline);
+          return {
+            group: METRIC_GROUP_LABEL[g],
+            label: m.label,
+            current: m.format(baseline),
+            challenger: m.format(challenger),
+            dir,
+            delta: dir === 'better' || dir === 'worse' ? deltaText(m, challenger, baseline) : null,
+          };
+        }),
+    ),
+    challenger_wins: wins,
+    current_wins: losses,
+    annual_savings: savings > 0 ? savings : null,
+  };
+
   return (
     <Container wide>
       <Header
@@ -4917,6 +4959,8 @@ function H2HView({
         </div>
       </div>
 
+      <H2HSendPanel key={challenger.id} challenger={challenger} headToHead={headToHeadQuote} />
+
       <div
         style={{
           display: 'flex',
@@ -4960,6 +5004,63 @@ function H2HView({
         </button>
       </div>
     </Container>
+  );
+}
+
+function h2hPlanRef(p: Plan): HeadToHeadQuote['current'] {
+  return {
+    carrier: p.carrier,
+    plan_name: p.plan_name,
+    plan_id_display: planIdShort(p.id),
+    contract_plan_segment: contractPlanSegment(p.id),
+    sbf_url: p.sbf_url || null,
+  };
+}
+
+// "Send this comparison" — collapsed under the verdict bar; opens the
+// quote builder in Head-to-Head mode (texts/emails the frozen comparison).
+function H2HSendPanel({ challenger, headToHead }: { challenger: Plan; headToHead: HeadToHeadQuote }) {
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <div
+        style={{
+          marginTop: 14,
+          padding: 14,
+          background: 'white',
+          border: `1px solid ${BORDER}`,
+          borderRadius: 12,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 16,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>Send this comparison</div>
+          <div style={{ marginTop: 2, fontSize: 11, color: MUTED }}>
+            Text and/or email {headToHead.baseline_label.toLowerCase()} vs {challenger.carrier} to the client, exactly as shown.
+          </div>
+        </div>
+        <Btn tier="primary" size="sm" onClick={() => setOpen(true)}>
+          Text / email it
+        </Btn>
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          style={{ background: 'transparent', border: 'none', color: MUTED, fontSize: 12, textDecoration: 'underline', cursor: 'pointer' }}
+        >
+          Hide
+        </button>
+      </div>
+      <QuoteBuilder rankedPlans={[planToLibraryRankPlan(challenger)]} headToHead={headToHead} />
+    </div>
   );
 }
 
