@@ -845,9 +845,10 @@ function deltaText(metric: Metric, plan: Plan, current: Plan | null): string | n
   if (metric.key === 'premium' || metric.key === 'giveback') {
     return `$${diff.toFixed(2)}`;
   }
-  // OTC compares on the quarterly amount; say so, or "$160" next to a
-  // "$70/mo" cell reads as a monthly difference.
-  if (metric.key === 'otc') return `$${Math.round(diff)}/qtr more`;
+  // OTC: no dollar pill (Rob, 2026-10-23 — a "$160" between a "$50/qtr" and
+  // a "$70/mo" cell confused seniors). The row's green/red shading still
+  // shows which plan gives more.
+  if (metric.key === 'otc') return null;
   if (
     metric.key === 'moop' ||
     metric.key === 'drugs' ||
