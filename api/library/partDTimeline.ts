@@ -264,7 +264,13 @@ function chargeFill(
   // tier cost-share. See DrugFill.costShareOverride.
   const tierShares: TierCostShares | undefined =
     drug.costShareOverride ?? plan.tierCostShares[drug.tier];
-  const canUseDeductible = tierCanUseDeductible(drug.tier, plan);
+  // Covered insulin is exempt from the Part D deductible (IRA §11406): the
+  // $35/month cap applies from the first fill in every phase, so insulin
+  // never burns the deductible. Routing it through the deductible phase
+  // billed each early fill at the capped $35 instead of the plan's real
+  // (often lower) initial cost-share, overstating insulin by the
+  // deductible's worth of $35 fills (Lantus on H4523-024: $256 vs $148 PF).
+  const canUseDeductible = tierCanUseDeductible(drug.tier, plan) && !drug.isInsulin;
 
   // ── Split fill across phases ────────────────────────────────────
   let deductiblePiece = 0;
@@ -339,7 +345,7 @@ export function partDTimeline(args: PartDTimelineArgs): MonthlyRow[] {
   // coverage rather than "we're in deductible but nobody's spending
   // toward it" — that would color the UI misleadingly.
   const anyDrugSubjectToDeductible = args.drugs.some((d) =>
-    tierCanUseDeductible(d.tier, args.plan),
+    tierCanUseDeductible(d.tier, args.plan) && !d.isInsulin,
   );
   const effectiveDeductible = anyDrugSubjectToDeductible
     // Plan's filed deductible is capped by the year's max (a plan
