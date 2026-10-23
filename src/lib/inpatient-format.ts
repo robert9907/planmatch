@@ -103,6 +103,12 @@ export function formatInpatientLadder(
       .map((t) => `${fmtDollars(t.copay)}/day · days ${t.dayStart}-${t.dayEnd}`)
       .join('\n');
   }
+  // UHC and others file inpatient as a flat copay PER STAY ("Inpatient
+  // hospital · $1960 per stay"). Rendering that as "$1960/day" overstated a
+  // 5-day stay five-fold (Rob, 2026-10-23).
+  if (typeof copay === 'number' && /per\s+(admission|stay)/i.test(description ?? '')) {
+    return `${fmtDollars(copay)} per stay`;
+  }
   if (typeof copay === 'number') return copay === 0 ? '$0/day' : `${fmtDollars(copay)}/day`;
   if (typeof coinsurance === 'number') return `${coinsurance}%`;
   return null;

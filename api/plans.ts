@@ -147,6 +147,10 @@ interface Plan {
   // as a "📄 Summary of Benefits ↗" link.
   sbf_url: string;
   benefits: PlanBenefits;
+  /** Out-of-network (PPO) / point-of-service (HMO-POS) cost sharing from
+   *  CMS PBP Section C (pm_plan_oon_costs). null when the plan year has no
+   *  Section C load yet — the UI shows nothing rather than guessing. */
+  out_of_network: OutOfNetwork | null;
   formulary: Record<string, never>; // populated lazily via /api/formulary
   // Vestigial — always empty. Per-plan network status lives in
   // useSession.providers[*].networkStatus[planId], written by the
@@ -743,6 +747,58 @@ const MAX_LIMIT = 2000;
 const SUPABASE_PAGE = 1000;
 const MAX_PAGES = 20;
 
+// ─── Out-of-network (CMS PBP Section C) ─────────────────────────────
+export interface OonCost {
+  copay_min?: number | null;
+  copay_max?: number | null;
+  coins_min?: number | null;
+  coins_max?: number | null;
+  per_stay?: number | null;
+  ladder?: Array<{ from_day: number | null; to_day: number | null; copay?: number; coins?: number }>;
+  original_medicare_cost_share?: boolean;
+}
+export interface OutOfNetwork {
+  /** 'oon' = PPO out-of-network benefit, 'pos' = HMO point-of-service,
+   *  'none' = in-network only (emergency/urgent still covered anywhere). */
+  mode: 'oon' | 'pos' | 'none';
+  moop: number | null;
+  costs: Record<string, OonCost>;
+}
+
+async function fetchOonByTriple(
+  catalogYear: number,
+  contractIds: string[],
+): Promise<Map<string, OutOfNetwork>> {
+  const out = new Map<string, OutOfNetwork>();
+  if (contractIds.length === 0) return out;
+  const rows = await fetchAllRows<{
+    contract_id: string; plan_id: string; segment_id: string;
+    network_mode: 'oon' | 'pos' | 'none'; oon_moop: number | string | null;
+    costs: Record<string, OonCost>;
+  }>(async (from, to) => {
+    const { data, error } = await supabase()
+      .from('pm_plan_oon_costs')
+      .select('contract_id, plan_id, segment_id, network_mode, oon_moop, costs')
+      .eq('plan_year', catalogYear)
+      .in('contract_id', contractIds)
+      .order('contract_id', { ascending: true })
+      .order('plan_id', { ascending: true })
+      .order('segment_id', { ascending: true })
+      .range(from, to);
+    // Table not loaded for this environment yet → no OON data, never a 500.
+    if (error) return [];
+    return (data ?? []) as never;
+  });
+  for (const r of rows) {
+    out.set(`${r.contract_id}-${r.plan_id}-${canonicalSegment(r.segment_id)}`, {
+      mode: r.network_mode,
+      moop: r.oon_moop == null ? null : Number(r.oon_moop),
+      costs: r.costs ?? {},
+    });
+  }
+  return out;
+}
+
 async function fetchAllRows<T>(
   pageFn: (from: number, to: number) => Promise<T[]>,
 ): Promise<T[]> {
@@ -1270,6 +1326,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (row.source !== 'cms_pbp') continue;
       const category = PBP_TYPE_TO_CATEGORY[row.benefit_type];
       if (!category || COPAY_RANGE_SKIP_CATEGORIES.has(category)) continue;
+      // cms_pbp files ambulance as two tiers (ground / air). The 'ambulance'
+      // category is GROUND — air has its own air_transportation row. Folding
+      // the air tier in put air's 20% onto the ground row (Devoted H5453-017
+      // showed "$0 · 20%" for ground when the SBF says $350 per trip).
+      if (row.benefit_type === 'ambulance' && row.tier_id === 'air') continue;
       const plan = planByCanonical.get(normalizePbpKey(row.plan_id));
       if (!plan) continue;
       const key = `${plan.contract_id}-${plan.plan_id}-${plan.segment_id}|${category}`;
@@ -1541,6 +1602,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ─── Step 4: shape into Plan[] ──────────────────────────────────
+    const oonByTriple = await fetchOonByTriple(
+      catalogYear,
+      [...new Set([...byTriple.values()].map((v) => v.row.contract_id))],
+    );
     const plans: Plan[] = [];
     for (const [key, { row, counties }] of byTriple) {
       // Use the merged benefits set (landscape + transformed pbp)
@@ -1631,6 +1696,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // plans whose carriers aren't on medicareadvantage.com.
         sbf_url: row.sbf_url ?? planFinderUrl(row.contract_id, row.plan_id, row.segment_id, catalogYear),
         benefits,
+        out_of_network:
+          oonByTriple.get(`${row.contract_id}-${row.plan_id}-${canonicalSegment(row.segment_id)}`) ?? null,
         formulary: {},
         in_network_npis: [],
       });
@@ -1724,7 +1791,11 @@ const COPAY_RANGE_SKIP_CATEGORIES: ReadonlySet<string> = new Set([
 // contrast specialist/urgent_care, which show the low. When cms_pbp filed
 // a flat value the max equals the low, so the result is unchanged.
 // Category-level, never per-plan.
-const HIGH_END_COPAY_CATEGORIES: ReadonlySet<string> = new Set(['asc']);
+// Ground ambulance is the same shape: CMS files "$0–$350" (H5453-017) while
+// the Summary of Benefits and Plan Finder show the $350 per-trip copay
+// (fixtures H0111-001 $350, H1036-318 $325 …). Showing "$0" read as free
+// ambulance rides (Rob, 2026-10-23, Stephaine Calahan quote).
+const HIGH_END_COPAY_CATEGORIES: ReadonlySet<string> = new Set(['asc', 'ambulance']);
 
 // ROB'S DECISION (reverses the earlier fix/remaining-nine attempt): do
 // NOT grade specialist/urgent_care copay on the cms_pbp low. Plan
@@ -1798,10 +1869,19 @@ export function costShareFor(
     //    value on the winning row. The cms_pbp low is a range floor, not
     //    the visit price, so it is display-only (copay_low below).
     // Fall back to the filed value whenever cms_pbp filed nothing.
-    const gradedCopay =
-      HIGH_END_COPAY_CATEGORIES.has(hit.benefit_category) && cmsCHigh != null
-        ? cmsCHigh
-        : rawCopay;
+    // pbp_benefits is segment-agnostic, so cmsCHigh is the max across ALL of
+    // a plan's segments (H4513-061 files ground ambulance $150–$275 by
+    // segment). For ambulance, only lift a $0/blank floor — never overwrite
+    // a real segment-specific filed copay with another segment's max.
+    const liftHighEnd =
+      HIGH_END_COPAY_CATEGORIES.has(hit.benefit_category) &&
+      cmsCHigh != null &&
+      (hit.benefit_category !== 'ambulance' || ((rawCopay == null || rawCopay === 0) && cmsCLow === 0));
+    const gradedCopay = liftHighEnd ? cmsCHigh : rawCopay;
+    // A real filed ground-ambulance copay is a flat per-trip amount; the
+    // segment-agnostic cms span would show another segment's range.
+    const ambulanceFiled =
+      hit.benefit_category === 'ambulance' && !liftHighEnd && rawCopay != null && rawCopay > 0;
     // Graded coinsurance: the real filed value on the winning row. No
     // category takes the cms_pbp low (see the note above); the cms_pbp
     // span rides along display-only via coinsurance_low/high below.
@@ -1810,8 +1890,14 @@ export function costShareFor(
       copay: gradedCopay,
       coinsurance: gradedCoins,
       description: hit.benefit_description ?? null,
-      copay_low: hasCmsCopay ? (cmsCLow ?? cmsCHigh) : rawCopay,
-      copay_high: hasCmsCopay ? (cmsCHigh ?? cmsCLow) : (fallbackHasRange ? maxCoverage : rawCopay),
+      // HIGH_END categories headline the filed max (what the SBF and Plan
+      // Finder print), so the display range collapses onto it — a "$0–$350"
+      // ambulance or "$0–$430" ASC cell would contradict the SBF.
+      copay_low: liftHighEnd
+        ? cmsCHigh
+        : ambulanceFiled ? rawCopay
+        : hasCmsCopay ? (cmsCLow ?? cmsCHigh) : rawCopay,
+      copay_high: ambulanceFiled ? rawCopay : hasCmsCopay ? (cmsCHigh ?? cmsCLow) : (fallbackHasRange ? maxCoverage : rawCopay),
       coinsurance_low: hasCmsCoins ? (cmsILow ?? cmsIHigh) : rawCoins,
       coinsurance_high: hasCmsCoins ? (cmsIHigh ?? cmsILow) : rawCoins,
       // Pass the displaced filing straight through — no range-collapse

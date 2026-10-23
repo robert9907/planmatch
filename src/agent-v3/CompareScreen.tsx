@@ -37,6 +37,7 @@ import {
   annualEstimate,
   costShareNumeric,
   formatCostShareWithRange,
+  formatOonLine,
   formatPcp,
   formatPremium,
   formatSpecialist,
@@ -48,7 +49,7 @@ import {
 } from '@/lib/classify-explanation';
 import { normalizePlanId, type LibraryRankPlan } from '@/lib/library-client';
 import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
-import { normalizeLisTierForClient } from '@/lib/dual-eligible';
+import { getLisCopays, normalizeLisTierForClient } from '@/lib/dual-eligible';
 import { useDrugPhases, type DrugPhaseHit } from '@/hooks/useDrugPhases';
 // DrugCostCard hidden from the Board in Compare v2 reskin (2026-08-05) —
 // component still on disk at ./DrugCostCard.tsx and its type export is
@@ -350,6 +351,74 @@ function providersInNetwork(plan: Plan, providers: ProviderRow[]): number {
 // instead of just "$0". CMS files the minimum in the structured copay
 // column with the high end only in the description text; flattening
 // to "$0" misleads the broker about real exposure.
+// Metric key → MedicalCopays key, where they differ.
+const OON_KEY_BY_METRIC: Record<string, string> = {
+  inpatient: 'inpatient',
+  mh_inpatient: 'mental_health_inpatient',
+  snf: 'snf',
+  pcp: 'primary_care',
+  out_surg_hosp: 'outpatient_surgery_hospital',
+  out_surg_asc: 'outpatient_surgery_asc',
+  out_obs: 'outpatient_observation',
+  lab: 'lab_services',
+  diag_proc: 'diagnostic_procedures',
+  imaging: 'advanced_imaging',
+  mh_indiv: 'mental_health_individual',
+  mh_group: 'mental_health_group',
+  pst: 'physical_speech_therapy',
+  ot: 'occupational_therapy',
+  air_amb: 'air_transportation',
+  chiro: 'chiropractic',
+  pod: 'podiatry',
+  sa: 'substance_abuse',
+  dme: 'dme_prosthetics',
+  partb_rx: 'partb_drugs',
+  diab_sup: 'diabetic_supplies',
+  hh: 'home_health',
+  dialysis: 'renal_dialysis',
+  urgent_care: 'urgent_care',
+  emergency: 'emergency',
+  ambulance: 'ambulance',
+  xray: 'xray',
+  specialist: 'specialist',
+};
+
+/** In-network value, plus the plan's CMS out-of-network cost on a second
+ *  line (PPO / HMO-POS), so every cost row reads In-network / Out-of-network. */
+function withOon(inNetwork: string, p: Plan, metricKey: string): string {
+  const line = formatOonLine(p, OON_KEY_BY_METRIC[metricKey] ?? metricKey);
+  return line ? `${inNetwork}\n${line}` : inNetwork;
+}
+
+// A CMS combined allowance (Section D "Combined Benefit") is ONE monthly
+// credit shared by OTC, healthy food and utilities — UHC Dual Complete GA-Q2
+// files $127/mo. The importer stores the OTC side as a quarterly equivalent
+// ($381/qtr), which read as a different, separate benefit next to a "$127/mo
+// food card" (Rob, 2026-10-23). Show it the way the SBF does: one monthly
+// credit, OTC for everyone, food/utilities for members who qualify.
+function combinedMonthlyCredit(p: Plan): number | null {
+  const otcDesc = p.benefits.otc.description ?? '';
+  const foodDesc = p.benefits.food_card.description ?? '';
+  if (!/combined/i.test(otcDesc) || !/combined/i.test(foodDesc)) return null;
+  const m = foodDesc.match(/combined\s+\$(\d[\d,]*(?:\.\d+)?)\s*\/\s*mo/i);
+  if (!m) return null;
+  const monthly = Number(m[1].replace(/,/g, ''));
+  // Only when the OTC quarterly equivalent is the same pot (×3).
+  return Math.abs(p.benefits.otc.allowance_per_quarter - monthly * 3) < 1 ? monthly : null;
+}
+
+function formatOtcForPlan(p: Plan): string {
+  const combined = combinedMonthlyCredit(p);
+  if (combined != null) return `$${combined}/mo shared credit\nOTC for everyone; food & utilities if you qualify`;
+  return formatOtc(p.benefits.otc.allowance_per_quarter, p.benefits.otc.description);
+}
+
+function formatFoodForPlan(p: Plan): string {
+  const combined = combinedMonthlyCredit(p);
+  if (combined != null) return `Same $${combined}/mo credit as OTC\n(qualifying chronic condition)`;
+  return planDisplay(p).meals;
+}
+
 function csMetric(
   key: string,
   label: string,
@@ -359,8 +428,10 @@ function csMetric(
   return {
     key,
     label,
-    format: (p) => safeCostShare(
-      formatCostShareWithRange(get(p), { isPdp: p.plan_type === 'PDP' }),
+    format: (p) => withOon(
+      safeCostShare(formatCostShareWithRange(get(p), { isPdp: p.plan_type === 'PDP' })),
+      p,
+      key,
     ),
     numeric: (p) => costShareNumeric(get(p)),
     higherIsBetter: false,
@@ -387,7 +458,7 @@ function ladderMetric(
     format: (p) => {
       const cs = get(p);
       const formatted = formatInpatientLadder(cs.description, cs.copay, cs.coinsurance);
-      return formatted ?? '—';
+      return withOon(formatted ?? '—', p, OON_KEY_BY_METRIC[key] ?? key);
     },
     numeric: (p) => {
       const cs = get(p);
@@ -408,6 +479,8 @@ function buildMetrics(args: {
   medications: ReadonlyArray<{ rxcui?: string; name: string }>;
   /** Per-plan per-drug breakdown from the brain (tier, $/mo, $/yr). */
   drugBreakdownByPlanId: Record<string, ReadonlyArray<DrugRow>>;
+  /** Client's Extra Help (LIS) per-fill maximums; null when no LIS. */
+  lisCaps?: { generic: number; brand: number } | null;
 }): Metric[] {
   const {
     rxcuis,
@@ -417,7 +490,31 @@ function buildMetrics(args: {
     drugsTotalByPlanId,
     medications,
     drugBreakdownByPlanId,
+    lisCaps,
   } = args;
+  // Rx tier rows for an Extra Help client: what they actually pay per fill
+  // is the LIS maximum (lesser of the plan's cost share and the cap), not the
+  // plan's filed 25%. Generic vs brand is decided by the drug, so the row
+  // shows both caps, with the plan's filing underneath.
+  const rxTier = (key: string, label: string, n: 1 | 2 | 3 | 4 | 5 | 6): Metric => {
+    const get = (p: Plan) =>
+      (p.benefits.rx_tiers as unknown as Record<string, CostShare | undefined>)[`tier_${n}`] ??
+      { copay: null, coinsurance: null, description: null };
+    const base = csMetric(key, label, get, 'rx_tiers');
+    if (!lisCaps) return base;
+    const money = (v: number) => `$${v.toFixed(2)}`;
+    return {
+      ...base,
+      format: (p) => {
+        const cs = get(p);
+        if (cs.copay == null && cs.coinsurance == null) return base.format(p);
+        const filed = formatCostShareWithRange(cs);
+        const capped = (cap: number) =>
+          cs.copay != null ? money(Math.min(cs.copay, cap)) : money(cap);
+        return `Extra Help: ${capped(lisCaps.generic)} generic · ${capped(lisCaps.brand)} brand max\nPlan files ${filed}`;
+      },
+    };
+  };
   // One row per client drug: what that drug costs on each plan. Matched
   // to the brain's breakdown by rxcui, then by name. A plan the brain
   // didn't price shows "Not priced" — never a guessed $0.
@@ -469,7 +566,10 @@ function buildMetrics(args: {
     {
       key: 'moop',
       label: 'MOOP',
-      format: (p) => fmt(p.moop_in_network),
+      format: (p) =>
+        p.moop_out_of_network != null && p.moop_out_of_network > 0
+          ? `${fmt(p.moop_in_network)} in-network\n${fmt(p.moop_out_of_network)} in + out-of-network`
+          : fmt(p.moop_in_network),
       numeric: (p) => p.moop_in_network,
       higherIsBetter: false,
       group: 'overview',
@@ -534,9 +634,8 @@ function buildMetrics(args: {
     },
     {
       key: 'otc',
-      label: 'OTC / qtr',
-      format: (p) =>
-        formatOtc(p.benefits.otc.allowance_per_quarter, p.benefits.otc.description),
+      label: 'OTC',
+      format: (p) => formatOtcForPlan(p),
       numeric: (p) => p.benefits.otc.allowance_per_quarter,
       higherIsBetter: true,
       group: 'extra_benefits',
@@ -573,7 +672,7 @@ function buildMetrics(args: {
     {
       key: 'pcp',
       label: 'PCP copay',
-      format: (p) => safeCostShare(formatPcp(p)),
+      format: (p) => withOon(safeCostShare(formatPcp(p)), p, 'pcp'),
       numeric: (p) => costShareNumeric(p.benefits.medical.primary_care),
       higherIsBetter: false,
       group: 'primary_specialty',
@@ -581,7 +680,7 @@ function buildMetrics(args: {
     {
       key: 'specialist',
       label: 'Specialist',
-      format: (p) => safeCostShare(formatSpecialist(p)),
+      format: (p) => withOon(safeCostShare(formatSpecialist(p)), p, 'specialist'),
       numeric: (p) => costShareNumeric(p.benefits.medical.specialist),
       higherIsBetter: false,
       group: 'primary_specialty',
@@ -674,11 +773,11 @@ function buildMetrics(args: {
     csMetric('hh', 'Home health', (p) => p.benefits.medical.home_health, 'ambulance_other'),
     csMetric('dialysis', 'Renal dialysis', (p) => p.benefits.medical.renal_dialysis, 'ambulance_other'),
     // ── Rx tiers ─────────────────────────────────────────────────
-    csMetric('rx_t1', 'Rx Tier 1', (p) => p.benefits.rx_tiers.tier_1, 'rx_tiers'),
-    csMetric('rx_t2', 'Rx Tier 2', (p) => p.benefits.rx_tiers.tier_2, 'rx_tiers'),
-    csMetric('rx_t3', 'Rx Tier 3', (p) => p.benefits.rx_tiers.tier_3, 'rx_tiers'),
-    csMetric('rx_t4', 'Rx Tier 4', (p) => p.benefits.rx_tiers.tier_4, 'rx_tiers'),
-    csMetric('rx_t5', 'Rx Tier 5', (p) => p.benefits.rx_tiers.tier_5, 'rx_tiers'),
+    rxTier('rx_t1', 'Rx Tier 1', 1),
+    rxTier('rx_t2', 'Rx Tier 2', 2),
+    rxTier('rx_t3', 'Rx Tier 3', 3),
+    rxTier('rx_t4', 'Rx Tier 4', 4),
+    rxTier('rx_t5', 'Rx Tier 5', 5),
     // Tier 6 is carrier-specific (Wellcare "Select Care" $0 generics,
     // CSNP buckets). Optional on RxTierCopays; skip the row when the
     // plan didn't file it.
@@ -700,7 +799,7 @@ function buildMetrics(args: {
     {
       key: 'food',
       label: 'Food card',
-      format: (p) => planDisplay(p).meals,
+      format: (p) => formatFoodForPlan(p),
       numeric: () => null,
       higherIsBetter: true,
       group: 'extra_benefits',
@@ -819,6 +918,8 @@ export function CompareScreen({
     [medications],
   );
 
+  // Extra Help per-fill maximums for this client (null = no LIS).
+  const lisCaps = useMemo(() => getLisCopays(normalizeLisTierForClient(client)), [client]);
   const metrics = useMemo(
     () =>
       buildMetrics({
@@ -829,6 +930,7 @@ export function CompareScreen({
         drugsTotalByPlanId: drugsTotalByPlanId ?? {},
         medications,
         drugBreakdownByPlanId: drugBreakdownByPlanId ?? {},
+        lisCaps,
       }),
     [
       rxcuis,
@@ -838,6 +940,7 @@ export function CompareScreen({
       drugsTotalByPlanId,
       medications,
       drugBreakdownByPlanId,
+      lisCaps,
     ],
   );
 
@@ -3832,7 +3935,7 @@ function SlotCell({
         />
         <MetricLine
           label="MOOP"
-          value={moopMetric ? moopMetric.format(plan) : '—'}
+          value={moopMetric ? moopMetric.format(plan).split('\n')[0] : '—'}
         />
         <MetricLine
           label="Dental / vision"

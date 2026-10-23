@@ -1,3 +1,4 @@
+import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear';
 // Dual-eligible / LIS (Extra Help) cost adjustment — types,
 // constants, deeming table, and adjustment function.
 //
@@ -236,13 +237,51 @@ export function deemLisTier(
   return AUTO_DEEM_LIS_TIER[medicaidLevel][livingSetting];
 }
 
+/** LIS per-fill copays by plan year. CY2027 = CMS CY2027 Rate Announcement
+ *  (Apr 6 2026) Table V-2, and what the 2027 SBFs print ("$0, $1.65, or
+ *  $5.80" generic / "$0, $5, or $14.40" all other). Mirrors the consumer
+ *  brain's LIS_COPAYS_BY_YEAR (robert9907/plan-match packages/brain). */
+export const LIS_COPAYS_BY_YEAR: Readonly<
+  Record<number, Readonly<Record<Exclude<LisTier, 'none'>, { generic: number; brand: number }>>>
+> = {
+  2026: LIS_COPAYS_2026,
+  2027: {
+    full_institutional: { generic: 0, brand: 0 },
+    full_low: { generic: 1.65, brand: 5.0 },
+    full_high: { generic: 5.8, brand: 14.4 },
+  },
+};
+
 /** Look up the per-fill generic/brand copay caps for an LIS tier.
- *  Returns null when the tier is 'none' (no LIS override applies). */
+ *  Returns null when the tier is 'none' (no LIS override applies).
+ *  Year defaults to the active plan catalog year — before this, every
+ *  2027 quote used the 2026 caps ($5.10/$12.65). */
 export function getLisCopays(
   tier: LisTier,
+  planYear: number = resolvePlanCatalogYear(),
 ): { generic: number; brand: number } | null {
   if (tier === 'none') return null;
-  return LIS_COPAYS_2026[tier];
+  return (LIS_COPAYS_BY_YEAR[planYear] ?? LIS_COPAYS_2026)[tier];
+}
+
+export type LisCapClass = 'generic' | 'brand';
+
+/** Which LIS cap bucket a drug falls in. CMS splits LIS copays by the DRUG
+ *  (generic / multisource vs brand), not the plan's tier — UHC files generic
+ *  dapagliflozin and generic sacubitril/valsartan on Tier 3. Order: explicit
+ *  brand flag, then the RxNorm name ("[Brand]" ⇒ brand), then the tier rule.
+ *  Mirrors the consumer brain's lisCapClassFor. */
+export function lisCapClassFor(args: {
+  tier: number | null | undefined;
+  isBrand?: boolean | null;
+  drugName?: string | null;
+}): LisCapClass {
+  if (args.isBrand === true) return 'brand';
+  if (args.isBrand === false) return 'generic';
+  // Only an RxNorm branded name ("… [Entresto]") proves brand from the
+  // name alone; a plain name can't prove generic ("Eliquis 5mg").
+  if (args.drugName?.includes('[')) return 'brand';
+  return args.tier != null && args.tier <= 2 ? 'generic' : 'brand';
 }
 
 /** ── SINGLE SOURCE OF TRUTH: who pays Medicare cost sharing ──────

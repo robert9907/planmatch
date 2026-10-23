@@ -48,7 +48,7 @@ import { useState, type ReactNode } from 'react';
 import type { Plan } from '@/types/plans';
 import type { Medication } from '@/types/session';
 import type { DualEligibleAdjustment, LisTier } from '@/lib/dual-eligible';
-import { getLisCopays } from '@/lib/dual-eligible';
+import { getLisCopays, lisCapClassFor } from '@/lib/dual-eligible';
 import type { DrugPhaseHit } from '@/hooks/useDrugPhases';
 import {
   partDTimeline,
@@ -423,7 +423,7 @@ function buildDrugTimeline(
   planDrugDeductible: number | null,
 ): DrugTimeline {
   const lisCaps = getLisCopays(lisTier);
-  const isBrand = drug.tier != null && drug.tier >= 3;
+  const isBrand = lisCapClassFor({ tier: drug.tier, drugName: drug.name }) === 'brand';
   const lisPerFillCap = lisCaps ? (isBrand ? lisCaps.brand : lisCaps.generic) : null;
 
   // Off-formulary / uncovered → skip library, emit empty cells so the
@@ -1192,7 +1192,7 @@ export function DrugCostCard(props: DrugCostCardProps): ReactNode {
     const caps = getLisCopays(lisTier);
     if (!caps) return s + d.annualCost;
     const perFill = d.annualCost > 0 ? d.annualCost / 12 : 0;
-    const isBrand = d.tier >= 3;
+    const isBrand = lisCapClassFor({ tier: d.tier, drugName: d.name }) === 'brand';
     const cap = isBrand ? caps.brand : caps.generic;
     return s + Math.round(Math.min(perFill, cap) * 12);
   }, 0);
