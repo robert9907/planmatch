@@ -10,7 +10,7 @@ import { planYearOverride } from '../../api/library/planYearOverride';
 // server route errors, callers can fall back to the static cmsPlans
 // array so the UI still renders during a Supabase outage.
 
-import type { Plan, PlanBenefits } from '@/types/plans';
+import type { CostShare, OutOfNetwork, Plan, PlanBenefits } from '@/types/plans';
 import type { PlanType, StateCode } from '@/types/session';
 
 interface ApiPlan {
@@ -57,6 +57,7 @@ interface ApiPlan {
   // synthesized URL for older builds that don't return the field.
   sbf_url?: string;
   benefits: Partial<PlanBenefits>;
+  out_of_network?: OutOfNetwork | null;
   formulary?: Record<string, never>;
   in_network_npis?: string[];
 }
@@ -247,6 +248,7 @@ function toPlan(p: ApiPlan): Plan {
     star_rating: p.star_rating ?? 0,
     sbf_url: p.sbf_url ?? fallbackSbfUrl(p.id),
     benefits: fillBenefits(p.benefits ?? {}),
+    out_of_network: p.out_of_network ?? null,
     // Formulary is queried per-(plan, rxcui) via /api/formulary — the
     // Plan type still carries a formulary dict for back-compat; we
     // leave it empty so any direct lookup misses and the code falls
@@ -344,10 +346,20 @@ function fillBenefits(partial: Partial<PlanBenefits>): PlanBenefits {
   };
 }
 
-function cs(v: { copay?: number | null; coinsurance?: number | null; description?: string | null } | undefined) {
+// Carry the CMS range (copay_low/high, coinsurance_low/high) and the
+// alternate filing through. Dropping them here is why Compare showed a flat
+// "$0" for ranged rows whose description didn't spell the range out.
+function cs(v: Partial<CostShare> | undefined): CostShare {
   return {
     copay: v?.copay ?? null,
     coinsurance: v?.coinsurance ?? null,
     description: v?.description ?? null,
+    copay_low: v?.copay_low ?? null,
+    copay_high: v?.copay_high ?? null,
+    coinsurance_low: v?.coinsurance_low ?? null,
+    coinsurance_high: v?.coinsurance_high ?? null,
+    alt_copay: v?.alt_copay ?? null,
+    alt_coinsurance: v?.alt_coinsurance ?? null,
+    alt_source: v?.alt_source ?? null,
   };
 }

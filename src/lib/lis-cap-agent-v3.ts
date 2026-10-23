@@ -18,6 +18,7 @@
 
 import {
   getLisCopays,
+  lisCapClassFor,
   isCostSharingProtected,
   type DualEligibleAdjustment,
   type LisTier,
@@ -30,6 +31,8 @@ import type { Plan } from '../types/plans';
 
 export interface LisCappableDrug {
   covered: boolean;
+  /** Drug name — an RxNorm "[Brand]" name marks a brand for the LIS cap. */
+  name?: string;
   /** Full plan-copay yearly cost. */
   annualCost: number;
   /** Formulary tier (1..N) when covered; null when not on formulary. */
@@ -71,7 +74,7 @@ export function applyLisCapsToLibraryPlan(
     }
     // Brain assumes 12 fills/year. Matches dual-eligible.ts:212.
     const planPerFill = m.annualCost > 0 ? m.annualCost / 12 : 0;
-    const isBrand = m.tier != null && m.tier >= 3;
+    const isBrand = lisCapClassFor({ tier: m.tier, drugName: m.name }) === 'brand';
     const lisCap = isBrand ? lisCopays.brand : lisCopays.generic;
     const perFill = Math.min(planPerFill, lisCap);
     running += Math.round(perFill * 12);
@@ -137,6 +140,7 @@ export function buildAgentV3LisMaps(args: {
 
     const drugs = lp.medications.map((m) => ({
       covered: m.covered,
+      name: m.name,
       annualCost: m.annual_cost,
       tier: m.tier,
     }));

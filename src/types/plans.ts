@@ -169,6 +169,27 @@ export interface RxTierCopays {
   tier_8?: CostShare;
 }
 
+/** One service's out-of-network cost share, straight from CMS PBP
+ *  Section C. Copay and/or coinsurance as a min–max; inpatient may carry a
+ *  per-stay copay or a day ladder; SNF may defer to Original Medicare. */
+export interface OonCost {
+  copay_min?: number | null;
+  copay_max?: number | null;
+  coins_min?: number | null;
+  coins_max?: number | null;
+  per_stay?: number | null;
+  ladder?: Array<{ from_day: number | null; to_day: number | null; copay?: number; coins?: number }>;
+  original_medicare_cost_share?: boolean;
+}
+
+export interface OutOfNetwork {
+  /** 'oon' PPO out-of-network · 'pos' HMO point-of-service · 'none' in-network only. */
+  mode: 'oon' | 'pos' | 'none';
+  moop: number | null;
+  /** Keyed by MedicalCopays field name. A key missing ⇒ not covered OON. */
+  costs: Partial<Record<keyof MedicalCopays, OonCost>>;
+}
+
 export interface PlanBenefits {
   dental: DentalBenefit;
   vision: VisionBenefit;
@@ -271,6 +292,9 @@ export interface Plan {
   // leaving Plan Match for medicare.gov.
   sbf_url: string;
   benefits: PlanBenefits;
+  /** CMS Section C out-of-network / POS cost sharing. null/absent when not
+   *  loaded for the plan year — render nothing, never a guess. */
+  out_of_network?: OutOfNetwork | null;
   formulary: Record<string, FormularyTier>;
   in_network_npis: string[];
 }

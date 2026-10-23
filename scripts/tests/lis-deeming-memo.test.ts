@@ -42,6 +42,7 @@ import {
   LIS_COPAYS_2026,
   deemLisTier,
   getLisCopays,
+  lisCapClassFor,
   normalizeLisTier,
   type LisTier,
   type LivingSetting,
@@ -91,7 +92,7 @@ const CASES: ReadonlyArray<[MedicaidLevel, LivingSetting, LisTier, string]> = [
 for (const [level, setting, expected, why] of CASES) {
   test(`deemLisTier(${level}, ${setting}) === ${expected} — ${why}`, () => {
     assert.equal(deemLisTier(level, setting), expected);
-    const copays = getLisCopays(deemLisTier(level, setting));
+    const copays = getLisCopays(deemLisTier(level, setting), 2026);
     assert.deepEqual(copays, expected === 'none' ? null : MEMO[expected]);
   });
 }
@@ -126,4 +127,22 @@ test('a session carrying the retired qmb_uniform is re-derived, not guessed', ()
   assert.equal(normalizeLisTier('full_high', 'fbde', 'community'), 'full_high');
   assert.equal(normalizeLisTier(null, 'none', 'community'), 'none');
   assert.equal(normalizeLisTier(undefined, 'none', 'community'), 'none');
+});
+
+// CY2027 — CMS CY2027 Rate Announcement Table V-2, as printed on the 2027
+// SBFs ("$0, $1.65, or $5.80" generic / "$0, $5, or $14.40" all other).
+test('CY2027 LIS copays match Table V-2', () => {
+  assert.deepEqual(getLisCopays('full_low', 2027), { generic: 1.65, brand: 5.0 });
+  assert.deepEqual(getLisCopays('full_high', 2027), { generic: 5.8, brand: 14.4 });
+  assert.deepEqual(getLisCopays('full_institutional', 2027), { generic: 0, brand: 0 });
+});
+
+test('LIS cap class follows the drug, not the tier', () => {
+  // UHC files generic dapagliflozin on Tier 3 — generic cap applies.
+  assert.equal(lisCapClassFor({ tier: 3, isBrand: false }), 'generic');
+  assert.equal(lisCapClassFor({ tier: 1, isBrand: true }), 'brand');
+  assert.equal(lisCapClassFor({ tier: 1, drugName: 'sacubitril 49 MG / valsartan 51 MG Oral Tablet [Entresto]' }), 'brand');
+  // No brand flag and a plain name → tier rule.
+  assert.equal(lisCapClassFor({ tier: 3, drugName: 'Eliquis 5mg' }), 'brand');
+  assert.equal(lisCapClassFor({ tier: 2, drugName: 'metformin' }), 'generic');
 });

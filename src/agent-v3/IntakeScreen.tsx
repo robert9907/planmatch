@@ -25,7 +25,7 @@ import { useSession } from '@/hooks/useSession';
 import type { EnrollmentPeriod, SepLifeEvent, StateCode } from '@/types/session';
 import { SEP_LIFE_EVENT_LABELS, SEP_LIFE_EVENT_TO_CMS } from '@/types/session';
 import type { LisTier, LivingSetting, MedicaidLevel } from '@/lib/dual-eligible';
-import { deemLisTier } from '@/lib/dual-eligible';
+import { deemLisTier, getLisCopays } from '@/lib/dual-eligible';
 import { DISCLAIMERS } from '@/lib/compliance';
 import {
   Card,
@@ -79,11 +79,18 @@ const LIVING_SETTING_CHIPS: ReadonlyArray<{ key: LivingSetting; label: string }>
   { key: 'institutional_or_hcbs',  label: 'Institution / HCBS' },
 ];
 
+// Chip amounts follow the active plan year (2027: $1.65/$5.00, $5.80/$14.40).
+function lisChipLabel(name: string, tier: 'full_low' | 'full_high'): string {
+  const c = getLisCopays(tier);
+  const f = (n: number) => `$${n.toFixed(2)}`;
+  return c ? `${name} (${f(c.generic)}/${f(c.brand)})` : name;
+}
+
 const LIS_TIER_CHIPS: ReadonlyArray<{ key: LisTier; label: string }> = [
   { key: 'none',                label: 'None' },
   { key: 'full_institutional',  label: 'Full institutional ($0/$0)' },
-  { key: 'full_low',            label: 'Full low ($1.60/$4.90)' },
-  { key: 'full_high',           label: 'Full high ($5.10/$12.65)' },
+  { key: 'full_low',            label: lisChipLabel('Full low', 'full_low') },
+  { key: 'full_high',           label: lisChipLabel('Full high', 'full_high') },
 ];
 
 // ── Enrollment period options ─────────────────────────────────────

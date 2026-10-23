@@ -6,7 +6,7 @@
 // objects in `Plan.benefits.*`. This module is the single place that
 // maps one to the other so every card renders consistently.
 
-import type { Plan } from '@/types/plans';
+import type { OonCost, Plan } from '@/types/plans';
 import { fitnessProgramForCarrier } from '@/lib/fitness-program';
 import { sharedAllowanceSuffix } from '@/lib/extractBenefitValue';
 
@@ -271,4 +271,81 @@ export function costShareNumeric(
   if (cs.copay != null) return cs.copay;
   if (cs.coinsurance != null) return cs.coinsurance;
   return null;
+}
+
+// ── Out-of-network line (CMS PBP Section C) ──────────────────────────
+// Every value is the plan's own CMS filing (pm_plan_oon_costs). A plan with
+// no Section C row for the year returns null → no line, never a guess.
+const OON_LOADED_KEYS: ReadonlySet<string> = new Set([
+  'primary_care', 'specialist', 'chiropractic', 'occupational_therapy',
+  'physical_speech_therapy', 'podiatry', 'mental_health_individual',
+  'mental_health_group', 'substance_abuse', 'home_health',
+  'diagnostic_procedures', 'lab_services', 'advanced_imaging', 'xray',
+  'outpatient_surgery_hospital', 'outpatient_observation',
+  'outpatient_surgery_asc', 'ambulance', 'air_transportation',
+  'dme_prosthetics', 'diabetic_supplies', 'renal_dialysis', 'partb_drugs',
+  'inpatient', 'mental_health_inpatient', 'snf',
+]);
+// Same Plan-Finder / SBF convention as in-network: these headline the
+// filed maximum, not the range floor.
+const OON_HIGH_END_KEYS: ReadonlySet<string> = new Set([
+  'ambulance', 'outpatient_surgery_asc', 'outpatient_surgery_hospital',
+]);
+
+function money(n: number): string {
+  return n % 1 === 0 ? `$${n.toLocaleString()}` : `$${n.toFixed(2)}`;
+}
+
+export function formatOonCost(
+  c: OonCost,
+  key: string,
+): string {
+  if (c.original_medicare_cost_share && !c.ladder && c.copay_min == null && c.coins_min == null) {
+    return 'Original Medicare amounts';
+  }
+  const parts: string[] = [];
+  if (c.per_stay != null) parts.push(`${money(c.per_stay)} per stay`);
+  if (c.ladder && c.ladder.length > 0) {
+    parts.push(
+      c.ladder
+        .map((t) => {
+          const v = t.copay != null ? `${money(t.copay)}/day` : `${t.coins}%`;
+          return `${v} days ${t.from_day ?? '?'}–${t.to_day ?? '?'}`;
+        })
+        .join(' · '),
+    );
+  }
+  const hi = OON_HIGH_END_KEYS.has(key);
+  if (c.copay_min != null || c.copay_max != null) {
+    const lo = c.copay_min ?? c.copay_max!;
+    const up = c.copay_max ?? lo;
+    parts.push(hi || up === lo ? money(up) : `${money(lo)}–${money(up)}`);
+  }
+  if (c.coins_min != null || c.coins_max != null) {
+    const lo = c.coins_min ?? c.coins_max!;
+    const up = c.coins_max ?? lo;
+    parts.push(hi || up === lo ? `${up}%` : `${lo}%–${up}%`);
+  }
+  return parts.length > 0 ? parts.join(' or ') : '—';
+}
+
+/** Second line under an in-network cost cell: "Out-of-network: $50".
+ *  null when the row has no out-of-network meaning or no data is loaded. */
+export function formatOonLine(plan: Plan, key: string): string | null {
+  const oon = plan.out_of_network;
+  if (!oon) return null;
+  if (key === 'emergency' || key === 'urgent_care') {
+    return 'Out-of-network: same cost (covered anywhere)';
+  }
+  if (!OON_LOADED_KEYS.has(key)) return null;
+  const label = oon.mode === 'pos' ? 'Out-of-network (POS)' : 'Out-of-network';
+  const c = oon.mode === 'none' ? undefined : oon.costs[key as keyof typeof oon.costs];
+  if (!c) {
+    // Emergency ambulance is covered anywhere, at the in-network cost.
+    if (key === 'ambulance' || key === 'air_transportation') {
+      return 'Out-of-network: same cost in an emergency';
+    }
+    return 'Out-of-network: not covered';
+  }
+  return `${label}: ${formatOonCost(c, key)}`;
 }
