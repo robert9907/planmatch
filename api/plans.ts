@@ -1869,10 +1869,19 @@ export function costShareFor(
     //    value on the winning row. The cms_pbp low is a range floor, not
     //    the visit price, so it is display-only (copay_low below).
     // Fall back to the filed value whenever cms_pbp filed nothing.
-    const gradedCopay =
-      HIGH_END_COPAY_CATEGORIES.has(hit.benefit_category) && cmsCHigh != null
-        ? cmsCHigh
-        : rawCopay;
+    // pbp_benefits is segment-agnostic, so cmsCHigh is the max across ALL of
+    // a plan's segments (H4513-061 files ground ambulance $150–$275 by
+    // segment). For ambulance, only lift a $0/blank floor — never overwrite
+    // a real segment-specific filed copay with another segment's max.
+    const liftHighEnd =
+      HIGH_END_COPAY_CATEGORIES.has(hit.benefit_category) &&
+      cmsCHigh != null &&
+      (hit.benefit_category !== 'ambulance' || ((rawCopay == null || rawCopay === 0) && cmsCLow === 0));
+    const gradedCopay = liftHighEnd ? cmsCHigh : rawCopay;
+    // A real filed ground-ambulance copay is a flat per-trip amount; the
+    // segment-agnostic cms span would show another segment's range.
+    const ambulanceFiled =
+      hit.benefit_category === 'ambulance' && !liftHighEnd && rawCopay != null && rawCopay > 0;
     // Graded coinsurance: the real filed value on the winning row. No
     // category takes the cms_pbp low (see the note above); the cms_pbp
     // span rides along display-only via coinsurance_low/high below.
@@ -1884,10 +1893,11 @@ export function costShareFor(
       // HIGH_END categories headline the filed max (what the SBF and Plan
       // Finder print), so the display range collapses onto it — a "$0–$350"
       // ambulance or "$0–$430" ASC cell would contradict the SBF.
-      copay_low: HIGH_END_COPAY_CATEGORIES.has(hit.benefit_category) && cmsCHigh != null
+      copay_low: liftHighEnd
         ? cmsCHigh
+        : ambulanceFiled ? rawCopay
         : hasCmsCopay ? (cmsCLow ?? cmsCHigh) : rawCopay,
-      copay_high: hasCmsCopay ? (cmsCHigh ?? cmsCLow) : (fallbackHasRange ? maxCoverage : rawCopay),
+      copay_high: ambulanceFiled ? rawCopay : hasCmsCopay ? (cmsCHigh ?? cmsCLow) : (fallbackHasRange ? maxCoverage : rawCopay),
       coinsurance_low: hasCmsCoins ? (cmsILow ?? cmsIHigh) : rawCoins,
       coinsurance_high: hasCmsCoins ? (cmsIHigh ?? cmsILow) : rawCoins,
       // Pass the displaced filing straight through — no range-collapse
