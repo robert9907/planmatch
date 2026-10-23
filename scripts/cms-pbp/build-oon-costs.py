@@ -2,7 +2,12 @@
 """Build pm_plan_oon_costs rows from the CMS PBP Benefits file, Section C.
 
 Usage:
-  python3 -I scripts/cms-pbp/build-oon-costs.py <pbp_dir> <plan_triples.txt> <out.json>
+  python3 -I scripts/cms-pbp/build-oon-costs.py <pbp_dir> <plan_triples.txt> <out.json> [zero_cost_triples.txt]
+
+[zero_cost_triples]  optional "CONTRACT|PLAN|SEGMENT" list of D-SNPs flagged
+                  pm_plans.zero_cost_sharing. Medicare Plan Finder shows $0
+                  out-of-network on these (Medicaid pays the member share), so
+                  their outpatient out-of-network cost becomes $0 to match it.
 
 <pbp_dir>         unzipped pbp-benefits-YYYY.zip (needs pbp_Section_C.txt,
                   pbp_Section_C_OON.txt, pbp_Section_C_POS.txt)
@@ -46,7 +51,10 @@ CODE_TO_KEY = {
     '11a': 'dme_prosthetics',
     '11c1': 'diabetic_supplies',
     '12': 'renal_dialysis',
-    '15-2': 'partb_drugs',
+    # 15-3 = "other Part B drugs" — what Medicare Plan Finder headlines as
+    # PART_B_OTHER_DRUGS (15-2 is chemo, 15-1-I insulin). Checked against
+    # Plan Finder 2026-10-23: 15-2 put 40% where Plan Finder shows 0–40%.
+    '15-3': 'partb_drugs',
 }
 
 
@@ -80,6 +88,12 @@ def cost_entry(coins_yn, cmin, cmax, copay_yn, pmin, pmax):
     if copay_yn == '1':
         e['copay_min'] = num(pmin)
         e['copay_max'] = num(pmax) if num(pmax) is not None else num(pmin)
+    # Both flags filed as "No" (2) = covered with NO cost sharing — $0, not
+    # "not covered". Plan Finder shows these as $0 (Humana H5141-025 PCP,
+    # Wellcare H5472-004 POS specialist, Devoted H5453-016 diabetic
+    # supplies). Blank flags mean the row carries no cost-share at all.
+    if coins_yn == '2' and copay_yn == '2':
+        return {'copay_min': 0.0, 'copay_max': 0.0}
     return e if any(v is not None for v in e.values()) else None
 
 
@@ -199,6 +213,21 @@ def main():
                      ['pbp_c_oon_out_mc_bendesc_cats', 'pbp_c_oon_out_nmc_bendesc_cats'])
     apply_outpatient(f'{pbp_dir}/pbp_Section_C_POS.txt', 'pbp_c_pos_outpt',
                      ['pbp_c_pos_outpt_mc_bencats', 'pbp_c_pos_outpt_nmc_bencats'])
+
+    zero_cost = set()
+    if len(sys.argv) > 4:
+        with open(sys.argv[4]) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    c, p, s_ = line.split('|')
+                    zero_cost.add((c, p, str(int(s_ or 0))))
+    for k, v in plans.items():
+        if k in zero_cost and v['network_mode'] != 'none':
+            for key, cost in v['costs'].items():
+                if 'ladder' in cost or 'per_stay' in cost or cost.get('original_medicare_cost_share'):
+                    continue
+                v['costs'][key] = {'copay_min': 0.0, 'copay_max': 0.0}
 
     out = []
     for (c, p, s), v in sorted(plans.items()):
