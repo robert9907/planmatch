@@ -842,9 +842,12 @@ function deltaText(metric: Metric, plan: Plan, current: Plan | null): string | n
   if (a == null || b == null) return null;
   if (a === b) return null;
   const diff = Math.abs(a - b);
-  if (metric.key === 'premium' || metric.key === 'giveback' || metric.key === 'otc') {
+  if (metric.key === 'premium' || metric.key === 'giveback') {
     return `$${diff.toFixed(2)}`;
   }
+  // OTC compares on the quarterly amount; say so, or "$160" next to a
+  // "$70/mo" cell reads as a monthly difference.
+  if (metric.key === 'otc') return `$${Math.round(diff)}/qtr more`;
   if (
     metric.key === 'moop' ||
     metric.key === 'drugs' ||
