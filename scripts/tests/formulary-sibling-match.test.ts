@@ -145,3 +145,25 @@ test('inhaler never crosses route to a nasal spray / ointment', () => {
   const hfa = row('H', '120 ACTUAT fluticasone propionate 0.05 MG/ACTUAT Metered Dose Inhaler', 3);
   assert.equal(pickBestFormularyRow('896018', diskus, [nasal, hfa]).row?.rxcui, 'H');
 });
+
+// Cache-bridge mis-attribution lock (2026-10-23 — Step 1 audit). The agent
+// prices a drug off the matched sibling's rxcui → pm_drug_ndc → pm_drug_cost_cache.
+// On C08's plan H5302-012, Stelara (ustekinumab) is filed uncovered at
+// full_cost $36,730; a prior scoring pass mis-attributed that to Hyrimoz
+// (adalimumab biosimilar). pickBestFormularyRow is the single gate that
+// decides the matched rxcui, so it must NEVER resolve Hyrimoz to the Stelara
+// row (or a different adalimumab brand) — else the cost bridge surfaces
+// Stelara's price under Hyrimoz. expandRxcui is ingredient-scoped and rule 1b
+// blocks cross-brand; this pins both guarantees.
+test('cache-bridge lock — Hyrimoz never resolves to Stelara or another brand', () => {
+  const hyrimoz = parseDrugProfile('0.4 ML adalimumab 100 MG/ML Auto-Injector [Hyrimoz]');
+  const stelara = row('853356', '1 ML ustekinumab 90 MG/ML Prefilled Syringe [Stelara]', null);
+  const humira = row('2545198', '0.4 ML adalimumab 100 MG/ML Auto-Injector [Humira]', 3);
+  const hyrimozRow = row('2641658', '0.4 ML adalimumab 100 MG/ML Auto-Injector [Hyrimoz]', 3);
+  // only the ustekinumab row filed → NOT COVERED (never prices off Stelara)
+  assert.equal(pickBestFormularyRow('__nonexact__', hyrimoz, [stelara]).row, null);
+  // different brand of the same molecule → NOT COVERED
+  assert.equal(pickBestFormularyRow('__nonexact__', hyrimoz, [humira]).row, null);
+  // a real Hyrimoz row still resolves
+  assert.equal(pickBestFormularyRow('__nonexact__', hyrimoz, [stelara, hyrimozRow]).row?.rxcui, '2641658');
+});
