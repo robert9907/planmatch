@@ -52,7 +52,8 @@ import { bulkLookupFormulary } from '@/lib/formularyLookup';
 import { fetchPlansForClient, lastPlanTruncated } from '@/lib/planCatalog';
 import { totalComplianceItems } from '@/lib/compliance';
 import type { Plan } from '@/types/plans';
-import type { StateCode } from '@/types/session';
+import type { CsnpConditionCode, StateCode } from '@/types/session';
+import { detectConditionsFromMeds, detectedToCsnp } from '@/lib/condition-detector';
 import { useAgentBaseRecommend } from '@/hooks/useAgentBaseRecommend';
 import { AgentBar, type ScreenId } from './AgentBar';
 import { ComplianceScreen } from './ComplianceScreen';
@@ -216,6 +217,32 @@ export function AgentV3App() {
   const confirmed = useSession((s) => s.disclaimersConfirmed);
   const sessionId = useSession((s) => s.sessionId);
   const startedAt = useSession((s) => s.startedAt);
+
+  // C-SNP eligibility from the med list (Rob, 2026-10-23 — Stephaine
+  // Calahan, Burke GA). The brain only puts C-SNPs in the pool when the
+  // client's chronic conditions are on file (csnpConditions), and those
+  // lived only in the Intake chips — a page reload or an AgentBase-hydrated
+  // session dropped them, so her Devoted C-SNP vanished ("0 C-SNP").
+  // When the meds clearly show a qualifying condition (diabetes, heart
+  // failure / AFib, COPD), tick that chip for the broker. A chip the
+  // broker unticks stays unticked for the rest of the session.
+  const updateClient = useSession((s) => s.updateClient);
+  const csnpAutoApplied = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const detected = detectedToCsnp(
+      detectConditionsFromMeds(medications).filter((d) => d.confidence !== 'possible'),
+    ).filter((c): c is CsnpConditionCode =>
+      // Kidney/ESRD is never auto-ticked: meds like dapagliflozin and
+      // furosemide read as "kidney" but an ESRD C-SNP needs dialysis — the
+      // broker ticks that one himself.
+      c === 'diabetes' || c === 'cardio' || c === 'copd',
+    );
+    const current = client.csnpConditions ?? [];
+    const toAdd = detected.filter((c) => !current.includes(c) && !csnpAutoApplied.current.has(c));
+    for (const c of detected) csnpAutoApplied.current.add(c);
+    if (toAdd.length > 0) updateClient({ csnpConditions: [...current, ...toAdd] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [medications]);
 
   // AgentBase write-back. Fires from CompareScreen's Enroll buttons
   // and EnrollScreen's SunFire CTA. Hook handles idempotent same-plan
