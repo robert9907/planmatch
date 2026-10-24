@@ -52,6 +52,11 @@ export interface DrugFill {
   /** IRA insulin cap applies (§11406). Member cost per fill is capped
    *  at insulinMonthlyCap regardless of phase. */
   isInsulin?: boolean;
+  /** Plan waives the Part D deductible for this drug (Medicare.gov shows a
+   *  flat copay in the deductible phase, not the full negotiated price). The
+   *  fill then skips the deductible phase — billed at the initial-phase rate
+   *  from month one, like insulin. */
+  deductibleWaived?: boolean;
   /** ACIP-recommended Part D vaccine (§11401) — member pays
    *  vaccineMemberCost ($0) in every phase. Vaccine spend still counts
    *  toward grossDrugCost. */
@@ -270,7 +275,8 @@ function chargeFill(
   // billed each early fill at the capped $35 instead of the plan's real
   // (often lower) initial cost-share, overstating insulin by the
   // deductible's worth of $35 fills (Lantus on H4523-024: $256 vs $148 PF).
-  const canUseDeductible = tierCanUseDeductible(drug.tier, plan) && !drug.isInsulin;
+  const canUseDeductible =
+    tierCanUseDeductible(drug.tier, plan) && !drug.isInsulin && !drug.deductibleWaived;
 
   // ── Split fill across phases ────────────────────────────────────
   let deductiblePiece = 0;
@@ -345,7 +351,7 @@ export function partDTimeline(args: PartDTimelineArgs): MonthlyRow[] {
   // coverage rather than "we're in deductible but nobody's spending
   // toward it" — that would color the UI misleadingly.
   const anyDrugSubjectToDeductible = args.drugs.some((d) =>
-    tierCanUseDeductible(d.tier, args.plan) && !d.isInsulin,
+    tierCanUseDeductible(d.tier, args.plan) && !d.isInsulin && !d.deductibleWaived,
   );
   const effectiveDeductible = anyDrugSubjectToDeductible
     // Plan's filed deductible is capped by the year's max (a plan
