@@ -372,18 +372,14 @@ function applyProviderGate(
 // every plan in the area, the broker sees an empty pool and knows to
 // reach for the manual fallback, not get quietly handed back a list of
 // plans we can't actually quote.
-function applyMedicationGate(
+export function applyMedicationGate(
   pool: ReadonlyArray<BrainScoredPlan>,
   userHasDrugs: boolean,
   otcIndices: ReadonlySet<number>,
 ): BrainScoredPlan[] {
   if (!userHasDrugs) return [...pool];
-  return pool.filter((s) => {
-    // Effective coverage: every non-OTC user drug must be covered on
-    // this plan. Drugs in otcIndices had covered=false on EVERY plan
-    // in the pool (see the pre-pass in runPlanBrain) so they're
-    // treated as non-Rx and skipped here — otherwise a single
-    // Vitamin D3 entry would empty the pool for every persona.
+  // Non-OTC drugs this plan covers (otcIndices = covered on NO plan → skipped).
+  const coverageOf = (s: BrainScoredPlan): { need: number; got: number } => {
     let need = 0;
     let got = 0;
     for (let i = 0; i < s.score.drugBreakdown.length; i += 1) {
@@ -391,9 +387,28 @@ function applyMedicationGate(
       need += 1;
       if (s.score.drugBreakdown[i].covered) got += 1;
     }
+    return { need, got };
+  };
+  const survivors = pool.filter((s) => {
+    // Effective coverage: every non-OTC user drug must be covered on
+    // this plan. Drugs in otcIndices had covered=false on EVERY plan
+    // in the pool (see the pre-pass in runPlanBrain) so they're
+    // treated as non-Rx and skipped here — otherwise a single
+    // Vitamin D3 entry would empty the pool for every persona.
+    const { need, got } = coverageOf(s);
     // need===0 ⇒ user entered only OTC items ⇒ nothing to gate on.
     return need === 0 || got === need;
   });
+  // Never hand a client zero plans. When no single plan covers the full
+  // regimen (C03 Tamara Wilkes: 9-drug MS regimen — teriflunomide +
+  // dalfampridine never on one plan) the all-or-nothing rule above empties
+  // the pool. Plan Finder shows all plans and flags uncovered drugs; fall
+  // back to the plans with the BEST coverage (most non-OTC drugs covered).
+  if (survivors.length === 0 && pool.length > 0) {
+    const maxGot = Math.max(...pool.map((s) => coverageOf(s).got));
+    return pool.filter((s) => coverageOf(s).got === maxGot);
+  }
+  return survivors;
 }
 
 // ─── Gate 3 — extras "must offer" elimination ────────────────────────
