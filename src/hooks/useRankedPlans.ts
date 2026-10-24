@@ -75,6 +75,11 @@ export interface UseRankedPlansArgs {
   /** Live Medicare.gov gross monthly prices (from usePlanBrain). The
    *  ranking re-runs when they arrive. */
   grossMonthlyByRxcui?: Map<string, number> | null;
+  /** Pharmacy dispensing channel the broker picked on Compare.
+   *  `preferred_retail` (default) or `mail_order` — forwarded to the
+   *  library rank-plans brain, which re-prices drugs for 90-day mail
+   *  fills. Changing it re-runs the ranking. */
+  pharmacy?: 'preferred_retail' | 'mail_order';
 }
 
 export interface UseRankedPlansState {
@@ -123,6 +128,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     enrollmentPeriod,
     sepReasonCode,
     grossMonthlyByRxcui,
+    pharmacy,
   } = args;
   const grossKey = useMemo(
     () =>
@@ -246,6 +252,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
           grossMonthlyByRxcui && grossMonthlyByRxcui.size > 0
             ? Object.fromEntries(grossMonthlyByRxcui)
             : undefined,
+        pharmacy,
       },
       ctrl.signal,
     )
@@ -278,7 +285,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     // medsKey / provsKey / extrasKey deliberately gate on serialized
     // content, not array identity — see notes above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [county, zip, state_, medsKey, provsKey, extrasKey, csnpKey, currentPlanId, dsnpEligible, enrollmentPeriod, sepReasonCode, client.lisTier, client.medicaidLevel, client.livingSetting, grossKey]);
+  }, [county, zip, state_, medsKey, provsKey, extrasKey, csnpKey, currentPlanId, dsnpEligible, enrollmentPeriod, sepReasonCode, client.lisTier, client.medicaidLevel, client.livingSetting, grossKey, pharmacy]);
 
   return state;
 }

@@ -411,6 +411,12 @@ export interface LibraryRankInput {
    *  quantity (src/lib/drugGrossPrice). Prices drugs pm_drug_cost_cache
    *  doesn't carry instead of the flat per-tier notional. */
   grossMonthlyByRxcui?: Record<string, number>;
+  /** Pharmacy dispensing channel for drug-cost pricing:
+   *  `preferred_retail` (default, 30-day fills) or `mail_order` (90-day
+   *  fills). Forwarded to the library rank-plans brain; omitted ⇒
+   *  preferred_retail. No `standard_retail` — pm_plan_benefits files only
+   *  the preferred 30-day retail cost-share. */
+  pharmacy?: 'preferred_retail' | 'mail_order';
 }
 
 export async function rankPlans(
