@@ -221,6 +221,12 @@ interface Props {
    *  Card", 'partb_giveback' → "Part B Giveback". Optional so older
    *  test wrappers / storybook callers don't need to change. */
   priorities?: readonly string[];
+  /** Pharmacy dispensing channel the drug costs are priced at, and a
+   *  setter for the on-screen toggle. `preferred_retail` (default) prices
+   *  30-day pickups; `mail_order` re-ranks for 90-day mail fills. Changing
+   *  it re-runs the library ranking upstream. */
+  pharmacy?: 'preferred_retail' | 'mail_order';
+  onPharmacyChange?: (p: 'preferred_retail' | 'mail_order') => void;
 }
 
 /** Subset of the brain's GateExplanations rendered on each SlotCell. */
@@ -903,6 +909,8 @@ export function CompareScreen({
   onNext,
   rankedPlans,
   priorities,
+  pharmacy = 'preferred_retail',
+  onPharmacyChange,
 }: Props) {
   const providers = useSession((s) => s.providers);
   const medications = useSession((s) => s.medications);
@@ -1615,6 +1623,44 @@ export function CompareScreen({
         onGrid={() => setMode('grid')}
         onH2H={enterH2HFromToggle}
       />
+
+      {medications.length > 0 && onPharmacyChange && (
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '10px 0 4px', fontSize: 13 }}
+        >
+          <span style={{ color: '#475569', fontWeight: 600 }}>Pharmacy</span>
+          <div style={{ display: 'inline-flex', border: '1px solid #cbd5e1', borderRadius: 8, overflow: 'hidden' }}>
+            {([
+              ['preferred_retail', 'Preferred retail'],
+              ['mail_order', 'Mail order · 90-day'],
+            ] as const).map(([value, label]) => {
+              const active = pharmacy === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => onPharmacyChange(value)}
+                  style={{
+                    padding: '6px 12px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: active ? 700 : 500,
+                    background: active ? 'var(--brand-blue, #0071e3)' : '#fff',
+                    color: active ? '#fff' : '#334155',
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          <span style={{ color: '#94a3b8', fontSize: 12 }}>
+            Drug costs re-price for the pharmacy the client will use.
+          </span>
+        </div>
+      )}
 
       {currentPlanMissing && (
         <div

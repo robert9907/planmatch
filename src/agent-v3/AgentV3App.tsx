@@ -684,6 +684,11 @@ export function AgentV3App() {
   // library response is expanded. Until then we pay one extra
   // ranking call per quote — temporary cost while the migration is
   // staged.
+  // Pharmacy channel the broker can toggle on Compare. Default preferred
+  // retail (what the client pays at a standard 30-day pickup); mail order
+  // re-prices for 90-day fills. Lives here (not in CompareScreen) so the
+  // selection drives the useRankedPlans re-fetch.
+  const [pharmacyChannel, setPharmacyChannel] = useState<'preferred_retail' | 'mail_order'>('preferred_retail');
   const ranked = useRankedPlans({
     client,
     medications,
@@ -691,6 +696,7 @@ export function AgentV3App() {
     userPriorities: userPriorityKeys,
     csnpConditions: client.csnpConditions,
     currentPlanId,
+    pharmacy: pharmacyChannel,
     // When the broker flagged the client as dual-eligible on Intake,
     // pass it through so the library's filterPlanPool keeps D-SNPs in
     // the Top-4 candidate pool. When false/undefined, the bench still
@@ -1575,6 +1581,8 @@ const explanationsByPlanId = useMemo<
                 : undefined
             }
             priorities={priorities}
+            pharmacy={pharmacyChannel}
+            onPharmacyChange={setPharmacyChannel}
             onRecommend={onRecommend}
             onBack={() => setScreen('priorities')}
             onNext={() => setScreen('compliance')}
