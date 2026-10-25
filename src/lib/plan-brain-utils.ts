@@ -383,6 +383,21 @@ export function unavailableDrugEstimates(
   }));
 }
 
+/** A cache per-fill phase cost reflects a genuine plan COPAY STRUCTURE — a flat
+ *  copay the plan files BELOW the drug's negotiated price (IRA/brand flat copays,
+ *  e.g. Xarelto $45 vs full $636) — only when it sits materially below full_cost.
+ *  A cheap generic's standalone scrape reports initial_cost ≈ full_cost (≈ the
+ *  drug's own few-dollar price); that is NOT a filed copay, so the plan's filed
+ *  tier cost-share (often $0 on tier 1/2) must win. Mirror of the consumer
+ *  (robert9907/plan-match packages/brain). Require ≥$1 below full AND ≤90%. */
+export function isMeaningfulCopayStructure(
+  phaseCost: number,
+  fullCost: number | null,
+): boolean {
+  if (fullCost == null || fullCost <= 0) return true;
+  return phaseCost <= fullCost - 1 && phaseCost <= fullCost * 0.9;
+}
+
 export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyEstimate[] {
   // ── 1. Per-drug metadata — unchanged from the pre-timeline body ──
   //
@@ -518,8 +533,15 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       // Only an authoritative cache initial_cost paired with a usable
       // full_cost (gross) drives the per-drug timeline override; without
       // a real gross price there's nothing to burn the deductible with.
+      // AND only when it's a real plan COPAY STRUCTURE materially below the
+      // negotiated price (brand flat copay), not a cheap generic whose cache
+      // initial_cost ≈ full_cost — that masks the plan's filed $0 tier copay
+      // (A03 alendronate: cache $5 vs filed tier-1 $0). Mirror of consumer fix.
       initialCostOverride:
-        cachedInitialCost != null && retailMonthly > 0 ? cachedInitialCost : null,
+        cachedInitialCost != null && retailMonthly > 0 &&
+        isMeaningfulCopayStructure(cachedInitialCost, cachedFullCost)
+          ? cachedInitialCost
+          : null,
       mfpCostShare,
     };
   });
