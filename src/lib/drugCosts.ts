@@ -14,22 +14,21 @@
 import type { LisTier } from './dual-eligible';
 
 // Medicare.gov plan-compare API accepts these LIS enum values.
-// Confirmed via scripts/_lis-probe-pdp.mjs 2026-07-22 against Humana
-// Basic Rx S5884-133-0: partd premium $6.80 → calculated_monthly_premium
-// $0 for LIS_LEVEL_1A/2/3/4_100 (subsidy recognized), $6.80 for
-// LIS_NO_HELP. The tier→level mapping follows CMS convention:
-//   Level 1(A) → institutional FBDE ($0/$0 copay tier)
-//   Level 2    → full LIS community, ≤100% FPL ($1.60/$4.90)
-//   Level 3    → full LIS community, higher FPL / MSP recipient
-//                ($5.10/$12.65)
-// LIS_LEVEL_4_100 is the pre-IRA partial-subsidy tier — post-IRA §11404
-// (2024) all partials migrated to full LIS, so this repo's LisTier has
-// no entry that maps to it.
-const LIS_ENUM_MAP: Record<LisTier, string> = {
+// The level→copay mapping was PINNED empirically 2026-10-26 by a per-DRUG-COPAY
+// probe (consumer repo) — Eliquis tier-3 brand on H5302-022 at each level, real
+// in-network chain NPI, 2027: LIS_LEVEL_2 → $5.00 brand (= full LIS ≤100% FPL /
+// FBDE community), LIS_LEVEL_1A → $14.40 (= full LIS higher-FPL), LIS_LEVEL_3 →
+// $0 (= institutional). This SUPERSEDES the earlier 2026-07-22 PDP probe
+// (scripts/_lis-probe-pdp.mjs), which only observed premium→$0 for 1A/2/3 — that
+// confirms subsidy recognition, NOT the per-copay tier, and its CMS-convention
+// inference mapped 1A/3 backwards. Kept in sync with the consumer enum map; see
+// memory reference_medicare_gov_lis_enum. LIS_LEVEL_4_100 is the pre-IRA partial
+// tier — post-IRA §11404 all partials migrated to full LIS, so no LisTier maps to it.
+export const LIS_ENUM_MAP: Record<LisTier, string> = {
   none: 'LIS_NO_HELP',
-  full_institutional: 'LIS_LEVEL_1A',
+  full_institutional: 'LIS_LEVEL_3',
   full_low: 'LIS_LEVEL_2',
-  full_high: 'LIS_LEVEL_3',
+  full_high: 'LIS_LEVEL_1A',
 };
 
 // CMS-typical retail prices per Part D tier, used to convert
