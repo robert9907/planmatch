@@ -13,7 +13,7 @@ import {
   type PlanInput as PartDPlanInput,
   type TierCostShares,
 } from '../../api/library/partDTimeline';
-import { getPlanYearParams } from '../../api/library/planYearParams';
+import { getPlanYearParams, type PlanYearParams } from '../../api/library/planYearParams';
 import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear';
 
 // ─── Utilization profiles (CMS-typical visit counts) ──────────────────
@@ -231,6 +231,14 @@ export interface DrugYearlyEstimate {
   // Consumed by the LIS override in dual-eligible.ts (step 3).
   // Defaults false when the input drug didn't carry the flag.
   isBrand: boolean;
+  // Standard (non-LIS) member cost-share for the year, computed WITHOUT the
+  // Part D OOP cap — what a non-LIS member would pay out of pocket (deductible +
+  // filed copay/coinsurance) if the catastrophic cap didn't stop billing. This
+  // is what accrues toward the LIS catastrophic threshold in dual-eligible.ts
+  // (= LIS copay + Extra-Help subsidy; manufacturer discounts excluded), NOT the
+  // capped yearlyCost (reaches $2,400 only at year end for a big basket). Mirror
+  // of consumer plan-brain-utils.ts #175. Only estimateBundleYearlyCost sets it.
+  standardAnnual?: number;
   // True ONLY when the plan year's formulary isn't published yet (CMS
   // hasn't posted the SPUF drug file). Distinct from covered/confirmedUncovered:
   // we have NO formulary at all, so tier is null and yearlyCost is 0 — not a
@@ -630,6 +638,12 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
   });
 
   let basketTotal = 0;
+  // Uncapped basket — the same shared-deductible timeline run WITHOUT the Part D
+  // OOP cap, so it yields the full standard (non-LIS) member cost-share. The LIS
+  // adjustment (dual-eligible.ts) accrues THIS toward the $2,400 catastrophic
+  // threshold; the capped basketTotal would only reach $2,400 at year end for a
+  // big basket and mistime the LIS member's drop to $0. Mirror of consumer #175.
+  let uncappedBasketTotal = 0;
   const soloYearlies: number[] = [];
   if (timelineDrugs.length > 0) {
     const basketRows = partDTimeline({
@@ -638,6 +652,17 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       drugs: timelineDrugs,
     });
     basketTotal = basketRows[basketRows.length - 1].cumulativeMemberCost;
+    const uncappedParams: PlanYearParams = {
+      ...BUNDLE_PARAMS,
+      troopCap: Number.POSITIVE_INFINITY,
+    };
+    const uncappedRows = partDTimeline({
+      planYear: BUNDLE_PLAN_YEAR,
+      planYearParams: uncappedParams,
+      plan,
+      drugs: timelineDrugs,
+    });
+    uncappedBasketTotal = uncappedRows[uncappedRows.length - 1].cumulativeMemberCost;
     for (const drug of timelineDrugs) {
       const soloRows = partDTimeline({
         planYear: BUNDLE_PLAN_YEAR,
@@ -665,6 +690,9 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
         covered: info.covered,
         confirmedUncovered: info.confirmedUncovered,
         isBrand,
+        // Cache yearly is already the standard (non-LIS) member cost without the
+        // OOP cap, so it doubles as the LIS accrual basis. Mirror of consumer #175.
+        standardAnnual: info.cacheOverride,
       };
     }
 
@@ -684,20 +712,19 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
         covered: false,
         confirmedUncovered: info.confirmedUncovered,
         isBrand,
+        // Off-formulary spend is OUTSIDE Part D — dual-eligible.ts never accrues
+        // it toward the catastrophic threshold; set for completeness only.
+        standardAnnual: Math.max(0, Math.round(yearly)),
       };
     }
 
-    // Timeline-eligible: allocate a share of the basket total.
+    // Timeline-eligible: allocate a share of the basket total (capped) for the
+    // displayed/ranked cost, and of the UNCAPPED basket for the standard
+    // cost-share that drives the LIS catastrophic accrual. Mirror of consumer #175.
     const tIdx = timelineDrugIndex.get(i);
-    let yearly = 0;
-    if (tIdx != null) {
-      if (soloSum > 0) {
-        yearly = basketTotal * (soloYearlies[tIdx] / soloSum);
-      } else {
-        // Every drug is $0 — nothing to allocate.
-        yearly = 0;
-      }
-    }
+    const weight = tIdx != null && soloSum > 0 ? soloYearlies[tIdx] / soloSum : 0;
+    const yearly = basketTotal * weight;
+    const standard = uncappedBasketTotal * weight;
     return {
       rxcui: info.input.rxcui,
       name: info.input.name,
@@ -706,6 +733,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       covered: true,
       confirmedUncovered: false,
       isBrand,
+      standardAnnual: Math.max(0, Math.round(standard)),
     };
   });
 }

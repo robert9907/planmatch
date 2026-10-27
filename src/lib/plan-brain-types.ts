@@ -309,6 +309,11 @@ export interface BrainScore {
     tier: number | null;
     monthlyCopay: number | null;
     annualCost: number;
+    // Standard (non-LIS) member cost-share for the year, UNCAPPED — the basis
+    // the LIS catastrophic cutoff accrues toward in dual-eligible.ts (not the
+    // capped annualCost). Mirror of consumer #175. Optional/absent for callers
+    // that predate it (dual-eligible falls back to annualCost).
+    standardAnnual?: number;
     // Brand vs. generic — mirrors Medication.isBrand from session.
     // Enables Generic/Brand chips on cards and the LIS L3+ copay
     // override in dual-eligible.ts.

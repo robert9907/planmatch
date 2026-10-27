@@ -581,22 +581,59 @@ export function applyDualEligibleCostAdjustment(
   let adjTotalAnnualDrug = score.totalAnnualDrugCost;
   let adjDrugBreakdown: BrainScore['drugBreakdown'] = score.drugBreakdown;
   if (lisCopays) {
-    let runningTotal = 0;
-    adjDrugBreakdown = score.drugBreakdown.map((drug) => {
-      if (!drug.covered) {
-        runningTotal += drug.annualCost;
-        return drug;
-      }
-      // Plan copay treated as per-fill; brain assumes 12 fills/year.
+    // LIS catastrophic cutoff under the 2025+ redesign (mirror of consumer
+    // plan-match #175, verified against live Plan Finder at LIS_LEVEL_2). The
+    // member pays min(plan per-fill copay, LIS tier cap) per fill; TrOOP accrues
+    // the plan's STANDARD (non-LIS) member cost-share — deductible + filed
+    // copay/coinsurance, which for an LIS member equals their LIS copay PLUS the
+    // Extra-Help subsidy (manufacturer discounts do NOT count, IRA §11201). When
+    // the accrued standard cost-share reaches the year's OOP threshold
+    // (PART_D_OOP_CAP), the LIS copay drops to $0. Interleave 12 monthly fills so
+    // an expensive basket stops charging copays mid-year rather than paying all
+    // 12 months. The prior model (cap the LIS-capped running total) never reached
+    // the cap for small LIS copays, so it over-charged duals with pricey baskets.
+    // Uncovered (off-formulary) spend is OUTSIDE Part D → never accrues here.
+    const n = score.drugBreakdown.length;
+    const perFillMember = new Array<number>(n).fill(0);
+    const standardFill = new Array<number>(n).fill(0);
+    score.drugBreakdown.forEach((drug, i) => {
+      if (!drug.covered) return;
       const planPerFill = drug.annualCost > 0 ? drug.annualCost / 12 : 0;
       const lisCap = drug.isBrand ? lisCopays.brand : lisCopays.generic;
-      const perFill = Math.min(planPerFill, lisCap);
-      const yearly = Math.round(perFill * 12);
-      runningTotal += yearly;
+      perFillMember[i] = Math.min(planPerFill, lisCap);
+      // Accrual basis: the UNCAPPED standard (non-LIS) cost-share per fill.
+      // standardAnnual is the non-LIS member cost without the OOP cap; fall back
+      // to the capped annualCost for callers that predate the field. `??` keeps
+      // an explicit 0 (no signal ⇒ no accrual; backstop clamp guards the total).
+      standardFill[i] = (drug.standardAnnual ?? (drug.annualCost > 0 ? drug.annualCost : 0)) / 12;
+    });
+    const memberYearly = new Array<number>(n).fill(0);
+    let cumStandard = 0;
+    for (let month = 0; month < 12; month += 1) {
+      for (let i = 0; i < n; i += 1) {
+        if (!score.drugBreakdown[i].covered) continue;
+        const reachedCat = cumStandard >= PART_D_OOP_CAP;
+        if (!reachedCat) memberYearly[i] += perFillMember[i];
+        cumStandard += standardFill[i];
+      }
+    }
+    let coveredTotal = 0;
+    let uncoveredTotal = 0;
+    adjDrugBreakdown = score.drugBreakdown.map((drug, i) => {
+      if (!drug.covered) {
+        uncoveredTotal += drug.annualCost;
+        return drug;
+      }
+      const yearly = Math.round(memberYearly[i]);
+      coveredTotal += yearly;
       return { ...drug, annualCost: yearly };
     });
-    // TrOOP backstop — Part D free above $2,100 for everyone (IRA §11201).
-    adjTotalAnnualDrug = Math.min(runningTotal, PART_D_OOP_CAP);
+    // Backstop clamp on the COVERED total (IRA §11201). Rarely binds now that the
+    // catastrophic cutoff is modeled; kept so a drug with no standard-cost-share
+    // signal (standardFill 0 → never triggers catastrophic) can't blow past the
+    // cap. Uncovered spend sits on top, outside Part D.
+    const cappedCovered = Math.min(coveredTotal, PART_D_OOP_CAP);
+    adjTotalAnnualDrug = cappedCovered + uncoveredTotal;
     adjRac.drugCost = adjTotalAnnualDrug;
   }
 
