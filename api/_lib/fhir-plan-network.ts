@@ -45,9 +45,45 @@ export const FHIR_CARRIER_IDS: ReadonlyArray<CarrierId> = [
 //   EXCLUDED bcbsnc (FHIR known-unreliable, 2026-10-01 identifier contract
 //            change — a not-found can be a lookup failure), anthem (~48 NPIs
 //            loaded + auth/timeout — partial), uhc (no directory loaded for 2027).
+// Hardcoded FALLBACK only. The SINGLE SOURCE OF TRUTH is the plan-match-prod
+// pm_prov_net_config table (key 'trusted_negative_carriers'), read by BOTH
+// repos (consumer api/_lib/network-row-precedence.ts) so this set can't drift.
+// This list must stay identical to the table seed; it is used only when the DB
+// read fails, so a Supabase hiccup never changes gating behavior.
 export const TRUSTED_NEGATIVE_CARRIERS: ReadonlySet<CarrierId> = new Set<CarrierId>([
   'humana', 'devoted', 'wellcare', 'healthteam',
 ]);
+
+let _trustedNegativeCache: ReadonlySet<string> | null = null;
+
+/** Load the trusted-negative carrier set from pm_prov_net_config (the single
+ *  cross-repo source) via the Supabase client. Memoized for the process after
+ *  the first successful read (no per-plan DB hit). On any read error or
+ *  empty/invalid value, returns the hardcoded TRUSTED_NEGATIVE_CARRIERS
+ *  fallback WITHOUT caching it. Mirrors the consumer loader. Pass the result
+ *  into expandCarrierSentinels({ trustedNegativeCarriers }). */
+export async function loadTrustedNegativeCarriers(sb: SupabaseClient): Promise<ReadonlySet<string>> {
+  if (_trustedNegativeCache) return _trustedNegativeCache;
+  try {
+    const { data, error } = await sb
+      .from('pm_prov_net_config')
+      .select('value')
+      .eq('key', 'trusted_negative_carriers')
+      .maybeSingle();
+    if (error || !data) return TRUSTED_NEGATIVE_CARRIERS;
+    const raw = (data as { value?: unknown }).value;
+    const arr = Array.isArray(raw) ? raw : null;
+    if (!arr || arr.length === 0) return TRUSTED_NEGATIVE_CARRIERS;
+    const set = new Set<string>(
+      arr.filter((x): x is string => typeof x === 'string').map((x) => x.toLowerCase()),
+    );
+    if (set.size === 0) return TRUSTED_NEGATIVE_CARRIERS;
+    _trustedNegativeCache = set;
+    return set;
+  } catch {
+    return TRUSTED_NEGATIVE_CARRIERS;
+  }
+}
 
 // Sentinel plan_ids (see consumer fhir-provider.ts). Keyed on the NPI, not a
 // real plan — a carrier-WIDE verdict for a doctor:
@@ -202,8 +238,14 @@ export function expandCarrierSentinels(args: {
   requestedIds: ReadonlyArray<string>;
   npis: ReadonlyArray<string>;
   requestedYear: number;
+  // Carriers whose __NPI_NOT_FOUND__ absence is trusted to eliminate — from the
+  // single-source pm_prov_net_config table (loadTrustedNegativeCarriers). The
+  // caller loads it once and passes it here; omitted ⇒ hardcoded fallback
+  // (identical to the table seed) so a DB read failure never changes behavior.
+  trustedNegativeCarriers?: ReadonlySet<string>;
 }): void {
   const { networkByPlan, sentinelRows, realRows, carrierMap, requestedIds, npis, requestedYear } = args;
+  const trusted = args.trustedNegativeCarriers ?? TRUSTED_NEGATIVE_CARRIERS;
   if (sentinelRows.length === 0) return;
 
   // (npi → carrier → best sentinel), preferring a requested-year row.
@@ -251,7 +293,7 @@ export function expandCarrierSentinels(args: {
       // (found, no MA network) is a positive finding → eliminates regardless of
       // completeness. Mirrors the consumer's gate in sentinelEliminations /
       // library provider-network.
-      if (verdict.plan_id === NPI_NOT_FOUND_PLAN_ID && !TRUSTED_NEGATIVE_CARRIERS.has(carrier)) continue;
+      if (verdict.plan_id === NPI_NOT_FOUND_PLAN_ID && !trusted.has(carrier)) continue;
       if (foundCarrierByNpi.get(npi)?.has(carrier)) continue; // real row wins carrier-wide
       const slot = (networkByPlan[id] ||= {});
       if (slot[npi]) continue; // a real / broker row already answers this (plan, npi)

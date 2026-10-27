@@ -30,6 +30,7 @@ import { outranks, isTrustedSource } from './_lib/network-row-precedence.js';
 import {
   loadContractToCarrierMap,
   expandCarrierSentinels,
+  loadTrustedNegativeCarriers,
   NPI_NOT_FOUND_PLAN_ID,
   NPI_NO_MA_NETWORK_PLAN_ID,
   type CarrierId,
@@ -627,6 +628,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.error('[plan-brain-data] contract→carrier map failed; sentinels not applied', err);
         carrierMap = new Map();
       }
+      // Single-source trusted-negative carriers (pm_prov_net_config; memoized,
+      // hardcoded fallback) — keeps the agent in lockstep with the consumer.
+      const trustedNegativeCarriers = await loadTrustedNegativeCarriers(sb);
       expandCarrierSentinels({
         networkByPlan,
         sentinelRows,
@@ -635,6 +639,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         requestedIds: ids,
         npis,
         requestedYear: catalogYear,
+        trustedNegativeCarriers,
       });
     }
 

@@ -214,3 +214,37 @@ test('gate: BCBS NC (untrusted) __NPI_NOT_FOUND__ does NOT eliminate, but its __
   });
   assert.equal(noma['H3449-024-000']?.[KLEIN]?.covered, false, 'NO_MA_NETWORK positive finding still eliminates');
 });
+
+// Single-source trusted set (pm_prov_net_config): the passed
+// trustedNegativeCarriers overrides the hardcoded fallback, so the agent reads
+// the same DB-backed list as the consumer and can't drift.
+test('trustedNegativeCarriers param overrides the hardcoded fallback (table is the source)', () => {
+  // humana IS in the hardcoded TRUSTED_NEGATIVE_CARRIERS, but the passed set
+  // excludes it → its NOT_FOUND must NOT eliminate.
+  const net: Record<string, Record<string, NetworkSlotRow>> = {};
+  expandCarrierSentinels({
+    networkByPlan: net,
+    sentinelRows: [sentinel(KLEIN, 'fhir_humana')],
+    realRows: [],
+    carrierMap: CARRIER_MAP,
+    requestedIds: ['H1036-123-000'],
+    npis: [KLEIN],
+    requestedYear: YEAR,
+    trustedNegativeCarriers: new Set(['devoted']), // table says humana not trusted today
+  });
+  assert.equal(net['H1036-123-000']?.[KLEIN], undefined, 'humana excluded by passed set → not eliminated');
+
+  // Same sentinel, humana IN the passed set → eliminates.
+  const net2: Record<string, Record<string, NetworkSlotRow>> = {};
+  expandCarrierSentinels({
+    networkByPlan: net2,
+    sentinelRows: [sentinel(KLEIN, 'fhir_humana')],
+    realRows: [],
+    carrierMap: CARRIER_MAP,
+    requestedIds: ['H1036-123-000'],
+    npis: [KLEIN],
+    requestedYear: YEAR,
+    trustedNegativeCarriers: new Set(['humana']),
+  });
+  assert.equal(net2['H1036-123-000']?.[KLEIN]?.covered, false, 'humana in passed set → eliminated');
+});
