@@ -19,6 +19,7 @@ import {
   type PharmacyMode,
   type PlanDrugCost,
 } from '@/lib/drugCosts';
+import { monthlyQuantity } from '@/lib/drugGrossPrice';
 
 export interface DrugCostMap {
   byPlanId: Record<string, PlanDrugCost>;
@@ -58,8 +59,8 @@ export function useDrugCosts(
       .sort()
       .join('|');
     const rxSig = medications
-      .map((m) => m.rxcui ?? '')
-      .filter((s) => s.length > 0)
+      .filter((m) => m.rxcui)
+      .map((m) => `${m.rxcui}:${monthlyQuantity(m)}`)
       .sort()
       .join(',');
     return `${plansSig}::${rxSig}::${mode}::lis=${lisTier ?? 'none'}`;
@@ -94,6 +95,12 @@ export function useDrugCosts(
         // the next one instead of leaving the drug out of the total.
         const priced = rxcuis.filter((rx) => (ndcsByRxcui[rx]?.length ?? 0) > 0);
         const repNdcs = priced.map((rx) => ndcsByRxcui[rx][0]);
+        // What the client actually uses in 30 days — a tube or nasal spray
+        // is one package, a twice-a-day pill is 60 — not a flat 30.
+        const monthlyQuantities = priced.map((rx) => {
+          const med = medications.find((m) => m.rxcui === rx);
+          return med ? monthlyQuantity(med) : 30;
+        });
         const altNdcs = priced.map((rx) => ndcsByRxcui[rx].slice(1, 6));
         if (repNdcs.length === 0) {
           setState({ ...INITIAL, source: 'no_ndcs' });
@@ -115,6 +122,7 @@ export function useDrugCosts(
           ndcs: repNdcs,
           alternates: altNdcs,
           rxcuis: priced,
+          monthlyQuantities,
           mode,
           lisTier,
         });

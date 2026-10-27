@@ -86,3 +86,17 @@ test('monthly quantity is always a whole number', () => {
   assert.equal(monthlyQuantity({ name: 'Amoxicillin Oral Suspension', quantity: '42.5' }), 43);
   assert.ok(Number.isInteger(monthlyQuantity({ quantity: '45', refillDays: 28 })));
 });
+
+// Regression (2026-10-27, Rob): creams, ointments and nasal sprays whose
+// NAME doesn't say "cream"/"spray" were priced off the sig as if they were
+// pills ("apply twice daily" → 60 tubes). The form or the sig marks them
+// as packaged — one package a month.
+test('topicals and sprays are packages even when the name does not say so', () => {
+  assert.equal(monthlyQuantity({ name: 'Fluticasone Propionate 50 MCG/ACT', quantity: '16', frequency: 'Use 2 sprays in each nostril once daily' }), 1);
+  assert.equal(monthlyQuantity({ name: 'Mupirocin 2%', quantity: '22 g', frequency: 'Apply to affected area 3 times a day' }), 1);
+  assert.equal(monthlyQuantity({ name: 'Triamcinolone Acetonide 0.1%', form: 'ointment', quantity: '80 g', frequency: 'Apply twice daily' }), 1);
+  assert.equal(monthlyQuantity({ name: 'Azelastine 137 MCG', form: 'nasal spray', quantity: '30 mL' }), 1);
+  assert.equal(monthlyQuantity({ name: 'Budesonide-Formoterol 160-4.5', quantity: '1', frequency: 'Inhale 2 puffs twice daily' }), 1);
+  // Pills are unchanged.
+  assert.equal(monthlyQuantity({ name: 'Lisinopril 10 MG', quantity: '90', frequency: 'Take 1 tablet by mouth twice daily' }), 60);
+});
