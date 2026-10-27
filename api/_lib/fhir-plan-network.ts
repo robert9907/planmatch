@@ -31,6 +31,24 @@ export const FHIR_CARRIER_IDS: ReadonlyArray<CarrierId> = [
   'uhc', 'humana', 'bcbsnc', 'devoted', 'anthem', 'wellcare', 'healthteam',
 ];
 
+// Carriers whose directory is BULK-COMPLETE and whose live lookup is RELIABLE —
+// only their carrier-wide "__NPI_NOT_FOUND__" / "__NPI_NO_MA_NETWORK__" negative
+// is trusted to ELIMINATE at Gate 1. A partial/unreliable carrier's not-found
+// may just mean "we couldn't resolve them" → it stays UNKNOWN ("call to
+// verify"), never dropping a plan the doctor may actually be in. Default when
+// uncertain = EXCLUDED. MUST stay in lockstep with the consumer's
+// TRUSTED_NEGATIVE_CARRIERS (robert9907/plan-match api/_lib/network-row-precedence.ts).
+//   TRUSTED  humana / devoted / wellcare / healthteam — reliable NPI lookup
+//            against a loaded directory (2027 cache: humana 2.67M rows·742 plans,
+//            devoted 964k·725, wellcare 924k·47, healthteam 12.8k·5 plans NPI-
+//            searchable verified 2026-10-14).
+//   EXCLUDED bcbsnc (FHIR known-unreliable, 2026-10-01 identifier contract
+//            change — a not-found can be a lookup failure), anthem (~48 NPIs
+//            loaded + auth/timeout — partial), uhc (no directory loaded for 2027).
+export const TRUSTED_NEGATIVE_CARRIERS: ReadonlySet<CarrierId> = new Set<CarrierId>([
+  'humana', 'devoted', 'wellcare', 'healthteam',
+]);
+
 // Sentinel plan_ids (see consumer fhir-provider.ts). Keyed on the NPI, not a
 // real plan — a carrier-WIDE verdict for a doctor:
 //   __NPI_NOT_FOUND__      absent from the carrier directory      → not_listed
@@ -226,6 +244,14 @@ export function expandCarrierSentinels(args: {
     for (const npi of npis) {
       const verdict = sentinelByNpiCarrier.get(npi)?.get(carrier);
       if (!verdict) continue;
+      // Completeness gate (Rob, 2026-10-26): a __NPI_NOT_FOUND__ (absence) only
+      // eliminates when the carrier's directory is bulk-complete + reliable
+      // (TRUSTED_NEGATIVE_CARRIERS). A partial/unreliable carrier's absence
+      // leaves the slot 'unknown' ("call to verify"). A __NPI_NO_MA_NETWORK__
+      // (found, no MA network) is a positive finding → eliminates regardless of
+      // completeness. Mirrors the consumer's gate in sentinelEliminations /
+      // library provider-network.
+      if (verdict.plan_id === NPI_NOT_FOUND_PLAN_ID && !TRUSTED_NEGATIVE_CARRIERS.has(carrier)) continue;
       if (foundCarrierByNpi.get(npi)?.has(carrier)) continue; // real row wins carrier-wide
       const slot = (networkByPlan[id] ||= {});
       if (slot[npi]) continue; // a real / broker row already answers this (plan, npi)
