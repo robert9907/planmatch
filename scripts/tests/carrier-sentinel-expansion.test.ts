@@ -28,7 +28,7 @@ const CARRIER_MAP = new Map<string, CarrierId>([
 const sentinel = (npi: string, source: string, plan_id = NPI_NOT_FOUND_PLAN_ID, plan_year = YEAR) =>
   ({ plan_id, npi, source, checked_at: '2026-10-18T00:00:00Z', plan_year });
 
-test('Klein: BCBS NC + Humana + HealthTeam not_listed sentinels eliminate those plans; Wellcare (no sentinel) survives', () => {
+test('Klein not_listed: TRUSTED carriers (Humana, HealthTeam) eliminate; an UNTRUSTED directory (BCBS NC) stays call-to-verify; Wellcare in-network survives', () => {
   const networkByPlan: Record<string, Record<string, NetworkSlotRow>> = {
     // Wellcare has a real in-network row — Klein IS on Wellcare.
     'H1234-001-000': { [KLEIN]: { plan_id: 'H1234-001', segment_id: '0', npi: KLEIN, covered: true, source: 'fhir_wellcare', plan_year: YEAR } },
@@ -36,9 +36,9 @@ test('Klein: BCBS NC + Humana + HealthTeam not_listed sentinels eliminate those 
   expandCarrierSentinels({
     networkByPlan,
     sentinelRows: [
-      sentinel(KLEIN, 'fhir_bcbsnc'),
-      sentinel(KLEIN, 'fhir_humana'),
-      sentinel(KLEIN, 'fhir_healthteam'),
+      sentinel(KLEIN, 'fhir_bcbsnc'),      // __NPI_NOT_FOUND__ from an UNTRUSTED directory
+      sentinel(KLEIN, 'fhir_humana'),      // trusted
+      sentinel(KLEIN, 'fhir_healthteam'),  // trusted
     ],
     realRows: [{ plan_id: 'H1234-001', npi: KLEIN, source: 'fhir_wellcare' }],
     carrierMap: CARRIER_MAP,
@@ -46,11 +46,14 @@ test('Klein: BCBS NC + Humana + HealthTeam not_listed sentinels eliminate those 
     npis: [KLEIN],
     requestedYear: YEAR,
   });
-  // BCBS / Humana / HealthTeam → synthetic trusted covered=false → eliminated.
-  for (const id of ['H3449-024-000', 'H1036-123-000', 'H9772-001-000']) {
+  // Humana + HealthTeam not-found → trusted covered=false → eliminated.
+  for (const id of ['H1036-123-000', 'H9772-001-000']) {
     assert.equal(networkByPlan[id]?.[KLEIN]?.covered, false, `${id} should be out`);
     assert.ok((networkByPlan[id][KLEIN].source ?? '').startsWith('fhir_'), `${id} trusted source`);
   }
+  // BCBS NC not-found is NOT trusted to eliminate (unreliable directory) → no
+  // slot written → the plan stays 'unknown' ("call to verify") downstream.
+  assert.equal(networkByPlan['H3449-024-000']?.[KLEIN], undefined, 'BCBS NC not_listed must NOT eliminate');
   // Wellcare keeps its real in-network row — survives.
   assert.equal(networkByPlan['H1234-001-000'][KLEIN].covered, true);
   assert.equal(networkByPlan['H1234-001-000'][KLEIN].source, 'fhir_wellcare');
@@ -96,15 +99,15 @@ test('a carrier with no sentinel row is kept (no_data / error → unknown, not e
   const networkByPlan: Record<string, Record<string, NetworkSlotRow>> = {};
   expandCarrierSentinels({
     networkByPlan,
-    sentinelRows: [sentinel(KLEIN, 'fhir_bcbsnc')], // only BCBS answered definitively
+    sentinelRows: [sentinel(KLEIN, 'fhir_humana')], // only Humana (trusted) answered definitively
     realRows: [],
     carrierMap: CARRIER_MAP,
-    requestedIds: ['H3449-024-000', 'H1036-123-000'], // Humana returned no sentinel
+    requestedIds: ['H1036-123-000', 'H3449-024-000'], // BCBS returned no sentinel
     npis: [KLEIN],
     requestedYear: YEAR,
   });
-  assert.equal(networkByPlan['H3449-024-000']?.[KLEIN]?.covered, false, 'BCBS eliminated');
-  assert.equal(networkByPlan['H1036-123-000']?.[KLEIN], undefined, 'Humana kept (no sentinel)');
+  assert.equal(networkByPlan['H1036-123-000']?.[KLEIN]?.covered, false, 'Humana eliminated');
+  assert.equal(networkByPlan['H3449-024-000']?.[KLEIN], undefined, 'BCBS kept (no sentinel)');
 });
 
 test('__NPI_NO_MA_NETWORK__ resolves to a trusted covered=false (out_of_network)', () => {
@@ -128,10 +131,13 @@ test('a stale medicare_gov row does NOT suppress a carrier sentinel (Klein BCBS/
   // still eliminate. In plan-brain-data the medicare_gov covered=false slot is
   // dropped before expansion, so the slot is empty here; the risk is purely
   // foundCarrierByNpi wrongly including the carrier off the medicare_gov row.
+  // bcbsnc uses a NO_MA_NETWORK sentinel (positive finding — eliminates
+  // regardless of the completeness gate); humana a trusted NOT_FOUND. Both must
+  // survive the stale medicare_gov row (which must NOT count as "carrier answered").
   const networkByPlan: Record<string, Record<string, NetworkSlotRow>> = {};
   expandCarrierSentinels({
     networkByPlan,
-    sentinelRows: [sentinel(KLEIN, 'fhir_bcbsnc'), sentinel(KLEIN, 'fhir_humana')],
+    sentinelRows: [sentinel(KLEIN, 'fhir_bcbsnc', NPI_NO_MA_NETWORK_PLAN_ID), sentinel(KLEIN, 'fhir_humana')],
     realRows: [
       { plan_id: 'H3449-012', npi: KLEIN, source: 'medicare_gov' }, // stale PF, must not count
       { plan_id: 'H1036-167', npi: KLEIN, source: 'medicare_gov' },
@@ -141,7 +147,7 @@ test('a stale medicare_gov row does NOT suppress a carrier sentinel (Klein BCBS/
     npis: [KLEIN],
     requestedYear: YEAR,
   });
-  assert.equal(networkByPlan['H3449-012-000'][KLEIN].covered, false, 'BCBS eliminated despite PF row');
+  assert.equal(networkByPlan['H3449-012-000'][KLEIN].covered, false, 'BCBS no-MA-network eliminated despite PF row');
   assert.equal(networkByPlan['H1036-167-000'][KLEIN].covered, false, 'Humana eliminated despite PF row');
 });
 
@@ -167,14 +173,44 @@ test('a requested-year sentinel is preferred over a prior-year carry-over', () =
   expandCarrierSentinels({
     networkByPlan,
     sentinelRows: [
-      sentinel(KLEIN, 'fhir_bcbsnc', NPI_NOT_FOUND_PLAN_ID, 2026), // prior-year
-      sentinel(KLEIN, 'fhir_bcbsnc', NPI_NOT_FOUND_PLAN_ID, 2027), // requested-year
+      sentinel(KLEIN, 'fhir_humana', NPI_NOT_FOUND_PLAN_ID, 2026), // prior-year
+      sentinel(KLEIN, 'fhir_humana', NPI_NOT_FOUND_PLAN_ID, 2027), // requested-year
     ],
+    realRows: [],
+    carrierMap: CARRIER_MAP,
+    requestedIds: ['H1036-123-000'],
+    npis: [KLEIN],
+    requestedYear: YEAR,
+  });
+  assert.equal(networkByPlan['H1036-123-000'][KLEIN].plan_year, 2027);
+});
+
+// Completeness gate (Rob, 2026-10-26): a __NPI_NOT_FOUND__ absence only
+// eliminates for a bulk-complete+reliable carrier; an unreliable directory's
+// absence stays call-to-verify. A __NPI_NO_MA_NETWORK__ positive finding is
+// never gated.
+test('gate: BCBS NC (untrusted) __NPI_NOT_FOUND__ does NOT eliminate, but its __NPI_NO_MA_NETWORK__ does', () => {
+  const nf: Record<string, Record<string, NetworkSlotRow>> = {};
+  expandCarrierSentinels({
+    networkByPlan: nf,
+    sentinelRows: [sentinel(KLEIN, 'fhir_bcbsnc', NPI_NOT_FOUND_PLAN_ID)],
     realRows: [],
     carrierMap: CARRIER_MAP,
     requestedIds: ['H3449-024-000'],
     npis: [KLEIN],
     requestedYear: YEAR,
   });
-  assert.equal(networkByPlan['H3449-024-000'][KLEIN].plan_year, 2027);
+  assert.equal(nf['H3449-024-000']?.[KLEIN], undefined, 'untrusted NOT_FOUND → call to verify, not eliminated');
+
+  const noma: Record<string, Record<string, NetworkSlotRow>> = {};
+  expandCarrierSentinels({
+    networkByPlan: noma,
+    sentinelRows: [sentinel(KLEIN, 'fhir_bcbsnc', NPI_NO_MA_NETWORK_PLAN_ID)],
+    realRows: [],
+    carrierMap: CARRIER_MAP,
+    requestedIds: ['H3449-024-000'],
+    npis: [KLEIN],
+    requestedYear: YEAR,
+  });
+  assert.equal(noma['H3449-024-000']?.[KLEIN]?.covered, false, 'NO_MA_NETWORK positive finding still eliminates');
 });
