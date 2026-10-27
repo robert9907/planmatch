@@ -910,6 +910,10 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
         tier: est.tier,
         monthlyCopay: cov?.copay ?? null,
         annualCost: Math.round(est.yearlyCost),
+        // Uncapped standard (non-LIS) cost-share — the LIS accrual basis in
+        // dual-eligible.ts. Falls back to the capped yearlyCost when unset.
+        // Mirror of consumer plan-brain.ts #175.
+        standardAnnual: est.standardAnnual ?? Math.round(est.yearlyCost),
         isBrand: est.isBrand,
         costUnavailable: est.costUnavailable === true,
         priorAuth: cov?.prior_auth === true,
