@@ -8,7 +8,7 @@ Extract the following fields and return ONLY valid JSON, no markdown, no explana
   "type": "medication",
   "drug_name": "exact name from label",
   "strength": "e.g. 500mg",
-  "form": "tablet|capsule|liquid|injection",
+  "form": "tablet|capsule|liquid|injection|cream|ointment|gel|lotion|nasal spray|inhaler|eye drops|ear drops|patch|other — exactly as the label describes it",
   "dosage_instructions": "exact instructions from label",
   "prescribing_physician": "full name and credentials if present",
   "pharmacy_name": "pharmacy name if present",
@@ -18,7 +18,7 @@ Extract the following fields and return ONLY valid JSON, no markdown, no explana
   "pharmacy_zip": "pharmacy 5-digit ZIP if printed, or null",
   "refills_remaining": "number or null",
   "last_filled": "date the prescription was filled/dispensed, as YYYY-MM-DD, or null",
-  "quantity": "quantity dispensed (the QTY number) as a number, or null — on many labels it is printed directly under the barcode, on the back side of the bottle",
+  "quantity": "quantity dispensed (the QTY) — for tablets/capsules just the number; for creams, ointments, sprays, inhalers, liquids, drops or patches the number WITH its unit exactly as printed (e.g. \"30 g\", \"16 mL\", \"120 sprays\"), or null — on many labels it is printed directly under the barcode",
   "days_supply": "only if the label has a field explicitly labeled DS or DAYS SUPPLY, that number; never a number taken from the NDC, Rx number, or quantity; otherwise null",
   "ndc_code": "NDC code if present or null",
   "confidence": "high|medium|low"

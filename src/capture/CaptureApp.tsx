@@ -337,7 +337,7 @@ export function CaptureApp() {
           {label && <p style={big}>{label}</p>}
           <p style={para}>
             Turn the <strong>same bottle</strong> around to the side with the barcode and take one more picture.
-            The number under the barcode tells us how many pills you get.
+            The number under the barcode tells us how much medicine you get.
           </p>
           <TurnBottle />
           <BigButton onClick={() => openCamera('more')}>Take a picture of the barcode side</BigButton>

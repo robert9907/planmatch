@@ -96,7 +96,10 @@ export function daysSupply(opts: {
   let computed: number | null = null;
   const qty = toNumber(opts.quantity);
   const form = (opts.form ?? '').toLowerCase();
-  const solid = !form || /tablet|capsule|tab|cap|pill|softgel/.test(form);
+  // A quantity in grams / mL / sprays is a tube, bottle or inhaler — the
+  // pills-per-day math never applies, even when no form was read.
+  const measured = MEASURE_UNIT_RE.test(String(opts.quantity ?? ''));
+  const solid = !measured && (!form || /tablet|capsule|tab|cap|pill|softgel/.test(form));
   if (qty != null && solid) {
     const perDay = unitsPerDay(opts.instructions);
     computed = perDay != null ? Math.floor(qty / perDay) : titrationDays(opts.instructions, qty);
@@ -137,7 +140,16 @@ export function nextRefillDate(lastFilled: string | null | undefined, days: numb
   return next.toISOString().slice(0, 10);
 }
 
+const MEASURE_UNIT_RE = /\d\s*(g|gm|grams?|ml|milliliters?|oz|sprays?|actuations?|puffs?|inhalers?|tubes?|bottles?|pens?|patch(es)?|units?)\b/i;
+
+/** QTY for the CRM. Pills stay a bare count ("90"); a measured amount keeps
+ *  its unit ("30 g", "16 mL") so a tube never reads as 30 pills. */
 export function quantityText(v: unknown): string | null {
   const n = toNumber(v);
-  return n == null ? null : String(n);
+  if (n == null) return null;
+  const m = String(v).match(MEASURE_UNIT_RE);
+  if (!m) return String(n);
+  const unit = m[1].toLowerCase();
+  const pretty = /^ml|milliliter/.test(unit) ? 'mL' : unit === 'gm' || /^gram/.test(unit) ? 'g' : unit;
+  return `${n} ${pretty}`;
 }

@@ -13,6 +13,11 @@ import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear';
 const SOLID_RE = /\b(tablet|tab|capsule|cap)s?\b/i;
 const PACKAGE_RE = /\b(cream|ointment|gel|lotion|spray|inhaler|pen|injector|kit)\b/i;
 const NON_SOLID_RE = /\b(cream|ointment|gel|lotion|spray|inhaler|inhalation|solution|suspension|injection|injector|pen|patch|drops?|vial|kit)\b/i;
+// Directions or a quantity unit that only fit a tube / spray / inhaler, for
+// when the name and form don't say so ("Mupirocin 2%", "apply twice daily").
+const PACKAGE_SIG_RE = /\b(apply|applied|rub|sprays?|nostrils?|puffs?|inhale|affected area|topically|vaginally)\b/i;
+const PACKAGE_UNIT_RE = /\d\s*(g|gm|grams?|ml)\b/i;
+const ORAL_RE = /\b(oral|by mouth|orally|swallow)\b/i;
 
 /** Doses per day from a free-text sig; null when it can't be read. */
 function dosesPerDay(sig: string): number | null {
@@ -51,6 +56,10 @@ function rawMonthlyQuantity(m: QuantityInput): number {
   const label = `${m.name ?? ''} ${m.form ?? ''}`;
   const qty = Number.parseFloat(String(m.quantity ?? '').replace(/[^\d.]/g, ''));
   const hasQty = Number.isFinite(qty) && qty > 0;
+  const sig = m.frequency ?? '';
+  const solid = SOLID_RE.test(label) || SOLID_RE.test(sig);
+  const oral = ORAL_RE.test(label) || ORAL_RE.test(sig);
+  if (!solid && (PACKAGE_SIG_RE.test(sig) || (!oral && PACKAGE_UNIT_RE.test(String(m.quantity ?? ''))))) return 1;
   if (NON_SOLID_RE.test(label) && !SOLID_RE.test(label)) {
     // medicare.gov counts these in PACKAGES (tubes, bottles, inhalers, pen
     // boxes), not grams/mL: quantity 43 on estradiol cream priced 43 tubes

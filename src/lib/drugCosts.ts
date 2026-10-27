@@ -128,6 +128,13 @@ export async function resolveRxcuisToNdcs(
   return body.ndcs ?? {};
 }
 
+/** Units to price for one fill: the 30-day amount, tripled for a 90-day
+ *  mail fill. medicare.gov's quantity is a whole number. */
+export function fillQuantity(monthly: number, mode: PharmacyMode): number {
+  const m = Math.max(1, Math.ceil(monthly));
+  return mode === 'mail' ? m * 3 : m;
+}
+
 export async function fetchDrugCosts(params: {
   plans: DrugCostPlanInput[];
   ndcs: string[];               // one representative NDC per prescription
@@ -137,22 +144,25 @@ export async function fetchDrugCosts(params: {
   /** Per prescription (aligned with `ndcs`): the drug's rxcui, so the server
    *  can send medicare.gov's own NDC for it. */
   rxcuis?: string[];
+  /** Per prescription (aligned with `ndcs`): units used in 30 days
+   *  (monthlyQuantity). A tube or spray is 1 package, not 30. Missing →
+   *  the old 30-a-month assumption. */
+  monthlyQuantities?: number[];
   mode: PharmacyMode;
   /** Client's LIS tier. Omitted / undefined is treated as 'none' — the
    *  API receives LIS_NO_HELP and cache buckets remain separate from
    *  subsidized-client requests (api/drug-costs.ts:201 keys on lis). */
   lisTier?: LisTier;
 }): Promise<DrugCostResponse> {
-  const { plans, ndcs, alternates, rxcuis, mode, lisTier } = params;
+  const { plans, ndcs, alternates, rxcuis, monthlyQuantities, mode, lisTier } = params;
   if (plans.length === 0 || ndcs.length === 0) {
     return { source: 'skipped', costs: [] };
   }
   const frequency = mode === 'mail' ? 'FREQUENCY_90_DAYS' : 'FREQUENCY_30_DAYS';
-  const quantity = mode === 'mail' ? '90' : '30';
   const prescriptions = ndcs.map((ndc, i) => ({
     ndc,
     frequency,
-    quantity,
+    quantity: String(fillQuantity(monthlyQuantities?.[i] ?? 30, mode)),
     alternates: alternates?.[i] ?? [],
     rxcui: rxcuis?.[i],
   }));
