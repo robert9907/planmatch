@@ -246,6 +246,12 @@ export function CaptureApp() {
       setStep('confirm');
       return;
     }
+    // Already answered earlier in the visit: bottles added since then get
+    // the same pharmacy instead of the one printed on their label.
+    if (pharmacyAnswer !== 'ask') {
+      void sendConfirm();
+      return;
+    }
     setStep(cardDone ? 'finish' : 'card-ask');
   }
 

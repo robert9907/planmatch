@@ -61,6 +61,8 @@ export type ExtractedItem = ExtractedMedication | ExtractedProvider | ExtractedM
 export interface CaptureItem {
   id: string;
   created_at: string;
+  /** Set when the client's pharmacy / doctor answers rewrite this item. */
+  updated_at?: string;
   /** @deprecated Capture photos are no longer stored. Present only on
    *  items written before that change. */
   image_url?: string;

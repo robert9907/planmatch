@@ -24,7 +24,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const allItems: CaptureItem[] = session.payload ?? [];
     const newItems = Number.isFinite(since) && since > 0
-      ? allItems.filter((it) => new Date(it.created_at).getTime() > since)
+      ? allItems.filter(
+          (it) =>
+            new Date(it.created_at).getTime() > since ||
+            (it.updated_at != null && new Date(it.updated_at).getTime() > since),
+        )
       : allItems;
 
     const expired = new Date(session.expires_at).getTime() < Date.now();
