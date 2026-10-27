@@ -18,6 +18,9 @@ export function supabase(): SupabaseClient {
 export interface CaptureItem {
   id: string;
   created_at: string;
+  /** Set when the client's end-of-visit answers (pharmacy / doctor)
+   *  rewrite an item already handed to the broker's inbox. */
+  updated_at?: string;
   /** @deprecated Capture photos are no longer stored — see capture-submit.
    *  Present only on rows written before that change. */
   image_url?: string;

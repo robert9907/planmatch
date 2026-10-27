@@ -154,9 +154,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // still waiting in the broker's inbox.
       const lowerNames = new Set(medNames.map((n) => n.toLowerCase()));
       const declinedParsed = declined.map((d) => parsePrescriber(d)).filter((p): p is NonNullable<typeof p> => p != null);
-      const payload: CaptureItem[] = (session.payload ?? []).map((item) => ({
-        ...item,
-        extracted: (item.extracted ?? []).map((e) => {
+      const now = new Date().toISOString();
+      const payload: CaptureItem[] = (session.payload ?? []).map((item) => {
+        const extracted = (item.extracted ?? []).map((e) => {
           if (e.type !== 'medication') return e;
           const next = { ...e };
           if (ph && (lowerNames.size === 0 || lowerNames.has((e.drug_name ?? '').toLowerCase()))) {
@@ -169,8 +169,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const presc = parsePrescriber(e.prescribing_physician ?? '');
           if (presc && declinedParsed.some((d) => sameLast(d, presc))) next.prescriber_declined = true;
           return next;
-        }),
-      }));
+        });
+        // Stamp what changed so the broker's inbox (which already has
+        // these items from when each photo landed) picks the answers up.
+        const changed = JSON.stringify(extracted) !== JSON.stringify(item.extracted ?? []);
+        return changed ? { ...item, extracted, updated_at: now } : item;
+      });
       const { error: updErr } = await supabase().from('capture_sessions').update({ payload }).eq('token', token);
       if (updErr) return serverError(res, updErr);
     }

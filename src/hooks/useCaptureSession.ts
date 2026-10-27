@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { CaptureItem, CaptureStartResponse, CaptureStatus } from '@/types/capture';
 import { pollCapture, startCapture } from '@/lib/captureApi';
+import { useSession } from '@/lib/session';
 
 export interface IncomingQueueItem extends CaptureItem {
   decision: 'pending' | 'approved' | 'rejected';
@@ -72,19 +73,46 @@ export function useCaptureSession(): UseCaptureSessionResult {
     setStatus(data.status);
     setClientName(data.client_name);
     if (data.new_items?.length) {
-      setQueue((prev) => {
-        const next = [...prev];
-        for (const item of data.new_items) {
-          if (seenIds.current.has(item.id)) continue;
+      const updates = new Map<string, CaptureItem>();
+      const fresh: CaptureItem[] = [];
+      for (const item of data.new_items) {
+        if (seenIds.current.has(item.id)) updates.set(item.id, item);
+        else {
           seenIds.current.add(item.id);
-          next.unshift({ ...item, decision: 'pending' });
+          fresh.push(item);
         }
+      }
+      // An item already in the inbox came back rewritten with the client's
+      // answers (the pharmacy they picked on their phone). Swap in the new
+      // reading; if the broker already approved it, move the pharmacy onto
+      // the medication in the session too — otherwise the label's pharmacy
+      // sticks.
+      for (const item of updates.values()) {
+        const prior = queueRef.current.find((q) => q.id === item.id);
+        if (prior?.decision !== 'approved') continue;
+        const { medications, updateMedication } = useSession.getState();
+        for (const e of item.extracted) {
+          if (e.type !== 'medication' || e.pharmacy_id == null) continue;
+          const want = (e.drug_name ?? '').trim().toLowerCase();
+          for (const m of medications) {
+            if (m.source === 'capture' && m.name.trim().toLowerCase() === want && m.pharmacyId !== e.pharmacy_id) {
+              updateMedication(m.id, { pharmacyId: e.pharmacy_id });
+            }
+          }
+        }
+      }
+      setQueue((prev) => {
+        const next = prev.map((q) => {
+          const u = updates.get(q.id);
+          return u ? { ...u, decision: q.decision } : q;
+        });
+        for (const item of fresh) next.unshift({ ...item, decision: 'pending' });
         return next;
       });
-      const newestAt = data.new_items.reduce(
-        (acc, it) => (acc && acc > it.created_at ? acc : it.created_at),
-        lastSeenAtRef.current,
-      );
+      const newestAt = data.new_items.reduce((acc, it) => {
+        const at = it.updated_at && it.updated_at > it.created_at ? it.updated_at : it.created_at;
+        return acc && acc > at ? acc : at;
+      }, lastSeenAtRef.current);
       lastSeenAtRef.current = newestAt;
     }
   }, [pollQuery.data]);
