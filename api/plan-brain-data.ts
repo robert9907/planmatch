@@ -216,7 +216,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   );
   if (triples.length === 0) return badRequest(res, 'no valid triple ids');
 
-  const tripleIds = triples.map((t) => `${t.contract}-${t.plan}-${(t.segment === '0' ? '000' : t.segment.padStart(3, '0'))}`);
   const contractPlans = [...new Set(triples.map((t) => `${t.contract}-${t.plan}`))];
   const contracts = [...new Set(triples.map((t) => t.contract))];
   const planNumbers = [...new Set(triples.map((t) => t.plan))];
@@ -281,7 +280,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .from('pbp_benefits')
           .select('plan_id, benefit_type, tier_id, copay, coinsurance, description, source')
           .eq('plan_year', catalogYear)
-          .in('plan_id', uniqueAcceptableIds(ids, tripleIds))
+          // pbp_benefits keys on the (contract-plan) DOUBLE id — no segment —
+          // so filter by contractPlans, not triple ids. The old filter only
+          // ever yielded triples ("H1112-044-0" / "H1112-044-000") and matched
+          // ZERO rows, silently starving the brain of every rx_tier / medical
+          // cost-share and falling it back to CMS_TYPICAL. (This read is
+          // independent of api/plans.ts costShareFor, which pulls pbp_benefits
+          // on its own path for the ground-truth-graded catalog fields.)
+          .in('plan_id', contractPlans)
           .in('source', ['medicare_gov', 'sb_ocr', 'cms_pbp', 'manual'])
           .order('plan_id', { ascending: true })
           .order('benefit_type', { ascending: true })
@@ -426,6 +432,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ─── Index by triple id ────────────────────────────────────────
+    // pbp_benefits is keyed by the (contract-plan) DOUBLE — no segment — so a
+    // single filing applies to every requested segment of that contract-plan.
+    // Fan each winner out to all requested triples sharing its contract-plan;
+    // if the caller sent none that match, fall back to the double id itself
+    // (the client adapter reads a segment-less key as segment 0).
+    const requestedTriplesByCp = new Map<string, string[]>();
+    for (const id of ids) {
+      const p = id.split('-');
+      if (p.length < 2) continue;
+      const cp = `${p[0]}-${p[1]}`;
+      const list = requestedTriplesByCp.get(cp);
+      if (list) list.push(id);
+      else requestedTriplesByCp.set(cp, [id]);
+    }
     const benefitsByPlan: Record<string, BenefitRow[]> = {};
     for (const [key, winner] of bestByKey) {
       const alt = altByKey.get(key) ?? null;
@@ -441,8 +461,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         alt_coinsurance: alt ? alt.coinsurance : null,
         alt_source: alt ? alt.source : null,
       };
-      const triple = normalizeTripleId(winner.plan_id, ids);
-      (benefitsByPlan[triple] ||= []).push(benefitRow);
+      const cpParts = winner.plan_id.split('-');
+      const cp = `${cpParts[0]}-${cpParts[1]}`;
+      const targets = requestedTriplesByCp.get(cp) ?? [winner.plan_id];
+      for (const t of targets) (benefitsByPlan[t] ||= []).push(benefitRow);
     }
 
     const drugCostCache: Record<string, Record<string, DrugCacheRow>> = {};
@@ -749,19 +771,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 }
 
-// pbp_benefits stores triple ids inconsistently across sources —
-// medicare_gov rows use the segment as-typed ("H1036-335-2"), federal
-// rows zero-pad to 3 ("H1036-335-002"). We accept both and return the
-// caller-supplied form so the client doesn't have to renormalize.
-function uniqueAcceptableIds(requested: string[], normalized: string[]): string[] {
-  return [...new Set([...requested, ...normalized])];
-}
-
-function normalizeTripleId(planId: string, requested: string[]): string {
-  const matched = matchToRequestedTriple(planId, requested);
-  return matched ?? planId;
-}
-
+// Map a table-side triple id back to the caller-supplied form. Table ids are
+// stored inconsistently across sources — medicare_gov rows use the segment
+// as-typed ("H1036-335-2"), federal rows zero-pad to 3 ("H1036-335-002") — so
+// we permute the segment to find the requested variant. (pbp_benefits itself
+// keys on the segment-less double and is fanned out separately; this helper
+// serves the segment-bearing maps: drug-cost cache, IRA cost-share, formulary,
+// network.)
 function matchToRequestedTriple(planId: string, requested: string[]): string | null {
   if (requested.includes(planId)) return planId;
   // Try permuting the segment between '0' / '00' / '000' to match.

@@ -73,6 +73,24 @@ export function benefitByCategory(
   return benefits.find((b) => b.benefit_category === category);
 }
 
+// Part D DRUG-COST tier cost-share lookup. Prefers the PREFERRED-retail filed
+// cost-share (cms_pbp `rx_tier_N`/`retail_preferred` → adapter category
+// `rx_tier_N_retail_preferred`, e.g. H1112-044 tier-1 = $0) over the standard
+// retail / CMS-typical fallback — matching consumer rank-plans / the
+// pm_drug_cost_cache basis (both preferred-pharmacy priced) and live PF. This
+// is the DRUG-COST path only; the GT-graded MEDICAL copays (specialist/
+// urgent_care/asc, Rob's high-end ruling in api/plans costShareFor) are a
+// separate path and untouched.
+export function preferredRxTierBenefit(
+  benefits: PlanBenefitRow[],
+  tier: number,
+): PlanBenefitRow | undefined {
+  return (
+    benefitByCategory(benefits, `rx_tier_${tier}_retail_preferred`) ??
+    benefitByCategory(benefits, `rx_tier_${tier}`)
+  );
+}
+
 // Cost a single service slot — flat copay > coinsurance × notional
 // service price > 0. Notional prices are CMS-published averages used
 // when the plan only files a coinsurance percentage (rare for primary/
@@ -520,7 +538,8 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       mfpGross != null && effectiveTier != null
         ? args.iraCostShareByTier?.get(effectiveTier) ?? null
         : null;
-    const tierBenefit = benefitByCategory(args.benefits, `rx_tier_${effectiveTier}`);
+    const tierBenefit =
+      effectiveTier != null ? preferredRxTierBenefit(args.benefits, effectiveTier) : undefined;
     let postDeductibleMonthly = 0;
     if (tierBenefit?.copay != null) postDeductibleMonthly = tierBenefit.copay;
     else if (tierBenefit?.coinsurance != null) {
@@ -570,7 +589,7 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
     }
   }
   for (const tier of encounteredTiers) {
-    const tierBenefit = benefitByCategory(args.benefits, `rx_tier_${tier}`);
+    const tierBenefit = preferredRxTierBenefit(args.benefits, tier);
     if (tierBenefit?.copay != null) {
       tierCostShares[tier] = { initial: { type: 'copay', amount: tierBenefit.copay } };
     } else if (tierBenefit?.coinsurance != null) {
