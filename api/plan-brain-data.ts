@@ -269,7 +269,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // results. formularyPublished gates whether the client is allowed to
     // treat an empty/partial formulary read as real cost data (it is not
     // until CMS posts the year's SPUF drug file ~Oct 31).
-    const [benefitsRes, drugCacheRes, formularyRes, ndcRes, networkRes, sentinelRes, formularyPublished] = await Promise.all([
+    const [benefitsRes, drugCacheRes, formularyRes, ndcRes, networkRes, sentinelRes, deductibleRes, formularyPublished] = await Promise.all([
       // Paginated + filtered to the four real sources so the alt_
       // dedup below sees every candidate (a source-restricted query
       // truncated at PostgREST's 1000-row cap would silently drop the
@@ -368,6 +368,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             .in('npi', npis)
             .eq('covered', false)
         : Promise.resolve({ data: [], error: null }),
+      // Per-plan Part D deductible-exempt tiers (CMS rx_deductible.exempt_tiers,
+      // segment-agnostic). pm_plan_benefits.plan_id is the 3-digit code, so key
+      // the response by `${contract_id}-${plan_id}`. The brain applies the
+      // deductible to every tier NOT in this list; absent ⇒ legacy [3,4,5].
+      sb
+        .from('pm_plan_benefits')
+        .select('contract_id, plan_id, exempt_tiers')
+        .eq('benefit_category', 'rx_deductible')
+        .eq('plan_year', catalogYear)
+        .in('contract_id', contracts),
       isFormularyPublished(sb, catalogYear),
     ]);
 
@@ -377,6 +387,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (ndcRes.error) throw ndcRes.error;
     if (networkRes.error) throw networkRes.error;
     if (sentinelRes.error) throw sentinelRes.error;
+    if (deductibleRes.error) throw deductibleRes.error;
+
+    // Per-plan CMS rx_deductible.exempt_tiers, keyed `${contract}-${plan}`
+    // (segment-agnostic). The brain applies the Part D deductible to every
+    // tier NOT listed; absent ⇒ its legacy [3,4,5] default.
+    const deductibleExemptTiersByPlan: Record<string, number[]> = {};
+    for (const row of (deductibleRes.data ?? []) as Array<{
+      contract_id: string;
+      plan_id: string;
+      exempt_tiers: number[] | null;
+    }>) {
+      if (Array.isArray(row.exempt_tiers)) {
+        deductibleExemptTiersByPlan[`${row.contract_id}-${row.plan_id}`] = row.exempt_tiers;
+      }
+    }
 
     // ─── Source-priority dedup + alt_ projection ─────────────────
     // Mirror of the winner/alt logic in api/plans.ts (bestByKey +
@@ -743,6 +768,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       benefitsByPlan,
       drugCostCache,
       iraCostShareByPlan,
+      deductibleExemptTiersByPlan,
       formularyByContractPlan,
       ndcByRxcui,
       networkByPlan,

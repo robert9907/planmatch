@@ -614,6 +614,11 @@ export interface BrainInputs {
   /** rxcui → live Medicare.gov gross monthly price for the client's
    *  quantity. See EstimateBundleInput.grossMonthlyByRxcui. */
   grossMonthlyByRxcui?: Map<string, number>;
+  /** Per-plan CMS rx_deductible.exempt_tiers, keyed `${contract}-${plan}`
+   *  (segment-agnostic). The Part D deductible applies to every tier NOT
+   *  listed; absent ⇒ the brain's legacy [3,4,5] default. Mirror of the
+   *  consumer deductibleExemptTiersByPlanKey wiring. */
+  deductibleExemptTiersByPlanKey?: Map<string, number[]>;
   // Optional: per-plan provider coverage, keyed on
   // `${contract_id}-${plan_id}` (no segment, mirrors formulary keying).
   providerNetworkByPlanKey?: Map<string, Map<string, ProviderNetworkCacheEntry>>;

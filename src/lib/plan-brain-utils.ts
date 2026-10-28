@@ -355,6 +355,13 @@ interface EstimateBundleInput {
    *  notional ($200/mo for Tier 3) inflated generics like gabapentin and
    *  pushed every plan to the Part D cap (Cynthia Kline, 2026-10-21). */
   grossMonthlyByRxcui?: Map<string, number>;
+  /** Formulary tiers EXEMPT from this plan's Part D deductible, from CMS
+   *  pm_plan_benefits rx_deductible.exempt_tiers. The deductible applies to
+   *  every tier NOT in this list. Omitted/null ⇒ the legacy
+   *  DEFAULT_DEDUCTIBLE_TIERS ([3,4,5]) fallback. Mirror of the consumer
+   *  rank-plans → brain wiring (A01 Xarelto on H5296-006 exempts [1,2,3,6]
+   *  → tier-3 brand must not burn the $700 deductible). */
+  deductibleExemptTiers?: number[] | null;
 }
 
 interface DrugInfo {
@@ -380,11 +387,11 @@ interface DrugInfo {
 
 
 
-// Bundle timeline planYear default. Deductible eligibility mirrors
-// the incumbent's implicit `tier >= 3` filter — the 2026 CMS default,
-// though many plans waive further. Callers can't override yet; when
-// per-plan `deductibleAppliesToTiers` starts flowing (from
-// pm_beneficiary_cost_v2 rows) this becomes an arg.
+// Bundle timeline planYear default. Deductible eligibility fallback used
+// ONLY when a plan has no CMS rx_deductible.exempt_tiers data: mirrors the
+// incumbent's implicit `tier >= 3` filter. When exempt_tiers IS present
+// (EstimateBundleInput.deductibleExemptTiers), the deductible applies to
+// every tier NOT exempted and this default is bypassed.
 const DEFAULT_DEDUCTIBLE_TIERS: ReadonlyArray<number> = [3, 4, 5];
 
 // Drug estimates for a plan year whose formulary CMS hasn't published yet.
@@ -607,9 +614,18 @@ export function estimateBundleYearlyCost(args: EstimateBundleInput): DrugYearlyE
       }
     }
   }
+  // Per-plan deductible applicability. CMS files which tiers a plan's Part D
+  // deductible applies to as rx_deductible.exempt_tiers; the deductible hits
+  // every OTHER tier. Many plans exempt tier 3 (e.g. H5296-006 exempts
+  // [1,2,3,6]) — the old hardcoded DEFAULT [3,4,5] then wrongly charged a
+  // tier-3 brand (Xarelto) the full deductible. Use the real exempt list when
+  // provided; fall back to DEFAULT only when the caller has no exempt data.
+  const deductibleAppliesToTiers = args.deductibleExemptTiers
+    ? [1, 2, 3, 4, 5, 6].filter((t) => !args.deductibleExemptTiers!.includes(t))
+    : [...DEFAULT_DEDUCTIBLE_TIERS];
   const plan: PartDPlanInput = {
     deductible: Math.max(0, args.drugDeductible ?? 0),
-    deductibleAppliesToTiers: [...DEFAULT_DEDUCTIBLE_TIERS],
+    deductibleAppliesToTiers,
     tierCostShares,
   };
 
