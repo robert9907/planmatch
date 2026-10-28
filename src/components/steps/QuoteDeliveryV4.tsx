@@ -534,18 +534,28 @@ export function QuoteDeliveryV4({
       (client.medicaidLevel != null && client.medicaidLevel !== 'none'),
     pharmacy: pharmacyFill === 'mail_90' ? 'mail_order' : 'preferred_retail',
   });
-  // plan_id (triple) → library-priced plan, across Top picks, bench, and the
-  // priced-but-unranked current plan, so any quoted column can be looked up.
-  const rankByPlanId = useMemo(() => {
+  // contract-plan ("H1112-044", segment dropped) → library-priced plan, across
+  // Top picks, bench, and the priced-but-unranked current plan, so any quoted
+  // column can be looked up. Keyed segment-AGNOSTIC on purpose: pm_plans.id
+  // carries a 3-char segment ("…-000") while rank-plans plan_id carries a
+  // 1-char one ("…-0"), and Part D drug cost is uniform per (contract, plan)
+  // regardless of segment (api/plans.ts). Matching on the full triple would
+  // silently miss and fall back to the legacy cost path.
+  const rankByContractPlan = useMemo(() => {
+    const contractPlanOf = (planId: string) => planId.split('-').slice(0, 2).join('-');
     const m = new Map<string, LibraryRankPlan>();
     const r = ranked.result;
     if (r) {
-      for (const p of r.top_plans) m.set(p.plan_id, p);
-      for (const p of r.bench_plans) m.set(p.plan_id, p);
-      if (r.current_plan) m.set(r.current_plan.plan_id, r.current_plan);
+      // Insert bench first so a Top/current plan wins on a (rare) segment
+      // collision for the same contract-plan.
+      for (const p of r.bench_plans) m.set(contractPlanOf(p.plan_id), p);
+      for (const p of r.top_plans) m.set(contractPlanOf(p.plan_id), p);
+      if (r.current_plan) m.set(contractPlanOf(r.current_plan.plan_id), r.current_plan);
     }
     return m;
   }, [ranked.result]);
+  const rankPlanFor = (plan: Plan): LibraryRankPlan | undefined =>
+    rankByContractPlan.get(`${plan.contract_id}-${plan.plan_number}`);
 
   // Manufacturer assistance — drives the help section under the table.
   const assistance = useManufacturerAssistance(medications);
@@ -705,7 +715,7 @@ export function QuoteDeliveryV4({
         (c) =>
           // rank-plans is authoritative; fall back to the brain-data lookup
           // only for a column the library didn't price (rare).
-          rankDrugInfo(rankByPlanId.get(c.plan.id), med) ??
+          rankDrugInfo(rankPlanFor(c.plan), med) ??
           lookupDrugCost(c.plan, med, brainData, pharmacyFill),
       );
       return {
@@ -869,7 +879,7 @@ export function QuoteDeliveryV4({
       // cache row can't inject a figure.
       if (brainData?.formularyPublished === false && medications.length > 0) return null;
 
-      const rp = rankByPlanId.get(c.plan.id);
+      const rp = rankPlanFor(c.plan);
 
       // Sum per-drug cells, but ONLY if every drug has a computable annual. If
       // any drug is 'unavailable' / 'not covered' / call-for-price (null), we
@@ -893,7 +903,7 @@ export function QuoteDeliveryV4({
       if (!usable) return null;
       return medications.length === 0 ? 0 : sum;
     });
-  }, [columns, rankByPlanId, medications, brainData, pharmacyFill]);
+  }, [columns, rankByContractPlan, medications, brainData, pharmacyFill]);
 
   const rxTotalMonthly = useMemo<(number | null)[]>(
     () => rxTotalAnnual.map((a) => (a != null ? Math.round(a / 12) : null)),
