@@ -47,7 +47,9 @@ import {
   classifyExplanation,
   summarizeExplanations,
 } from '@/lib/classify-explanation';
-import { normalizePlanId, type LibraryRankPlan } from '@/lib/library-client';
+import { normalizePlanId, type LibraryRankPlan, type LibraryRankDrugMonth } from '@/lib/library-client';
+
+type DrugMonth = LibraryRankDrugMonth;
 import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
 import { getLisCopays, normalizeLisTierForClient } from '@/lib/dual-eligible';
 import { useDrugPhases, type DrugPhaseHit } from '@/hooks/useDrugPhases';
@@ -160,6 +162,9 @@ interface Props {
     string,
     ReadonlyArray<DrugRow>
   >;
+  /** Jan–Dec drug-cost calendar per plan (rank-plans drug_cost_by_month).
+   *  Absent for Extra Help / Medicaid clients and unpublished formularies. */
+  drugMonthsByPlanId?: Record<string, ReadonlyArray<DrugMonth>>;
   /** Every county plan that didn't make Top 4, sorted by cost ASC.
    *  Rendered below the 4-up grid with an elimination-reason badge
    *  per card so the broker can scroll the full pool without leaving
@@ -314,6 +319,8 @@ interface DrugRow {
   quantityLimit?: boolean;
   quantityLimitAmount?: number | null;
   quantityLimitDays?: number | null;
+  // Jan..Dec member cost for this drug on this plan (rank-plans monthly_cost).
+  monthlyCost?: number[] | null;
 }
 
 // Per-fill cost label for one drug on one plan. Uses the brain's
@@ -582,7 +589,7 @@ function buildMetrics(args: {
     },
     {
       key: 'drugs',
-      label: 'Drug cost / mo',
+      label: 'Drug cost / mo avg',
       // Compact summary. The LIS-adjusted breakdown + strike + savings
       // badge + phase breakdown live in DrugCostCard (rendered below
       // the metric grid inside SlotCell), keeping the metric row a
@@ -592,6 +599,15 @@ function buildMetrics(args: {
         return v == null ? '—' : perMonth(v);
       },
       numeric: drug,
+      higherIsBetter: false,
+      group: 'drug_coverage',
+    },
+    {
+      key: 'partd_ded',
+      label: 'Part D Ded.',
+      format: (p) =>
+        p.drug_deductible == null ? '—' : `$${p.drug_deductible}`,
+      numeric: (p) => p.drug_deductible,
       higherIsBetter: false,
       group: 'drug_coverage',
     },
@@ -690,15 +706,6 @@ function buildMetrics(args: {
       numeric: (p) => costShareNumeric(p.benefits.medical.specialist),
       higherIsBetter: false,
       group: 'primary_specialty',
-    },
-    {
-      key: 'partd_ded',
-      label: 'Part D Ded.',
-      format: (p) =>
-        p.drug_deductible == null ? '—' : `$${p.drug_deductible}`,
-      numeric: (p) => p.drug_deductible,
-      higherIsBetter: false,
-      group: 'drug_coverage',
     },
     csMetric('urgent_care', 'Urgent care', (p) => p.benefits.medical.urgent_care, 'primary_specialty'),
     csMetric('emergency', 'Emergency', (p) => p.benefits.medical.emergency, 'primary_specialty'),
@@ -899,6 +906,7 @@ export function CompareScreen({
   drugsCoveredByPlanId,
   drugsTotalByPlanId,
   drugBreakdownByPlanId,
+  drugMonthsByPlanId,
   benchPlans,
   benchGateResultsByPlanId,
   explanationsByPlanId,
@@ -1479,6 +1487,8 @@ export function CompareScreen({
         pool={stablePool.filter((p) => p.id !== boardBaseline.id)}
         metrics={metrics}
         annualDrugByPlanId={annualDrugByPlanId}
+        drugMonthsByPlanId={drugMonthsByPlanId ?? {}}
+        drugBreakdownByPlanId={drugBreakdownByPlanId ?? {}}
         unresolvedMedCount={unresolvedMedCount}
         totalMedCount={medications.length}
         unresolvedMedNames={unresolvedMedNames}
@@ -4591,6 +4601,8 @@ function H2HView({
   pool,
   metrics,
   annualDrugByPlanId,
+  drugMonthsByPlanId,
+  drugBreakdownByPlanId,
   unresolvedMedCount,
   totalMedCount,
   unresolvedMedNames,
@@ -4607,6 +4619,8 @@ function H2HView({
   pool: Plan[];
   metrics: Metric[];
   annualDrugByPlanId: Record<string, number | null>;
+  drugMonthsByPlanId: Record<string, ReadonlyArray<DrugMonth>>;
+  drugBreakdownByPlanId: Record<string, ReadonlyArray<DrugRow>>;
   unresolvedMedCount: number;
   totalMedCount: number;
   unresolvedMedNames: ReadonlyArray<string>;
@@ -4998,6 +5012,22 @@ function H2HView({
                 </div>,
               );
             }
+            // Jan–Dec drug-cost calendar closes the Drug Coverage section.
+            if (g === 'drug_coverage') {
+              const baseMonths = drugMonthsByPlanId[baseline.id];
+              const chMonths = drugMonthsByPlanId[challenger.id];
+              if (baseMonths || chMonths) {
+                chunks.push(
+                  <H2HDrugCalendar
+                    key="drug-calendar"
+                    left={baseMonths ?? null}
+                    right={chMonths ?? null}
+                    leftDrugs={drugBreakdownByPlanId[baseline.id] ?? []}
+                    rightDrugs={drugBreakdownByPlanId[challenger.id] ?? []}
+                  />,
+                );
+              }
+            }
           }
           return chunks;
         })()}
@@ -5276,3 +5306,203 @@ void [
   cardBtn,
   MetricRow,
 ];
+
+// ── H2H Jan–Dec drug-cost calendar ─────────────────────────────
+//
+// What the client actually pays for drugs each month on each plan (Rob,
+// 2026-10-28 — Debra O'Connell). The averaged "Drug cost / mo" hides the
+// deductible front-load (Devoted: Jan $278.40, Feb $196.97, then $41.76);
+// this lays the year out like HealthSherpa / Medicare.gov. Figures come from
+// rank-plans drug_cost_by_month — the same shared-deductible timeline that
+// produces the plan's annual drug cost, so the 12 months add up to it.
+// Click a month to see each drug's share.
+
+const CAL_MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+function money2(n: number): string {
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+const PHASE_TAG: Record<'deductible' | 'catastrophic', { text: string; color: string; bg: string }> = {
+  deductible: { text: 'Deductible', color: '#991b1b', bg: 'rgba(239,68,68,0.10)' },
+  catastrophic: { text: 'Cap met', color: '#0a5c3a', bg: 'rgba(34,197,94,0.12)' },
+};
+
+function H2HDrugCalendar({
+  left,
+  right,
+  leftDrugs,
+  rightDrugs,
+}: {
+  left: ReadonlyArray<DrugMonth> | null;
+  right: ReadonlyArray<DrugMonth> | null;
+  leftDrugs: ReadonlyArray<DrugRow>;
+  rightDrugs: ReadonlyArray<DrugRow>;
+}) {
+  const [open, setOpen] = useState<number | null>(null);
+  const yearTotal = (m: ReadonlyArray<DrugMonth> | null) =>
+    m ? m.reduce((s, x) => s + x.cost, 0) : null;
+  const leftYear = yearTotal(left);
+  const rightYear = yearTotal(right);
+
+  const cell = (
+    m: DrugMonth | undefined,
+    align: 'left' | 'right',
+  ): ReactElement => {
+    const tag = m && (m.phase === 'deductible' || m.phase === 'catastrophic') ? PHASE_TAG[m.phase] : null;
+    return (
+      <div
+        style={{
+          padding: '9px 18px',
+          display: 'flex',
+          gap: 8,
+          alignItems: 'center',
+          justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
+          flexDirection: align === 'right' ? 'row-reverse' : 'row',
+          background: tag ? tag.bg : 'transparent',
+        }}
+      >
+        <span style={{ fontFamily: FONT_NUM, fontSize: 14, fontWeight: 600, color: TEXT }}>
+          {m ? money2(m.cost) : '—'}
+        </span>
+        {tag && (
+          <span
+            style={{
+              fontFamily: FONT_LABEL,
+              fontSize: 9,
+              fontWeight: 800,
+              color: tag.color,
+              textTransform: 'uppercase',
+              letterSpacing: 0.5,
+            }}
+          >
+            {tag.text}
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  const drugLines = (drugs: ReadonlyArray<DrugRow>, k: number, align: 'left' | 'right') => (
+    <div style={{ padding: '2px 18px 10px', textAlign: align }}>
+      {drugs
+        .filter((d) => d.covered && !d.unmatched && Array.isArray(d.monthlyCost))
+        .map((d) => (
+          <div
+            key={`${d.rxcui}-${d.name}`}
+            style={{
+              fontFamily: FONT_LABEL,
+              fontSize: 11.5,
+              color: MUTED,
+              lineHeight: 1.6,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {d.name} <span style={{ fontFamily: FONT_NUM, color: TEXT, fontWeight: 600 }}>{money2(d.monthlyCost![k] ?? 0)}</span>
+          </div>
+        ))}
+    </div>
+  );
+
+  return (
+    <div style={{ borderTop: `1px solid ${BORDER}` }}>
+      <div
+        style={{
+          padding: '10px 18px 6px',
+          background: '#f8fafc',
+          fontFamily: FONT_LABEL,
+          fontSize: 10,
+          fontWeight: 800,
+          color: NAVY,
+          textTransform: 'uppercase',
+          letterSpacing: 0.8,
+        }}
+      >
+        Drug cost by month
+      </div>
+      {CAL_MONTHS.map((name, k) => {
+        const isOpen = open === k;
+        return (
+          <div key={name} style={{ borderTop: `1px solid ${BORDER}` }}>
+            <button
+              type="button"
+              onClick={() => setOpen(isOpen ? null : k)}
+              aria-expanded={isOpen}
+              style={{
+                all: 'unset',
+                cursor: 'pointer',
+                display: 'grid',
+                gridTemplateColumns: '1fr 110px 1fr',
+                width: '100%',
+                background: k % 2 === 0 ? 'white' : '#fcfcfd',
+              }}
+            >
+              {cell(left?.[k], 'right')}
+              <div
+                style={{
+                  padding: '9px 8px',
+                  textAlign: 'center',
+                  background: '#fafafa',
+                  fontFamily: FONT_LABEL,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: MUTED,
+                  textTransform: 'uppercase',
+                  letterSpacing: 0.6,
+                  borderLeft: `1px solid ${BORDER}`,
+                  borderRight: `1px solid ${BORDER}`,
+                }}
+              >
+                {name} {isOpen ? '▴' : '▾'}
+              </div>
+              {cell(right?.[k], 'left')}
+            </button>
+            {isOpen && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 1fr', background: '#fcfcfd' }}>
+                {drugLines(leftDrugs, k, 'right')}
+                <div style={{ background: '#fafafa', borderLeft: `1px solid ${BORDER}`, borderRight: `1px solid ${BORDER}` }} />
+                {drugLines(rightDrugs, k, 'left')}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 110px 1fr',
+          borderTop: `2px solid ${NAVY}`,
+          background: '#f1f5f9',
+        }}
+      >
+        <div style={{ padding: '11px 18px', textAlign: 'right', fontFamily: FONT_NUM, fontSize: 15, fontWeight: 800, color: NAVY }}>
+          {leftYear == null ? '—' : money2(leftYear)}
+        </div>
+        <div
+          style={{
+            padding: '11px 8px',
+            textAlign: 'center',
+            fontFamily: FONT_LABEL,
+            fontSize: 10,
+            fontWeight: 800,
+            color: NAVY,
+            textTransform: 'uppercase',
+            letterSpacing: 0.6,
+            borderLeft: `1px solid ${BORDER}`,
+            borderRight: `1px solid ${BORDER}`,
+          }}
+        >
+          Year total
+        </div>
+        <div style={{ padding: '11px 18px', textAlign: 'left', fontFamily: FONT_NUM, fontSize: 15, fontWeight: 800, color: NAVY }}>
+          {rightYear == null ? '—' : money2(rightYear)}
+        </div>
+      </div>
+    </div>
+  );
+}

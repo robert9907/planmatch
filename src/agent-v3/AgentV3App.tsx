@@ -40,7 +40,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { usePlanBrain } from '@/hooks/usePlanBrain';
 import { useRankedPlans } from '@/hooks/useRankedPlans';
-import { normalizePlanId } from '@/lib/library-client';
+import { normalizePlanId, type LibraryRankDrugMonth } from '@/lib/library-client';
 import { checkNetworkBatch } from '@/lib/networkCheck';
 import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
@@ -896,6 +896,8 @@ export function AgentV3App() {
     // no real tier or cost; render "formulary not yet published", never $0 /
     // Tier / Not covered.
     costUnavailable?: boolean;
+    // Jan..Dec member cost for this drug (rank-plans monthly_cost).
+    monthlyCost?: number[] | null;
   };
 
   // planById is keyed by the normalized triple form so the agent's
@@ -1149,6 +1151,7 @@ export function AgentV3App() {
         quantity_limit?: boolean | null;
         quantity_limit_amount?: number | null;
         quantity_limit_days?: number | null;
+        monthly_cost?: number[] | null;
       }>,
     ): DrugRow[] =>
       meds.map((m) =>
@@ -1179,6 +1182,7 @@ export function AgentV3App() {
               quantityLimit: m.quantity_limit === true,
               quantityLimitAmount: m.quantity_limit_amount ?? null,
               quantityLimitDays: m.quantity_limit_days ?? null,
+              monthlyCost: m.monthly_cost ?? null,
             },
       );
     // Meds that never matched a drug code aren't sent to rank-plans, so
@@ -1212,6 +1216,25 @@ export function AgentV3App() {
     }
     return out;
   }, [ranked.result, planById, medications]);
+
+  // Jan–Dec drug-cost calendar per plan (rank-plans drug_cost_by_month).
+  // Withheld when the formulary isn't published — no real costs to lay out.
+  const drugMonthsByPlanId = useMemo<Record<string, LibraryRankDrugMonth[]>>(() => {
+    if (!ranked.result || formularyUnavailable) return {};
+    const out: Record<string, LibraryRankDrugMonth[]> = {};
+    const all = [
+      ...ranked.result.top_plans,
+      ...ranked.result.bench_plans,
+      ...(ranked.result.current_plan ? [ranked.result.current_plan] : []),
+    ];
+    for (const lp of all) {
+      const p = planById.get(normalizePlanId(lp.plan_id));
+      if (p && lp.drug_cost_by_month && lp.drug_cost_by_month.length === 12) {
+        out[p.id] = lp.drug_cost_by_month;
+      }
+    }
+    return out;
+  }, [ranked.result, planById, formularyUnavailable]);
 
   // ── Per-plan gate explanations (CompareScreen "Why this plan" pills) ─
   // Sourced from the LOCAL brain (usePlanBrain), not the library response.
@@ -1571,6 +1594,7 @@ const explanationsByPlanId = useMemo<
             drugsCoveredByPlanId={drugsCoveredByPlanId}
             drugsTotalByPlanId={drugsTotalByPlanId}
             drugBreakdownByPlanId={drugBreakdownByPlanId}
+            drugMonthsByPlanId={drugMonthsByPlanId}
             explanationsByPlanId={explanationsByPlanId}
             compositeByPlanId={compositeByPlanId}
             unresolvedDrugs={brain.result?.unresolvedDrugs ?? []}

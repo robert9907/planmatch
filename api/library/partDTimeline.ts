@@ -142,6 +142,10 @@ export interface MonthlyRow {
   /** True when at least one fill this month straddled a phase
    *  boundary (member paid at two different rates within the month). */
   phaseChangedMidMonth: boolean;
+  /** Member cost this month per drug, index-aligned to args.drugs (input
+   *  order). Sums to memberCost (before rounding). Drives the per-drug
+   *  rows of the Jan–Dec drug-cost calendar. */
+  memberCostByDrug: number[];
 }
 
 // ─── Internal state ───────────────────────────────────────────────────
@@ -394,16 +398,19 @@ export function partDTimeline(args: PartDTimelineArgs): MonthlyRow[] {
   // subject drug would under-pay. Subject-first reproduces medicare.gov to the
   // dollar (A03 H3449-027: $562.72; Linzess+losartan: $671.16). Stable sort
   // preserves input order within each group.
-  const orderedDrugs = [...args.drugs].sort((a, b) => {
-    const as = drugPaysFullDuringDeductible(a, args.plan) ? 0 : 1;
-    const bs = drugPaysFullDuringDeductible(b, args.plan) ? 0 : 1;
-    return as - bs;
-  });
+  const orderedDrugs = args.drugs
+    .map((drug, index) => ({ drug, index }))
+    .sort((a, b) => {
+      const as = drugPaysFullDuringDeductible(a.drug, args.plan) ? 0 : 1;
+      const bs = drugPaysFullDuringDeductible(b.drug, args.plan) ? 0 : 1;
+      return as - bs;
+    });
 
   for (let month = startMonth; month <= 12; month += 1) {
     let monthMemberCost = 0;
     let monthGrossCost = 0;
     let anyStraddle = false;
+    const byDrug = new Array<number>(args.drugs.length).fill(0);
 
     const phaseAtStart = currentPhase(state, params);
 
@@ -411,9 +418,10 @@ export function partDTimeline(args: PartDTimelineArgs): MonthlyRow[] {
     // subsequent fills in the same month see the running balance —
     // a $600 fill followed by a $50 fill on the same day should have
     // the second fill see the deductible burn from the first.
-    for (const drug of orderedDrugs) {
+    for (const { drug, index } of orderedDrugs) {
       if (!isFillMonth(drug, month, startMonth)) continue;
       const fill = chargeFill(drug, state, args.plan, params);
+      byDrug[index] += fill.memberCost;
       monthMemberCost += fill.memberCost;
       monthGrossCost += fill.grossCost;
       if (fill.straddled) anyStraddle = true;
@@ -433,6 +441,7 @@ export function partDTimeline(args: PartDTimelineArgs): MonthlyRow[] {
       troop: round2(state.troop),
       grossDrugCost: round2(monthGrossCost),
       phaseChangedMidMonth,
+      memberCostByDrug: byDrug.map(round2),
     });
   }
 

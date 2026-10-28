@@ -32,6 +32,18 @@ test('packaged forms price one package per month', () => {
   assert.equal(monthlyQuantity({ name: 'Albuterol Inhaler', quantity: '' }), 1);
 });
 
+// Regression (2026-10-28, Debra O'Connell): AgentBase/formulary labels use
+// pharmacy abbreviations ("REPATHA SURECLICK SOLN AUTO-INJ"). They missed the
+// non-solid check, fell through to the 30-tablet default and priced 30
+// syringes (~$8,250/mo) — every plan pegged at the $2,400 cap ($200/mo).
+test('abbreviated injectable labels price the filed quantity, never 30', () => {
+  assert.equal(monthlyQuantity({ name: 'REPATHA SURECLICK SOLN AUTO-INJ' }), 1);
+  assert.equal(monthlyQuantity({ name: 'REPATHA SURECLICK SOLN AUTO-INJ', quantity: '1' }), 1);
+  assert.equal(monthlyQuantity({ name: 'REPATHA SURECLICK SOLN AUTO-INJ', quantity: '2' }), 2);
+  assert.equal(monthlyQuantity({ name: 'ENOXAPARIN SOD INJ PFS 40MG/0.4ML', quantity: '' }), 1);
+  assert.equal(monthlyQuantity({ name: 'HUMALOG KWIKPEN INJ 100U/ML' }), 1);
+});
+
 test('liquids keep the filed quantity', () => {
   assert.equal(monthlyQuantity({ name: 'Amoxicillin Oral Suspension', quantity: '150' }), 150);
 });
