@@ -223,6 +223,13 @@ function tierCanUseDeductible(tier: number | null, plan: PlanInput): boolean {
   return plan.deductibleAppliesToTiers.includes(tier);
 }
 
+/** Whether a drug pays the full negotiated price during the deductible phase
+ *  (a deductible-SUBJECT drug), vs. paying its normal initial-phase share even
+ *  while the deductible is being met (insulin §11406 / waived / exempt tier). */
+function drugPaysFullDuringDeductible(drug: DrugFill, plan: PlanInput): boolean {
+  return tierCanUseDeductible(drug.tier, plan) && !drug.isInsulin && !drug.deductibleWaived;
+}
+
 // ─── Per-fill charge ──────────────────────────────────────────────────
 //
 // Handles a single fill event: splits across phases as needed, applies
@@ -269,31 +276,43 @@ function chargeFill(
   // tier cost-share. See DrugFill.costShareOverride.
   const tierShares: TierCostShares | undefined =
     drug.costShareOverride ?? plan.tierCostShares[drug.tier];
-  // Covered insulin is exempt from the Part D deductible (IRA §11406): the
-  // $35/month cap applies from the first fill in every phase, so insulin
-  // never burns the deductible. Routing it through the deductible phase
-  // billed each early fill at the capped $35 instead of the plan's real
-  // (often lower) initial cost-share, overstating insulin by the
-  // deductible's worth of $35 fills (Lantus on H4523-024: $256 vs $148 PF).
-  const canUseDeductible =
-    tierCanUseDeductible(drug.tier, plan) && !drug.isInsulin && !drug.deductibleWaived;
+  // Whether THIS drug pays the full negotiated price during the deductible
+  // phase. Covered insulin (IRA §11406 — $35/month cap from fill one),
+  // deductible-waived drugs, and drugs on a plan's deductible-exempt tiers do
+  // NOT: they pay their normal initial-phase cost-share even while the
+  // deductible is being met. (Routing insulin at the capped $35 through the
+  // deductible would overstate it — Lantus on H4523-024: $256 vs $148 PF.)
+  const paysFullDuringDeductible = drugPaysFullDuringDeductible(drug, plan);
 
   // ── Split fill across phases ────────────────────────────────────
+  // The Part D deductible is a shared TOTAL-DRUG-COST threshold ($700 of
+  // negotiated price, not member out-of-pocket). EVERY covered drug's gross
+  // draws it down — including drugs that don't pay full price during it: the
+  // plan's payment on a $0-copay exempt-tier drug (or insulin, or a waived-
+  // deductible drug) still counts toward meeting the deductible. This mirrors
+  // medicare.gov: a deductible-SUBJECT drug (Linzess tier 3 on H3449-027)
+  // clears the deductible faster — and costs the member less — when filled
+  // alongside exempt drugs, because their spend helps meet the $700. The old
+  // code only let subject drugs draw the deductible down, so a lone subject
+  // drug absorbed the whole $700 at full price even after the basket's total
+  // spend had already met it (A03 $899 vs PF $563; A02 pegged the $2,400 cap).
   let deductiblePiece = 0;
-  let initialPiece = 0;
-  if (canUseDeductible && state.deductibleRemaining > 0) {
+  let initialPiece = gross;
+  if (state.deductibleRemaining > 0) {
     deductiblePiece = Math.min(gross, state.deductibleRemaining);
     initialPiece = gross - deductiblePiece;
     state.deductibleRemaining -= deductiblePiece;
-  } else {
-    initialPiece = gross;
   }
 
   const deductibleMemberCost = memberCostForPhasePiece({
-    share: tierShares?.deductible,
+    // A deductible-subject drug pays the full negotiated price for its
+    // deductible piece; an exempt / insulin / waived drug pays its normal
+    // initial-phase share even here (its gross still drew the deductible down
+    // above, but the member isn't charged full price for it).
+    share: paysFullDuringDeductible ? tierShares?.deductible : tierShares?.initial,
     fullFillGross: gross,
     pieceGross: deductiblePiece,
-    fallbackToRetail: true,
+    fallbackToRetail: paysFullDuringDeductible,
   });
 
   const initialMemberCost = memberCostForPhasePiece({
@@ -367,6 +386,20 @@ export function partDTimeline(args: PartDTimelineArgs): MonthlyRow[] {
 
   const rows: MonthlyRow[] = [];
 
+  // Charge deductible-SUBJECT drugs before exempt/insulin/waived drugs each
+  // month. The deductible is a shared pot every covered drug draws down, but a
+  // subject drug pays the full price only on its OWN fills that land while the
+  // deductible is still open — so its fills must be counted toward the pot
+  // first, otherwise exempt drugs' gross would deplete the deductible and the
+  // subject drug would under-pay. Subject-first reproduces medicare.gov to the
+  // dollar (A03 H3449-027: $562.72; Linzess+losartan: $671.16). Stable sort
+  // preserves input order within each group.
+  const orderedDrugs = [...args.drugs].sort((a, b) => {
+    const as = drugPaysFullDuringDeductible(a, args.plan) ? 0 : 1;
+    const bs = drugPaysFullDuringDeductible(b, args.plan) ? 0 : 1;
+    return as - bs;
+  });
+
   for (let month = startMonth; month <= 12; month += 1) {
     let monthMemberCost = 0;
     let monthGrossCost = 0;
@@ -378,7 +411,7 @@ export function partDTimeline(args: PartDTimelineArgs): MonthlyRow[] {
     // subsequent fills in the same month see the running balance —
     // a $600 fill followed by a $50 fill on the same day should have
     // the second fill see the deductible burn from the first.
-    for (const drug of args.drugs) {
+    for (const drug of orderedDrugs) {
       if (!isFillMonth(drug, month, startMonth)) continue;
       const fill = chargeFill(drug, state, args.plan, params);
       monthMemberCost += fill.memberCost;

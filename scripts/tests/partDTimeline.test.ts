@@ -310,12 +310,18 @@ test('annual sum matches hand-computed expected for simple basket (within $1)', 
   // Basket: one tier-1 generic ($8/mo, $0 copay) + one tier-3 brand
   //   ($200/mo, $47 copay), plan deductible $615 applying to tier 3+.
   //
-  // Expected annual (hand math, matching the mid-month straddle test):
-  //   T1 generic: $0 × 12 = $0
-  //   T3 brand: 3×$200 (Jan/Feb/Mar burn deductible) + straddle-month
-  //     April ($15 ded + $47×185/200 = $58.475) + 8×$47 (May-Dec) =
-  //     600 + 58.475 + 376 = $1,034.475
-  //   Total: $1,034.475
+  // The Part D deductible is met by TOTAL drug cost: the tier-1 generic's $8/mo
+  // gross draws the $615 deductible down too (the plan pays it; member $0), so
+  // the brand pays full price on $615 − generic contribution, not the whole
+  // $615. Subject-first ordering charges the brand before the generic each
+  // month, so the generic absorbs only the leftover room:
+  //   months 1-2: brand $200 full (=$400), generic $8 each → deductible $599/$615
+  //     consumed by the brand ($599), $16 by the generic, met in month 3.
+  //   month 3: brand straddle — $199 at full + $1 at copay ($0.235) = $199.235
+  //   months 4-12 (9 fills): brand copay $47 = $423; generic $0.
+  //   Total: 400 + 199.235 + 423 = $1,022.235
+  // (Was $1,034.475 under the old subject-only deductible model, before the
+  // total-drug-cost fix — the generic's gross wasn't counted.)
   const rows = partDTimeline({
     planYear: 2026,
     plan: plan(),
@@ -326,7 +332,7 @@ test('annual sum matches hand-computed expected for simple basket (within $1)', 
   });
 
   const total = sumMemberCost(rows);
-  const expected = 1034.475;
+  const expected = 1022.235;
   assert.ok(
     Math.abs(total - expected) < 1,
     `annual sum ${total} within $1 of expected ${expected}`,
