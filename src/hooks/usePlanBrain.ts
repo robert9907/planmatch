@@ -141,6 +141,10 @@ export interface PlanBrainData {
   /** Per-plan IRA-selected-drug cost-share by tier (preferred pharmacy),
    *  keyed by triple id. Coinsurance as a 0..1 fraction. MFP-fallback only. */
   iraCostShareByPlan?: Record<string, Record<string, { type: 'copay' | 'coinsurance'; amount: number }>>;
+  /** Per-plan CMS rx_deductible.exempt_tiers, keyed `${contract}-${plan}`
+   *  (segment-agnostic). The Part D deductible applies to every tier NOT
+   *  listed. Absent ⇒ the brain's legacy [3,4,5] default. */
+  deductibleExemptTiersByPlan?: Record<string, number[]>;
   formularyByContractPlan: Record<string, Record<string, FormularyRow>>;
   ndcByRxcui: Record<string, NdcRow>;
   networkByPlan: Record<string, Record<string, ProviderNetworkRow>>;
@@ -733,6 +737,14 @@ export function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
     iraCostShareByPlanKey.set(key, inner);
   }
 
+  // ── deductibleExemptTiersByPlanKey (contract-plan → exempt tiers) ──
+  // Segment-agnostic CMS rx_deductible.exempt_tiers; the brain looks up
+  // with `${contract}-${plan}`.
+  const deductibleExemptTiersByPlanKey = new Map<string, number[]>();
+  for (const [key, tiers] of Object.entries(data.deductibleExemptTiersByPlan ?? {})) {
+    if (Array.isArray(tiers)) deductibleExemptTiersByPlanKey.set(key, tiers);
+  }
+
   // ── rxcuiToNdc bridge ─────────────────────────────────────────────
   const rxcuiToNdc = new Map<string, string>();
   for (const [rxcui, row] of Object.entries(data.ndcByRxcui)) {
@@ -801,6 +813,7 @@ export function adaptToBrainInputs(args: AdapterArgs): BrainInputs {
     drugCostCacheByPlanKey,
     rxcuiToNdc,
     iraCostShareByPlanKey,
+    deductibleExemptTiersByPlanKey,
     grossMonthlyByRxcui: args.grossMonthlyByRxcui,
     providerNetworkByPlanKey,
     mapdContractPlanIds,

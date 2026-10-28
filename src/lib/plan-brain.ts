@@ -755,6 +755,12 @@ export function runPlanBrain(input: BrainInputs): BrainOutput {
           rxcuiToNdc: input.rxcuiToNdc,
           iraCostShareByTier: input.iraCostShareByPlanKey?.get(planKeyWithSegment(row)),
           grossMonthlyByRxcui: input.grossMonthlyByRxcui,
+          // Per-plan deductible-exempt tiers (CMS rx_deductible.exempt_tiers),
+          // keyed contract-plan (segment-agnostic) so a tier the plan exempts
+          // (commonly tier 3) doesn't wrongly burn the deductible.
+          deductibleExemptTiers: input.deductibleExemptTiersByPlanKey?.get(
+            `${row.contract_id}-${row.plan_id}`,
+          ),
         });
     const totalAnnualDrugCost = drugEstimates.reduce((s, x) => s + x.yearlyCost, 0);
     const coveredCount = drugEstimates.filter((x) => x.covered).length;
