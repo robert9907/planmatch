@@ -4718,6 +4718,24 @@ function H2HView({
             </button>
           );
         })}
+        <button
+          type="button"
+          onClick={onBackToGrid}
+          style={{
+            background: 'transparent',
+            color: NAVY,
+            border: `1.5px solid rgba(13,47,94,0.15)`,
+            borderRadius: 16,
+            padding: '5px 12px',
+            fontFamily: FONT_LABEL,
+            fontSize: 11,
+            fontWeight: 700,
+            cursor: 'pointer',
+            letterSpacing: 0.3,
+          }}
+        >
+          4-up grid →
+        </button>
       </div>
 
       <div
@@ -5137,23 +5155,6 @@ function H2HView({
           }}
         >
           ← Back
-        </button>
-        <button
-          type="button"
-          onClick={onBackToGrid}
-          style={{
-            background: 'transparent',
-            color: NAVY,
-            border: `1.5px solid rgba(13,47,94,0.15)`,
-            borderRadius: 9,
-            padding: '10px 18px',
-            fontFamily: FONT_LABEL,
-            fontSize: 12,
-            fontWeight: 700,
-            cursor: 'pointer',
-          }}
-        >
-          4-up grid →
         </button>
       </div>
     </Container>
