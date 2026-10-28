@@ -20,6 +20,7 @@ type Step =
   | 'more' // turn the bottle, one more picture of the same bottle
   | 'many' // several bottles in one photo → one at a time
   | 'blurry' // nothing readable → try again
+  | 'missed' // the phone reloaded the page while its camera was open
   | 'failed' // didn't send (signal) → try again
   | 'confirm' // is this your pharmacy? is this your doctor?
   | 'pick-pharmacy' // a different pharmacy
@@ -30,29 +31,85 @@ type Step =
 type Photo = { base64: string; mimeType: string };
 type CameraFor = 'bottle' | 'more' | 'card';
 
+// Android (and sometimes iPhone) closes the browser in the background
+// while its camera app is open; on return the page reloads and every
+// in-memory answer is gone — the bottles are saved server-side, but the
+// count, the pharmacy/doctor reads and "I'm all done" vanish. The visit's
+// progress is kept in sessionStorage (this tab only, cleared when the tab
+// closes) so a reload picks up where the client was. No photos stored.
+interface SavedVisit {
+  savedCount: number;
+  cardDone: boolean;
+  label: string;
+  medNames: string[];
+  pharmacyRead: SnapPharmacyRead | null;
+  prescribers: string[];
+  prescriberReadings: string[];
+  pharmacyAnswer: 'ask' | 'yes' | 'changed';
+  chosenPharmacy: PharmacyChoice | null;
+  doctorAnswers: Record<string, 'yes' | 'no'>;
+  /** Set while the phone's camera is open; still set after a reload means
+   *  the picture never came back. */
+  cameraOpenFor: CameraFor | null;
+  step: Step;
+}
+
+const visitKey = (token: string) => `snap_visit_${token}`;
+
+function loadVisit(token: string | null): SavedVisit | null {
+  if (!token) return null;
+  try {
+    const raw = sessionStorage.getItem(visitKey(token));
+    return raw ? (JSON.parse(raw) as SavedVisit) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveVisit(token: string, visit: SavedVisit): void {
+  try {
+    sessionStorage.setItem(visitKey(token), JSON.stringify(visit));
+  } catch {
+    /* storage blocked — the visit still works, just without a safety net */
+  }
+}
+
+// Screens that are safe to land back on after a reload.
+const RESUMABLE: Step[] = ['start', 'got', 'more', 'many', 'confirm', 'card-ask', 'card-got', 'finish'];
+
+function resumeStep(v: SavedVisit): Step {
+  if (v.cameraOpenFor) return 'missed';
+  if (RESUMABLE.includes(v.step)) return v.step;
+  return v.savedCount > 0 ? 'got' : 'start';
+}
+
 // Validity of the capture link itself, checked once on mount.
 type LinkState = 'checking' | 'ok' | 'expired' | 'unknown';
 
 export function CaptureApp() {
   const token = readTokenFromPath();
+  const [restored] = useState(() => loadVisit(token));
   const [linkState, setLinkState] = useState<LinkState>('checking');
   const [firstName, setFirstName] = useState<string | null>(null);
-  const [step, setStep] = useState<Step>('start');
-  const [label, setLabel] = useState<string>('');
+  const [step, setStep] = useState<Step>(() => (restored ? resumeStep(restored) : 'start'));
+  const [label, setLabel] = useState<string>(restored?.label ?? '');
   const [bottleCount, setBottleCount] = useState(0);
-  const [savedCount, setSavedCount] = useState(0);
-  const [cardDone, setCardDone] = useState(false);
+  const [savedCount, setSavedCount] = useState(restored?.savedCount ?? 0);
+  const [cardDone, setCardDone] = useState(restored?.cardDone ?? false);
   const [failMessage, setFailMessage] = useState<string>('');
   // Collected across the visit for the pharmacy / doctor check at the end.
-  const [medNames, setMedNames] = useState<string[]>([]);
-  const [pharmacyRead, setPharmacyRead] = useState<SnapPharmacyRead | null>(null);
-  const [prescribers, setPrescribers] = useState<string[]>([]);
+  const [medNames, setMedNames] = useState<string[]>(restored?.medNames ?? []);
+  const [pharmacyRead, setPharmacyRead] = useState<SnapPharmacyRead | null>(restored?.pharmacyRead ?? null);
+  const [prescribers, setPrescribers] = useState<string[]>(restored?.prescribers ?? []);
   // Every bottle's prescriber as printed — the server merges them by last
   // name at the end of the visit (one bottle often prints only part).
-  const [prescriberReadings, setPrescriberReadings] = useState<string[]>([]);
-  const [pharmacyAnswer, setPharmacyAnswer] = useState<'ask' | 'yes' | 'changed'>('ask');
-  const [chosenPharmacy, setChosenPharmacy] = useState<PharmacyChoice | null>(null);
-  const [doctorAnswers, setDoctorAnswers] = useState<Record<string, 'yes' | 'no'>>({});
+  const [prescriberReadings, setPrescriberReadings] = useState<string[]>(restored?.prescriberReadings ?? []);
+  const [pharmacyAnswer, setPharmacyAnswer] = useState<'ask' | 'yes' | 'changed'>(restored?.pharmacyAnswer ?? 'ask');
+  const [chosenPharmacy, setChosenPharmacy] = useState<PharmacyChoice | null>(restored?.chosenPharmacy ?? null);
+  const [doctorAnswers, setDoctorAnswers] = useState<Record<string, 'yes' | 'no'>>(restored?.doctorAnswers ?? {});
+  // Which picture the camera was open for when the page reloaded.
+  const [missedFor, setMissedFor] = useState<CameraFor>(restored?.cameraOpenFor ?? 'bottle');
+  const cameraOpenFor = useRef<CameraFor | null>(null);
   const [confirmSending, setConfirmSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraFor = useRef<CameraFor>('bottle');
@@ -61,6 +118,25 @@ export function CaptureApp() {
   const firstPhoto = useRef<Photo | null>(null);
   // What to resend if the connection drops.
   const pending = useRef<{ photos: Photo[]; kind: CameraFor } | null>(null);
+
+  // Keep the visit's progress so a reload (phone camera app) resumes it.
+  useEffect(() => {
+    if (!token) return;
+    saveVisit(token, {
+      savedCount,
+      cardDone,
+      label,
+      medNames,
+      pharmacyRead,
+      prescribers,
+      prescriberReadings,
+      pharmacyAnswer,
+      chosenPharmacy,
+      doctorAnswers,
+      cameraOpenFor: cameraOpenFor.current,
+      step,
+    });
+  }, [token, step, savedCount, cardDone, label, medNames, pharmacyRead, prescribers, prescriberReadings, pharmacyAnswer, chosenPharmacy, doctorAnswers]);
 
   // Check the link before showing the camera, and pick up the client's
   // first name for the greeting. capture-poll is read-only.
@@ -131,11 +207,20 @@ export function CaptureApp() {
     cameraFor.current = forWhat;
     const input = fileInputRef.current;
     if (!input) return;
+    // Recorded before the camera app opens: if the page is reloaded while
+    // it's up, the restore sees this and asks for the picture again.
+    cameraOpenFor.current = forWhat;
+    if (token) saveVisit(token, { ...currentVisit(), cameraOpenFor: forWhat });
     input.value = ''; // same file twice must still fire onChange
     input.click();
   }
 
   async function handleFilePick(e: React.ChangeEvent<HTMLInputElement>) {
+    cameraOpenFor.current = null;
+    if (token) {
+      const v = loadVisit(token);
+      if (v) saveVisit(token, { ...v, cameraOpenFor: null });
+    }
     const file = e.target.files?.[0];
     if (!file) return;
     const kind = cameraFor.current;
@@ -234,6 +319,23 @@ export function CaptureApp() {
     }
   }
 
+  function currentVisit(): SavedVisit {
+    return {
+      savedCount,
+      cardDone,
+      label,
+      medNames,
+      pharmacyRead,
+      prescribers,
+      prescriberReadings,
+      pharmacyAnswer,
+      chosenPharmacy,
+      doctorAnswers,
+      cameraOpenFor: null,
+      step,
+    };
+  }
+
   function retrySend() {
     const p = pending.current;
     if (p) void send(p.photos, p.kind);
@@ -305,7 +407,10 @@ export function CaptureApp() {
         <div>
           <h1 style={h1}>{firstName ? `Hi ${firstName}!` : 'Hi there!'}</h1>
           <p style={para}>Let's take a picture of your pill bottles, one bottle at a time.</p>
-          <p style={para}>Hold the bottle close so the words fill the screen.</p>
+          <p style={para}>
+            Hold the bottle about a hand's width from your phone, in good light. Tap the words on your screen
+            so they look sharp, then hold still.
+          </p>
           <BigButton onClick={() => openCamera('bottle')}>Take a picture of a pill bottle</BigButton>
           {savedCount > 0 && (
             <QuietButton onClick={allDone}>I'm all done</QuietButton>
@@ -367,7 +472,10 @@ export function CaptureApp() {
       {step === 'blurry' && (
         <div>
           <h1 style={h1}>That one came out blurry</h1>
-          <p style={para}>Let's try again. Hold the phone still and close to the words.</p>
+          <p style={para}>
+            Let's try again. Hold the bottle about a hand's width away — any closer and the phone can't focus.
+            Tap the words on your screen so they look sharp, then hold still.
+          </p>
           <BigButton onClick={() => openCamera(cameraFor.current === 'card' ? 'card' : 'bottle')}>
             Try again
           </BigButton>
@@ -376,6 +484,26 @@ export function CaptureApp() {
               if (cameraFor.current === 'card') setStep('finish');
               else setStep(savedCount > 0 ? 'got' : 'start');
               setLabel('');
+            }}
+          >
+            Skip this one
+          </QuietButton>
+        </div>
+      )}
+
+      {step === 'missed' && (
+        <div>
+          <h1 style={h1}>Your picture didn't come through</h1>
+          <p style={para}>
+            Your phone closed this page while the camera was open. Anything you already sent is safe — just take
+            that picture again.
+          </p>
+          <BigButton onClick={() => openCamera(missedFor)}>Take the picture again</BigButton>
+          <QuietButton
+            onClick={() => {
+              if (missedFor === 'card') setStep('finish');
+              else setStep(savedCount > 0 ? 'got' : 'start');
+              setMissedFor('bottle');
             }}
           >
             Skip this one
