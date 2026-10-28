@@ -219,6 +219,7 @@ function buildPlanTimeline(
         troop: 0,
         grossDrugCost: 0,
         phaseChangedMidMonth: false,
+        memberCostByDrug: [],
       }))
     : applyLisCap(
         partDTimeline({

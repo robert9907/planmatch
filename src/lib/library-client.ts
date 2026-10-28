@@ -262,6 +262,17 @@ export interface LibraryRankMedication {
   quantity_limit?: boolean;
   quantity_limit_amount?: number | null;
   quantity_limit_days?: number | null;
+  /** This drug's member cost Jan..Dec (12 entries). Null/absent for a
+   *  call-for-price drug, an Extra Help / Medicaid client, or an older API. */
+  monthly_cost?: number[] | null;
+}
+
+/** One month of the Jan–Dec drug-cost calendar. */
+export interface LibraryRankDrugMonth {
+  month: number;
+  cost: number;
+  /** Part D phase the month ends in; null when no drug runs the timeline. */
+  phase: 'deductible' | 'initial' | 'catastrophic' | null;
 }
 
 export interface LibraryRankProvider {
@@ -307,6 +318,9 @@ export interface LibraryRankPlan {
   star_rating: number | null;
   medications: LibraryRankMedication[];
   total_annual_drug_cost: number;
+  /** Jan–Dec drug-cost calendar (12 rows, sums to total_annual_drug_cost).
+   *  Null for Extra Help / Medicaid clients; absent on older API responses. */
+  drug_cost_by_month?: LibraryRankDrugMonth[] | null;
   meds_covered: number;
   meds_total: number;
   providers: LibraryRankProvider[];
