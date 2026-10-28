@@ -112,3 +112,17 @@ test('topicals and sprays are packages even when the name does not say so', () =
   // Pills are unchanged.
   assert.equal(monthlyQuantity({ name: 'Lisinopril 10 MG', quantity: '90', frequency: 'Take 1 tablet by mouth twice daily' }), 60);
 });
+
+// Regression (2026-10-28, Debra O'Connell): with no pharmacy chosen,
+// medicare.gov prices the mail lane as a 90-day fill (quantity ×3) even when
+// asked for 30 days. The 90-day full_cost must be scaled to one 30-day fill.
+test('a 90-day mail row is scaled back to a 30-day gross price', () => {
+  const resp = {
+    costs: [
+      { raw: { costs: [{ drug_costs: [{ ndc: 'R1', full_cost: 1619.31, frequency: 'FREQUENCY_90_DAYS' }] }] } },
+      { raw: { costs: [{ drug_costs: [{ ndc: 'R1', full_cost: 539.77, frequency: 'FREQUENCY_30_DAYS' }] }] } },
+    ],
+  };
+  const m = grossMonthlyFromResponse(resp, { '1665900': ['R1'] });
+  assert.equal(m.get('1665900'), 539.77);
+});

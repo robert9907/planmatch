@@ -78,7 +78,17 @@ function rawMonthlyQuantity(m: QuantityInput): number {
 }
 
 interface CostsResponse {
-  costs?: Array<{ raw?: { costs?: Array<{ drug_costs?: Array<{ ndc?: string; full_cost?: number }> }> } }>;
+  costs?: Array<{ raw?: { costs?: Array<{ drug_costs?: Array<{ ndc?: string; full_cost?: number; frequency?: string }> }> } }>;
+}
+
+// medicare.gov prices only the MAIL lane when no pharmacy is chosen, and
+// returns it as a 90-day fill (quantity ×3, full_cost ×3) even when we ask
+// for 30 days. Treating that as a monthly price tripled every live-priced
+// drug (Debra O'Connell 2026-10-28: Repatha $1,619 "per month"). Scale a
+// 90-day row back to one 30-day fill.
+function thirtyDayCost(d: { full_cost?: number; frequency?: string }): number | null {
+  if (typeof d.full_cost !== 'number' || !(d.full_cost > 0)) return null;
+  return d.frequency === 'FREQUENCY_90_DAYS' ? d.full_cost / 3 : d.full_cost;
 }
 
 function median(xs: number[]): number {
@@ -101,9 +111,10 @@ export function grossMonthlyFromResponse(
     for (const pc of c.raw?.costs ?? []) {
       for (const d of pc.drug_costs ?? []) {
         const rx = d.ndc ? rxcuiByNdc.get(d.ndc) : undefined;
-        if (!rx || typeof d.full_cost !== 'number' || !(d.full_cost > 0)) continue;
+        const cost = thirtyDayCost(d);
+        if (!rx || cost == null) continue;
         const arr = prices.get(rx) ?? [];
-        arr.push(d.full_cost);
+        arr.push(cost);
         prices.set(rx, arr);
       }
     }
