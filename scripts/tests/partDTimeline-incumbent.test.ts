@@ -102,7 +102,11 @@ function runIncumbent(s: Scenario): number {
 function runTimeline(s: Scenario): { total: number; month12Cumulative: number } {
   const inputs = toTimelineInputs(s);
   const rows = partDTimeline({
-    planYear: 2026,
+    // 2027 — matches the incumbent's BUNDLE_PLAN_YEAR (resolvePlanCatalogYear)
+    // post-AEP cutover. The incumbent caps at the CY2027 TrOOP $2,400; pinning
+    // the timeline to 2026 ($2,100) made the catastrophic scenario diverge by
+    // $300 against a now-2027 incumbent.
+    planYear: 2027,
     plan: inputs.plan,
     drugs: inputs.drugs,
   });
@@ -137,7 +141,7 @@ test('waived-deductible tier-1 generic: incumbent and timeline both = $0', () =>
 // operate on different assumed prices and diverge trivially.
 
 test('single tier-3 drug @ notional $200/mo, ded $600 — clears in 3 months, no straddle', () => {
-  // Deductible must be ≤ 2026 max ($615) or the timeline clamps
+  // Deductible must be ≤ the plan-year max ($700 in 2027) or the timeline clamps
   // defensively while the incumbent doesn't — trivial divergence.
   // $600 evenly divides 200/mo × 3, so month 3's fill fully hits the
   // last $200 of ded with no straddle.
@@ -214,7 +218,7 @@ test('specialty tier-3 hits catastrophic — incumbent respects TrOOP cap via ti
       // Tier 3 with high monthly retail so TrOOP crosses fast. Under
       // the pre-retirement incumbent this basket returned ~$4,615/yr
       // (no cap). Now the incumbent delegates to partDTimeline, both
-      // clamp at $2,100.
+      // clamp at the CY2027 TrOOP cap $2,400.
       { rxcui: 'x1', name: 'CatDrug', tier: 3, monthlyRetail: 900, monthlyCopay: 500 },
     ],
   };
@@ -229,14 +233,15 @@ test('specialty tier-3 hits catastrophic — incumbent respects TrOOP cap via ti
     Math.abs(month12Cumulative - timeline) < 0.02,
     `cumulative vs sum drift: ${month12Cumulative} vs ${timeline}`,
   );
-  // Both sides must respect the RxMOOP cap of $2,100 (IRA §11201).
+  // Both sides must respect the CY2027 RxMOOP cap of $2,400 (IRA §11201,
+  // CMS CY2027 final rule — up from $2,100 in 2026).
   assert.ok(
-    timeline <= 2100 + 0.01,
-    `timeline ${timeline} exceeds TrOOP cap $2,100`,
+    timeline <= 2400 + 0.01,
+    `timeline ${timeline} exceeds TrOOP cap $2,400`,
   );
   assert.ok(
-    incumbent <= 2100 + 0.01,
-    `incumbent ${incumbent} exceeds TrOOP cap $2,100 — retirement didn't take effect for this call site?`,
+    incumbent <= 2400 + 0.01,
+    `incumbent ${incumbent} exceeds TrOOP cap $2,400 — retirement didn't take effect for this call site?`,
   );
   assert.ok(
     Math.abs(delta) < 1,
@@ -264,8 +269,9 @@ test('SUMMARY — historical divergences now closed by the retirement', () => {
     2. No catastrophic gating:
        Kept applying deductible + copay for the full year regardless
        of TrOOP. Over-charged for high-cost specialty baskets once
-       TrOOP crossed $2,100 (IRA §11201 caps member cost at $0
-       thereafter — was over by $2,500+ on a $900/mo tier-3 basket).
+       TrOOP crossed the RxMOOP cap ($2,400 in CY2027; IRA §11201
+       caps member cost at $0 thereafter — was over by $2,200+ on a
+       $900/mo tier-3 basket).
 
   Both are closed as of the retirement commit — estimateBundleYearlyCost
   now delegates its basket math to partDTimeline and returns the
