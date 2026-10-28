@@ -57,7 +57,8 @@ import {
   type CompatRuleApplication,
   type CompatRealAnnualCost,
 } from '@/hooks/usePlanBrain';
-import { useDrugCosts, lookupPlanCost } from '@/hooks/useDrugCosts';
+import { useRankedPlans } from '@/hooks/useRankedPlans';
+import type { LibraryRankPlan } from '@/lib/library-client';
 import { monthlyCostFromFormulary } from '@/lib/drugCosts';
 import {
   useManufacturerAssistance,
@@ -132,7 +133,6 @@ import { BROKER } from '@/lib/constants';
 import { buildSunfireRecommendationText } from '@/lib/clipboardFormat';
 import { parseDrugName } from '@/lib/parseDrugName';
 import { dedupeMedContext, dedupeProviderContext } from '@/lib/agentbaseSyncDedup';
-import { normalizeLisTierForClient } from '@/lib/dual-eligible';
 
 // Single source of truth for the SunFire workspace URL — see
 // src/lib/constants.ts BROKER.sunfire. The previous in-file constant
@@ -330,7 +330,7 @@ interface MedRow {
   /** Per-cell provenance — drives the rendering between actual,
    *  estimate (with asterisk + tooltip), unavailable (em dash),
    *  and excluded. Length matches columns.length. */
-  sources: ('cache' | 'formulary' | 'tier_estimate' | 'unavailable' | 'excluded' | 'formulary_unpublished' | 'no_rxcui')[];
+  sources: (CostSource | 'no_rxcui')[];
   paStFlags: Array<{ pa?: boolean; st?: boolean } | null>;
 }
 
@@ -370,11 +370,6 @@ export function QuoteDeliveryV4({
 }: Props) {
   const currentPlanId = useSession((s) => s.currentPlanId);
   const isAnnualReview = useSession((s) => s.isAnnualReview);
-  // Normalized at the selector: a session persisted between 2026-07-23
-  // and 2026-08-15 can carry the retired `qmb_uniform` tier, which no
-  // longer exists in LIS_COPAYS_2026. normalizeLisTierForClient
-  // re-derives it from medicaidLevel + livingSetting.
-  const clientLisTier = useSession((s) => normalizeLisTierForClient(s.client));
   const [pharmacyFill, setPharmacyFill] = useState<PharmacyFill>('retail_30');
   const [pickerOpen, setPickerOpen] = useState(false);
   // Weight preset — drives weightOverride for usePlanBrain. null lets
@@ -522,15 +517,45 @@ export function QuoteDeliveryV4({
     weightOverride,
   });
 
-  // Live drug-cost prime — hits /api/drug-costs and writes back to
-  // pm_drug_cost_cache. byPlanId.<plan.id>.annual_cost is the
-  // authoritative Total Rx Cost for the client's full prescription set.
-  const drugCosts = useDrugCosts(
-    plansForBrain,
+  // Authoritative drug costs — the consumer library's /api/library/rank-plans
+  // (the SAME engine the Compare board uses). Replaces the agent's own
+  // /api/drug-costs call and the retail×3 mail fallback: rank-plans prices
+  // every covered drug with correct Extra Help / LIS caps AND the chosen
+  // pharmacy channel (90-day mail re-priced server-side, not retail×3). The
+  // quote reads per-plan + per-drug costs straight off the result by plan_id.
+  const ranked = useRankedPlans({
+    client,
     medications,
-    pharmacyFill === 'mail_90' ? 'mail' : 'retail',
-    clientLisTier,
-  );
+    providers,
+    userPriorities: userPriorityKeys,
+    currentPlanId,
+    dsnpEligible:
+      client.dsnpEligible === true ||
+      (client.medicaidLevel != null && client.medicaidLevel !== 'none'),
+    pharmacy: pharmacyFill === 'mail_90' ? 'mail_order' : 'preferred_retail',
+  });
+  // contract-plan ("H1112-044", segment dropped) → library-priced plan, across
+  // Top picks, bench, and the priced-but-unranked current plan, so any quoted
+  // column can be looked up. Keyed segment-AGNOSTIC on purpose: pm_plans.id
+  // carries a 3-char segment ("…-000") while rank-plans plan_id carries a
+  // 1-char one ("…-0"), and Part D drug cost is uniform per (contract, plan)
+  // regardless of segment (api/plans.ts). Matching on the full triple would
+  // silently miss and fall back to the legacy cost path.
+  const rankByContractPlan = useMemo(() => {
+    const contractPlanOf = (planId: string) => planId.split('-').slice(0, 2).join('-');
+    const m = new Map<string, LibraryRankPlan>();
+    const r = ranked.result;
+    if (r) {
+      // Insert bench first so a Top/current plan wins on a (rare) segment
+      // collision for the same contract-plan.
+      for (const p of r.bench_plans) m.set(contractPlanOf(p.plan_id), p);
+      for (const p of r.top_plans) m.set(contractPlanOf(p.plan_id), p);
+      if (r.current_plan) m.set(contractPlanOf(r.current_plan.plan_id), r.current_plan);
+    }
+    return m;
+  }, [ranked.result]);
+  const rankPlanFor = (plan: Plan): LibraryRankPlan | undefined =>
+    rankByContractPlan.get(`${plan.contract_id}-${plan.plan_number}`);
 
   // Manufacturer assistance — drives the help section under the table.
   const assistance = useManufacturerAssistance(medications);
@@ -686,7 +711,13 @@ export function QuoteDeliveryV4({
 
   const medRows = useMemo<MedRow[]>(() => {
     const built = medications.map((med) => {
-      const lookups = columns.map((c) => lookupDrugCost(c.plan, med, brainData, pharmacyFill));
+      const lookups = columns.map(
+        (c) =>
+          // rank-plans is authoritative; fall back to the brain-data lookup
+          // only for a column the library didn't price (rare).
+          rankDrugInfo(rankPlanFor(c.plan), med) ??
+          lookupDrugCost(c.plan, med, brainData, pharmacyFill),
+      );
       return {
         id: med.id,
         name: med.name,
@@ -838,23 +869,22 @@ export function QuoteDeliveryV4({
     },
   ], [columns]);
 
-  // Total Rx Cost — prefer live /api/drug-costs total when available.
+  // Total Rx Cost — from the consumer library's rank-plans (correct LIS/dual
+  // caps + pharmacy channel), summing the per-drug cells so the total always
+  // matches the rows the broker sees. No /api/drug-costs call, no retail×3.
   const rxTotalAnnual = useMemo<(number | null)[]>(() => {
     return columns.map((c) => {
       // Formulary for the catalog year isn't published yet → we cannot honestly
-      // total drug costs. Return null (cell renders incomplete) BEFORE the live
-      // /api/drug-costs path, so a cross-year cache row can't inject a figure.
+      // total drug costs. Return null (cell renders incomplete) so a cross-year
+      // cache row can't inject a figure.
       if (brainData?.formularyPublished === false && medications.length > 0) return null;
 
-      // Path 1 — live /api/drug-costs total. Authoritative.
-      const live = lookupPlanCost(drugCosts, c.plan);
-      if (live?.annual_cost != null) return Math.round(live.annual_cost);
+      const rp = rankPlanFor(c.plan);
 
-      // Path 2 — sum per-drug cells, but ONLY if every drug has a
-      // computable annual. If any drug is 'unavailable' or returns
-      // null, we can't honestly produce a total — return null and
-      // let the cell render '—'. Per the compliance directive:
-      // never silently treat missing data as $0.
+      // Sum per-drug cells, but ONLY if every drug has a computable annual. If
+      // any drug is 'unavailable' / 'not covered' / call-for-price (null), we
+      // can't honestly produce a total — return null and render '—'. Per the
+      // compliance directive: never silently treat missing data as $0.
       let sum = 0;
       let usable = true;
       for (const med of medications) {
@@ -862,8 +892,9 @@ export function QuoteDeliveryV4({
           usable = false;
           break;
         }
-        const d = lookupDrugCost(c.plan, med, brainData, pharmacyFill);
-        if (!d || d.source === 'unavailable' || d.annual == null) {
+        // rank-plans authoritative; brain-data fallback for an unpriced column.
+        const d = rankDrugInfo(rp, med) ?? lookupDrugCost(c.plan, med, brainData, pharmacyFill);
+        if (!d || d.source === 'unavailable' || d.source === 'excluded' || d.annual == null) {
           usable = false;
           break;
         }
@@ -872,7 +903,7 @@ export function QuoteDeliveryV4({
       if (!usable) return null;
       return medications.length === 0 ? 0 : sum;
     });
-  }, [columns, drugCosts, medications, brainData, pharmacyFill]);
+  }, [columns, rankByContractPlan, medications, brainData, pharmacyFill]);
 
   const rxTotalMonthly = useMemo<(number | null)[]>(
     () => rxTotalAnnual.map((a) => (a != null ? Math.round(a / 12) : null)),
@@ -2008,7 +2039,7 @@ export function QuoteDeliveryV4({
         <strong style={{ marginRight: 8, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Pharmacy</strong>
         <button type="button" onClick={() => setPharmacyFill('retail_30')} style={pharmBtnStyle(pharmacyFill === 'retail_30')}>30-day retail</button>
         <button type="button" onClick={() => setPharmacyFill('mail_90')} style={pharmBtnStyle(pharmacyFill === 'mail_90')}>90-day mail</button>
-        {drugCosts.loading && <span style={{ marginLeft: 8, fontSize: 10, color: COL.inkSub }}>fetching live costs…</span>}
+        {ranked.loading && <span style={{ marginLeft: 8, fontSize: 10, color: COL.inkSub }}>fetching live costs…</span>}
       </div>
 
       {/* Comparison chips — broker picks which finalists go into the
@@ -2322,8 +2353,8 @@ export function QuoteDeliveryV4({
                   // data. Comparing an estimate against a real number
                   // would mislead — the cells are not commensurate.
                   const sourceBase = m.sources[0];
-                  const isRealHere = source === 'cache' || source === 'formulary';
-                  const isRealBase = sourceBase === 'cache' || sourceBase === 'formulary';
+                  const isRealHere = source === 'cache' || source === 'formulary' || source === 'library';
+                  const isRealBase = sourceBase === 'cache' || sourceBase === 'formulary' || sourceBase === 'library';
                   const delta =
                     ci === 0 || !isRealHere || !isRealBase || monthlyHere == null || monthlyBase == null || monthlyHere === monthlyBase
                       ? null
@@ -2344,6 +2375,8 @@ export function QuoteDeliveryV4({
                         return 'Actual price from Medicare.gov Plan Finder cache.';
                       case 'formulary':
                         return 'Actual cost from plan formulary file.';
+                      case 'library':
+                        return 'Priced by Plan Match rank-plans — includes Extra Help / LIS caps and your pharmacy channel.';
                     }
                   };
                   return (
@@ -2968,6 +3001,10 @@ type CostSource =
   | 'tier_estimate'
   | 'unavailable'
   | 'excluded'
+  // Priced by the consumer library's /api/library/rank-plans (the same engine
+  // the Compare board uses) — correct LIS/dual caps + pharmacy channel. The
+  // authoritative drug-cost source for the quote; renders "$X" normally.
+  | 'library'
   // The catalog year's formulary isn't published yet (CMS SPUF not posted).
   // Distinct from 'unavailable' (no data for THIS drug on a published plan):
   // here we have NO formulary at all for the year, so we can't price ANY drug.
@@ -3003,6 +3040,34 @@ const TIER_ESTIMATE_USD: Record<number, number | null> = {
   4: null, // coinsurance tier — handled separately
   5: null, // coinsurance tier
 };
+
+// Drug cost from the consumer library's rank-plans result (the authoritative
+// source — correct LIS/dual caps + pharmacy channel). Returns null when this
+// plan wasn't priced by the library (caller falls back to lookupDrugCost), or
+// the drug isn't on the plan's medication list. annual_cost is typed `number`
+// for Compare/LIS back-compat but the consumer sends null for an uncovered
+// "call for price" drug — guard for it.
+function rankDrugInfo(rp: LibraryRankPlan | undefined, med: Medication): DrugInfo | null {
+  if (!rp || !med.rxcui) return null;
+  const rm = rp.medications.find((m) => m.rxcui === med.rxcui);
+  if (!rm) return null;
+  const annual = (rm.annual_cost as number | null) == null ? null : Math.round(rm.annual_cost);
+  // Uncovered with no priceable figure, or covered but unpriced → "Not covered"
+  // (never a fabricated $0).
+  if (!rm.covered && annual == null) return notCovered();
+  if (annual == null) return notCovered();
+  const monthly = Math.round(annual / 12);
+  return {
+    tier: rm.tier,
+    label: `$${monthly}`,
+    monthly,
+    annual,
+    source: 'library',
+    is_estimate: false,
+    pa: rm.prior_auth === true,
+    st: rm.step_therapy === true,
+  };
+}
 
 function lookupDrugCost(
   plan: Plan,

@@ -250,8 +250,18 @@ export interface LibraryRankMedication {
   tier: number | null;
   /** Monthly copay (dollars) — null when coinsurance or unknown. */
   copay: number | null;
-  /** Yearly out-of-pocket estimate for this drug on this plan. */
+  /** Yearly out-of-pocket estimate for this drug on this plan. (At runtime the
+   *  consumer sends null for an uncovered "call for price" drug; callers that
+   *  care guard for it — the field stays typed `number` for back-compat with
+   *  the Compare/LIS consumers that sum it.) */
   annual_cost: number;
+  /** CMS utilization-management flags (consumer PR #107). Optional — absent on
+   *  older API responses. */
+  prior_auth?: boolean;
+  step_therapy?: boolean;
+  quantity_limit?: boolean;
+  quantity_limit_amount?: number | null;
+  quantity_limit_days?: number | null;
 }
 
 export interface LibraryRankProvider {
