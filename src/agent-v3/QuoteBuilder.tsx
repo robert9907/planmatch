@@ -457,7 +457,13 @@ function parseTriple(planId: string): { contract_id: string; plan_id: string; se
 function firstNameFrom(name: string | undefined | null): string | null {
   if (!name) return null;
   const first = name.trim().split(/\s+/)[0];
-  return first || null;
+  if (!first) return null;
+  // "CHARLANA" / "charlana" → "Charlana"; mixed case ("DeShawn") kept.
+  if (first !== first.toUpperCase() && first !== first.toLowerCase()) return first;
+  return first
+    .split('-')
+    .map((p) => (p ? p.charAt(0).toUpperCase() + p.slice(1).toLowerCase() : p))
+    .join('-');
 }
 
 function buildDefaultNote(firstName: string | null): string {
