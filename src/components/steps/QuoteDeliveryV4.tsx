@@ -51,7 +51,6 @@ import { useSession } from '@/hooks/useSession';
 import {
   usePlanBrain,
   type PlanBrainData,
-  type RibbonKey,
   type ScoredPlan,
   type WeightProfile,
   type CompatRuleApplication,
@@ -554,6 +553,19 @@ export function QuoteDeliveryV4({
     }
     return m;
   }, [ranked.result]);
+
+  // Column order map: consumer rank-plans top_plans position by
+  // segment-agnostic contract-plan key. Computed OUTSIDE the columns
+  // useMemo because the local `ranked` there shadows this `ranked`.
+  const rpColumnOrder = useMemo(() => {
+    const cpOf = (id: string) => id.split('-').slice(0, 2).join('-');
+    const m = new Map<string, number>();
+    (ranked.result?.top_plans ?? []).forEach((pl, i) => {
+      const k = cpOf(pl.plan_id);
+      if (!m.has(k)) m.set(k, i);
+    });
+    return m;
+  }, [ranked.result]);
   const rankPlanFor = (plan: Plan): LibraryRankPlan | undefined =>
     rankByContractPlan.get(`${plan.contract_id}-${plan.plan_number}`);
 
@@ -642,65 +654,32 @@ export function QuoteDeliveryV4({
     const coveredRanked = allRanked.filter((s) => planHasCoverage(s.plan));
     const ranked = coveredRanked.length > 0 ? coveredRanked : allRanked;
 
-    const pickByRibbon = (...ribbons: RibbonKey[]): ScoredPlan | null => {
-      for (const r of ribbons) {
-        const hit = ranked.find((s) => s.ribbon === r && !used.has(s.plan.id));
-        if (hit) return hit;
-      }
-      return null;
-    };
-
-    // Best Rx
-    const bestRx =
-      pickByRibbon('LOWEST_DRUG_COST', 'BEST_OVERALL') ??
-      ranked.find((s) => !used.has(s.plan.id)) ??
-      null;
-    if (bestRx && cols.length < MAX_FINALIST_COLUMNS) {
-      cols.push(makeCol(bestRx.plan, bestRx, 'best_rx'));
-      used.add(bestRx.plan.id);
-    }
-
-    // Lowest OOP
-    let lowestOop = pickByRibbon('LOWEST_OOP');
-    if (!lowestOop) {
-      lowestOop = ranked
-        .filter((s) => !used.has(s.plan.id))
-        .reduce<ScoredPlan | null>(
-          (best, s) =>
-            best == null || s.totalOOPEstimate < best.totalOOPEstimate ? s : best,
-          null,
-        );
-    }
-    if (lowestOop && cols.length < MAX_FINALIST_COLUMNS) {
-      cols.push(makeCol(lowestOop.plan, lowestOop, 'lowest_oop'));
-      used.add(lowestOop.plan.id);
-    }
-
-    // Part B Giveback
-    let giveback = pickByRibbon('PART_B_SAVINGS');
-    if (!giveback) {
-      giveback = ranked
-        .filter((s) => !used.has(s.plan.id) && (s.plan.part_b_giveback ?? 0) > 0)
-        .reduce<ScoredPlan | null>(
-          (best, s) =>
-            best == null || (s.plan.part_b_giveback ?? 0) > (best.plan.part_b_giveback ?? 0) ? s : best,
-          null,
-        );
-    }
-    if (giveback && cols.length < MAX_FINALIST_COLUMNS) {
-      cols.push(makeCol(giveback.plan, giveback, 'giveback'));
-      used.add(giveback.plan.id);
-    }
-
-    // Backfill normal columns
-    for (const s of ranked) {
+    // Columns follow consumer rank-plans top_plans (gate order) so the
+    // agent 4-up is identical to the consumer brain — not the old
+    // best-Rx / lowest-OOP / giveback strength picks.
+    const cpOfCol = (id: string) => id.split('-').slice(0, 2).join('-');
+    const byTop = [...ranked].sort(
+      (a, b) =>
+        ((rpColumnOrder.get(cpOfCol(a.plan.id)) ?? Number.POSITIVE_INFINITY) -
+          (rpColumnOrder.get(cpOfCol(b.plan.id)) ?? Number.POSITIVE_INFINITY)) ||
+        (b.composite - a.composite),
+    );
+    for (const s of byTop) {
       if (cols.length >= MAX_FINALIST_COLUMNS) break;
       if (used.has(s.plan.id)) continue;
-      cols.push(makeCol(s.plan, s, 'normal'));
+      const variant: ColumnVariant =
+        s.ribbon === 'LOWEST_DRUG_COST' || s.ribbon === 'BEST_OVERALL'
+          ? 'best_rx'
+          : s.ribbon === 'LOWEST_OOP'
+            ? 'lowest_oop'
+            : s.ribbon === 'PART_B_SAVINGS'
+              ? 'giveback'
+              : 'normal';
+      cols.push(makeCol(s.plan, s, variant));
       used.add(s.plan.id);
     }
     return cols;
-  }, [currentPlan, result, brainData, medications, compareIds, finalists]);
+  }, [currentPlan, result, brainData, medications, compareIds, finalists, rpColumnOrder]);
 
   // ── Per-row data (computed once per render) ───────────────────────
   // Baseline column for delta badges:
