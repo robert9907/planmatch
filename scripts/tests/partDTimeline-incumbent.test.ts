@@ -24,6 +24,16 @@ import {
   type PlanInput,
 } from '../../api/library/partDTimeline.js';
 import { estimateBundleYearlyCost } from '../../src/lib/plan-brain-utils.js';
+import { resolvePlanCatalogYear } from '../../api/library/planCatalogYear.js';
+import { getPlanYearParams } from '../../api/library/planYearParams.js';
+
+// estimateBundleYearlyCost builds its partDTimeline against the resolved
+// catalog year (BUNDLE_PLAN_YEAR). runTimeline must use the SAME year, or
+// the two sides clamp at different TrOOP caps and the reconciliation
+// diverges. As of the 2026-10-15 AEP cutover this resolves to CY2027,
+// whose RxMOOP cap is $2,400 (CMS CY2027 final rule; up from $2,100/2026).
+const RECON_PLAN_YEAR = resolvePlanCatalogYear();
+const RECON_TROOP_CAP = getPlanYearParams(RECON_PLAN_YEAR).troopCap;
 
 // ─── Shared scenario builder ─────────────────────────────────────────
 //
@@ -102,7 +112,7 @@ function runIncumbent(s: Scenario): number {
 function runTimeline(s: Scenario): { total: number; month12Cumulative: number } {
   const inputs = toTimelineInputs(s);
   const rows = partDTimeline({
-    planYear: 2026,
+    planYear: RECON_PLAN_YEAR,
     plan: inputs.plan,
     drugs: inputs.drugs,
   });
@@ -214,7 +224,7 @@ test('specialty tier-3 hits catastrophic — incumbent respects TrOOP cap via ti
       // Tier 3 with high monthly retail so TrOOP crosses fast. Under
       // the pre-retirement incumbent this basket returned ~$4,615/yr
       // (no cap). Now the incumbent delegates to partDTimeline, both
-      // clamp at $2,100.
+      // clamp at the resolved year's RxMOOP cap ($2,400 in CY2027).
       { rxcui: 'x1', name: 'CatDrug', tier: 3, monthlyRetail: 900, monthlyCopay: 500 },
     ],
   };
@@ -229,14 +239,15 @@ test('specialty tier-3 hits catastrophic — incumbent respects TrOOP cap via ti
     Math.abs(month12Cumulative - timeline) < 0.02,
     `cumulative vs sum drift: ${month12Cumulative} vs ${timeline}`,
   );
-  // Both sides must respect the RxMOOP cap of $2,100 (IRA §11201).
+  // Both sides must respect the resolved year's RxMOOP cap (IRA §11201;
+  // $2,400 in CY2027, $2,100 in CY2026).
   assert.ok(
-    timeline <= 2100 + 0.01,
-    `timeline ${timeline} exceeds TrOOP cap $2,100`,
+    timeline <= RECON_TROOP_CAP + 0.01,
+    `timeline ${timeline} exceeds TrOOP cap $${RECON_TROOP_CAP}`,
   );
   assert.ok(
-    incumbent <= 2100 + 0.01,
-    `incumbent ${incumbent} exceeds TrOOP cap $2,100 — retirement didn't take effect for this call site?`,
+    incumbent <= RECON_TROOP_CAP + 0.01,
+    `incumbent ${incumbent} exceeds TrOOP cap $${RECON_TROOP_CAP} — retirement didn't take effect for this call site?`,
   );
   assert.ok(
     Math.abs(delta) < 1,
