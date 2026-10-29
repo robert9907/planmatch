@@ -5361,7 +5361,11 @@ function H2HDrugCalendar({
           display: 'flex',
           gap: 8,
           alignItems: 'center',
-          justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
+          // row-reverse puts the amount at the right edge (next to the month
+          // label) with its tag beside it; its main-axis start IS the right
+          // edge, so flex-start — flex-end pushed the left column's numbers
+          // to the far left of the cell.
+          justifyContent: 'flex-start',
           flexDirection: align === 'right' ? 'row-reverse' : 'row',
           background: tag ? tag.bg : 'transparent',
         }}
