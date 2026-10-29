@@ -390,21 +390,24 @@ export function partDTimeline(args: PartDTimelineArgs): MonthlyRow[] {
 
   const rows: MonthlyRow[] = [];
 
-  // Charge deductible-SUBJECT drugs before exempt/insulin/waived drugs each
-  // month. The deductible is a shared pot every covered drug draws down, but a
-  // subject drug pays the full price only on its OWN fills that land while the
-  // deductible is still open — so its fills must be counted toward the pot
-  // first, otherwise exempt drugs' gross would deplete the deductible and the
-  // subject drug would under-pay. Subject-first reproduces medicare.gov to the
-  // dollar (A03 H3449-027: $562.72; Linzess+losartan: $671.16). Stable sort
-  // preserves input order within each group.
+  // Charge fills toward the shared deductible in ASCENDING TIER order each
+  // month. medicare.gov draws the deductible by tier number, so the LOWER-tier
+  // drug's fill counts toward the pot first — regardless of whether it's
+  // deductible-subject or exempt. Verified live 2026-10-28 on two cases a pure
+  // subject-first (or exempt-first) sort gets wrong:
+  //   • A08 H5453-002: Eliquis tier-3 subject + atorvastatin/finasteride tier-1
+  //     EXEMPT. Tier-1 first → the $14 generics deplete part of the $461
+  //     deductible before Eliquis, so Eliquis under-pays → $801.81 (= PF). A
+  //     subject-first sort charged Eliquis first → $826.81 (wrong).
+  //   • A03 H3449-027: Linzess tier-3 subject + losartan/alendronate tier-6
+  //     exempt. Tier-3 first → Linzess pays full for 2 months → $562.72 (= PF).
+  // Ascending-tier reproduces BOTH; subject-first only reproduced A03 (where the
+  // subject drug happens to be the lowest tier). Stable sort preserves input
+  // order within a tier; null tiers (Part B / uncovered) sort last.
+  // MIRROR of consumer plan-match packages/shared/src/partDTimeline.ts.
   const orderedDrugs = args.drugs
     .map((drug, index) => ({ drug, index }))
-    .sort((a, b) => {
-      const as = drugPaysFullDuringDeductible(a.drug, args.plan) ? 0 : 1;
-      const bs = drugPaysFullDuringDeductible(b.drug, args.plan) ? 0 : 1;
-      return as - bs;
-    });
+    .sort((a, b) => (a.drug.tier ?? Number.POSITIVE_INFINITY) - (b.drug.tier ?? Number.POSITIVE_INFINITY));
 
   for (let month = startMonth; month <= 12; month += 1) {
     let monthMemberCost = 0;
