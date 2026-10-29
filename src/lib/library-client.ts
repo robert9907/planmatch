@@ -321,6 +321,10 @@ export interface LibraryRankPlan {
   /** Jan–Dec drug-cost calendar (12 rows, sums to total_annual_drug_cost).
    *  Null for Extra Help / Medicaid clients; absent on older API responses. */
   drug_cost_by_month?: LibraryRankDrugMonth[] | null;
+  /** Whole-plan yearly cost: premium + drugs − Part B giveback + the brain's
+   *  expected medical copays from the client's usage estimate. Decides the
+   *  Head to Head winner. Absent on older API responses. */
+  total_annual_cost_with_medical?: number;
   meds_covered: number;
   meds_total: number;
   providers: LibraryRankProvider[];
