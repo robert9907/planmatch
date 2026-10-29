@@ -40,7 +40,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { usePlanBrain } from '@/hooks/usePlanBrain';
 import { useRankedPlans } from '@/hooks/useRankedPlans';
-import { normalizePlanId, type LibraryRankDrugMonth } from '@/lib/library-client';
+import { normalizePlanId, type LibraryRankDrugMonth, type SwitchSuggestion } from '@/lib/library-client';
 import { checkNetworkBatch } from '@/lib/networkCheck';
 import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
@@ -1152,6 +1152,7 @@ export function AgentV3App() {
         quantity_limit_amount?: number | null;
         quantity_limit_days?: number | null;
         monthly_cost?: number[] | null;
+        switch_suggestion?: SwitchSuggestion | null;
       }>,
     ): DrugRow[] =>
       meds.map((m) =>
@@ -1183,6 +1184,10 @@ export function AgentV3App() {
               quantityLimitAmount: m.quantity_limit_amount ?? null,
               quantityLimitDays: m.quantity_limit_days ?? null,
               monthlyCost: m.monthly_cost ?? null,
+              // Covered brand↔generic equivalent for an uncovered drug
+              // (consumer rank-plans switch_suggestion). Non-null only when
+              // !covered; drives the "ask your doctor about switching" note.
+              switchSuggestion: m.switch_suggestion ?? null,
             },
       );
     // Meds that never matched a drug code aren't sent to rank-plans, so

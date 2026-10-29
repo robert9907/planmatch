@@ -57,7 +57,7 @@ import {
   type CompatRealAnnualCost,
 } from '@/hooks/usePlanBrain';
 import { useRankedPlans } from '@/hooks/useRankedPlans';
-import type { LibraryRankPlan } from '@/lib/library-client';
+import { formatSwitchNote, type LibraryRankPlan, type SwitchSuggestion } from '@/lib/library-client';
 import { monthlyCostFromFormulary } from '@/lib/drugCosts';
 import {
   useManufacturerAssistance,
@@ -331,6 +331,10 @@ interface MedRow {
    *  and excluded. Length matches columns.length. */
   sources: (CostSource | 'no_rxcui')[];
   paStFlags: Array<{ pa?: boolean; st?: boolean } | null>;
+  /** Per-cell "ask your doctor about switching" note — the formatted copy
+   *  string when this plan files a covered brand↔generic equivalent for an
+   *  uncovered drug, null otherwise. Length matches columns.length. */
+  switchNotes: Array<string | null>;
 }
 
 interface ProviderRow {
@@ -708,6 +712,7 @@ export function QuoteDeliveryV4({
           !d ? 'no_rxcui' : d.source,
         ),
         paStFlags: lookups.map((d) => (d ? { pa: d.pa, st: d.st } : null)),
+        switchNotes: lookups.map((d) => (d ? formatSwitchNote(d.switchSuggestion) : null)),
       };
     });
     // Sort by total monthly cost across all comparison columns,
@@ -2358,6 +2363,7 @@ export function QuoteDeliveryV4({
                         return 'Priced by Plan Match rank-plans — includes Extra Help / LIS caps and your pharmacy channel.';
                     }
                   };
+                  const switchNote = m.switchNotes[ci];
                   return (
                     <td key={col.id} style={cellStyle(s.bodyBg)}>
                       <div
@@ -2379,6 +2385,11 @@ export function QuoteDeliveryV4({
                         {flags?.pa && <Flag>PA</Flag>}
                         {flags?.st && <Flag>ST</Flag>}
                       </div>
+                      {switchNote && (
+                        <div style={{ fontSize: 10, color: '#1d4ed8', lineHeight: 1.3, marginTop: 2 }}>
+                          {switchNote}
+                        </div>
+                      )}
                     </td>
                   );
                 })}
@@ -2999,6 +3010,11 @@ interface DrugInfo {
   is_estimate: boolean;
   pa: boolean;
   st: boolean;
+  // Covered brand↔generic equivalent for an uncovered drug (rank-plans
+  // switch_suggestion). Only set on a "Not covered" row the plan files a clean
+  // opposite-form match for — drives the "ask your doctor about switching"
+  // note. Undefined/null otherwise.
+  switchSuggestion?: SwitchSuggestion | null;
 }
 
 // Industry-typical tier copays for MAPD plans, used only as the very
@@ -3032,9 +3048,10 @@ function rankDrugInfo(rp: LibraryRankPlan | undefined, med: Medication): DrugInf
   if (!rm) return null;
   const annual = (rm.annual_cost as number | null) == null ? null : Math.round(rm.annual_cost);
   // Uncovered with no priceable figure, or covered but unpriced → "Not covered"
-  // (never a fabricated $0).
-  if (!rm.covered && annual == null) return notCovered();
-  if (annual == null) return notCovered();
+  // (never a fabricated $0). Carry the covered brand↔generic equivalent (if the
+  // plan files one) so the cell can show the "ask your doctor" note.
+  if (!rm.covered && annual == null) return notCovered(rm.switch_suggestion);
+  if (annual == null) return notCovered(rm.switch_suggestion);
   const monthly = Math.round(annual / 12);
   return {
     tier: rm.tier,
@@ -3208,7 +3225,7 @@ function lookupDrugCost(
   };
 }
 
-function notCovered(): DrugInfo {
+function notCovered(switchSuggestion?: SwitchSuggestion | null): DrugInfo {
   return {
     tier: null,
     label: 'Not covered',
@@ -3218,6 +3235,7 @@ function notCovered(): DrugInfo {
     is_estimate: false,
     pa: false,
     st: false,
+    switchSuggestion: switchSuggestion ?? null,
   };
 }
 
