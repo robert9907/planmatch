@@ -36,6 +36,7 @@ import {
 } from './_lib/non-commissionable.js';
 import { supabase } from './_lib/supabase.js';
 import { resolvePlanCatalogYear } from './library/planCatalogYear.js';
+import { dentalSignalsFromRow } from './_lib/dentalTier.js';
 
 type AppPlanType = 'MA' | 'MAPD' | 'DSNP' | 'CSNP' | 'ISNP' | 'PDP' | 'MEDSUPP';
 
@@ -2156,9 +2157,15 @@ export function buildBenefits(
   // funnel produced 0 finalists whenever Diabetic was enabled.
   return {
     dental: {
-      preventive: Boolean(dental),
-      comprehensive: dentalMax > 0,
-      annual_max: dentalMax,
+      // Tier is derived straight from CMS PBP B16 (shared dentalSignalsFromRow),
+      // NEVER from the annual max — a $500 preventive-only plan is not
+      // "comprehensive", and a comprehensive plan that files no max still is.
+      // Keeps the agent's Compare/Head-to-Head/quote in lockstep with the
+      // consumer's classifyPlanDentalTier.
+      preventive: dentalSignalsFromRow(dental).preventive,
+      comprehensive: dentalSignalsFromRow(dental).comprehensive,
+      annual_max: dentalMax, // display only
+
       description:
         dental?.benefit_description ??
         (pbpFallback?.dentalAnnualMax
