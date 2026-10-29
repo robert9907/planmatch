@@ -123,9 +123,12 @@ function scoreRow(orig: DrugProfile, rowName: string): { score: number; strength
   // substitute. Exact rxcui still wins in pickBestFormularyRow before scoring.
   // (Same-brand form siblings at the SAME strength are kept — rule 1d.) Only applies when we know
   // the requested brand name; a generic request is unaffected.
+  // Brand ≠ generic for coverage (Rob — symmetric rule, mirrors consumer).
   if (orig.brand) {
     if (!rp.brand) return null; // a generic row is not "that brand"
     if (orig.brandName && rp.brandName && rp.brandName !== orig.brandName) return null; // different brand
+  } else if (rp.brand) {
+    return null; // generic request: a brand row is not the entered generic
   }
   let score = 0;
   // Strength — the strongest discriminator (600 MG tablet vs 50 MG/ML solution).
