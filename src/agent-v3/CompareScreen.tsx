@@ -562,7 +562,12 @@ function buildMetrics(args: {
       if (!r) return 'Not priced';
       if (r.unmatched) return 'Not matched — re-search on Meds';
       if (r.costUnavailable) return 'Formulary not yet published';
-      if (!r.covered) return 'Not covered';
+      if (!r.covered) {
+        // Surface the brand↔generic switch note on the metric grid too, so the
+        // Head-to-Head grid matches the drug-cost calendar + Compare board.
+        const note = formatSwitchNote(r.switchSuggestion);
+        return note ? `Not covered — ${note}` : 'Not covered';
+      }
       const tier = r.tier != null ? `Tier ${r.tier}` : 'Covered';
       return `${tier} · ${perMonth(r.annualCost)}`;
     },
