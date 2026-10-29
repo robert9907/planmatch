@@ -34,7 +34,6 @@ import {
 } from '@/lib/inpatient-format';
 import { Container, Header, Nav, fmt } from './atoms';
 import {
-  annualEstimate,
   costShareNumeric,
   formatCostShareWithRange,
   formatOonLine,
@@ -48,6 +47,7 @@ import {
   summarizeExplanations,
 } from '@/lib/classify-explanation';
 import { normalizePlanId, type LibraryRankPlan, type LibraryRankDrugMonth } from '@/lib/library-client';
+import { pickH2HWinner, type H2HWinner } from './h2hWinner';
 
 type DrugMonth = LibraryRankDrugMonth;
 import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
@@ -165,6 +165,9 @@ interface Props {
   /** Jan–Dec drug-cost calendar per plan (rank-plans drug_cost_by_month).
    *  Absent for Extra Help / Medicaid clients and unpublished formularies. */
   drugMonthsByPlanId?: Record<string, ReadonlyArray<DrugMonth>>;
+  /** Whole-plan yearly cost (premium + drugs − giveback + expected medical
+   *  copays) from rank-plans. Decides the Head to Head winner. */
+  wholeCostByPlanId?: Record<string, number>;
   /** Every county plan that didn't make Top 4, sorted by cost ASC.
    *  Rendered below the 4-up grid with an elimination-reason badge
    *  per card so the broker can scroll the full pool without leaving
@@ -907,6 +910,7 @@ export function CompareScreen({
   drugsTotalByPlanId,
   drugBreakdownByPlanId,
   drugMonthsByPlanId,
+  wholeCostByPlanId,
   benchPlans,
   benchGateResultsByPlanId,
   explanationsByPlanId,
@@ -1489,6 +1493,15 @@ export function CompareScreen({
         annualDrugByPlanId={annualDrugByPlanId}
         drugMonthsByPlanId={drugMonthsByPlanId ?? {}}
         drugBreakdownByPlanId={drugBreakdownByPlanId ?? {}}
+        winner={pickH2HWinner({
+          baseline: boardBaseline,
+          challenger,
+          wholeCostByPlanId: wholeCostByPlanId ?? {},
+          annualDrugByPlanId,
+          drugsCoveredByPlanId: drugsCoveredByPlanId ?? {},
+          drugsTotalByPlanId: drugsTotalByPlanId ?? {},
+          providers,
+        })}
         unresolvedMedCount={unresolvedMedCount}
         totalMedCount={medications.length}
         unresolvedMedNames={unresolvedMedNames}
@@ -4600,9 +4613,9 @@ function H2HView({
   challenger,
   pool,
   metrics,
-  annualDrugByPlanId,
   drugMonthsByPlanId,
   drugBreakdownByPlanId,
+  winner,
   unresolvedMedCount,
   totalMedCount,
   unresolvedMedNames,
@@ -4621,6 +4634,7 @@ function H2HView({
   annualDrugByPlanId: Record<string, number | null>;
   drugMonthsByPlanId: Record<string, ReadonlyArray<DrugMonth>>;
   drugBreakdownByPlanId: Record<string, ReadonlyArray<DrugRow>>;
+  winner: H2HWinner;
   unresolvedMedCount: number;
   totalMedCount: number;
   unresolvedMedNames: ReadonlyArray<string>;
@@ -4632,9 +4646,11 @@ function H2HView({
   onEnroll: (plan: Plan) => void;
   onBack: () => void;
 }) {
-  const baseAnnual = annualEstimate(baseline, annualDrugByPlanId[baseline.id] ?? null).total ?? 0;
-  const chAnnual = annualEstimate(challenger, annualDrugByPlanId[challenger.id] ?? null).total ?? 0;
-  const savings = baseAnnual - chAnnual;
+  // One winner, decided on the whole plan (see pickH2HWinner). savings is
+  // what the winner saves per year vs the other side (0 when a gate decided
+  // it and the loser has no comparable cost).
+  const challengerWins = winner.winnerId === challenger.id;
+  const savings = winner.savings;
 
   let wins = 0;
   let losses = 0;
@@ -4668,7 +4684,7 @@ function H2HView({
     ),
     challenger_wins: wins,
     current_wins: losses,
-    annual_savings: savings > 0 ? savings : null,
+    annual_savings: challengerWins && savings > 0 ? savings : null,
   };
 
   return (
@@ -5116,32 +5132,45 @@ function H2HView({
             {challenger.carrier} wins {wins}, {baselineLabel.toLowerCase()} wins {losses}
           </div>
         </div>
-        {savings > 0 && (
-          <div style={{ textAlign: 'center' }}>
-            <div
-              style={{
-                fontFamily: FONT_LABEL,
-                fontSize: 9,
-                fontWeight: 700,
-                color: SEAFOAM,
-                textTransform: 'uppercase',
-                letterSpacing: 0.8,
-              }}
-            >
-              Annual savings
-            </div>
+        <div style={{ textAlign: 'center' }}>
+          <div
+            style={{
+              fontFamily: FONT_LABEL,
+              fontSize: 9,
+              fontWeight: 700,
+              color: SEAFOAM,
+              textTransform: 'uppercase',
+              letterSpacing: 0.8,
+            }}
+          >
+            Winner
+          </div>
+          <div
+            style={{
+              fontFamily: FONT_LABEL,
+              fontSize: 14,
+              fontWeight: 800,
+              color: 'white',
+              marginTop: 2,
+              maxWidth: 260,
+            }}
+          >
+            {challengerWins ? challenger.plan_name : baselineIsCurrent ? `Keep current — ${baseline.plan_name}` : baseline.plan_name}
+          </div>
+          {savings > 0 && (
             <div
               style={{
                 fontFamily: FONT_NUM,
-                fontSize: 24,
+                fontSize: 20,
                 fontWeight: 700,
                 color: GREEN,
+                marginTop: 2,
               }}
             >
-              {fmt(savings)}
+              {fmt(savings)}/yr less
             </div>
-          </div>
-        )}
+          )}
+        </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {/* One Enroll per side. The incumbent (Current) never gets one —
               there's nothing to enroll into. */}

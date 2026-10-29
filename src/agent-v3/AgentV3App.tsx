@@ -1236,6 +1236,24 @@ export function AgentV3App() {
     return out;
   }, [ranked.result, planById, formularyUnavailable]);
 
+  // Whole-plan yearly cost per plan (premium + drugs − giveback + expected
+  // medical copays) — the Head to Head winner is decided on this.
+  const wholeCostByPlanId = useMemo<Record<string, number>>(() => {
+    if (!ranked.result) return {};
+    const out: Record<string, number> = {};
+    for (const lp of [
+      ...ranked.result.top_plans,
+      ...ranked.result.bench_plans,
+      ...(ranked.result.current_plan ? [ranked.result.current_plan] : []),
+    ]) {
+      const p = planById.get(normalizePlanId(lp.plan_id));
+      if (p && typeof lp.total_annual_cost_with_medical === 'number') {
+        out[p.id] = lp.total_annual_cost_with_medical;
+      }
+    }
+    return out;
+  }, [ranked.result, planById]);
+
   // ── Per-plan gate explanations (CompareScreen "Why this plan" pills) ─
   // Sourced from the LOCAL brain (usePlanBrain), not the library response.
   // The library's LibraryRankPlan shape doesn't yet carry gate_explanations
@@ -1595,6 +1613,7 @@ const explanationsByPlanId = useMemo<
             drugsTotalByPlanId={drugsTotalByPlanId}
             drugBreakdownByPlanId={drugBreakdownByPlanId}
             drugMonthsByPlanId={drugMonthsByPlanId}
+            wholeCostByPlanId={wholeCostByPlanId}
             explanationsByPlanId={explanationsByPlanId}
             compositeByPlanId={compositeByPlanId}
             unresolvedDrugs={brain.result?.unresolvedDrugs ?? []}
