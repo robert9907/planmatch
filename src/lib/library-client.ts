@@ -242,6 +242,39 @@ export async function searchProviders(args: {
 
 // ─── rank-plans ──────────────────────────────────────────────────
 
+/** A covered brand↔generic equivalent the plan files for a drug it does NOT
+ *  cover as entered (brand ≠ generic policy). Non-null only on an uncovered
+ *  medication (covered:false); covered meds always carry null. Drives the
+ *  "ask your doctor about switching" note. Mirror of the consumer rank-plans
+ *  `switch_suggestion` shape — coinsurance is PERCENT (0..100), copay dollars. */
+export interface SwitchSuggestion {
+  /** true ⇒ the covered equivalent is the generic; false ⇒ the brand. */
+  is_generic: boolean;
+  /** The covered equivalent's drug_name. */
+  name: string | null;
+  tier: number | null;
+  /** Dollars. */
+  copay: number | null;
+  /** PERCENT 0..100 (consumer convention — NOT a fraction). */
+  coinsurance: number | null;
+}
+
+/** Shared formatter for the "ask your doctor about switching" note. One copy
+ *  string across all three agent surfaces (Compare grid, Head-to-Head,
+ *  QuoteDeliveryV4). Returns null when there's nothing to render. */
+export function formatSwitchNote(s: SwitchSuggestion | null | undefined): string | null {
+  if (!s || !s.name) return null;
+  const kind = s.is_generic ? 'Generic' : 'Brand';
+  const tierClause = s.tier != null ? ` at Tier ${s.tier}` : '';
+  let costClause = '';
+  if (s.copay != null) {
+    costClause = `, $${s.copay}/mo`;
+  } else if (s.coinsurance != null) {
+    costClause = ` (~${s.coinsurance}% coinsurance)`;
+  }
+  return `${kind} ${s.name} is covered on this plan${tierClause}${costClause} — ask your doctor about switching.`;
+}
+
 export interface LibraryRankMedication {
   rxcui: string;
   name: string;
@@ -265,6 +298,10 @@ export interface LibraryRankMedication {
   /** This drug's member cost Jan..Dec (12 entries). Null/absent for a
    *  call-for-price drug, an Extra Help / Medicaid client, or an older API. */
   monthly_cost?: number[] | null;
+  /** A covered brand↔generic equivalent for an UNCOVERED drug (covered:false)
+   *  the plan files a clean opposite-form match for. Null on covered meds and
+   *  when no equivalent is filed; absent on older API responses. */
+  switch_suggestion?: SwitchSuggestion | null;
 }
 
 /** One month of the Jan–Dec drug-cost calendar. */

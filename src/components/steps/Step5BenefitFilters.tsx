@@ -5,6 +5,7 @@ import { findPlan } from '@/lib/cmsPlans';
 import { fetchPlansForClient, lastPlanSource } from '@/lib/planCatalog';
 import { computeFunnel, finalistIdsFromSnapshot } from '@/lib/planFilter';
 import { bulkLookupFormulary } from '@/lib/formularyLookup';
+import { useRankedPlans } from '@/hooks/useRankedPlans';
 import type { BenefitFilter, BenefitKey, CutTag, Plan } from '@/types/plans';
 
 interface Step5Props {
@@ -127,6 +128,13 @@ export function Step5BenefitFilters({ onAdvance }: Step5Props) {
   const resetBenefitFilters = useSession((s) => s.resetBenefitFilters);
   const setSelectedFinalists = useSession((s) => s.setSelectedFinalists);
 
+  // Consumer rank-plans (gate order) drives finalist ORDER so the quote's
+  // Recommended pick + 4-up match the consumer brain, not the agent funnel.
+  const dsnpEligibleForRank =
+    client.dsnpEligible === true ||
+    (client.medicaidLevel != null && client.medicaidLevel !== 'none');
+  const ranked = useRankedPlans({ client, medications, providers, dsnpEligible: dsnpEligibleForRank });
+
   const [eligiblePlans, setEligiblePlans] = useState<Plan[]>([]);
   const [plansLoading, setPlansLoading] = useState(false);
   const [planSource, setPlanSource] = useState<'pm_plans' | 'static_fallback' | null>(null);
@@ -199,10 +207,22 @@ export function Step5BenefitFilters({ onAdvance }: Step5Props) {
     [eligiblePlans, medications, providers, benefitFilters, formularyTick],
   );
 
-  const finalistIds = useMemo(
-    () => finalistIdsFromSnapshot(eligiblePlans, snapshot),
-    [eligiblePlans, snapshot],
-  );
+  const finalistIds = useMemo(() => {
+    const survivors = finalistIdsFromSnapshot(eligiblePlans, snapshot);
+    const top = ranked.result?.top_plans ?? [];
+    if (top.length === 0) return survivors;
+    const cpOf = (id: string) => id.split('-').slice(0, 2).join('-');
+    const rank = new Map<string, number>();
+    top.forEach((pl, i) => {
+      const k = cpOf(pl.plan_id);
+      if (!rank.has(k)) rank.set(k, i);
+    });
+    return [...survivors].sort(
+      (a, b) =>
+        (rank.get(cpOf(a)) ?? Number.POSITIVE_INFINITY) -
+        (rank.get(cpOf(b)) ?? Number.POSITIVE_INFINITY),
+    );
+  }, [eligiblePlans, snapshot, ranked.result]);
 
   useEffect(() => {
     setSelectedFinalists(finalistIds);

@@ -51,14 +51,13 @@ import { useSession } from '@/hooks/useSession';
 import {
   usePlanBrain,
   type PlanBrainData,
-  type RibbonKey,
   type ScoredPlan,
   type WeightProfile,
   type CompatRuleApplication,
   type CompatRealAnnualCost,
 } from '@/hooks/usePlanBrain';
 import { useRankedPlans } from '@/hooks/useRankedPlans';
-import type { LibraryRankPlan } from '@/lib/library-client';
+import { formatSwitchNote, type LibraryRankPlan, type SwitchSuggestion } from '@/lib/library-client';
 import { monthlyCostFromFormulary } from '@/lib/drugCosts';
 import {
   useManufacturerAssistance,
@@ -332,6 +331,10 @@ interface MedRow {
    *  and excluded. Length matches columns.length. */
   sources: (CostSource | 'no_rxcui')[];
   paStFlags: Array<{ pa?: boolean; st?: boolean } | null>;
+  /** Per-cell "ask your doctor about switching" note — the formatted copy
+   *  string when this plan files a covered brand↔generic equivalent for an
+   *  uncovered drug, null otherwise. Length matches columns.length. */
+  switchNotes: Array<string | null>;
 }
 
 interface ProviderRow {
@@ -554,6 +557,19 @@ export function QuoteDeliveryV4({
     }
     return m;
   }, [ranked.result]);
+
+  // Column order map: consumer rank-plans top_plans position by
+  // segment-agnostic contract-plan key. Computed OUTSIDE the columns
+  // useMemo because the local `ranked` there shadows this `ranked`.
+  const rpColumnOrder = useMemo(() => {
+    const cpOf = (id: string) => id.split('-').slice(0, 2).join('-');
+    const m = new Map<string, number>();
+    (ranked.result?.top_plans ?? []).forEach((pl, i) => {
+      const k = cpOf(pl.plan_id);
+      if (!m.has(k)) m.set(k, i);
+    });
+    return m;
+  }, [ranked.result]);
   const rankPlanFor = (plan: Plan): LibraryRankPlan | undefined =>
     rankByContractPlan.get(`${plan.contract_id}-${plan.plan_number}`);
 
@@ -642,65 +658,32 @@ export function QuoteDeliveryV4({
     const coveredRanked = allRanked.filter((s) => planHasCoverage(s.plan));
     const ranked = coveredRanked.length > 0 ? coveredRanked : allRanked;
 
-    const pickByRibbon = (...ribbons: RibbonKey[]): ScoredPlan | null => {
-      for (const r of ribbons) {
-        const hit = ranked.find((s) => s.ribbon === r && !used.has(s.plan.id));
-        if (hit) return hit;
-      }
-      return null;
-    };
-
-    // Best Rx
-    const bestRx =
-      pickByRibbon('LOWEST_DRUG_COST', 'BEST_OVERALL') ??
-      ranked.find((s) => !used.has(s.plan.id)) ??
-      null;
-    if (bestRx && cols.length < MAX_FINALIST_COLUMNS) {
-      cols.push(makeCol(bestRx.plan, bestRx, 'best_rx'));
-      used.add(bestRx.plan.id);
-    }
-
-    // Lowest OOP
-    let lowestOop = pickByRibbon('LOWEST_OOP');
-    if (!lowestOop) {
-      lowestOop = ranked
-        .filter((s) => !used.has(s.plan.id))
-        .reduce<ScoredPlan | null>(
-          (best, s) =>
-            best == null || s.totalOOPEstimate < best.totalOOPEstimate ? s : best,
-          null,
-        );
-    }
-    if (lowestOop && cols.length < MAX_FINALIST_COLUMNS) {
-      cols.push(makeCol(lowestOop.plan, lowestOop, 'lowest_oop'));
-      used.add(lowestOop.plan.id);
-    }
-
-    // Part B Giveback
-    let giveback = pickByRibbon('PART_B_SAVINGS');
-    if (!giveback) {
-      giveback = ranked
-        .filter((s) => !used.has(s.plan.id) && (s.plan.part_b_giveback ?? 0) > 0)
-        .reduce<ScoredPlan | null>(
-          (best, s) =>
-            best == null || (s.plan.part_b_giveback ?? 0) > (best.plan.part_b_giveback ?? 0) ? s : best,
-          null,
-        );
-    }
-    if (giveback && cols.length < MAX_FINALIST_COLUMNS) {
-      cols.push(makeCol(giveback.plan, giveback, 'giveback'));
-      used.add(giveback.plan.id);
-    }
-
-    // Backfill normal columns
-    for (const s of ranked) {
+    // Columns follow consumer rank-plans top_plans (gate order) so the
+    // agent 4-up is identical to the consumer brain — not the old
+    // best-Rx / lowest-OOP / giveback strength picks.
+    const cpOfCol = (id: string) => id.split('-').slice(0, 2).join('-');
+    const byTop = [...ranked].sort(
+      (a, b) =>
+        ((rpColumnOrder.get(cpOfCol(a.plan.id)) ?? Number.POSITIVE_INFINITY) -
+          (rpColumnOrder.get(cpOfCol(b.plan.id)) ?? Number.POSITIVE_INFINITY)) ||
+        (b.composite - a.composite),
+    );
+    for (const s of byTop) {
       if (cols.length >= MAX_FINALIST_COLUMNS) break;
       if (used.has(s.plan.id)) continue;
-      cols.push(makeCol(s.plan, s, 'normal'));
+      const variant: ColumnVariant =
+        s.ribbon === 'LOWEST_DRUG_COST' || s.ribbon === 'BEST_OVERALL'
+          ? 'best_rx'
+          : s.ribbon === 'LOWEST_OOP'
+            ? 'lowest_oop'
+            : s.ribbon === 'PART_B_SAVINGS'
+              ? 'giveback'
+              : 'normal';
+      cols.push(makeCol(s.plan, s, variant));
       used.add(s.plan.id);
     }
     return cols;
-  }, [currentPlan, result, brainData, medications, compareIds, finalists]);
+  }, [currentPlan, result, brainData, medications, compareIds, finalists, rpColumnOrder]);
 
   // ── Per-row data (computed once per render) ───────────────────────
   // Baseline column for delta badges:
@@ -729,6 +712,7 @@ export function QuoteDeliveryV4({
           !d ? 'no_rxcui' : d.source,
         ),
         paStFlags: lookups.map((d) => (d ? { pa: d.pa, st: d.st } : null)),
+        switchNotes: lookups.map((d) => (d ? formatSwitchNote(d.switchSuggestion) : null)),
       };
     });
     // Sort by total monthly cost across all comparison columns,
@@ -2379,6 +2363,7 @@ export function QuoteDeliveryV4({
                         return 'Priced by Plan Match rank-plans — includes Extra Help / LIS caps and your pharmacy channel.';
                     }
                   };
+                  const switchNote = m.switchNotes[ci];
                   return (
                     <td key={col.id} style={cellStyle(s.bodyBg)}>
                       <div
@@ -2400,6 +2385,11 @@ export function QuoteDeliveryV4({
                         {flags?.pa && <Flag>PA</Flag>}
                         {flags?.st && <Flag>ST</Flag>}
                       </div>
+                      {switchNote && (
+                        <div style={{ fontSize: 10, color: '#1d4ed8', lineHeight: 1.3, marginTop: 2 }}>
+                          {switchNote}
+                        </div>
+                      )}
                     </td>
                   );
                 })}
@@ -3020,6 +3010,11 @@ interface DrugInfo {
   is_estimate: boolean;
   pa: boolean;
   st: boolean;
+  // Covered brand↔generic equivalent for an uncovered drug (rank-plans
+  // switch_suggestion). Only set on a "Not covered" row the plan files a clean
+  // opposite-form match for — drives the "ask your doctor about switching"
+  // note. Undefined/null otherwise.
+  switchSuggestion?: SwitchSuggestion | null;
 }
 
 // Industry-typical tier copays for MAPD plans, used only as the very
@@ -3053,9 +3048,10 @@ function rankDrugInfo(rp: LibraryRankPlan | undefined, med: Medication): DrugInf
   if (!rm) return null;
   const annual = (rm.annual_cost as number | null) == null ? null : Math.round(rm.annual_cost);
   // Uncovered with no priceable figure, or covered but unpriced → "Not covered"
-  // (never a fabricated $0).
-  if (!rm.covered && annual == null) return notCovered();
-  if (annual == null) return notCovered();
+  // (never a fabricated $0). Carry the covered brand↔generic equivalent (if the
+  // plan files one) so the cell can show the "ask your doctor" note.
+  if (!rm.covered && annual == null) return notCovered(rm.switch_suggestion);
+  if (annual == null) return notCovered(rm.switch_suggestion);
   const monthly = Math.round(annual / 12);
   return {
     tier: rm.tier,
@@ -3229,7 +3225,7 @@ function lookupDrugCost(
   };
 }
 
-function notCovered(): DrugInfo {
+function notCovered(switchSuggestion?: SwitchSuggestion | null): DrugInfo {
   return {
     tier: null,
     label: 'Not covered',
@@ -3239,6 +3235,7 @@ function notCovered(): DrugInfo {
     is_estimate: false,
     pa: false,
     st: false,
+    switchSuggestion: switchSuggestion ?? null,
   };
 }
 

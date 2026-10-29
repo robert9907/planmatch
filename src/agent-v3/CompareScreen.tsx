@@ -46,7 +46,13 @@ import {
   classifyExplanation,
   summarizeExplanations,
 } from '@/lib/classify-explanation';
-import { normalizePlanId, type LibraryRankPlan, type LibraryRankDrugMonth } from '@/lib/library-client';
+import {
+  normalizePlanId,
+  formatSwitchNote,
+  type LibraryRankPlan,
+  type LibraryRankDrugMonth,
+  type SwitchSuggestion,
+} from '@/lib/library-client';
 import { pickH2HWinner, type H2HWinner } from './h2hWinner';
 
 type DrugMonth = LibraryRankDrugMonth;
@@ -324,6 +330,11 @@ interface DrugRow {
   quantityLimitDays?: number | null;
   // Jan..Dec member cost for this drug on this plan (rank-plans monthly_cost).
   monthlyCost?: number[] | null;
+  // Covered brand↔generic equivalent for an UNCOVERED drug (rank-plans
+  // switch_suggestion). Only populated when !covered and the plan files a
+  // clean opposite-form match — drives the "ask your doctor about switching"
+  // note. Undefined/null on covered drugs and plans with no equivalent.
+  switchSuggestion?: SwitchSuggestion | null;
 }
 
 // Per-fill cost label for one drug on one plan. Uses the brain's
@@ -3314,14 +3325,51 @@ function DrugBreakdown({
           }
           const tierLabel = d.unmatched ? 'Not matched' : d.tier != null ? `Tier ${d.tier}` : 'Not covered';
           const copayLabel = perMonth(d.annualCost);
+          // "Ask your doctor about switching" — only on an uncovered drug the
+          // plan files a covered brand↔generic equivalent for.
+          const switchNote = !d.covered && !d.unmatched ? formatSwitchNote(d.switchSuggestion) : null;
           if (isCard) {
             return (
+              <div key={d.rxcui || d.name} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) auto',
+                    alignItems: 'baseline',
+                    gap: 6,
+                    fontSize: 11,
+                    color: d.covered ? TEXT : '#991b1b',
+                  }}
+                >
+                  <span
+                    style={{
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      minWidth: 0,
+                    }}
+                    title={d.name}
+                  >
+                    {d.name}
+                  </span>
+                  <span style={{ fontFamily: FONT_NUM, fontSize: 10, whiteSpace: 'nowrap' }}>
+                    {d.unmatched ? 'Not matched' : d.covered ? `${tierLabel} · ${copayLabel}` : 'Not covered'}
+                  </span>
+                </div>
+                {switchNote && (
+                  <span style={{ fontSize: 10, color: '#1d4ed8', lineHeight: 1.3 }}>{switchNote}</span>
+                )}
+              </div>
+            );
+          }
+          return (
+            <div key={d.rxcui || d.name} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <div
-                key={d.rxcui || d.name}
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'minmax(0, 1fr) auto',
-                  alignItems: 'baseline',
+                  gridTemplateColumns: 'minmax(0, 1fr) 60px 70px',
+                  alignItems: 'center',
                   gap: 6,
                   fontSize: 11,
                   color: d.covered ? TEXT : '#991b1b',
@@ -3339,42 +3387,16 @@ function DrugBreakdown({
                 >
                   {d.name}
                 </span>
-                <span style={{ fontFamily: FONT_NUM, fontSize: 10, whiteSpace: 'nowrap' }}>
-                  {d.unmatched ? 'Not matched' : d.covered ? `${tierLabel} · ${copayLabel}` : 'Not covered'}
+                <span style={{ color: d.covered ? MUTED : '#991b1b', fontSize: 10 }}>
+                  {tierLabel}
+                </span>
+                <span style={{ fontFamily: FONT_NUM, fontSize: 10, fontWeight: 700, textAlign: 'right' }}>
+                  {d.covered ? copayLabel : '—'}
                 </span>
               </div>
-            );
-          }
-          return (
-            <div
-              key={d.rxcui || d.name}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'minmax(0, 1fr) 60px 70px',
-                alignItems: 'center',
-                gap: 6,
-                fontSize: 11,
-                color: d.covered ? TEXT : '#991b1b',
-              }}
-            >
-              <span
-                style={{
-                  fontWeight: 600,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  minWidth: 0,
-                }}
-                title={d.name}
-              >
-                {d.name}
-              </span>
-              <span style={{ color: d.covered ? MUTED : '#991b1b', fontSize: 10 }}>
-                {tierLabel}
-              </span>
-              <span style={{ fontFamily: FONT_NUM, fontSize: 10, fontWeight: 700, textAlign: 'right' }}>
-                {d.covered ? copayLabel : '—'}
-              </span>
+              {switchNote && (
+                <span style={{ fontSize: 10, color: '#1d4ed8', lineHeight: 1.3 }}>{switchNote}</span>
+              )}
             </div>
           );
         })}
@@ -5423,23 +5445,45 @@ function H2HDrugCalendar({
   const drugLines = (drugs: ReadonlyArray<DrugRow>, k: number, align: 'left' | 'right') => (
     <div style={{ padding: '2px 18px 10px', textAlign: align }}>
       {drugs
-        .filter((d) => d.covered && !d.unmatched && Array.isArray(d.monthlyCost))
-        .map((d) => (
-          <div
-            key={`${d.rxcui}-${d.name}`}
-            style={{
-              fontFamily: FONT_LABEL,
-              fontSize: 11.5,
-              color: MUTED,
-              lineHeight: 1.6,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            {d.name} <span style={{ fontFamily: FONT_NUM, color: TEXT, fontWeight: 600 }}>{money2(d.monthlyCost![k] ?? 0)}</span>
-          </div>
-        ))}
+        // Covered priced rows (have a monthly calendar), plus uncovered rows
+        // that carry a switch suggestion so the "ask your doctor" note shows.
+        // Uncovered rows are never priced here.
+        .filter((d) => {
+          if (d.unmatched) return false;
+          if (d.covered && Array.isArray(d.monthlyCost)) return true;
+          return !d.covered && formatSwitchNote(d.switchSuggestion) != null;
+        })
+        .map((d) => {
+          const priced = d.covered && Array.isArray(d.monthlyCost);
+          const switchNote = !d.covered ? formatSwitchNote(d.switchSuggestion) : null;
+          return (
+            <div
+              key={`${d.rxcui}-${d.name}`}
+              style={{
+                fontFamily: FONT_LABEL,
+                fontSize: 11.5,
+                color: MUTED,
+                lineHeight: 1.6,
+              }}
+            >
+              <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {d.name}{' '}
+                {priced ? (
+                  <span style={{ fontFamily: FONT_NUM, color: TEXT, fontWeight: 600 }}>
+                    {money2(d.monthlyCost![k] ?? 0)}
+                  </span>
+                ) : (
+                  <span style={{ color: '#991b1b', fontWeight: 600 }}>Not covered</span>
+                )}
+              </div>
+              {switchNote && (
+                <div style={{ fontSize: 10, color: '#1d4ed8', lineHeight: 1.3, whiteSpace: 'normal' }}>
+                  {switchNote}
+                </div>
+              )}
+            </div>
+          );
+        })}
     </div>
   );
 
