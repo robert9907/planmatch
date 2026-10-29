@@ -79,8 +79,30 @@ export interface NdcSlot {
   origin?: string;
 }
 
+interface FormsPackage {
+  ndc?: string;
+  type?: string;
+  /** Devices (pens, syringes) in one medicare.gov package — a Repatha
+   *  SureClick 2-pack is 2, a Lantus SoloStar box is 5. */
+  quantity?: number;
+  use_quantity?: boolean;
+}
 interface FormsResponse {
-  dosages?: Array<{ rxcui?: string; packages?: Array<{ ndc?: string }> }>;
+  dosages?: Array<{ rxcui?: string; packages?: FormsPackage[] }>;
+}
+
+/** Devices per medicare.gov package for each NDC of this rxcui's dosage.
+ *  medicare.gov counts quantity in PACKAGES: one Repatha "unit" is a 2-pen
+ *  carton (Debra O'Connell, 2026-10-28 — 2 pens priced as 4). */
+export function devicesByNdc(forms: FormsResponse | null | undefined, rxcui: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const dosage = forms?.dosages?.find((d) => String(d.rxcui ?? '') === rxcui);
+  for (const p of dosage?.packages ?? []) {
+    const ndc = String(p.ndc ?? '');
+    const n = Number(p.quantity);
+    if (/^\d{11}$/.test(ndc) && p.use_quantity !== false && Number.isFinite(n) && n >= 1) out.set(ndc, n);
+  }
+  return out;
 }
 
 /** The NDC medicare.gov itself uses for this exact rxcui (first package of
@@ -157,6 +179,13 @@ interface DrugCostBody {
   npis: string[];
 }
 
+interface DrugCostResult {
+  source: 'live' | 'rate_limited';
+  costs: PlanDrugCost[];
+  /** Caller NDC → devices per medicare.gov package (quantity is in packages). */
+  packages?: Record<string, { devices: number }>;
+}
+
 interface PlanDrugCost {
   contract_id: string;
   plan_id: string;
@@ -217,7 +246,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // v2: parser rewrite (2026-10-20). Entries cached by the old parser hold
   // blank plan ids / null totals; versioning the key skips them.
   // v4: medicare.gov's own NDC per rxcui (2026-10-21).
-  const cacheKey = sha256(`v4::${canonicalize(body)}`);
+  // v5: devices per package returned alongside costs (2026-10-28).
+  const cacheKey = sha256(`v5::${canonicalize(body)}`);
   const sb = supabase();
 
   // ─── Cache hit? ────────────────────────────────────────────────────
@@ -232,10 +262,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.warn('[drug-costs] cache read error:', error.message);
     }
     if (data) {
-      const payload = (data as { payload: { costs: PlanDrugCost[] }; source: string }).payload;
+      const payload = (data as { payload: { costs: PlanDrugCost[]; packages?: DrugCostResult['packages'] }; source: string }).payload;
       return sendJson(res, 200, {
         source: `cache:${(data as { source: string }).source}`,
         costs: payload.costs ?? [],
+        packages: payload.packages ?? {},
       });
     }
   } catch (err) {
@@ -243,7 +274,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // ─── Live fetch ────────────────────────────────────────────────────
-  let result: { source: 'live' | 'rate_limited'; costs: PlanDrugCost[] };
+  let result: DrugCostResult;
   try {
     result = await fetchDrugCostsShared(cacheKey, body);
   } catch (err) {
@@ -275,7 +306,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .upsert(
         {
           cache_key: cacheKey,
-          payload: { costs: result.costs },
+          payload: { costs: result.costs, packages: result.packages ?? {} },
           source: result.source,
           expires_at: expires,
         },
@@ -285,7 +316,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.warn('[drug-costs] cache write failed:', (err as Error).message);
   }
 
-  return sendJson(res, 200, { source: result.source, costs: result.costs });
+  return sendJson(res, 200, { source: result.source, costs: result.costs, packages: result.packages ?? {} });
 }
 
 // ─── canonicalization + hashing ────────────────────────────────────────
@@ -331,12 +362,12 @@ function serialized<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // Identical requests that arrive together share one live fetch.
-const inFlight = new Map<string, Promise<{ source: 'live' | 'rate_limited'; costs: PlanDrugCost[] }>>();
+const inFlight = new Map<string, Promise<DrugCostResult>>();
 
 function fetchDrugCostsShared(
   key: string,
   body: DrugCostBody,
-): Promise<{ source: 'live' | 'rate_limited'; costs: PlanDrugCost[] }> {
+): Promise<DrugCostResult> {
   const existing = inFlight.get(key);
   if (existing) return existing;
   const p = serialized(() => fetchDrugCosts(body)).finally(() => inFlight.delete(key));
@@ -346,7 +377,7 @@ function fetchDrugCostsShared(
 
 async function fetchDrugCosts(
   body: DrugCostBody,
-): Promise<{ source: 'live' | 'rate_limited'; costs: PlanDrugCost[] }> {
+): Promise<DrugCostResult> {
   const browser = await launchBrowser();
   const ctx = await browser.newContext({ userAgent: USER_AGENT, locale: 'en-US' });
   const page = await ctx.newPage();
@@ -370,6 +401,8 @@ async function fetchDrugCosts(
       origin: p.ndc,
     }));
     const origins = () => slots.map((slot) => slot.origin ?? slot.ndc);
+    // NDC → devices per medicare.gov package, from the forms lookup below.
+    const packageDevices = new Map<string, number>();
 
     const apiHeaders = {
       Accept: 'application/json',
@@ -394,7 +427,9 @@ async function fetchDrugCosts(
             { headers: apiHeaders },
           );
           if (!r.ok()) return;
-          const ndc = medicareNdcFor((await r.json()) as FormsResponse, p.rxcui);
+          const forms = (await r.json()) as FormsResponse;
+          for (const [n, d] of devicesByNdc(forms, p.rxcui)) packageDevices.set(n, d);
+          const ndc = medicareNdcFor(forms, p.rxcui);
           if (ndc) preferNdc(slots[k], ndc);
         } catch {
           // Lookup failure leaves the caller's NDCs in place.
@@ -496,9 +531,18 @@ async function fetchDrugCosts(
       if (anyRateLimited) break;
     }
 
+    // Devices per package for the NDC each prescription was finally priced
+    // under, reported under the caller's NDC (like the costs).
+    const packages: Record<string, { devices: number }> = {};
+    slots.forEach((slot) => {
+      const d = packageDevices.get(slot.ndc);
+      if (d != null) packages[slot.origin ?? slot.ndc] = { devices: d };
+    });
+
     return {
       source: anyRateLimited && costs.length === 0 ? 'rate_limited' : 'live',
       costs,
+      packages,
     };
   } finally {
     await browser.close().catch(() => {});

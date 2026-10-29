@@ -18,6 +18,17 @@ const NON_SOLID_RE = /\b(cream|ointment|gel|lotion|spray|inhaler|inhalation|solu
 const PACKAGE_SIG_RE = /\b(apply|applied|rub|sprays?|nostrils?|puffs?|inhale|affected area|topically|vaginally)\b/i;
 const PACKAGE_UNIT_RE = /\d\s*(g|gm|grams?|ml)\b/i;
 const ORAL_RE = /\b(oral|by mouth|orally|swallow)\b/i;
+// Pens, syringes, auto-injectors, cartridges: the client's quantity is a
+// count of DEVICES (2 Repatha pens a month). medicare.gov prices quantity in
+// PACKAGES (a Repatha 2-pack, a Lantus 5-pen box), so the price is divided
+// back to devices with the package size medicare.gov reports.
+const DEVICE_RE = /\b(inj|injection|injectable|injector|auto-?inj|pen-?inj|pens?|kwikpen|flexpen|flextouch|solostar|sureclick|syringes?|syr|pfs|prefilled|cartridges?)\b/i;
+
+/** True when the quantity is a count of pens / syringes (see DEVICE_RE). */
+export function isDeviceCounted(m: QuantityInput): boolean {
+  const label = `${m.name ?? ''} ${m.form ?? ''}`;
+  return DEVICE_RE.test(label) && !SOLID_RE.test(label);
+}
 
 /** Doses per day from a free-text sig; null when it can't be read. */
 function dosesPerDay(sig: string): number | null {
@@ -59,6 +70,8 @@ function rawMonthlyQuantity(m: QuantityInput): number {
   const sig = m.frequency ?? '';
   const solid = SOLID_RE.test(label) || SOLID_RE.test(sig);
   const oral = ORAL_RE.test(label) || ORAL_RE.test(sig);
+  // Pens / syringes: the filed device count (1 when blank), never doses × 30.
+  if (isDeviceCounted(m)) return hasQty ? qty : 1;
   if (!solid && (PACKAGE_SIG_RE.test(sig) || (!oral && PACKAGE_UNIT_RE.test(String(m.quantity ?? ''))))) return 1;
   if (NON_SOLID_RE.test(label) && !SOLID_RE.test(label)) {
     // medicare.gov counts these in PACKAGES (tubes, bottles, inhalers, pen
@@ -78,6 +91,8 @@ function rawMonthlyQuantity(m: QuantityInput): number {
 }
 
 interface CostsResponse {
+  /** Caller NDC → devices per medicare.gov package (api/drug-costs). */
+  packages?: Record<string, { devices?: number }>;
   costs?: Array<{ raw?: { costs?: Array<{ drug_costs?: Array<{ ndc?: string; full_cost?: number; frequency?: string }> }> } }>;
 }
 
@@ -103,6 +118,9 @@ function median(xs: number[]): number {
 export function grossMonthlyFromResponse(
   resp: CostsResponse,
   ndcsByRxcui: Record<string, string[]>,
+  /** rxcuis whose quantity was sent as a DEVICE count: their package price
+   *  is divided by devices per package (2-pen carton priced per pen). */
+  deviceRxcuis: ReadonlySet<string> = new Set(),
 ): Map<string, number> {
   const rxcuiByNdc = new Map<string, string>();
   for (const [rx, ndcs] of Object.entries(ndcsByRxcui)) for (const n of ndcs) rxcuiByNdc.set(n, rx);
@@ -111,8 +129,10 @@ export function grossMonthlyFromResponse(
     for (const pc of c.raw?.costs ?? []) {
       for (const d of pc.drug_costs ?? []) {
         const rx = d.ndc ? rxcuiByNdc.get(d.ndc) : undefined;
-        const cost = thirtyDayCost(d);
+        let cost = thirtyDayCost(d);
         if (!rx || cost == null) continue;
+        const devices = deviceRxcuis.has(rx) && d.ndc ? Number(resp.packages?.[d.ndc]?.devices) : NaN;
+        if (Number.isFinite(devices) && devices > 1) cost /= devices;
         const arr = prices.get(rx) ?? [];
         arr.push(cost);
         prices.set(rx, arr);
@@ -174,5 +194,6 @@ export async function fetchGrossMonthlyPrices(
     signal,
   });
   if (!res.ok) throw new Error(`drug-costs ${res.status}`);
-  return grossMonthlyFromResponse((await res.json()) as CostsResponse, ndcsByRxcui);
+  const deviceRxcuis = new Set(priced.filter((d) => isDeviceCounted(d)).map((d) => d.rxcui));
+  return grossMonthlyFromResponse((await res.json()) as CostsResponse, ndcsByRxcui, deviceRxcuis);
 }

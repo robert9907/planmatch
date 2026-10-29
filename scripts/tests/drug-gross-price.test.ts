@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { monthlyQuantity, grossMonthlyFromResponse } from '../../src/lib/drugGrossPrice';
+import { monthlyQuantity, grossMonthlyFromResponse, isDeviceCounted } from '../../src/lib/drugGrossPrice';
 
 test('monthly quantity from the sig (doses per day × 30)', () => {
   assert.equal(monthlyQuantity({ quantity: '60', frequency: 'Take 1 tablet by mouth 3 times daily', form: 'Oral Tablet' }), 90);
@@ -28,7 +28,8 @@ test('monthly quantity falls back to the fill size and refill days', () => {
 test('packaged forms price one package per month', () => {
   assert.equal(monthlyQuantity({ name: 'Estradiol Vaginal Cream', quantity: '42.5', frequency: 'Insert 1 gram vaginally at bedtime 3 times a week' }), 1);
   assert.equal(monthlyQuantity({ name: 'Fluticasone Propionate Nasal Spray, USP', quantity: '16' }), 1);
-  assert.equal(monthlyQuantity({ name: 'Zepbound 5 MG/0.5ML Pen', quantity: '2' }), 1);
+  // Pens are counted in devices (priced per device via the package size).
+  assert.equal(monthlyQuantity({ name: 'Zepbound 5 MG/0.5ML Pen', quantity: '2' }), 2);
   assert.equal(monthlyQuantity({ name: 'Albuterol Inhaler', quantity: '' }), 1);
 });
 
@@ -125,4 +126,29 @@ test('a 90-day mail row is scaled back to a 30-day gross price', () => {
   };
   const m = grossMonthlyFromResponse(resp, { '1665900': ['R1'] });
   assert.equal(m.get('1665900'), 539.77);
+});
+
+
+// Debra O'Connell (2026-10-28): medicare.gov prices Repatha per 2-pen carton.
+// 2 pens a month was sent as quantity 2 = 2 cartons = 4 pens. The package
+// price must be divided back to devices.
+test('pen price is divided by devices per medicare.gov package', () => {
+  const resp = {
+    packages: { R1: { devices: 2 } },
+    costs: [
+      { raw: { costs: [{ drug_costs: [{ ndc: 'R1', full_cost: 1104.73, frequency: 'FREQUENCY_30_DAYS' }] }] } },
+    ],
+  };
+  const pens = grossMonthlyFromResponse(resp, { '1665900': ['R1'] }, new Set(['1665900']));
+  assert.equal(pens.get('1665900'), 552.37);
+  // A drug not counted in devices is never divided.
+  const pills = grossMonthlyFromResponse(resp, { '1665900': ['R1'] });
+  assert.equal(pills.get('1665900'), 1104.73);
+});
+
+test('pens and syringes are device-counted; tablets are not', () => {
+  assert.equal(isDeviceCounted({ name: 'REPATHA SURECLICK SOLN AUTO-INJ' }), true);
+  assert.equal(isDeviceCounted({ name: 'Lantus Solostar INJ' }), true);
+  assert.equal(isDeviceCounted({ name: 'Gabapentin 300 MG' }), false);
+  assert.equal(isDeviceCounted({ name: 'Ozempic 3 MG Oral Tablet' }), false);
 });

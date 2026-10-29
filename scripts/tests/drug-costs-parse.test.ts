@@ -105,7 +105,7 @@ test('nothing priced at all → no NDC is treated as unrecognized', () => {
 // 313 RxNorm NDCs, mostly repackagers medicare.gov doesn't recognize; its
 // own NDC (42858020350) was #50, so the drug was never priced. The server
 // now asks medicare.gov's /drugs/{rxcui}/forms which NDC to send.
-import { medicareNdcFor, preferNdc, restoreOriginNdcs, type NdcSlot } from '../../api/drug-costs';
+import { medicareNdcFor, devicesByNdc, preferNdc, restoreOriginNdcs, type NdcSlot } from '../../api/drug-costs';
 
 const forms = {
   dosages: [
@@ -134,4 +134,23 @@ test("costs are reported under the caller's NDC", () => {
   const data = { plans: [{ costs: [{ drug_costs: [{ ndc: '42858020350', full_cost: 20 }] }] }] };
   restoreOriginNdcs(data, slots);
   assert.equal(data.plans[0].costs[0].drug_costs[0].ndc, '00245041201');
+});
+
+// medicare.gov forms (2027, captured 2026-10-28): Repatha SureClick's first
+// package is a 2-pen carton; Lantus SoloStar's is a 5-pen box.
+test('devices per medicare.gov package, per NDC', () => {
+  const forms = {
+    dosages: [
+      { rxcui: '1665900', packages: [
+        { ndc: '72511039302', type: 'PACKAGE_TYPE_PEN', quantity: 2, use_quantity: true },
+        { ndc: '72511039301', type: 'PACKAGE_TYPE_PEN', quantity: 1, use_quantity: true },
+      ] },
+      { rxcui: '847232', packages: [{ ndc: '50090139800', type: 'PACKAGE_TYPE_PEN', quantity: 5, use_quantity: true }] },
+    ],
+  };
+  const repatha = devicesByNdc(forms, '1665900');
+  assert.equal(repatha.get('72511039302'), 2);
+  assert.equal(repatha.get('72511039301'), 1);
+  assert.equal(devicesByNdc(forms, '847232').get('50090139800'), 5);
+  assert.equal(devicesByNdc(forms, '999').size, 0);
 });
