@@ -1059,8 +1059,15 @@ export function AgentV3App() {
     ranked.result != null &&
     medications.some((m) => !!m.rxcui) &&
     benchPlans.some((p) => !mainRankedIds.has(normalizePlanId(p.id)));
+  // Medicaid category / LIS left off: the brain drops D-SNPs whose accepted
+  // populations don't list the client's category, which would leave those
+  // bench plans unpriced again. LIS caps are applied client-side below.
+  const pricingClient = useMemo(
+    () => ({ ...client, medicaidLevel: undefined, lisTier: undefined }),
+    [client],
+  );
   const pricingPass = useRankedPlans({
-    client,
+    client: pricingClient,
     medications,
     providers: PRICING_PASS_NO_PROVIDERS,
     csnpConditions: PRICING_PASS_ALL_CSNP,
