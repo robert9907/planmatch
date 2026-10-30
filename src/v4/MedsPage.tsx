@@ -21,6 +21,13 @@ import { bulkLookupFormulary, getCachedFormulary } from '@/lib/formularyLookup';
 import type { Plan, FormularyTier } from '@/types/plans';
 import type { Medication } from '@/types/session';
 
+// Part D / Part B coverage labels — identical wording to the agent-v3 MedsScreen
+// and the consumer (plain words for a 67-year-old; straight apostrophe).
+const PART_D_NOT_COVERED_LABEL = 'Not covered by Part D — over the counter';
+const PART_B_COVERED_LABEL =
+  "Covered under Part B — your plan's Part B drug coinsurance applies";
+const PART_B_OR_D_NOTE = 'May be covered by Part B in some situations';
+
 interface Props {
   capture: UseCaptureSessionResult;
   onBack: () => void;
@@ -113,7 +120,19 @@ export function MedsPage({ capture, onBack, onContinue }: Props) {
     // (Quote, AgentBase sync) show what the agent actually picked
     // rather than the raw RxNorm SCD/SBD canonical string.
     const name = displayLabel(d) || d.name;
-    addMedication({ rxcui: d.rxcui, name, source: 'manual', isBrand: d.is_brand ?? false });
+    addMedication({
+      rxcui: d.rxcui, name, source: 'manual', isBrand: d.is_brand ?? false,
+      // Part D / Part B classification + display facts from drug-search — so the
+      // row labels OTC / Part B immediately and the AgentBase sync carries real
+      // values. partB flags derive from the single part_b_status.
+      not_part_d: d.not_part_d || undefined,
+      partBEligible: d.part_b_status === 'part_b' || undefined,
+      partBOrD: d.part_b_status === 'part_b_or_d' || undefined,
+      strengthDisplay: d.strength_display ?? undefined,
+      packageSize: d.package_size ?? undefined,
+      packageUnit: d.package_unit ?? undefined,
+      quantityUnit: d.quantity_unit ?? undefined,
+    });
     setQuery(''); setResults([]);
   }
 
@@ -245,6 +264,19 @@ function MedRow({ med, plans, onRemove }: { med: Medication; plans: Plan[]; onRe
   const shownCarriers = carriers.slice(0, 3);
   const moreCount = carriers.length - shownCarriers.length;
 
+  // Part D / Part B coverage — an OTC or Part B drug isn't priced through the
+  // Part D formulary, so show the plain-words label instead of tier badges and
+  // a (meaningless) covered-plan count. part_b_or_d stays a normal Part D row
+  // with a small note.
+  const notPartD = med.not_part_d === true;
+  const partB = med.partBEligible === true;
+  const partBorD = med.partBOrD === true;
+  const coverageLabel = notPartD
+    ? PART_D_NOT_COVERED_LABEL
+    : partB
+    ? PART_B_COVERED_LABEL
+    : null;
+
   return (
     <div className="mi">
       <div className="minfo">
@@ -257,21 +289,28 @@ function MedRow({ med, plans, onRemove }: { med: Medication; plans: Plan[]; onRe
           {paCount > 0 && <span className="tb wrn" style={{ marginLeft: 4 }}>PA on {paCount} plan{paCount === 1 ? '' : 's'}</span>}
         </div>
         <div className="trow">
-          {shownCarriers.length === 0 ? (
-            <span className="tb not">No coverage yet</span>
+          {coverageLabel ? (
+            <span className="tb cov" style={{ whiteSpace: 'normal' }}>{coverageLabel}</span>
           ) : (
-            shownCarriers.map(([carrier, info]) => (
-              <span key={carrier} className="tb cov">
-                {firstWord(carrier)}: T{info.tier ?? '?'} {info.copay != null ? `$${info.copay}` : info.coins != null ? `${info.coins}%` : '—'}
-              </span>
-            ))
+            <>
+              {shownCarriers.length === 0 ? (
+                <span className="tb not">No coverage yet</span>
+              ) : (
+                shownCarriers.map(([carrier, info]) => (
+                  <span key={carrier} className="tb cov">
+                    {firstWord(carrier)}: T{info.tier ?? '?'} {info.copay != null ? `$${info.copay}` : info.coins != null ? `${info.coins}%` : '—'}
+                  </span>
+                ))
+              )}
+              {moreCount > 0 && <span className="tb cov">+{moreCount} more</span>}
+              {partBorD && <span className="tb" style={{ whiteSpace: 'normal' }}>{PART_B_OR_D_NOTE}</span>}
+            </>
           )}
-          {moreCount > 0 && <span className="tb cov">+{moreCount} more</span>}
         </div>
       </div>
       <div className="mact">
-        <div style={{ fontFamily: 'var(--v4-fm)', fontSize: 16, fontWeight: 700, color: covered.length > 0 ? 'var(--v4-grn)' : 'var(--v4-red)' }}>
-          {covered.length}/{plans.length}
+        <div style={{ fontFamily: 'var(--v4-fm)', fontSize: 16, fontWeight: 700, color: notPartD || partB ? 'var(--v4-mut, #6b7280)' : covered.length > 0 ? 'var(--v4-grn)' : 'var(--v4-red)' }}>
+          {notPartD || partB ? '—' : `${covered.length}/${plans.length}`}
         </div>
         <button type="button" className="mrem" onClick={onRemove}>Remove</button>
       </div>

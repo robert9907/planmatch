@@ -26,6 +26,15 @@ export interface RxNormDrug {
   strength?: string;
   dose_form?: string;
   is_brand?: boolean;
+  /** Part D / Part B classification + display facts from pm_drugs (via
+   *  /api/library/drug-search). Carried through so the v4 MedsPage add-path
+   *  labels OTC/Part B drugs and the AgentBase sync payload gets real values. */
+  part_b_status?: 'part_b' | 'part_b_or_d' | null;
+  not_part_d?: boolean;
+  strength_display?: string | null;
+  package_size?: string | null;
+  package_unit?: string | null;
+  quantity_unit?: string | null;
 }
 
 function libraryToRxNorm(d: LibraryDrug): RxNormDrug {
@@ -37,6 +46,12 @@ function libraryToRxNorm(d: LibraryDrug): RxNormDrug {
     strength: d.strength || undefined,
     dose_form: d.dose_form || undefined,
     is_brand: d.is_brand,
+    part_b_status: d.part_b_status ?? null,
+    not_part_d: d.not_part_d,
+    strength_display: d.strength_display ?? null,
+    package_size: d.package_size ?? null,
+    package_unit: d.package_unit ?? null,
+    quantity_unit: d.quantity_unit ?? null,
   };
 }
 
