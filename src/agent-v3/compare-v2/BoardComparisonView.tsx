@@ -1173,7 +1173,7 @@ function buildDrugSection(
       // part_b_or_d: keep the normal Part D price + the small Part-B note.
       const tierSubtext = `Tier ${drugRow.tier ?? '—'} · annual ${fmtMoney(drugRow.annualCost)}`;
       return {
-        text: `$${drugRow.monthlyCopay}/mo`,
+        text: `$${Number.isInteger(drugRow.monthlyCopay) ? drugRow.monthlyCopay : drugRow.monthlyCopay.toFixed(2)}/mo`,
         subtext: drugRow.partBOrD ? `${tierSubtext} · ${PART_B_OR_D_NOTE}` : tierSubtext,
         score: drugRow.monthlyCopay,
       };

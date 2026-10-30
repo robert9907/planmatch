@@ -80,6 +80,9 @@ export interface UseRankedPlansArgs {
    *  library rank-plans brain, which re-prices drugs for 90-day mail
    *  fills. Changing it re-runs the ranking. */
   pharmacy?: 'preferred_retail' | 'mail_order';
+  /** When false the hook makes no request and returns the empty state.
+   *  Defaults to true. */
+  enabled?: boolean;
 }
 
 export interface UseRankedPlansState {
@@ -129,6 +132,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     sepReasonCode,
     grossMonthlyByRxcui,
     pharmacy,
+    enabled = true,
   } = args;
   const grossKey = useMemo(
     () =>
@@ -213,7 +217,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
   const state_ = client.state;
 
   useEffect(() => {
-    if (!county || !zip || !state_) {
+    if (!enabled || !county || !zip || !state_) {
       setState({
         ...EMPTY_STATE,
         unresolvedProviderNames,
@@ -285,7 +289,7 @@ export function useRankedPlans(args: UseRankedPlansArgs): UseRankedPlansState {
     // medsKey / provsKey / extrasKey deliberately gate on serialized
     // content, not array identity — see notes above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [county, zip, state_, medsKey, provsKey, extrasKey, csnpKey, currentPlanId, dsnpEligible, enrollmentPeriod, sepReasonCode, client.lisTier, client.medicaidLevel, client.livingSetting, grossKey, pharmacy]);
+  }, [county, zip, state_, medsKey, provsKey, extrasKey, csnpKey, currentPlanId, dsnpEligible, enrollmentPeriod, sepReasonCode, client.lisTier, client.medicaidLevel, client.livingSetting, grossKey, pharmacy, enabled]);
 
   return state;
 }
