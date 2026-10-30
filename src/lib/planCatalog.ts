@@ -323,6 +323,7 @@ function fillBenefits(partial: Partial<PlanBenefits>): PlanBenefits {
       physical_speech_therapy: cs(partial.medical?.physical_speech_therapy),
       occupational_therapy: cs(partial.medical?.occupational_therapy),
       telehealth: cs(partial.medical?.telehealth),
+      dental_medicare_covered: cs(partial.medical?.dental_medicare_covered),
       ambulance: cs(partial.medical?.ambulance),
       air_transportation: cs(partial.medical?.air_transportation),
       chiropractic: cs(partial.medical?.chiropractic),

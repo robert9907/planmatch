@@ -466,6 +466,39 @@ function csMetric(
   };
 }
 
+// Medicare-covered dental (CMS PBP B16a) — a MEDICAL cost-share row that
+// renders differently from csMetric in two ways the shared formatters
+// don't cover: (1) a plan that files no B16a (copay & coinsurance both
+// null) must read "Not filed — call to verify", NEVER the em-dash or $0
+// a bare CostShare would produce; (2) B16 files no out-of-network value,
+// so the OON sub-line is a fixed "Out-of-network: Not filed — call to
+// verify" rather than the pm_plan_oon_costs lookup withOon does.
+const DENTAL_MC_NOT_FILED = 'Not filed — call to verify';
+function formatDentalMcInNetwork(cs: CostShare, isPdp: boolean): string {
+  if (isPdp) return 'N/A — Part D only';
+  if (cs.copay != null) return `$${cs.copay}`;
+  if (cs.coinsurance != null) return `${cs.coinsurance}%`;
+  return DENTAL_MC_NOT_FILED;
+}
+function dentalMcMetric(key: string, label: string, group: MetricGroup): Metric {
+  return {
+    key,
+    label,
+    format: (p) => {
+      const inNetwork = formatDentalMcInNetwork(
+        p.benefits.medical.dental_medicare_covered,
+        p.plan_type === 'PDP',
+      );
+      // PDP has no medical network; don't append a medical OON line.
+      if (p.plan_type === 'PDP') return inNetwork;
+      return `${inNetwork}\nOut-of-network: ${DENTAL_MC_NOT_FILED}`;
+    },
+    numeric: (p) => costShareNumeric(p.benefits.medical.dental_medicare_covered),
+    higherIsBetter: false,
+    group,
+  };
+}
+
 // Inpatient day-tier ladder metric — renders the full ladder
 // ("$0/day · days 1-20\n$218/day · days 21-50\n$0/day · days 51-100")
 // from benefit_description and uses the day-1 copay for winner math
@@ -783,6 +816,13 @@ function buildMetrics(args: {
     ),
     csMetric('ot', 'Occupational therapy', (p) => p.benefits.medical.occupational_therapy, 'diagnostics_therapy'),
     csMetric('telehealth', 'Telehealth', (p) => p.benefits.medical.telehealth, 'diagnostics_therapy'),
+    // Medicare-covered dental (CMS PBP B16a) — a MEDICAL cost-share, NOT the
+    // routine dental allowance (that stays its own row in Extra benefits).
+    // B16 files no OON and no range, so this is a single value. Missing
+    // (no B16a, or copay & coinsurance both null) must read "Not filed —
+    // call to verify", never the em-dash/$0 the shared formatters would
+    // give — so we render it directly instead of via csMetric.
+    dentalMcMetric('dental_mc', 'Medicare-covered dental', 'diagnostics_therapy'),
     // ── Transport ────────────────────────────────────────────────
     csMetric('ambulance', 'Ambulance (ground)', (p) => p.benefits.medical.ambulance, 'ambulance_other'),
     csMetric('air_amb', 'Air ambulance', (p) => p.benefits.medical.air_transportation, 'ambulance_other'),

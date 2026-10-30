@@ -228,6 +228,9 @@ interface PlanBenefits {
     physical_speech_therapy: CostShare;
     occupational_therapy: CostShare;
     telehealth: CostShare;
+    // Medicare-covered dental (CMS PBP B16a) as a MEDICAL cost-share.
+    // Distinct from the routine dental allowance (benefits.dental).
+    dental_medicare_covered: CostShare;
     ambulance: CostShare;
     air_transportation: CostShare;
     chiropractic: CostShare;
@@ -2253,6 +2256,24 @@ export function buildBenefits(
       physical_speech_therapy: costShareFor(rows, 'physical_speech_therapy', pbpFallback),
       occupational_therapy: costShareFor(rows, 'occupational_therapy'),
       telehealth: costShareFor(rows, 'telehealth'),
+      // Medicare-covered dental (CMS PBP B16a) as a MEDICAL cost-share row.
+      // Built straight from the dental_medicare_covered pm_plan_benefits row
+      // (same row that feeds benefits.dental.medicare_covered) — copay OR
+      // coinsurance, in-network only. B16 files no OON and no low/high range,
+      // so the range fields stay null and the surfaces render the single
+      // value (or "Not filed — call to verify" when the plan files no B16a).
+      dental_medicare_covered: {
+        copay: toNum(dentalMc?.copay) ?? null,
+        coinsurance: toNum(dentalMc?.coinsurance) ?? null,
+        description: dentalMc?.benefit_description ?? null,
+        copay_low: null,
+        copay_high: null,
+        coinsurance_low: null,
+        coinsurance_high: null,
+        alt_copay: null,
+        alt_coinsurance: null,
+        alt_source: null,
+      },
       ambulance: costShareFor(rows, 'ambulance'),
       air_transportation: costShareFor(rows, 'air_transportation'),
       chiropractic: costShareFor(rows, 'chiropractic'),

@@ -44,6 +44,24 @@ interface DetailRow {
 
 void costShareNumeric; // future use for "best in pool" tinting
 
+// Medicare-covered dental (CMS PBP B16a) — a MEDICAL cost-share. Missing
+// (copay & coinsurance both null) reads "Not filed — call to verify", never
+// "—"/$0. B16 files no out-of-network value, so the OON sub-line is a fixed
+// "Not filed — call to verify" (rendered on a second line via pre-line).
+const DENTAL_MC_NOT_FILED = 'Not filed — call to verify';
+function dentalMcValue(cs: {
+  copay: number | null;
+  coinsurance: number | null;
+}): string {
+  const inNetwork =
+    cs.copay != null
+      ? `$${cs.copay}`
+      : cs.coinsurance != null
+        ? `${cs.coinsurance}%`
+        : DENTAL_MC_NOT_FILED;
+  return `${inNetwork}\nOut-of-network: ${DENTAL_MC_NOT_FILED}`;
+}
+
 export function PlanDetailModal({
   plan,
   annualDrug,
@@ -97,6 +115,9 @@ export function PlanDetailModal({
     { l: 'Physical / speech therapy', v: formatCostShare(plan.benefits.medical.physical_speech_therapy) },
     { l: 'Occupational therapy', v: formatCostShare(plan.benefits.medical.occupational_therapy) },
     { l: 'Telehealth', v: formatCostShare(plan.benefits.medical.telehealth) },
+    // Medicare-covered dental (B16a) — a MEDICAL cost-share, NOT the routine
+    // dental allowance (that stays in the Extras section below).
+    { l: 'Medicare-covered dental', v: dentalMcValue(plan.benefits.medical.dental_medicare_covered) },
     { l: 'Ambulance', v: formatCostShare(plan.benefits.medical.ambulance) },
     { l: 'Air ambulance', v: formatCostShare(plan.benefits.medical.air_transportation) },
     { l: 'Chiropractic', v: formatCostShare(plan.benefits.medical.chiropractic) },
@@ -300,7 +321,9 @@ function DetailSection({ title, rows }: { title: string; rows: DetailRow[] }) {
           }}
         >
           <div style={{ color: '#475569', fontWeight: 600 }}>{r.l}</div>
-          <div style={{ color: '#0d2f5e', fontWeight: 700 }}>{r.v}</div>
+          {/* pre-line so the Medicare-covered-dental OON sub-line renders on
+              its own line; single-line values are unaffected. */}
+          <div style={{ color: '#0d2f5e', fontWeight: 700, whiteSpace: 'pre-line' }}>{r.v}</div>
         </div>
       ))}
     </div>
