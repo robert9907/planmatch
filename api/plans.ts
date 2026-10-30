@@ -1629,7 +1629,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         contract_id: row.contract_id,
         plan_number: row.plan_id,
         segment_id: row.segment_id || '000',
-        carrier: row.carrier ?? row.parent_organization ?? '—',
+        // HCSC's HealthSpring plans file under the legal entity
+        // "Blue Cross and Blue Shield of IL, NM, OK, TX" — show the
+        // brand the client actually sees on the card.
+        carrier: /^HealthSpring\b/i.test(row.plan_name ?? '')
+          ? 'HealthSpring'
+          : row.carrier ?? row.parent_organization ?? '—',
         plan_name: row.plan_name,
         ...(includeNonComm &&
         (nonComm.contracts.has(row.contract_id) ||

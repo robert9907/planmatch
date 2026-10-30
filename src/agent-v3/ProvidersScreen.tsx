@@ -237,7 +237,7 @@ export function ProvidersScreen({
           ✅ Every county plan is listed above. Status comes from
           rank-plans (FHIR for UHC / Humana / BCBS NC / Devoted,
           pm_provider_network_cache for the rest). Tap <b>Mark
-          In-Network</b> on any <b>⚠ Unverified</b> row after you
+          In-Network</b> on any <b>⚠ Not confirmed</b> row after you
           confirm with the carrier office — the override applies
           immediately and persists via broker-verify-provider.
         </AgentInsight>
@@ -442,12 +442,11 @@ function ProviderRail({
           fontWeight: 700,
         }}
       >
-        <span style={{ color: '#065f46' }}>✓ {inCount} In-Network</span>
-        <span style={{ color: '#991b1b' }}>✕ {outCount} Out-of-Network</span>
-        <span style={{ color: '#92400e' }}>⚠ {unknownCount} Unverified</span>
-        <span style={{ color: '#94a3b8', fontWeight: 500 }}>
-          · {rows.length} plans total
+        <span style={{ color: '#065f46' }}>
+          ✓ In-network on {inCount} of {rows.length} plans
         </span>
+        <span style={{ color: '#991b1b' }}>✕ {outCount} out-of-network</span>
+        <span style={{ color: '#92400e' }}>⚠ {unknownCount} not confirmed</span>
       </div>
 
       {Array.from(byCarrier.entries()).map(([carrier, group]) => {
@@ -521,13 +520,25 @@ function ProviderRail({
                 </span>
               )}
             </span>
-            <span style={{ display: 'flex', gap: 8, flexShrink: 0, letterSpacing: 0 }}>
-              {gIn > 0 && <span style={{ color: '#065f46' }}>✓ {gIn}</span>}
-              {gOut > 0 && <span style={{ color: '#991b1b' }}>✕ {gOut}</span>}
-              {gUnk > 0 && <span style={{ color: '#92400e' }}>⚠ {gUnk}</span>}
-              <span style={{ color: '#94a3b8', fontWeight: 500 }}>
-                {group.length} plan{group.length === 1 ? '' : 's'}
+            <span
+              style={{
+                display: 'flex',
+                gap: 8,
+                flexShrink: 0,
+                letterSpacing: 0,
+                textTransform: 'none',
+              }}
+            >
+              <span style={{ color: gIn > 0 ? '#065f46' : '#64748b' }}>
+                In-network on {gIn} of {group.length} plan
+                {group.length === 1 ? '' : 's'}
               </span>
+              {gOut > 0 && (
+                <span style={{ color: '#991b1b' }}>· {gOut} out-of-network</span>
+              )}
+              {gUnk > 0 && (
+                <span style={{ color: '#92400e' }}>· {gUnk} not confirmed</span>
+              )}
             </span>
           </button>
           {isOpen && group.map((row) => {
@@ -654,7 +665,7 @@ function RowBadge({ state }: { state: RowState }) {
         color: '#92400e',
       }}
     >
-      ⚠ Unverified
+      ⚠ Not confirmed
     </span>
   );
 }
