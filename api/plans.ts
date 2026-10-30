@@ -199,8 +199,21 @@ export interface CostShare {
   alt_source?: string | null;
 }
 
+// Routine dental per-category drill-down — pm_plan_benefits.detail (jsonb).
+// Passed through verbatim to the client (src/types/plans.ts DentalDetail is
+// the structurally-identical UI mirror). Shapes decoded from CMS PBP B16b/c
+// at ingest. Any field may be null → the UI renders "Not filed — call to
+// verify", never a fabricated $0. Kept local because api/ is its own tsconfig
+// project and cannot import from src/ (see [api/* no @plan-match/shared]).
+interface DentalDetail {
+  annual_max?: { kind?: string | null; amount?: number | null; in_oon?: number | null } | null;
+  deductible?: { preventive?: number | null; comprehensive?: number | null; medicare_covered?: number | null } | null;
+  preventive_services?: Record<string, unknown> | null;
+  comprehensive_categories?: Record<string, unknown> | null;
+}
+
 interface PlanBenefits {
-  dental: { preventive: boolean; comprehensive: boolean; annual_max: number; description: string | null; medicare_covered: { copay: number | null; coinsurance: number | null; description: string | null } | null };
+  dental: { preventive: boolean; comprehensive: boolean; annual_max: number; description: string | null; medicare_covered: { copay: number | null; coinsurance: number | null; description: string | null } | null; detail: DentalDetail | null };
   vision: { exam: boolean; eyewear_allowance_year: number; description: string | null };
   hearing: { aid_allowance_year: number; exam: boolean; description: string | null };
   transportation: { rides_per_year: number; distance_miles: number; description: string | null };
@@ -303,6 +316,11 @@ export interface BenefitRow {
   // pm_plan_benefits.food_category — set on 'meals' rows (food_card /
   // flex_card_food / food_card_unverified / none). Absent on synth rows.
   food_category?: string | null;
+  // pm_plan_benefits.detail (jsonb) — per-category routine dental drill-down
+  // on the 'dental' row (CMS PBP B16b/c). Null on non-dental rows and on
+  // dental rows that filed no structured per-service detail. Projected only
+  // for the routine-dental surfaces; carried through to benefits.dental.detail.
+  detail?: DentalDetail | null;
   // ── Displaced cost-share (the "other" filing) ───────────────────
   // Two independent merges below pick ONE cost-share per (triple,
   // category): the pbp source-priority dedup (medicare_gov 5 >
@@ -1154,7 +1172,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await sb
         .from('pm_plan_benefits')
         .select(
-          'id, contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage, food_category',
+          'id, contract_id, plan_id, segment_id, benefit_category, benefit_description, coverage_amount, copay, coinsurance, max_coverage, food_category, detail',
         )
         // Federal base layer is year-aware (pm_plan_benefits has plan_year, and
         // is 2026-only today). Scope to the catalog year so a 2027 plan doesn't
@@ -1560,10 +1578,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // from the same pbp_benefits filing set as the value it disagrees
     // with, so it's the closer comparison.
     for (const b of synthFiltered) {
-      if (b.alt_source != null) continue;
       const triple = `${b.contract_id}-${b.plan_id}-${b.segment_id || '000'}`;
       const land = landscapeByKey.get(`${triple}|${b.benefit_category}`);
       if (!land) continue;
+      // Carry the routine dental DETAIL jsonb forward when a synth (PBP) dental
+      // row displaces the authoritative pm_plan_benefits dental row (happens on
+      // the ~118 detail-bearing rows that filed no annual cap). The synth row
+      // has no detail of its own, so without this the per-category drill-down
+      // would be silently lost for those plans. Only the detail rides along —
+      // the cost-share values stay the merge winner's.
+      if (b.benefit_category === 'dental' && b.detail == null && land.detail != null) {
+        b.detail = land.detail;
+      }
+      if (b.alt_source != null) continue;
       if (land.copay == null && land.coinsurance == null) continue;
       if (land.copay === b.copay && land.coinsurance === b.coinsurance) continue;
       b.alt_copay = land.copay;
@@ -2181,6 +2208,11 @@ export function buildBenefits(
             description: dentalMc.benefit_description ?? null,
           }
         : null,
+      // Per-category routine dental drill-down — passed through verbatim from
+      // the pm_plan_benefits.detail jsonb (CMS PBP B16b/c). Null when the plan
+      // filed no structured detail; the UI then shows the summary line + a
+      // single "Not filed — call to verify" row. Never fabricate a $0 here.
+      detail: (dental?.detail ?? null) as DentalDetail | null,
     },
     vision: {
       exam: Boolean(vision),

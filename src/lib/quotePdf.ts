@@ -87,6 +87,10 @@ export interface PrintableQuote {
   inpatientTotal: (number | null)[];
   planCostRows: PrintableCopayRow[];
   extraRows: PrintableCopayRow[];
+  /** Routine dental per-category drill-down (deductible + annual max, then
+   *  per-service cost with OON / frequency / prior-auth sub-lines). Empty when
+   *  every column is a PDP. ROUTINE dental only — not Medicare-covered dental. */
+  dentalDetailRows: PrintableCopayRow[];
   /** Total monthly Rx cost per column ($/mo). */
   rxTotalMonthly: (number | null)[];
   /** Total annual Rx cost per column ($/yr). */
@@ -476,6 +480,10 @@ function drawComparisonPages(doc: jsPDF, q: PrintableQuote, _finalize: Array<() 
     { label: 'Inpatient', rows: [q.inpatientRow] },
     { label: 'Plan Costs', rows: q.planCostRows },
     { label: 'Extra Benefits', rows: q.extraRows },
+    // ROUTINE dental per-category drill-down. Omitted when all-PDP (empty).
+    ...(q.dentalDetailRows.length > 0
+      ? [{ label: 'Routine Dental Details', rows: q.dentalDetailRows }]
+      : []),
   ];
 
   // Build the body — section header rows separate the groups.

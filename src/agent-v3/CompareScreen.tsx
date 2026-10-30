@@ -54,6 +54,7 @@ import {
   type SwitchSuggestion,
 } from '@/lib/library-client';
 import { pickH2HWinner, type H2HWinner } from './h2hWinner';
+import { DentalDetailBody, DentalDetailDisclosure } from './components/DentalDetailTable';
 
 type DrugMonth = LibraryRankDrugMonth;
 import type { DualEligibleAdjustment } from '@/lib/dual-eligible';
@@ -4207,6 +4208,18 @@ function SlotCell({
           </div>
         ))}
 
+      {/* Routine dental DETAIL — per-category drill-down behind the
+          "Dental / vision" summary line above. Collapsed by default so
+          the grid card stays lean; opens to a covered/in-net/out-net/
+          frequency/prior-auth table (benefits.dental.detail). Hidden on
+          PDPs (no dental benefit at all) and when no detail was filed the
+          body renders a single "Not filed — call to verify" line. This is
+          the ROUTINE dental drill-down, NOT the Medicare-covered dental
+          medical row above. */}
+      {plan.plan_type !== 'PDP' && (
+        <DentalDetailDisclosure detail={plan.benefits.dental.detail} />
+      )}
+
       {/* Action block — stacked, one tier per row.
           Was: three equal-width buttons in three different treatments
           (mint tint / navy fill / mint outline), with "Summary of
@@ -5200,6 +5213,50 @@ function H2HView({
                   />,
                 );
               }
+            }
+            // Routine dental DETAIL drill-down closes the Extra Benefits
+            // section — the per-category table (covered / in-net / out-net /
+            // frequency / prior auth) behind the one-line Dental metric above.
+            // Baseline left, challenger right. Skipped when both sides are PDPs
+            // (no dental benefit). ROUTINE dental only, not Medicare-covered.
+            if (g === 'extra_benefits' && (baseline.plan_type !== 'PDP' || challenger.plan_type !== 'PDP')) {
+              chunks.push(
+                <div
+                  key="dental-detail-h2h"
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: 1,
+                    background: BORDER,
+                    borderTop: `1px solid ${BORDER}`,
+                  }}
+                >
+                  {[baseline, challenger].map((pl, side) => (
+                    <div key={pl.id} style={{ background: 'white', padding: '12px 16px' }}>
+                      <div
+                        style={{
+                          fontFamily: FONT_LABEL,
+                          fontSize: 10,
+                          fontWeight: 800,
+                          color: NAVY,
+                          textTransform: 'uppercase',
+                          letterSpacing: 0.6,
+                          marginBottom: 8,
+                        }}
+                      >
+                        Dental detail · {side === 0 ? 'Current' : 'Compared'}
+                      </div>
+                      {pl.plan_type === 'PDP' ? (
+                        <div style={{ fontFamily: FONT_LABEL, fontSize: 10.5, color: MUTED }}>
+                          N/A — Part D only
+                        </div>
+                      ) : (
+                        <DentalDetailBody detail={pl.benefits.dental.detail} />
+                      )}
+                    </div>
+                  ))}
+                </div>,
+              );
             }
           }
           return chunks;
