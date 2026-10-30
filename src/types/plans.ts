@@ -135,6 +135,15 @@ export interface MedicalCopays {
   physical_speech_therapy: CostShare;
   occupational_therapy: CostShare;
   telehealth: CostShare;
+  // Medicare-covered dental (CMS PBP B16a) — medically-necessary,
+  // non-routine dental (jaw repair, pre-radiation exams). A MEDICAL
+  // cost-share filed under its own copay/coinsurance — distinct from the
+  // routine preventive/comprehensive allowance (DentalBenefit above), which
+  // keeps its own row in the extras area. Populated from pm_plan_benefits
+  // benefit_category = 'dental_medicare_covered' (copay OR coinsurance,
+  // in-network only; B16 files no OON and no range). null/null when the
+  // plan files no B16a → surfaces as "Not filed — call to verify".
+  dental_medicare_covered: CostShare;
   // Transport
   ambulance: CostShare;
   air_transportation: CostShare;

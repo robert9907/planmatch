@@ -641,6 +641,10 @@ function extractNumber(s: string): number | null {
 // as $ within a row — same plan filed one shape, others another;
 // direct compare is imperfect but the row still surfaces the winner
 // among comparable filings.
+// Medicare-covered dental (B16a) missing / out-of-network placeholder —
+// never "—"/$0, per the dental-MC row's rules.
+const DENTAL_MC_NOT_FILED = 'Not filed — call to verify';
+
 function parseMoneyOrPct(s: string): number | null {
   if (!s || s === '—') return null;
   if (s.startsWith('N/A')) return null;
@@ -770,6 +774,29 @@ function buildSections(
   ): ScoreableRow | null =>
     anyPlanHasCostShare(_plans, getter) ? medicalRow(label, getter) : null;
 
+  // Medicare-covered dental (CMS PBP B16a) — a MEDICAL cost-share row.
+  // Differs from medicalRow: missing (copay & coinsurance both null) must
+  // read "Not filed — call to verify", never "—"/$0; and B16 files no OON,
+  // so the subtext is a fixed OON "Not filed" line. Always rendered.
+  const dentalMcRow = (label: string): ScoreableRow => ({
+    label,
+    direction: 'lower',
+    render: (p) => {
+      const d = p.benefits.medical.dental_medicare_covered;
+      const inNetwork =
+        d.copay != null
+          ? `$${d.copay}`
+          : d.coinsurance != null
+            ? `${d.coinsurance}%`
+            : DENTAL_MC_NOT_FILED;
+      return {
+        text: inNetwork,
+        subtext: `Out-of-network: ${DENTAL_MC_NOT_FILED}`,
+        score: parseMoneyOrPct(inNetwork),
+      };
+    },
+  });
+
   const compact = (rows: (ScoreableRow | null)[]): ScoreableRow[] =>
     rows.filter((r): r is ScoreableRow => r !== null);
 
@@ -876,6 +903,13 @@ function buildSections(
         optionalMedicalRow('Diagnostic procedures', (m) => m.diagnostic_procedures),
         optionalMedicalRow('X-ray', (m) => m.xray),
         optionalMedicalRow('Advanced imaging (MRI/CT)', (m) => m.advanced_imaging),
+        // Medicare-covered dental (CMS PBP B16a) — a MEDICAL cost-share,
+        // NOT the routine dental allowance (that stays in the extras rows).
+        // Always shown (no optional gate): a plan with no B16a reads
+        // "Not filed — call to verify", never "—"/$0. B16 files no OON,
+        // so the subtext is a fixed "Out-of-network: Not filed — call to
+        // verify".
+        dentalMcRow('Medicare-covered dental'),
       ]),
     },
     {

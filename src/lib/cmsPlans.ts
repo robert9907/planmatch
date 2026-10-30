@@ -85,6 +85,7 @@ const EMPTY_MEDICAL = {
   physical_speech_therapy: EMPTY_COST_SHARE,
   occupational_therapy: EMPTY_COST_SHARE,
   telehealth: EMPTY_COST_SHARE,
+  dental_medicare_covered: EMPTY_COST_SHARE,
   ambulance: EMPTY_COST_SHARE,
   air_transportation: EMPTY_COST_SHARE,
   chiropractic: EMPTY_COST_SHARE,

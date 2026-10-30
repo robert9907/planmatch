@@ -740,7 +740,7 @@ export function QuoteDeliveryV4({
   const copayRows = useMemo<CopayRow[]>(() => {
     return MEDICAL_DEFS.slice(0, MEDICAL_DEFS.length - 1).map((def) => ({
       label: def.label,
-      values: columns.map((c) => formatCostShare(def.pick(c.plan))),
+      values: columns.map((c) => (def.fmt ?? formatCostShare)(def.pick(c.plan))),
       numbers: columns.map((c) => copayCash(def.pick(c.plan))),
     }));
   }, [columns]);
@@ -3276,6 +3276,26 @@ function providerStatusFor(prov: Provider, plan: Plan): 'in' | 'out' | 'unknown'
 interface MedicalDef {
   label: string;
   pick: (plan: Plan) => { copay: number | null; coinsurance: number | null; description: string | null } | null | undefined;
+  /** Optional per-row formatter overriding the shared formatCostShare.
+   *  Used by Medicare-covered dental (B16a): its missing state is
+   *  "Not filed — call to verify" (never "—"/$0) and it carries a fixed
+   *  out-of-network sub-line (B16 files no OON). May return a two-line
+   *  string; the copay cell renders it pre-line. */
+  fmt?: (cs: { copay: number | null; coinsurance: number | null; description: string | null } | null | undefined) => string;
+}
+
+// Medicare-covered dental (B16a) placeholder — never "—"/$0.
+const QUOTE_DENTAL_MC_NOT_FILED = 'Not filed — call to verify';
+function formatDentalMcQuote(
+  cs: { copay: number | null; coinsurance: number | null } | null | undefined,
+): string {
+  const inNetwork =
+    cs?.copay != null
+      ? `$${cs.copay}`
+      : cs?.coinsurance != null
+        ? `${cs.coinsurance}%`
+        : QUOTE_DENTAL_MC_NOT_FILED;
+  return `${inNetwork}\nOut-of-network: ${QUOTE_DENTAL_MC_NOT_FILED}`;
 }
 
 const MEDICAL_DEFS: MedicalDef[] = [
@@ -3288,6 +3308,11 @@ const MEDICAL_DEFS: MedicalDef[] = [
   { label: 'Outpatient Surgery', pick: (p) => p.benefits?.medical?.outpatient_surgery_hospital },
   { label: 'Mental Health',      pick: (p) => p.benefits?.medical?.mental_health_individual },
   { label: 'PT / OT',            pick: (p) => p.benefits?.medical?.physical_speech_therapy },
+  // Medicare-covered dental (B16a) — a MEDICAL cost-share, NOT the routine
+  // dental allowance (that stays in Extras). Kept BEFORE Inpatient, which
+  // must remain last (copayRows slices off the final entry as the per-day
+  // inpatient row).
+  { label: 'Medicare-covered dental', pick: (p) => p.benefits?.medical?.dental_medicare_covered, fmt: formatDentalMcQuote },
   { label: 'Inpatient',          pick: (p) => p.benefits?.medical?.inpatient },
 ];
 
@@ -3401,7 +3426,10 @@ function CopayRowEl({ row, columns, betterIsHigher }: { row: CopayRow; columns: 
         const delta = ci === 0 || !isNumeric || num === baseNum ? null : (num as number) - (baseNum as number);
         return (
           <td key={col.id} style={cellStyle(s.bodyBg)}>
-            <span style={{ fontFamily: FONT.mono, fontSize: 12, color: s.bodyFg }}>{v}</span>
+            {/* inline-block + pre-line so the Medicare-covered-dental
+                out-of-network sub-line renders on its own line; single-line
+                values are unaffected. */}
+            <span style={{ fontFamily: FONT.mono, fontSize: 12, color: s.bodyFg, display: 'inline-block', whiteSpace: 'pre-line' }}>{v}</span>
             {delta != null && delta !== 0 && (
               <DeltaBadge value={delta} flipBetter={betterIsHigher} />
             )}
