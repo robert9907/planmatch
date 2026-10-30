@@ -2099,7 +2099,17 @@ export function buildBenefits(
   // instead of silently shadowing it.
   const dental = rows.find((r) => r.benefit_category === 'dental');
   const pmDentalMax = Math.max(toNum(dental?.max_coverage) ?? 0, toNum(dental?.coverage_amount) ?? 0);
-  const dentalMax = pmDentalMax > 0 ? pmDentalMax : (pbpFallback?.dentalAnnualMax ?? 0);
+  // Fall back to the medicare.gov scraper's dental_annual_max only when it is a
+  // CREDIBLE annual maximum. Some pbp_benefits rows carry a mis-mapped small
+  // figure (a per-visit copay, not the yearly cap) — e.g. Kaiser GA $44,
+  // Alignment NC $10, Verda TX $50 — which was surfacing as a bogus "$44/yr max"
+  // over a clean B16 row that files no cap. Real MA dental maximums are ≥ ~$500;
+  // the legitimate fallbacks (B16 extract gaps) sit at $1,000–$3,500. A sub-$250
+  // value is not a real annual maximum, so it is dropped (→ "no max" / 0),
+  // mirroring the > $10,000 filing-error ceiling in api/_lib/b16-dental.ts.
+  const MIN_SANE_DENTAL_MAX = 250;
+  const fallbackMax = pbpFallback?.dentalAnnualMax ?? 0;
+  const dentalMax = pmDentalMax > 0 ? pmDentalMax : (fallbackMax >= MIN_SANE_DENTAL_MAX ? fallbackMax : 0);
   // Medicare-covered dental (CMS PBP B16a) — a separate category from the
   // routine allowance, carried through so agent dental == consumer dental
   // (robert9907/plan-match #95 wrote both rows into the shared pm_plan_benefits).
