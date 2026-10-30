@@ -898,6 +898,12 @@ export function AgentV3App() {
     costUnavailable?: boolean;
     // Jan..Dec member cost for this drug (rank-plans monthly_cost).
     monthlyCost?: number[] | null;
+    // Part D / Part B coverage classification (rank-plans). Drives the three
+    // drug-coverage labels rendered by CompareScreen / BoardComparisonView.
+    notPartD?: boolean;
+    partBEligible?: boolean;
+    partBOrD?: boolean;
+    partBNote?: string | null;
   };
 
   // planById is keyed by the normalized triple form so the agent's
@@ -1153,6 +1159,10 @@ export function AgentV3App() {
         quantity_limit_days?: number | null;
         monthly_cost?: number[] | null;
         switch_suggestion?: SwitchSuggestion | null;
+        not_part_d?: boolean;
+        part_b_eligible?: boolean;
+        part_b_or_d?: boolean;
+        part_b_note?: string | null;
       }>,
     ): DrugRow[] =>
       meds.map((m) =>
@@ -1188,6 +1198,12 @@ export function AgentV3App() {
               // (consumer rank-plans switch_suggestion). Non-null only when
               // !covered; drives the "ask your doctor about switching" note.
               switchSuggestion: m.switch_suggestion ?? null,
+              // Part D / Part B coverage classification (rank-plans) — drives
+              // the three verbatim drug-coverage labels on Compare / H2H.
+              notPartD: m.not_part_d === true,
+              partBEligible: m.part_b_eligible === true,
+              partBOrD: m.part_b_or_d === true,
+              partBNote: m.part_b_note ?? null,
             },
       );
     // Meds that never matched a drug code aren't sent to rank-plans, so

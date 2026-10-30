@@ -79,6 +79,16 @@ export interface LibraryDrug {
   strength: string;
   dose_form: string;
   is_brand: boolean;
+  /** Part D / Part B classification + display facts from pm_drugs, returned by
+   *  /api/library/drug-search. Optional (older deploys omit them). Threaded into
+   *  the Medication so the Meds screen can label OTC / Part B drugs immediately
+   *  and the AgentBase sync payload carries real values (not null). */
+  part_b_status?: 'part_b' | 'part_b_or_d' | null;
+  not_part_d?: boolean;
+  strength_display?: string | null;
+  package_size?: string | null;
+  package_unit?: string | null;
+  quantity_unit?: string | null;
 }
 
 export async function searchDrugs(
@@ -302,6 +312,20 @@ export interface LibraryRankMedication {
    *  the plan files a clean opposite-form match for. Null on covered meds and
    *  when no equivalent is filed; absent on older API responses. */
   switch_suggestion?: SwitchSuggestion | null;
+  /** Part D / Part B coverage classification (consumer rank-plans). Drives the
+   *  three drug-coverage labels. All optional — absent on older API responses.
+   *  - not_part_d: the drug is excluded from Part D (e.g. OTC); never priced.
+   *  - part_b_eligible: the drug is covered under Part B (the plan's Part B
+   *    drug coinsurance applies), not a Part D tier/copay.
+   *  - part_b_or_d: Part D is the normal path but Part B may cover it in some
+   *    situations — keep the Part D price and add a small note. */
+  not_part_d?: boolean;
+  part_b_eligible?: boolean;
+  part_b_or_d?: boolean;
+  /** Free-text Part B caveat for a part_b_or_d drug; null when none filed. */
+  part_b_note?: string | null;
+  /** Human-readable strength + form (e.g. "500 mg tablet"); null when absent. */
+  strength_display?: string | null;
 }
 
 /** One month of the Jan–Dec drug-cost calendar. */

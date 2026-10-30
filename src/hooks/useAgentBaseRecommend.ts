@@ -79,6 +79,26 @@ export interface SyncInput {
      *  endpoint treats absent === unknown. */
     pa_required?: boolean;
     st_required?: boolean;
+    /** Drug-identity + Part D/B classification fields AgentBase ingests
+     *  under these exact names (don't rename). Each is optional and
+     *  may be null when the source the med carries doesn't fill it:
+     *   - dose_form: dosage form ("Oral Tablet"), mirrors `form`.
+     *   - strength: numeric strength ("10 MG"), mirrors `dose`.
+     *   - strength_display: human-readable strength+form; null unless
+     *     the med was hydrated with it (drug-search doesn't carry it).
+     *   - package_size / package_unit / quantity_unit: packaging facts;
+     *     not available on the agent-v3 Medication today → null.
+     *   - not_part_d: true when the drug is excluded from Part D (OTC).
+     *   - part_b_status: 'part_b' | 'part_b_or_d' | 'not_part_d' | null
+     *     — the Part D/B classification; null when unknown. */
+    dose_form?: string | null;
+    strength?: string | null;
+    strength_display?: string | null;
+    package_size?: string | null;
+    package_unit?: string | null;
+    quantity_unit?: string | null;
+    not_part_d?: boolean | null;
+    part_b_status?: 'part_b' | 'part_b_or_d' | 'not_part_d' | null;
   }>;
   /** Provider-network status on the recommended plan. */
   providerContext: Array<{

@@ -60,7 +60,20 @@ interface DrugRow {
   // True when the catalog year's formulary isn't published yet — no real tier
   // or cost. Render "not yet published", never $0 / Tier / Not covered.
   costUnavailable?: boolean;
+  // Part D / Part B coverage classification (rank-plans). Drives the three
+  // verbatim drug-coverage labels — mirrors CompareScreen's DrugRow.
+  notPartD?: boolean;
+  partBEligible?: boolean;
+  partBOrD?: boolean;
+  partBNote?: string | null;
 }
+
+// Verbatim drug-coverage labels — kept byte-identical to CompareScreen so the
+// wording never drifts across the two Compare surfaces.
+const PART_D_NOT_COVERED_LABEL = 'Not covered by Part D — over the counter';
+const PART_B_COVERED_LABEL =
+  "Covered under Part B — your plan's Part B drug coinsurance applies";
+const PART_B_OR_D_NOTE = 'May be covered by Part B in some situations';
 
 export interface BoardComparisonViewProps {
   /** Plans currently on the board (2-4). Filtered upstream — no null
@@ -1129,6 +1142,13 @@ function buildDrugSection(
         // Formulary not published yet — no tier/cost. Never "Not covered".
         return { text: 'Not yet published', score: null, neutralOnPending: true };
       }
+      // Part D / Part B coverage labels take precedence over a tier/cost.
+      if (drugRow.notPartD) {
+        return { text: PART_D_NOT_COVERED_LABEL, score: null };
+      }
+      if (drugRow.partBEligible) {
+        return { text: PART_B_COVERED_LABEL, score: null };
+      }
       if (!drugRow.covered) {
         return { text: 'Not covered', score: null };
       }
@@ -1140,9 +1160,11 @@ function buildDrugSection(
           subtext: `Annual est: ${fmtMoney(drugRow.annualCost)}`,
         };
       }
+      // part_b_or_d: keep the normal Part D price + the small Part-B note.
+      const tierSubtext = `Tier ${drugRow.tier ?? '—'} · annual ${fmtMoney(drugRow.annualCost)}`;
       return {
         text: `$${drugRow.monthlyCopay}/mo`,
-        subtext: `Tier ${drugRow.tier ?? '—'} · annual ${fmtMoney(drugRow.annualCost)}`,
+        subtext: drugRow.partBOrD ? `${tierSubtext} · ${PART_B_OR_D_NOTE}` : tierSubtext,
         score: drugRow.monthlyCopay,
       };
     };

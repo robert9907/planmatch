@@ -17,6 +17,14 @@ export interface DrugSearchResult {
   strength: string | null;
   dose_form: string | null;
   is_brand: boolean;
+  // Part D / Part B classification + display facts (pm_drugs), passed through
+  // from drug-search so a med added here carries them onto the Medication.
+  part_b_status: 'part_b' | 'part_b_or_d' | null;
+  not_part_d: boolean;
+  strength_display: string | null;
+  package_size: string | null;
+  package_unit: string | null;
+  quantity_unit: string | null;
 }
 
 export interface UseDrugSearch {
@@ -112,6 +120,12 @@ export function useDrugSearch(
           strength: nullable(r.d.strength),
           dose_form: nullable(r.d.dose_form),
           is_brand: Boolean(r.d.is_brand),
+          part_b_status: r.d.part_b_status ?? null,
+          not_part_d: Boolean(r.d.not_part_d),
+          strength_display: nullable(r.d.strength_display),
+          package_size: nullable(r.d.package_size),
+          package_unit: nullable(r.d.package_unit),
+          quantity_unit: nullable(r.d.quantity_unit),
         }));
 
         setResults(mapped);

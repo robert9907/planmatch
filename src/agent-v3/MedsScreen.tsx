@@ -59,6 +59,17 @@ import { SnapInbox } from './SnapInbox';
 import { FADE_SLIDE_IN } from './styles';
 import { normalizeLisTierForClient } from '@/lib/dual-eligible';
 
+// Verbatim drug-coverage labels — byte-identical to the Compare / Head-to-Head
+// surfaces so the wording never drifts (plain words for a 67-year-old).
+//  - not_part_d → "Not covered by Part D — over the counter" (no price)
+//  - partBEligible → "Covered under Part B — your plan's Part B drug
+//    coinsurance applies" (instead of a tier/cost)
+//  - partBOrD → keep the normal estimate + a small Part-B note.
+const PART_D_NOT_COVERED_LABEL = 'Not covered by Part D — over the counter';
+const PART_B_COVERED_LABEL =
+  "Covered under Part B — your plan's Part B drug coinsurance applies";
+const PART_B_OR_D_NOTE = 'May be covered by Part B in some situations';
+
 interface Props {
   onNext: () => void;
   onBack: () => void;
@@ -266,6 +277,16 @@ export function MedsScreen({ onNext, onBack, clientView, capture, formularyUnava
             form: r.dose_form ?? undefined,
             source: 'manual',
             isBrand: r.is_brand,
+            // Part D / Part B classification + display facts from drug-search —
+            // so the label renders immediately and the AgentBase sync carries
+            // real values. partB flags derive from the single part_b_status.
+            not_part_d: r.not_part_d || undefined,
+            partBEligible: r.part_b_status === 'part_b' || undefined,
+            partBOrD: r.part_b_status === 'part_b_or_d' || undefined,
+            strengthDisplay: r.strength_display ?? undefined,
+            packageSize: r.package_size ?? undefined,
+            packageUnit: r.package_unit ?? undefined,
+            quantityUnit: r.quantity_unit ?? undefined,
           });
         }}
       />
@@ -550,7 +571,19 @@ function MedRow({
         ✕
       </button>
       <div style={{ textAlign: 'right', minWidth: 95 }}>
-        {med.rxcui && formularyUnavailable ? (
+        {med.not_part_d ? (
+          // Drug is excluded from Part D (OTC) — no tier, no price. Matches the
+          // small red "Not covered" treatment used elsewhere on this screen.
+          <div style={{ fontSize: 10, color: '#a32d2d', fontWeight: 600, lineHeight: 1.3 }}>
+            {PART_D_NOT_COVERED_LABEL}
+          </div>
+        ) : med.partBEligible ? (
+          // Covered under Part B — the plan's Part B drug coinsurance applies,
+          // not a Part D tier/cost.
+          <div style={{ fontSize: 10, color: '#0d2f5e', fontWeight: 600, lineHeight: 1.3 }}>
+            {PART_B_COVERED_LABEL}
+          </div>
+        ) : med.rxcui && formularyUnavailable ? (
           // Formulary for this catalog year isn't published yet — no tier, no
           // estimate. Never show $0 / "Not covered" / a prior-year tier here.
           <div style={{ fontSize: 10, color: '#92400e', fontWeight: 600, lineHeight: 1.3 }}>
@@ -622,6 +655,12 @@ function MedRow({
             <div style={{ fontSize: 9, color: '#059669', fontWeight: 600 }}>
               Covered on {stats.coveredPlans}/{stats.totalPlans} plans
             </div>
+            {med.partBOrD && (
+              // part_b_or_d: keep the normal Part D estimate + the small note.
+              <div style={{ fontSize: 9, color: '#64748b', fontWeight: 600, lineHeight: 1.3, maxWidth: 140 }}>
+                {PART_B_OR_D_NOTE}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -643,6 +682,12 @@ function AddMedPanel({
     strength: string | null;
     dose_form: string | null;
     is_brand: boolean;
+    part_b_status: 'part_b' | 'part_b_or_d' | null;
+    not_part_d: boolean;
+    strength_display: string | null;
+    package_size: string | null;
+    package_unit: string | null;
+    quantity_unit: string | null;
   }) => void;
   panelRef?: RefObject<HTMLDivElement>;
   presetQuery?: string | null;
@@ -733,6 +778,12 @@ function AddMedPanel({
                     strength: r.strength,
                     dose_form: r.dose_form,
                     is_brand: r.is_brand,
+                    part_b_status: r.part_b_status,
+                    not_part_d: r.not_part_d,
+                    strength_display: r.strength_display,
+                    package_size: r.package_size,
+                    package_unit: r.package_unit,
+                    quantity_unit: r.quantity_unit,
                   });
                   setQuery('');
                 }}

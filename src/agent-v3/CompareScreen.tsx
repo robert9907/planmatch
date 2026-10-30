@@ -335,6 +335,32 @@ interface DrugRow {
   // clean opposite-form match — drives the "ask your doctor about switching"
   // note. Undefined/null on covered drugs and plans with no equivalent.
   switchSuggestion?: SwitchSuggestion | null;
+  // Part D / Part B coverage classification (rank-plans). Drives the three
+  // drug-coverage labels — see drugCoverageLabel(). Absent on older responses.
+  notPartD?: boolean;
+  partBEligible?: boolean;
+  partBOrD?: boolean;
+  partBNote?: string | null;
+}
+
+// Verbatim drug-coverage labels (plain words for a 67-year-old). Shared across
+// the Meds screen, Compare board, and Head-to-Head so the wording never drifts.
+// Returns null when the normal Part D price/tier should show instead.
+//  - not_part_d → "Not covered by Part D — over the counter" (no price)
+//  - part_b_eligible → "Covered under Part B — your plan's Part B drug
+//    coinsurance applies" (instead of a tier/cost)
+//  - part_b_or_d → keep the Part D price; a small note is rendered separately.
+const PART_D_NOT_COVERED_LABEL = 'Not covered by Part D — over the counter';
+const PART_B_COVERED_LABEL =
+  "Covered under Part B — your plan's Part B drug coinsurance applies";
+const PART_B_OR_D_NOTE = 'May be covered by Part B in some situations';
+function drugCoverageLabel(d: {
+  notPartD?: boolean;
+  partBEligible?: boolean;
+}): string | null {
+  if (d.notPartD) return PART_D_NOT_COVERED_LABEL;
+  if (d.partBEligible) return PART_B_COVERED_LABEL;
+  return null;
 }
 
 // Per-fill cost label for one drug on one plan. Uses the brain's
@@ -595,6 +621,9 @@ function buildMetrics(args: {
       if (!r) return 'Not priced';
       if (r.unmatched) return 'Not matched — re-search on Meds';
       if (r.costUnavailable) return 'Formulary not yet published';
+      // Part D / Part B coverage labels take precedence over a tier/cost.
+      const coverageLabel = drugCoverageLabel(r);
+      if (coverageLabel) return coverageLabel;
       if (!r.covered) {
         // Surface the brand↔generic switch note on the metric grid too, so the
         // Head-to-Head grid matches the drug-cost calendar + Compare board.
@@ -602,7 +631,9 @@ function buildMetrics(args: {
         return note ? `Not covered — ${note}` : 'Not covered';
       }
       const tier = r.tier != null ? `Tier ${r.tier}` : 'Covered';
-      return `${tier} · ${perMonth(r.annualCost)}`;
+      const price = `${tier} · ${perMonth(r.annualCost)}`;
+      // part_b_or_d: keep the normal Part D price + the small Part-B note.
+      return r.partBOrD ? `${price} · ${PART_B_OR_D_NOTE}` : price;
     },
     numeric: (p: Plan) => {
       const r = drugRowFor(p, med);
@@ -3370,6 +3401,11 @@ function DrugBreakdown({
           }
           const tierLabel = d.unmatched ? 'Not matched' : d.tier != null ? `Tier ${d.tier}` : 'Not covered';
           const copayLabel = perMonth(d.annualCost);
+          // Part D / Part B coverage label (OTC-excluded or Part-B-covered) —
+          // shown in place of the tier/cost. part_b_or_d keeps the price and
+          // renders PART_B_OR_D_NOTE as a small sub-line below.
+          const coverageLabel = drugCoverageLabel(d);
+          const partBOrDNote = d.partBOrD ? PART_B_OR_D_NOTE : null;
           // "Ask your doctor about switching" — only on an uncovered drug the
           // plan files a covered brand↔generic equivalent for.
           const switchNote = !d.covered && !d.unmatched ? formatSwitchNote(d.switchSuggestion) : null;
@@ -3398,10 +3434,18 @@ function DrugBreakdown({
                   >
                     {d.name}
                   </span>
-                  <span style={{ fontFamily: FONT_NUM, fontSize: 10, whiteSpace: 'nowrap' }}>
-                    {d.unmatched ? 'Not matched' : d.covered ? `${tierLabel} · ${copayLabel}` : 'Not covered'}
+                  <span style={{ fontSize: 10, whiteSpace: 'normal', textAlign: 'right' }}>
+                    {coverageLabel ??
+                      (d.unmatched
+                        ? 'Not matched'
+                        : d.covered
+                          ? `${tierLabel} · ${copayLabel}`
+                          : 'Not covered')}
                   </span>
                 </div>
+                {partBOrDNote && (
+                  <span style={{ fontSize: 10, color: MUTED, lineHeight: 1.3 }}>{partBOrDNote}</span>
+                )}
                 {switchNote && (
                   <span style={{ fontSize: 10, color: '#1d4ed8', lineHeight: 1.3 }}>{switchNote}</span>
                 )}
@@ -3432,13 +3476,34 @@ function DrugBreakdown({
                 >
                   {d.name}
                 </span>
-                <span style={{ color: d.covered ? MUTED : '#991b1b', fontSize: 10 }}>
-                  {tierLabel}
-                </span>
-                <span style={{ fontFamily: FONT_NUM, fontSize: 10, fontWeight: 700, textAlign: 'right' }}>
-                  {d.covered ? copayLabel : '—'}
-                </span>
+                {coverageLabel ? (
+                  // Part B / not-Part-D label spans both value columns in place
+                  // of the tier + cost (no Part D price to show).
+                  <span
+                    style={{
+                      gridColumn: '2 / span 2',
+                      fontSize: 10,
+                      textAlign: 'right',
+                      color: d.notPartD ? '#991b1b' : TEXT,
+                      lineHeight: 1.3,
+                    }}
+                  >
+                    {coverageLabel}
+                  </span>
+                ) : (
+                  <>
+                    <span style={{ color: d.covered ? MUTED : '#991b1b', fontSize: 10 }}>
+                      {tierLabel}
+                    </span>
+                    <span style={{ fontFamily: FONT_NUM, fontSize: 10, fontWeight: 700, textAlign: 'right' }}>
+                      {d.covered ? copayLabel : '—'}
+                    </span>
+                  </>
+                )}
               </div>
+              {partBOrDNote && (
+                <span style={{ fontSize: 10, color: MUTED, lineHeight: 1.3 }}>{partBOrDNote}</span>
+              )}
               {switchNote && (
                 <span style={{ fontSize: 10, color: '#1d4ed8', lineHeight: 1.3 }}>{switchNote}</span>
               )}
@@ -5495,10 +5560,13 @@ function H2HDrugCalendar({
         // Uncovered rows are never priced here.
         .filter((d) => {
           if (d.unmatched) return false;
+          // Part B / not-Part-D drugs carry a coverage label instead of a price.
+          if (drugCoverageLabel(d) != null) return true;
           if (d.covered && Array.isArray(d.monthlyCost)) return true;
           return !d.covered && formatSwitchNote(d.switchSuggestion) != null;
         })
         .map((d) => {
+          const coverageLabel = drugCoverageLabel(d);
           const priced = d.covered && Array.isArray(d.monthlyCost);
           const switchNote = !d.covered ? formatSwitchNote(d.switchSuggestion) : null;
           return (
@@ -5511,9 +5579,13 @@ function H2HDrugCalendar({
                 lineHeight: 1.6,
               }}
             >
-              <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{ whiteSpace: coverageLabel ? 'normal' : 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {d.name}{' '}
-                {priced ? (
+                {coverageLabel ? (
+                  <span style={{ color: d.notPartD ? '#991b1b' : TEXT, fontWeight: 600 }}>
+                    {coverageLabel}
+                  </span>
+                ) : priced ? (
                   <span style={{ fontFamily: FONT_NUM, color: TEXT, fontWeight: 600 }}>
                     {money2(d.monthlyCost![k] ?? 0)}
                   </span>
@@ -5521,6 +5593,11 @@ function H2HDrugCalendar({
                   <span style={{ color: '#991b1b', fontWeight: 600 }}>Not covered</span>
                 )}
               </div>
+              {d.partBOrD && (
+                <div style={{ fontSize: 10, color: MUTED, lineHeight: 1.3, whiteSpace: 'normal' }}>
+                  {PART_B_OR_D_NOTE}
+                </div>
+              )}
               {switchNote && (
                 <div style={{ fontSize: 10, color: '#1d4ed8', lineHeight: 1.3, whiteSpace: 'normal' }}>
                   {switchNote}
