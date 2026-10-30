@@ -47,6 +47,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Plan } from '@/types/plans';
 import { formatOonLine } from '@/agent-v3/planDisplay';
+import { buildDentalDetailView, DENTAL_NOT_FILED } from '@/lib/dentalDetail';
 import type { Client, Medication, Provider, CsnpConditionCode } from '@/types/session';
 import { useSession } from '@/hooks/useSession';
 import {
@@ -854,6 +855,74 @@ export function QuoteDeliveryV4({
     },
   ], [columns]);
 
+  // Routine dental DETAIL rows — the per-category drill-down behind the one-
+  // line "Dental" summary row above. One row per service (Preventive, Fillings,
+  // Root canals, Gum care, Extractions, Crowns & bridges, Dentures, Implants),
+  // plus the dental deductible + annual max. Each cell is a multi-line string:
+  // in-network cost, then OON / frequency / prior-auth sub-lines (pre-line).
+  // Sourced from benefits.dental.detail (pm_plan_benefits.detail jsonb). Missing
+  // → "Not filed — call to verify"; a PDP column → "N/A — Part D only"; a plan
+  // that filed no detail at all → "Not filed — call to verify" in each cell.
+  // ROUTINE dental only — never the Medicare-covered dental medical row.
+  const dentalDetailRows = useMemo<CopayRow[]>(() => {
+    const views = columns.map((c) =>
+      c.plan.plan_type === 'PDP' ? null : buildDentalDetailView(c.plan.benefits.dental.detail),
+    );
+    const anyDental = columns.some((c) => c.plan.plan_type !== 'PDP');
+    if (!anyDental) return [];
+
+    const cell = (view: ReturnType<typeof buildDentalDetailView> | null, rowKey: string): string => {
+      if (view == null) return 'N/A — Part D only';
+      if (view.empty) return DENTAL_NOT_FILED;
+      const r = view.rows.find((x) => x.key === rowKey);
+      if (!r) return DENTAL_NOT_FILED;
+      if (r.covered === 'No') return 'Not covered';
+      if (r.covered === 'Not filed') return DENTAL_NOT_FILED;
+      const lines = [r.inNetwork];
+      lines.push(`OON: ${r.outNetwork}`);
+      lines.push(`Freq: ${r.frequency}`);
+      lines.push(`Prior auth: ${r.priorAuth}`);
+      return lines.join('\n');
+    };
+
+    const serviceRows: CopayRow[] = (
+      [
+        { key: 'preventive', label: 'Preventive' },
+        { key: 'rs', label: 'Fillings' },
+        { key: 'end', label: 'Root canals' },
+        { key: 'peri', label: 'Gum care' },
+        { key: 'omsg', label: 'Extractions' },
+        { key: 'prf', label: 'Crowns & bridges' },
+        { key: 'prm', label: 'Dentures' },
+        { key: 'impl', label: 'Implants' },
+      ] as const
+    ).map((spec) => ({
+      label: `  ${spec.label}`,
+      values: views.map((v) => cell(v, spec.key)),
+      numbers: columns.map(() => null),
+    }));
+
+    const summaryRows: CopayRow[] = [
+      {
+        label: 'Dental annual max',
+        values: views.map((v) => (v == null ? 'N/A — Part D only' : v.empty ? DENTAL_NOT_FILED : v.annualMax)),
+        numbers: columns.map(() => null),
+      },
+      {
+        label: 'Preventive deductible',
+        values: views.map((v) => (v == null ? 'N/A — Part D only' : v.empty ? DENTAL_NOT_FILED : v.deductible.preventive)),
+        numbers: columns.map(() => null),
+      },
+      {
+        label: 'Comprehensive deductible',
+        values: views.map((v) => (v == null ? 'N/A — Part D only' : v.empty ? DENTAL_NOT_FILED : v.deductible.comprehensive)),
+        numbers: columns.map(() => null),
+      },
+    ];
+
+    return [...summaryRows, ...serviceRows];
+  }, [columns]);
+
   // Total Rx Cost — from the consumer library's rank-plans (correct LIS/dual
   // caps + pharmacy channel), summing the per-drug cells so the total always
   // matches the rows the broker sees. No /api/drug-costs call, no retail×3.
@@ -1197,6 +1266,7 @@ export function QuoteDeliveryV4({
       inpatientTotal,
       planCostRows,
       extraRows,
+      dentalDetailRows,
       rxTotalMonthly,
       rxTotalAnnual,
       whySwitch,
@@ -1212,7 +1282,7 @@ export function QuoteDeliveryV4({
   }, [
     setPrintableSnapshot, client, medications, providers, result,
     columns, medRows, providerRows, copayRows, inpatientRow, inpatientTotal,
-    planCostRows, extraRows, rxTotalMonthly, rxTotalAnnual, whySwitch,
+    planCostRows, extraRows, dentalDetailRows, rxTotalMonthly, rxTotalAnnual, whySwitch,
     recommendation, pharmacyFill, isAnnualReview, brainData?.planYear,
   ]);
 
@@ -2559,6 +2629,35 @@ export function QuoteDeliveryV4({
 
             {extraRows.map((row, ri) => (
               <CopayRowEl key={`ex-${ri}`} row={row} columns={columns} betterIsHigher={row.betterIsHigher} />
+            ))}
+
+            {/* Routine dental DETAIL — per-category drill-down behind the
+                "Dental" summary row above. Rendered as a sub-grouped set of
+                rows (deductible + annual max, then per-service cost with OON /
+                frequency / prior-auth sub-lines). ROUTINE dental only. */}
+            {dentalDetailRows.length > 0 && (
+              <tr>
+                <th
+                  colSpan={colSpanFull}
+                  style={{
+                    padding: '8px 14px 4px 24px',
+                    textAlign: 'left',
+                    background: COL.panelBg,
+                    fontFamily: FONT.body,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color: COL.inkSub,
+                    textTransform: 'uppercase',
+                    letterSpacing: 0.4,
+                    borderBottom: `1px solid ${COL.rule}`,
+                  }}
+                >
+                  Routine dental details
+                </th>
+              </tr>
+            )}
+            {dentalDetailRows.map((row, ri) => (
+              <CopayRowEl key={`dd-${ri}`} row={row} columns={columns} betterIsHigher={row.betterIsHigher} />
             ))}
 
             </>)}

@@ -9,6 +9,45 @@ export type FormularyTier = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 'excluded';
 // UI can render meaningful copy instead of "—" on plans that
 // clearly DO cover the benefit but didn't file an annual cap.
 
+// ── Routine dental DETAIL (per-category drill-down) ──────────────────
+// pm_plan_benefits.detail (jsonb) on the routine dental row. Decoded from
+// CMS PBP B16b (preventive) + B16c (comprehensive) at ingest — the same
+// B16 service columns that classify the preventive/comprehensive tier.
+// This is the drill-down BEHIND the one-line `description` summary; it
+// never touches the Medicare-covered (B16a) medical cost-share row.
+// Null when the plan filed no structured per-service detail (common —
+// ~half of dental rows). Every nested field can be null/absent → the UI
+// renders "Not filed — call to verify", never a fabricated $0.
+export interface DentalServiceCost {
+  copay: number | null;
+  coinsurance: number | null;
+}
+export interface DentalServiceDetail {
+  covered: boolean;
+  referral?: boolean;
+  frequency?: { num: number | null; per: string | null } | null;
+  in_network?: DentalServiceCost | null;
+  prior_auth?: boolean;
+  /** Same shape as in_network, or null when OON isn't filed. */
+  out_of_network?: DentalServiceCost | null;
+}
+export interface DentalDetail {
+  annual_max?: {
+    kind?: string | null;
+    amount?: number | null;
+    in_oon?: number | null;
+  } | null;
+  deductible?: {
+    preventive?: number | null;
+    comprehensive?: number | null;
+    medicare_covered?: number | null;
+  } | null;
+  /** Keyed by B16b code: oe, pc, dx, ft, ods, ops (and 'ov' aggregate). */
+  preventive_services?: Record<string, DentalServiceDetail | null> | null;
+  /** Keyed by B16c code: rs, end, peri, omsg, prm, prf, impl, ags, … */
+  comprehensive_categories?: Record<string, DentalServiceDetail | null> | null;
+}
+
 export interface DentalBenefit {
   preventive: boolean;
   comprehensive: boolean;
@@ -25,6 +64,10 @@ export interface DentalBenefit {
     coinsurance: number | null;
     description: string | null;
   } | null;
+  // Per-category routine dental drill-down (pm_plan_benefits.detail jsonb).
+  // Undefined/null when not projected or not filed → UI shows the summary
+  // line and a single "Not filed — call to verify" row, never a table of $0s.
+  detail?: DentalDetail | null;
 }
 
 export interface VisionBenefit {

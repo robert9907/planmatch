@@ -269,6 +269,10 @@ function fillBenefits(partial: Partial<PlanBenefits>): PlanBenefits {
       comprehensive: partial.dental?.comprehensive ?? false,
       annual_max: partial.dental?.annual_max ?? 0,
       description: partial.dental?.description ?? null,
+      // Per-category routine dental drill-down (api/plans benefits.dental.detail,
+      // pm_plan_benefits.detail jsonb). Undefined/null when not filed → the
+      // dental detail table renders a single "Not filed — call to verify" line.
+      detail: partial.dental?.detail ?? null,
     },
     vision: {
       exam: partial.vision?.exam ?? false,
