@@ -58,7 +58,8 @@
       ]
     },
     "generated": "proposed 2026-10-15 from medicare.gov plan_card cache (~/Code/plan-match/_tmp/medicare-gov/_y2027)",
-    "carryover_note": "Carried-over 2026 fixtures re-captured for 2027. Dropped: H0174-009-000 (Wellcare Assist TX Harris, no 2027 row) and H5253-041-000 (UHC AARP D-SNP NC Durham, no 2027 row). Added H4513-061-000 (Cigna HealthSpring Preferred HMO, Harris TX) to restore TX coverage. H3404-004-000 is MA-ONLY in CY2027 (no Part D per landscape + pm_mapd_plan_set) so its drug_deductible and all rx_tiers are null. Extras left null where medicare.gov exposes no unambiguous dollar figure."
+    "carryover_note": "Carried-over 2026 fixtures re-captured for 2027. Dropped: H0174-009-000 (Wellcare Assist TX Harris, no 2027 row) and H5253-041-000 (UHC AARP D-SNP NC Durham, no 2027 row). Added H4513-061-000 (Cigna HealthSpring Preferred HMO, Harris TX) to restore TX coverage. H3404-004-000 is MA-ONLY in CY2027 (no Part D per landscape + pm_mapd_plan_set) so its drug_deductible and all rx_tiers are null. Extras left null where medicare.gov exposes no unambiguous dollar figure.",
+    "dental_note": "dental_annual_max + dental_comprehensive verified from medicare.gov CY2027 captures (2026-10-30); medical.dental_medicare_covered copay/coins is CMS PBP B16a (medicare.gov does not expose Medicare-covered dental). OON line drift is locked by the consumer secret-shopper (plan-match e2e)."
   },
   "fixtures": [
     {
@@ -134,16 +135,21 @@
           "snf": {
             "copay": 0,
             "coinsurance": null
+          },
+          "dental_medicare_covered": {
+            "copay": 40,
+            "coinsurance": null
           }
         },
         "extras": {
-          "dental_annual_max": null,
+          "dental_annual_max": 0,
           "vision_eyewear_allowance_year": null,
           "hearing_aid_allowance_year": null,
           "otc_allowance_per_quarter": null,
           "food_card_allowance_per_month": null,
           "transportation_rides_per_year": null,
-          "fitness_enabled": null
+          "fitness_enabled": null,
+          "dental_comprehensive": true
         },
         "rx_tiers": {
           "tier_1": {
@@ -242,16 +248,21 @@
           "snf": {
             "copay": null,
             "coinsurance": null
+          },
+          "dental_medicare_covered": {
+            "copay": 45,
+            "coinsurance": null
           }
         },
         "extras": {
-          "dental_annual_max": null,
+          "dental_annual_max": 1000,
           "vision_eyewear_allowance_year": null,
           "hearing_aid_allowance_year": null,
           "otc_allowance_per_quarter": null,
           "food_card_allowance_per_month": null,
           "transportation_rides_per_year": null,
-          "fitness_enabled": null
+          "fitness_enabled": null,
+          "dental_comprehensive": true
         },
         "rx_tiers": {
           "tier_1": {
@@ -350,16 +361,21 @@
           "snf": {
             "copay": null,
             "coinsurance": null
+          },
+          "dental_medicare_covered": {
+            "copay": 50,
+            "coinsurance": null
           }
         },
         "extras": {
-          "dental_annual_max": null,
+          "dental_annual_max": 0,
           "vision_eyewear_allowance_year": null,
           "hearing_aid_allowance_year": null,
           "otc_allowance_per_quarter": null,
           "food_card_allowance_per_month": null,
           "transportation_rides_per_year": null,
-          "fitness_enabled": null
+          "fitness_enabled": null,
+          "dental_comprehensive": false
         },
         "rx_tiers": {
           "tier_1": {
@@ -458,16 +474,21 @@
           "snf": {
             "copay": 0,
             "coinsurance": null
+          },
+          "dental_medicare_covered": {
+            "copay": null,
+            "coinsurance": 20
           }
         },
         "extras": {
-          "dental_annual_max": null,
+          "dental_annual_max": 0,
           "vision_eyewear_allowance_year": null,
           "hearing_aid_allowance_year": null,
           "otc_allowance_per_quarter": null,
           "food_card_allowance_per_month": null,
           "transportation_rides_per_year": null,
-          "fitness_enabled": null
+          "fitness_enabled": null,
+          "dental_comprehensive": false
         },
         "rx_tiers": {
           "tier_1": {
@@ -566,16 +587,21 @@
           "snf": {
             "copay": 0,
             "coinsurance": null
+          },
+          "dental_medicare_covered": {
+            "copay": null,
+            "coinsurance": 20
           }
         },
         "extras": {
-          "dental_annual_max": null,
+          "dental_annual_max": 0,
           "vision_eyewear_allowance_year": null,
           "hearing_aid_allowance_year": null,
           "otc_allowance_per_quarter": null,
           "food_card_allowance_per_month": null,
           "transportation_rides_per_year": null,
-          "fitness_enabled": null
+          "fitness_enabled": null,
+          "dental_comprehensive": false
         },
         "rx_tiers": {
           "tier_1": {
@@ -674,16 +700,21 @@
           "snf": {
             "copay": 0,
             "coinsurance": null
+          },
+          "dental_medicare_covered": {
+            "copay": null,
+            "coinsurance": 30
           }
         },
         "extras": {
-          "dental_annual_max": null,
+          "dental_annual_max": 3000,
           "vision_eyewear_allowance_year": null,
           "hearing_aid_allowance_year": null,
           "otc_allowance_per_quarter": null,
           "food_card_allowance_per_month": null,
           "transportation_rides_per_year": null,
-          "fitness_enabled": null
+          "fitness_enabled": null,
+          "dental_comprehensive": true
         },
         "rx_tiers": {
           "tier_1": {
@@ -782,16 +813,21 @@
           "snf": {
             "copay": 0,
             "coinsurance": null
+          },
+          "dental_medicare_covered": {
+            "copay": 40,
+            "coinsurance": null
           }
         },
         "extras": {
-          "dental_annual_max": null,
+          "dental_annual_max": 1500,
           "vision_eyewear_allowance_year": null,
           "hearing_aid_allowance_year": null,
           "otc_allowance_per_quarter": null,
           "food_card_allowance_per_month": null,
           "transportation_rides_per_year": null,
-          "fitness_enabled": null
+          "fitness_enabled": null,
+          "dental_comprehensive": true
         },
         "rx_tiers": {
           "tier_1": {
@@ -890,16 +926,21 @@
           "snf": {
             "copay": 0,
             "coinsurance": null
+          },
+          "dental_medicare_covered": {
+            "copay": 40,
+            "coinsurance": null
           }
         },
         "extras": {
-          "dental_annual_max": null,
+          "dental_annual_max": 2000,
           "vision_eyewear_allowance_year": null,
           "hearing_aid_allowance_year": null,
           "otc_allowance_per_quarter": null,
           "food_card_allowance_per_month": null,
           "transportation_rides_per_year": null,
-          "fitness_enabled": null
+          "fitness_enabled": null,
+          "dental_comprehensive": true
         },
         "rx_tiers": {
           "tier_1": {
@@ -998,16 +1039,21 @@
           "snf": {
             "copay": null,
             "coinsurance": null
+          },
+          "dental_medicare_covered": {
+            "copay": 20,
+            "coinsurance": null
           }
         },
         "extras": {
-          "dental_annual_max": null,
+          "dental_annual_max": 2750,
           "vision_eyewear_allowance_year": null,
           "hearing_aid_allowance_year": null,
           "otc_allowance_per_quarter": null,
           "food_card_allowance_per_month": null,
           "transportation_rides_per_year": null,
-          "fitness_enabled": null
+          "fitness_enabled": null,
+          "dental_comprehensive": true
         },
         "rx_tiers": {
           "tier_1": {

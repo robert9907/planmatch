@@ -63,6 +63,10 @@ interface CostShareExpected {
 
 interface ExtrasExpected {
   dental_annual_max: number | null;
+  // Dental tier (medicare.gov truth: BENEFIT_COMPREHENSIVE_DENTAL filed).
+  // Medicare-covered dental copay/coins is asserted via expected.medical
+  // .dental_medicare_covered (B16a, CMS PBP — medicare.gov does not expose it).
+  dental_comprehensive?: boolean | null;
   vision_eyewear_allowance_year: number | null;
   hearing_aid_allowance_year: number | null;
   otc_allowance_per_quarter: number | null;
@@ -127,7 +131,7 @@ interface ApiPlan {
   star_rating: number;
   part_b_giveback: number;
   benefits: {
-    dental?: { annual_max?: number };
+    dental?: { annual_max?: number; comprehensive?: boolean };
     vision?: { eyewear_allowance_year?: number };
     hearing?: { aid_allowance_year?: number };
     otc?: { allowance_per_quarter?: number };
@@ -356,6 +360,7 @@ function checksForFixture(fixture: Fixture, plan: ApiPlan | undefined, tolerance
   }
 
   add('extras.dental_annual_max', e.extras.dental_annual_max, plan?.benefits?.dental?.annual_max ?? null);
+  add('extras.dental_comprehensive', e.extras.dental_comprehensive ?? null, plan?.benefits?.dental?.comprehensive ?? null);
   add('extras.vision_eyewear_allowance_year', e.extras.vision_eyewear_allowance_year, plan?.benefits?.vision?.eyewear_allowance_year ?? null);
   add('extras.hearing_aid_allowance_year', e.extras.hearing_aid_allowance_year, plan?.benefits?.hearing?.aid_allowance_year ?? null);
   add('extras.otc_allowance_per_quarter', e.extras.otc_allowance_per_quarter, plan?.benefits?.otc?.allowance_per_quarter ?? null);
