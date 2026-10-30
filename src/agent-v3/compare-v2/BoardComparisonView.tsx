@@ -37,6 +37,7 @@ import { PreviewDrawerShell } from './QuickPreviewDrawer';
 import {
   planDisplay,
   formatCostShareWithRange,
+  formatOonLine,
   formatPcp,
   formatSpecialist,
   formatPremium,
@@ -789,8 +790,12 @@ function buildSections(
 
   // Medicare-covered dental (CMS PBP B16a) — a MEDICAL cost-share row.
   // Differs from medicalRow: missing (copay & coinsurance both null) must
-  // read "Not filed — call to verify", never "—"/$0; and B16 files no OON,
-  // so the subtext is a fixed OON "Not filed" line. Always rendered.
+  // read "Not filed — call to verify", never "—"/$0. The out-of-network
+  // subtext reads EXACTLY as the sibling medical rows do — through
+  // formatOonLine / pm_plan_oon_costs — so HMO reads "Out-of-network: not
+  // covered", a PPO shows its filed OON share, and only a plan with no
+  // Section C data at all falls back to the fixed OON "Not filed" line.
+  // Always rendered.
   const dentalMcRow = (label: string): ScoreableRow => ({
     label,
     direction: 'lower',
@@ -802,9 +807,14 @@ function buildSections(
           : d.coinsurance != null
             ? `${d.coinsurance}%`
             : DENTAL_MC_NOT_FILED;
+      // Same OON source/logic as the sibling medical rows (formatOonLine):
+      // HMO → "not covered", PPO → filed OON share. Only when the plan has
+      // no Section C data loaded (formatOonLine → null) do we fall back.
+      const subtext = formatOonLine(p, 'dental_medicare_covered')
+        ?? `Out-of-network: ${DENTAL_MC_NOT_FILED}`;
       return {
         text: inNetwork,
-        subtext: `Out-of-network: ${DENTAL_MC_NOT_FILED}`,
+        subtext,
         score: parseMoneyOrPct(inNetwork),
       };
     },

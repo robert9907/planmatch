@@ -284,7 +284,7 @@ const OON_LOADED_KEYS: ReadonlySet<string> = new Set([
   'outpatient_surgery_hospital', 'outpatient_observation',
   'outpatient_surgery_asc', 'ambulance', 'air_transportation',
   'dme_prosthetics', 'diabetic_supplies', 'renal_dialysis', 'partb_drugs',
-  'inpatient', 'mental_health_inpatient', 'snf',
+  'inpatient', 'mental_health_inpatient', 'snf', 'dental_medicare_covered',
 ]);
 // Same Plan-Finder / SBF convention as in-network: these headline the
 // filed maximum, not the range floor.
@@ -344,6 +344,15 @@ export function formatOonLine(plan: Plan, key: string): string | null {
     // Emergency ambulance is covered anywhere, at the in-network cost.
     if (key === 'ambulance' || key === 'air_transportation') {
       return 'Out-of-network: same cost in an emergency';
+    }
+    // Medicare-covered dental (B16a) only: on a PPO/POS plan, OON IS
+    // covered — we just don't have the filed B16a dollar amount. Saying
+    // "not covered" there would read as a coverage denial. Surface
+    // "Not filed — call to verify" instead. On an in-network-only HMO
+    // (mode 'none') OON genuinely isn't covered, so it falls through to
+    // the generic "not covered" below. Dental-key only; siblings unchanged.
+    if (key === 'dental_medicare_covered' && oon.mode !== 'none') {
+      return 'Out-of-network: Not filed — call to verify';
     }
     return 'Out-of-network: not covered';
   }

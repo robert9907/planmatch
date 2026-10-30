@@ -493,12 +493,14 @@ function csMetric(
 }
 
 // Medicare-covered dental (CMS PBP B16a) — a MEDICAL cost-share row that
-// renders differently from csMetric in two ways the shared formatters
-// don't cover: (1) a plan that files no B16a (copay & coinsurance both
-// null) must read "Not filed — call to verify", NEVER the em-dash or $0
-// a bare CostShare would produce; (2) B16 files no out-of-network value,
-// so the OON sub-line is a fixed "Out-of-network: Not filed — call to
-// verify" rather than the pm_plan_oon_costs lookup withOon does.
+// renders differently from csMetric in one way the shared formatters
+// don't cover: a plan that files no B16a (copay & coinsurance both null)
+// must read "Not filed — call to verify", NEVER the em-dash or $0 a bare
+// CostShare would produce. The out-of-network sub-line reads EXACTLY as the
+// sibling medical rows do — through formatOonLine / pm_plan_oon_costs — so
+// HMO reads "Out-of-network: not covered", a PPO shows its filed OON share,
+// and only a plan with no Section C data at all falls back to the fixed
+// "Out-of-network: Not filed — call to verify".
 const DENTAL_MC_NOT_FILED = 'Not filed — call to verify';
 function formatDentalMcInNetwork(cs: CostShare, isPdp: boolean): string {
   if (isPdp) return 'N/A — Part D only';
@@ -517,7 +519,12 @@ function dentalMcMetric(key: string, label: string, group: MetricGroup): Metric 
       );
       // PDP has no medical network; don't append a medical OON line.
       if (p.plan_type === 'PDP') return inNetwork;
-      return `${inNetwork}\nOut-of-network: ${DENTAL_MC_NOT_FILED}`;
+      // Same OON source/logic as the sibling medical rows (formatOonLine):
+      // HMO → "not covered", PPO → filed OON share. Only when the plan has
+      // no Section C data loaded (formatOonLine → null) do we fall back.
+      const oon = formatOonLine(p, 'dental_medicare_covered')
+        ?? `Out-of-network: ${DENTAL_MC_NOT_FILED}`;
+      return `${inNetwork}\n${oon}`;
     },
     numeric: (p) => costShareNumeric(p.benefits.medical.dental_medicare_covered),
     higherIsBetter: false,

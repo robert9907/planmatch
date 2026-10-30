@@ -46,6 +46,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Plan } from '@/types/plans';
+import { formatOonLine } from '@/agent-v3/planDisplay';
 import type { Client, Medication, Provider, CsnpConditionCode } from '@/types/session';
 import { useSession } from '@/hooks/useSession';
 import {
@@ -740,7 +741,7 @@ export function QuoteDeliveryV4({
   const copayRows = useMemo<CopayRow[]>(() => {
     return MEDICAL_DEFS.slice(0, MEDICAL_DEFS.length - 1).map((def) => ({
       label: def.label,
-      values: columns.map((c) => (def.fmt ?? formatCostShare)(def.pick(c.plan))),
+      values: columns.map((c) => (def.fmt ? def.fmt(def.pick(c.plan), c.plan) : formatCostShare(def.pick(c.plan)))),
       numbers: columns.map((c) => copayCash(def.pick(c.plan))),
     }));
   }, [columns]);
@@ -3278,16 +3279,22 @@ interface MedicalDef {
   pick: (plan: Plan) => { copay: number | null; coinsurance: number | null; description: string | null } | null | undefined;
   /** Optional per-row formatter overriding the shared formatCostShare.
    *  Used by Medicare-covered dental (B16a): its missing state is
-   *  "Not filed — call to verify" (never "—"/$0) and it carries a fixed
-   *  out-of-network sub-line (B16 files no OON). May return a two-line
-   *  string; the copay cell renders it pre-line. */
-  fmt?: (cs: { copay: number | null; coinsurance: number | null; description: string | null } | null | undefined) => string;
+   *  "Not filed — call to verify" (never "—"/$0) and it carries an
+   *  out-of-network sub-line that reads the same as the sibling medical
+   *  rows (formatOonLine). Receives the whole plan so it can read the
+   *  plan-type-aware OON source. May return a two-line string; the copay
+   *  cell renders it pre-line. */
+  fmt?: (
+    cs: { copay: number | null; coinsurance: number | null; description: string | null } | null | undefined,
+    plan: Plan,
+  ) => string;
 }
 
 // Medicare-covered dental (B16a) placeholder — never "—"/$0.
 const QUOTE_DENTAL_MC_NOT_FILED = 'Not filed — call to verify';
 function formatDentalMcQuote(
   cs: { copay: number | null; coinsurance: number | null } | null | undefined,
+  plan: Plan,
 ): string {
   const inNetwork =
     cs?.copay != null
@@ -3295,7 +3302,12 @@ function formatDentalMcQuote(
       : cs?.coinsurance != null
         ? `${cs.coinsurance}%`
         : QUOTE_DENTAL_MC_NOT_FILED;
-  return `${inNetwork}\nOut-of-network: ${QUOTE_DENTAL_MC_NOT_FILED}`;
+  // Same OON source/logic as the sibling medical rows (formatOonLine):
+  // HMO → "not covered", PPO → filed OON share. Only when the plan has no
+  // Section C data loaded (formatOonLine → null) do we fall back.
+  const oon = formatOonLine(plan, 'dental_medicare_covered')
+    ?? `Out-of-network: ${QUOTE_DENTAL_MC_NOT_FILED}`;
+  return `${inNetwork}\n${oon}`;
 }
 
 const MEDICAL_DEFS: MedicalDef[] = [

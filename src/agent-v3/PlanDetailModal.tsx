@@ -17,6 +17,7 @@ import {
   costShareNumeric,
   formatCostShare,
   formatCostShareWithRange,
+  formatOonLine,
   formatPcp,
   formatPremium,
   formatSpecialist,
@@ -46,20 +47,26 @@ void costShareNumeric; // future use for "best in pool" tinting
 
 // Medicare-covered dental (CMS PBP B16a) — a MEDICAL cost-share. Missing
 // (copay & coinsurance both null) reads "Not filed — call to verify", never
-// "—"/$0. B16 files no out-of-network value, so the OON sub-line is a fixed
-// "Not filed — call to verify" (rendered on a second line via pre-line).
+// "—"/$0. The out-of-network sub-line reads EXACTLY as the sibling medical
+// rows do — through formatOonLine / pm_plan_oon_costs — so HMO reads
+// "Out-of-network: not covered", a PPO shows its filed OON share, and only a
+// plan with no Section C data at all falls back to the fixed
+// "Out-of-network: Not filed — call to verify" (rendered via pre-line).
 const DENTAL_MC_NOT_FILED = 'Not filed — call to verify';
-function dentalMcValue(cs: {
-  copay: number | null;
-  coinsurance: number | null;
-}): string {
+function dentalMcValue(plan: Plan): string {
+  const cs = plan.benefits.medical.dental_medicare_covered;
   const inNetwork =
     cs.copay != null
       ? `$${cs.copay}`
       : cs.coinsurance != null
         ? `${cs.coinsurance}%`
         : DENTAL_MC_NOT_FILED;
-  return `${inNetwork}\nOut-of-network: ${DENTAL_MC_NOT_FILED}`;
+  // Same OON source/logic as the sibling medical rows (formatOonLine):
+  // HMO → "not covered", PPO → filed OON share. Only when the plan has no
+  // Section C data loaded (formatOonLine → null) do we fall back.
+  const oon = formatOonLine(plan, 'dental_medicare_covered')
+    ?? `Out-of-network: ${DENTAL_MC_NOT_FILED}`;
+  return `${inNetwork}\n${oon}`;
 }
 
 export function PlanDetailModal({
@@ -117,7 +124,7 @@ export function PlanDetailModal({
     { l: 'Telehealth', v: formatCostShare(plan.benefits.medical.telehealth) },
     // Medicare-covered dental (B16a) — a MEDICAL cost-share, NOT the routine
     // dental allowance (that stays in the Extras section below).
-    { l: 'Medicare-covered dental', v: dentalMcValue(plan.benefits.medical.dental_medicare_covered) },
+    { l: 'Medicare-covered dental', v: dentalMcValue(plan) },
     { l: 'Ambulance', v: formatCostShare(plan.benefits.medical.ambulance) },
     { l: 'Air ambulance', v: formatCostShare(plan.benefits.medical.air_transportation) },
     { l: 'Chiropractic', v: formatCostShare(plan.benefits.medical.chiropractic) },
