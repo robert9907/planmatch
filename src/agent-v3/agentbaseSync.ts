@@ -121,18 +121,17 @@ export async function buildAgentV3SyncInput(args: BuildArgs): Promise<SyncInput 
       pharmacy_id: m.pharmacyId ?? null,
       tier_on_recommended_plan: null,
       monthly_cost: null,
-      // Drug-identity + Part D/B classification fields AgentBase ingests
-      // under these exact names. dose_form/strength mirror form/dose (the
-      // names the CRM's client_medications columns expect). The remaining
-      // fields are null when the agent-v3 Medication doesn't carry them:
-      // strength_display + packaging come from a fuller formulary/NDC
-      // hydration the drug-search path doesn't currently provide.
+      // Drug-identity + Part D/B classification + packaging fields AgentBase
+      // ingests under these exact names. dose_form/strength mirror form/dose
+      // (the CRM's client_medications column names). strength_display +
+      // packaging are populated from the drug-search hydration (pm_drugs /
+      // pm_drug_ndc); null only for meds hydrated by a path that lacks them.
       dose_form: m.form ?? null,
       strength: m.dose ?? null,
       strength_display: m.strengthDisplay ?? null,
-      package_size: null,
-      package_unit: null,
-      quantity_unit: null,
+      package_size: m.packageSize ?? null,
+      package_unit: m.packageUnit ?? null,
+      quantity_unit: m.quantityUnit ?? null,
       not_part_d: m.not_part_d ?? null,
       part_b_status: partBStatus,
     };

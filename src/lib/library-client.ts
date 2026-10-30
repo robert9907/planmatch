@@ -79,6 +79,16 @@ export interface LibraryDrug {
   strength: string;
   dose_form: string;
   is_brand: boolean;
+  /** Part D / Part B classification + display facts from pm_drugs, returned by
+   *  /api/library/drug-search. Optional (older deploys omit them). Threaded into
+   *  the Medication so the Meds screen can label OTC / Part B drugs immediately
+   *  and the AgentBase sync payload carries real values (not null). */
+  part_b_status?: 'part_b' | 'part_b_or_d' | null;
+  not_part_d?: boolean;
+  strength_display?: string | null;
+  package_size?: string | null;
+  package_unit?: string | null;
+  quantity_unit?: string | null;
 }
 
 export async function searchDrugs(

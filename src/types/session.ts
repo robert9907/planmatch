@@ -216,6 +216,12 @@ export interface Medication {
   partBOrD?: boolean;
   partBNote?: string | null;
   strengthDisplay?: string | null;
+  // Packaging facts (pm_drug_ndc) for the AgentBase client card, populated from
+  // the drug-search hydration. e.g. packageSize "30", packageUnit "g"/"mL"/
+  // "actuations", quantityUnit the unit the free-text quantity is counted in.
+  packageSize?: string | null;
+  packageUnit?: string | null;
+  quantityUnit?: string | null;
   addedAt: number;
 }
 

@@ -277,6 +277,16 @@ export function MedsScreen({ onNext, onBack, clientView, capture, formularyUnava
             form: r.dose_form ?? undefined,
             source: 'manual',
             isBrand: r.is_brand,
+            // Part D / Part B classification + display facts from drug-search —
+            // so the label renders immediately and the AgentBase sync carries
+            // real values. partB flags derive from the single part_b_status.
+            not_part_d: r.not_part_d || undefined,
+            partBEligible: r.part_b_status === 'part_b' || undefined,
+            partBOrD: r.part_b_status === 'part_b_or_d' || undefined,
+            strengthDisplay: r.strength_display ?? undefined,
+            packageSize: r.package_size ?? undefined,
+            packageUnit: r.package_unit ?? undefined,
+            quantityUnit: r.quantity_unit ?? undefined,
           });
         }}
       />
@@ -672,6 +682,12 @@ function AddMedPanel({
     strength: string | null;
     dose_form: string | null;
     is_brand: boolean;
+    part_b_status: 'part_b' | 'part_b_or_d' | null;
+    not_part_d: boolean;
+    strength_display: string | null;
+    package_size: string | null;
+    package_unit: string | null;
+    quantity_unit: string | null;
   }) => void;
   panelRef?: RefObject<HTMLDivElement>;
   presetQuery?: string | null;
@@ -762,6 +778,12 @@ function AddMedPanel({
                     strength: r.strength,
                     dose_form: r.dose_form,
                     is_brand: r.is_brand,
+                    part_b_status: r.part_b_status,
+                    not_part_d: r.not_part_d,
+                    strength_display: r.strength_display,
+                    package_size: r.package_size,
+                    package_unit: r.package_unit,
+                    quantity_unit: r.quantity_unit,
                   });
                   setQuery('');
                 }}
