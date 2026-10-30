@@ -40,7 +40,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { usePlanBrain } from '@/hooks/usePlanBrain';
 import { useRankedPlans } from '@/hooks/useRankedPlans';
-import { normalizePlanId, type LibraryRankDrugMonth, type SwitchSuggestion } from '@/lib/library-client';
+import {
+  normalizePlanId,
+  type CsnpConditionKey,
+  type LibraryRankDrugMonth,
+  type LibraryRankResult,
+  type SwitchSuggestion,
+} from '@/lib/library-client';
 import { checkNetworkBatch } from '@/lib/networkCheck';
 import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
@@ -52,7 +58,7 @@ import { bulkLookupFormulary } from '@/lib/formularyLookup';
 import { fetchPlansForClient, lastPlanTruncated } from '@/lib/planCatalog';
 import { totalComplianceItems } from '@/lib/compliance';
 import type { Plan } from '@/types/plans';
-import type { CsnpConditionCode, StateCode } from '@/types/session';
+import type { CsnpConditionCode, Provider, StateCode } from '@/types/session';
 import { detectConditionsFromMeds, detectedToCsnp } from '@/lib/condition-detector';
 import { useAgentBaseRecommend } from '@/hooks/useAgentBaseRecommend';
 import { AgentBar, type ScreenId } from './AgentBar';
@@ -77,7 +83,12 @@ import {
   pickCurrentPlanForSeed,
 } from './seed';
 import { AGENT_V3_CSS } from './styles';
-import { normalizeLisTierForClient } from '@/lib/dual-eligible';
+import { getLisCopays, lisCapClassFor, normalizeLisTierForClient } from '@/lib/dual-eligible';
+
+// Pricing-pass inputs (see "Pricing pass" in AgentV3App). Module-level so the
+// hook's dependency keys stay stable across renders.
+const PRICING_PASS_NO_PROVIDERS: Provider[] = [];
+const PRICING_PASS_ALL_CSNP: CsnpConditionKey[] = ['diabetes', 'cardio', 'copd', 'esrd'];
 
 /** Returns the AgentBase clients.id passed in via ?clientId=… or null
  *  when the parameter is absent / blank. The AgentBase CRM links to
@@ -1023,6 +1034,72 @@ export function AgentV3App() {
     client.medicaidLevel,
   ]);
 
+  // ── Pricing pass: every plan on the board gets real drug prices ──
+  // The ranking call above only prices the plans in the brain's pool for
+  // this client (D-SNPs drop out unless the Intake dual box is ticked,
+  // C-SNPs unless a condition qualifies), but the bench lists every plan
+  // the client qualifies for. Those extra plans showed "Not priced" on
+  // every drug (Juddith Eddins, Oct 30 2026 — QMB on D-SNPs). This second
+  // call widens ONLY the candidate pool so the brain prices them too.
+  // Nothing from it touches ranking: only per-drug coverage/cost is read,
+  // and only for plans the main call didn't return.
+  const mainRankedIds = useMemo(() => {
+    const s = new Set<string>();
+    if (!ranked.result) return s;
+    for (const lp of [
+      ...ranked.result.top_plans,
+      ...ranked.result.bench_plans,
+      ...(ranked.result.current_plan ? [ranked.result.current_plan] : []),
+    ]) {
+      s.add(normalizePlanId(lp.plan_id));
+    }
+    return s;
+  }, [ranked.result]);
+  const needsPricingPass =
+    ranked.result != null &&
+    medications.some((m) => !!m.rxcui) &&
+    benchPlans.some((p) => !mainRankedIds.has(normalizePlanId(p.id)));
+  const pricingPass = useRankedPlans({
+    client,
+    medications,
+    providers: PRICING_PASS_NO_PROVIDERS,
+    csnpConditions: PRICING_PASS_ALL_CSNP,
+    currentPlanId,
+    pharmacy: pharmacyChannel,
+    dsnpEligible: true,
+    grossMonthlyByRxcui: brain.grossMonthlyByRxcui,
+    enabled: needsPricingPass,
+  });
+  // Rank-result shape with the pricing-pass plans appended to bench_plans.
+  // Used ONLY by the drug-cost maps below — ribbons, gates, sellability and
+  // the Top 4 keep reading ranked.result.
+  const pricedResult = useMemo<LibraryRankResult | null>(() => {
+    if (!ranked.result) return null;
+    const extra = pricingPass.result
+      ? [
+          ...pricingPass.result.top_plans,
+          ...pricingPass.result.bench_plans,
+          ...(pricingPass.result.current_plan ? [pricingPass.result.current_plan] : []),
+        ].filter((lp) => !mainRankedIds.has(normalizePlanId(lp.plan_id)))
+      : [];
+    if (extra.length === 0) return ranked.result;
+    return { ...ranked.result, bench_plans: [...ranked.result.bench_plans, ...extra] };
+  }, [ranked.result, pricingPass.result, mainRankedIds]);
+
+  // Extra Help per-fill maximums for this client (null = no LIS). Applied to
+  // every per-drug row so a single drug's price matches the LIS-capped total.
+  const lisCopays = useMemo(
+    () =>
+      getLisCopays(
+        normalizeLisTierForClient({
+          lisTier: client.lisTier,
+          medicaidLevel: client.medicaidLevel,
+          livingSetting: client.livingSetting,
+        }),
+      ),
+    [client.lisTier, client.medicaidLevel, client.livingSetting],
+  );
+
   // The by-plan-id maps below are keyed by the agent's Plan.id (NOT the
   // library's lp.plan_id) because CompareScreen looks them up as
   // `annualDrugByPlanId[plan.id]` where plan came from fetchPlansForClient.
@@ -1038,7 +1115,7 @@ export function AgentV3App() {
   const { annualDrugByPlanId, dualEligibleByPlanId } = useMemo(
     () =>
       buildAgentV3LisMaps({
-        ranked: ranked.result,
+        ranked: pricedResult,
         planById,
         normalizePlanId,
         client: {
@@ -1056,7 +1133,7 @@ export function AgentV3App() {
         },
       }),
     [
-      ranked.result,
+      pricedResult,
       planById,
       client.lisTier,
       client.medicaidLevel,
@@ -1112,38 +1189,48 @@ export function AgentV3App() {
   );
 
   const drugsCoveredByPlanId = useMemo<Record<string, number>>(() => {
-    if (!ranked.result) return {};
+    if (!pricedResult) return {};
     const out: Record<string, number> = {};
-    for (const lp of ranked.result.top_plans) {
+    for (const lp of pricedResult.top_plans) {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p) out[p.id] = lp.meds_covered;
     }
-    for (const lp of [...ranked.result.bench_plans, ...(ranked.result.current_plan ? [ranked.result.current_plan] : [])]) {
+    for (const lp of [...pricedResult.bench_plans, ...(pricedResult.current_plan ? [pricedResult.current_plan] : [])]) {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p) out[p.id] = lp.meds_covered;
     }
     return out;
-  }, [ranked.result, planById]);
+  }, [pricedResult, planById]);
 
   const drugsTotalByPlanId = useMemo<Record<string, number>>(() => {
-    if (!ranked.result) return {};
+    if (!pricedResult) return {};
     const out: Record<string, number> = {};
-    for (const lp of ranked.result.top_plans) {
+    for (const lp of pricedResult.top_plans) {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p) out[p.id] = lp.meds_total;
     }
-    for (const lp of [...ranked.result.bench_plans, ...(ranked.result.current_plan ? [ranked.result.current_plan] : [])]) {
+    for (const lp of [...pricedResult.bench_plans, ...(pricedResult.current_plan ? [pricedResult.current_plan] : [])]) {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p) out[p.id] = lp.meds_total;
     }
     return out;
-  }, [ranked.result, planById]);
+  }, [pricedResult, planById]);
 
   const drugBreakdownByPlanId = useMemo<
     Record<string, ReadonlyArray<DrugRow>>
   >(() => {
-    if (!ranked.result) return {};
+    if (!pricedResult) return {};
     const out: Record<string, ReadonlyArray<DrugRow>> = {};
+    // Extra Help client: what they pay per fill for a covered drug is the
+    // lesser of the plan's cost and the LIS maximum (generic vs brand) — the
+    // same math the plan's drug total already uses (lis-cap-agent-v3), so a
+    // single drug's price can never disagree with the plan total.
+    const lisFill = (m: { covered: boolean; tier: number | null; name: string; annual_cost: number | null }): number | null => {
+      if (!lisCopays || !m.covered || m.annual_cost == null) return null;
+      const cap = lisCapClassFor({ tier: m.tier, drugName: m.name }) === 'brand' ? lisCopays.brand : lisCopays.generic;
+      return Math.round(Math.min(m.annual_cost / 12, cap) * 100) / 100;
+    };
+    const lisAnnual = (perFill: number): number => Math.round(perFill * 12 * 100) / 100;
     const adapt = (
       meds: ReadonlyArray<{
         rxcui: string;
@@ -1184,8 +1271,8 @@ export function AgentV3App() {
               name: m.name,
               covered: m.covered,
               tier: m.tier,
-              monthlyCopay: m.copay,
-              annualCost: m.annual_cost,
+              monthlyCopay: lisFill(m) ?? m.copay,
+              annualCost: lisFill(m) != null ? lisAnnual(lisFill(m)!) : m.annual_cost,
               // PA / ST / QL flags from rank-plans (consumer PR #107) — the
               // Compare board's drug data comes from the rank-plans medications.
               priorAuth: m.prior_auth === true,
@@ -1193,7 +1280,7 @@ export function AgentV3App() {
               quantityLimit: m.quantity_limit === true,
               quantityLimitAmount: m.quantity_limit_amount ?? null,
               quantityLimitDays: m.quantity_limit_days ?? null,
-              monthlyCost: m.monthly_cost ?? null,
+              monthlyCost: lisFill(m) != null ? Array<number>(12).fill(lisFill(m)!) : m.monthly_cost ?? null,
               // Covered brand↔generic equivalent for an uncovered drug
               // (consumer rank-plans switch_suggestion). Non-null only when
               // !covered; drives the "ask your doctor about switching" note.
@@ -1220,52 +1307,70 @@ export function AgentV3App() {
         annualCost: 0,
         unmatched: true,
       }));
-    for (const lp of ranked.result.top_plans) {
+    for (const lp of pricedResult.top_plans) {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p) out[p.id] = [...adapt(lp.medications), ...unmatched];
     }
-    for (const lp of ranked.result.bench_plans) {
+    for (const lp of pricedResult.bench_plans) {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p) out[p.id] = [...adapt(lp.medications), ...unmatched];
     }
     // Current plan: priced separately (never ranked) so its card shows real
     // per-drug costs instead of "not priced".
-    const cur = ranked.result.current_plan;
+    const cur = pricedResult.current_plan;
     if (cur) {
       const p = planById.get(normalizePlanId(cur.plan_id));
       if (p) out[p.id] = [...adapt(cur.medications), ...unmatched];
     }
     return out;
-  }, [ranked.result, planById, medications]);
+  }, [pricedResult, planById, medications, lisCopays]);
 
   // Jan–Dec drug-cost calendar per plan (rank-plans drug_cost_by_month).
   // Withheld when the formulary isn't published — no real costs to lay out.
   const drugMonthsByPlanId = useMemo<Record<string, LibraryRankDrugMonth[]>>(() => {
-    if (!ranked.result || formularyUnavailable) return {};
+    if (!pricedResult || formularyUnavailable) return {};
     const out: Record<string, LibraryRankDrugMonth[]> = {};
     const all = [
-      ...ranked.result.top_plans,
-      ...ranked.result.bench_plans,
-      ...(ranked.result.current_plan ? [ranked.result.current_plan] : []),
+      ...pricedResult.top_plans,
+      ...pricedResult.bench_plans,
+      ...(pricedResult.current_plan ? [pricedResult.current_plan] : []),
     ];
     for (const lp of all) {
       const p = planById.get(normalizePlanId(lp.plan_id));
-      if (p && lp.drug_cost_by_month && lp.drug_cost_by_month.length === 12) {
+      if (!p) continue;
+      if (lisCopays) {
+        // Extra Help: the server calendar is at full plan cost. Rebuild it
+        // from the LIS-capped per-drug fills so each month shows what the
+        // client actually pays.
+        const rows = drugBreakdownByPlanId[p.id] ?? [];
+        if (!rows.some((d) => d.covered && Array.isArray(d.monthlyCost))) continue;
+        out[p.id] = Array.from({ length: 12 }, (_, k) => ({
+          month: k + 1,
+          cost:
+            Math.round(
+              rows.reduce(
+                (sum, d) => sum + (d.covered && Array.isArray(d.monthlyCost) ? d.monthlyCost[k] ?? 0 : 0),
+                0,
+              ) * 100,
+            ) / 100,
+          phase: 'initial' as const,
+        }));
+      } else if (lp.drug_cost_by_month && lp.drug_cost_by_month.length === 12) {
         out[p.id] = lp.drug_cost_by_month;
       }
     }
     return out;
-  }, [ranked.result, planById, formularyUnavailable]);
+  }, [pricedResult, planById, formularyUnavailable, lisCopays, drugBreakdownByPlanId]);
 
   // Whole-plan yearly cost per plan (premium + drugs − giveback + expected
   // medical copays) — the Head to Head winner is decided on this.
   const wholeCostByPlanId = useMemo<Record<string, number>>(() => {
-    if (!ranked.result) return {};
+    if (!pricedResult) return {};
     const out: Record<string, number> = {};
     for (const lp of [
-      ...ranked.result.top_plans,
-      ...ranked.result.bench_plans,
-      ...(ranked.result.current_plan ? [ranked.result.current_plan] : []),
+      ...pricedResult.top_plans,
+      ...pricedResult.bench_plans,
+      ...(pricedResult.current_plan ? [pricedResult.current_plan] : []),
     ]) {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p && typeof lp.total_annual_cost_with_medical === 'number') {
@@ -1273,7 +1378,7 @@ export function AgentV3App() {
       }
     }
     return out;
-  }, [ranked.result, planById]);
+  }, [pricedResult, planById]);
 
   // ── Per-plan gate explanations (CompareScreen "Why this plan" pills) ─
   // Sourced from the LOCAL brain (usePlanBrain), not the library response.

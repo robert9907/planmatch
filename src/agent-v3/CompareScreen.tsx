@@ -373,7 +373,10 @@ function drugCoverageLabel(d: {
 // Drug costs are quoted per month (Rob, 2026-10-21): the brain's annual
 // figure (deductible + cost-share + cap over the year) averaged to a month.
 function perMonth(annual: number): string {
-  return `${fmt(Math.round(annual / 12))}/mo`;
+  // Cents kept when the monthly amount isn't whole — Extra Help copays are
+  // $1.60 / $4.90 / $5.10 / $12.65, and rounding them reads as a wrong price.
+  const m = Math.round((annual / 12) * 100) / 100;
+  return Number.isInteger(m) ? `${fmt(m)}/mo` : `$${m.toFixed(2)}/mo`;
 }
 
 /** Monthly drug cost for the drugs this plan covers. Not-covered drugs are
