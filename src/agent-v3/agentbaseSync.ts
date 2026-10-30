@@ -97,19 +97,46 @@ export async function buildAgentV3SyncInput(args: BuildArgs): Promise<SyncInput 
   // that the agentbase-recommend endpoint treated as authoritative.
   // QuoteDeliveryV4 (v4 flow) still sends real values from brain
   // output — those fields are now optional in SyncInput.
-  const medContext = medications.map((m) => ({
-    name: m.name,
-    rxcui: m.rxcui ?? null,
-    dose: m.dose ?? null,
-    form: m.form ?? null,
-    frequency: m.frequency ?? null,
-    refill_days: null,
-    // Bottle-scan facts (Snap Link) — fill-only on the CRM row.
-    quantity: m.quantity ?? null,
-    pharmacy_id: m.pharmacyId ?? null,
-    tier_on_recommended_plan: null,
-    monthly_cost: null,
-  }));
+  const medContext = medications.map((m) => {
+    // Part D / Part B classification → the single `part_b_status` string
+    // AgentBase ingests. not_part_d (OTC) wins, then part_b, then
+    // part_b_or_d; null when the med carries no classification (the
+    // drug-search hydration path doesn't set these flags).
+    const partBStatus: 'part_b' | 'part_b_or_d' | 'not_part_d' | null = m.not_part_d
+      ? 'not_part_d'
+      : m.partBEligible
+        ? 'part_b'
+        : m.partBOrD
+          ? 'part_b_or_d'
+          : null;
+    return {
+      name: m.name,
+      rxcui: m.rxcui ?? null,
+      dose: m.dose ?? null,
+      form: m.form ?? null,
+      frequency: m.frequency ?? null,
+      refill_days: null,
+      // Bottle-scan facts (Snap Link) — fill-only on the CRM row.
+      quantity: m.quantity ?? null,
+      pharmacy_id: m.pharmacyId ?? null,
+      tier_on_recommended_plan: null,
+      monthly_cost: null,
+      // Drug-identity + Part D/B classification fields AgentBase ingests
+      // under these exact names. dose_form/strength mirror form/dose (the
+      // names the CRM's client_medications columns expect). The remaining
+      // fields are null when the agent-v3 Medication doesn't carry them:
+      // strength_display + packaging come from a fuller formulary/NDC
+      // hydration the drug-search path doesn't currently provide.
+      dose_form: m.form ?? null,
+      strength: m.dose ?? null,
+      strength_display: m.strengthDisplay ?? null,
+      package_size: null,
+      package_unit: null,
+      quantity_unit: null,
+      not_part_d: m.not_part_d ?? null,
+      part_b_status: partBStatus,
+    };
+  });
 
   const providerContext = providers.map((p) => ({
     name: p.name,

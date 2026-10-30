@@ -59,6 +59,17 @@ import { SnapInbox } from './SnapInbox';
 import { FADE_SLIDE_IN } from './styles';
 import { normalizeLisTierForClient } from '@/lib/dual-eligible';
 
+// Verbatim drug-coverage labels — byte-identical to the Compare / Head-to-Head
+// surfaces so the wording never drifts (plain words for a 67-year-old).
+//  - not_part_d → "Not covered by Part D — over the counter" (no price)
+//  - partBEligible → "Covered under Part B — your plan's Part B drug
+//    coinsurance applies" (instead of a tier/cost)
+//  - partBOrD → keep the normal estimate + a small Part-B note.
+const PART_D_NOT_COVERED_LABEL = 'Not covered by Part D — over the counter';
+const PART_B_COVERED_LABEL =
+  "Covered under Part B — your plan's Part B drug coinsurance applies";
+const PART_B_OR_D_NOTE = 'May be covered by Part B in some situations';
+
 interface Props {
   onNext: () => void;
   onBack: () => void;
@@ -550,7 +561,19 @@ function MedRow({
         ✕
       </button>
       <div style={{ textAlign: 'right', minWidth: 95 }}>
-        {med.rxcui && formularyUnavailable ? (
+        {med.not_part_d ? (
+          // Drug is excluded from Part D (OTC) — no tier, no price. Matches the
+          // small red "Not covered" treatment used elsewhere on this screen.
+          <div style={{ fontSize: 10, color: '#a32d2d', fontWeight: 600, lineHeight: 1.3 }}>
+            {PART_D_NOT_COVERED_LABEL}
+          </div>
+        ) : med.partBEligible ? (
+          // Covered under Part B — the plan's Part B drug coinsurance applies,
+          // not a Part D tier/cost.
+          <div style={{ fontSize: 10, color: '#0d2f5e', fontWeight: 600, lineHeight: 1.3 }}>
+            {PART_B_COVERED_LABEL}
+          </div>
+        ) : med.rxcui && formularyUnavailable ? (
           // Formulary for this catalog year isn't published yet — no tier, no
           // estimate. Never show $0 / "Not covered" / a prior-year tier here.
           <div style={{ fontSize: 10, color: '#92400e', fontWeight: 600, lineHeight: 1.3 }}>
@@ -622,6 +645,12 @@ function MedRow({
             <div style={{ fontSize: 9, color: '#059669', fontWeight: 600 }}>
               Covered on {stats.coveredPlans}/{stats.totalPlans} plans
             </div>
+            {med.partBOrD && (
+              // part_b_or_d: keep the normal Part D estimate + the small note.
+              <div style={{ fontSize: 9, color: '#64748b', fontWeight: 600, lineHeight: 1.3, maxWidth: 140 }}>
+                {PART_B_OR_D_NOTE}
+              </div>
+            )}
           </div>
         )}
       </div>

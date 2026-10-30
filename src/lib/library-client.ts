@@ -302,6 +302,20 @@ export interface LibraryRankMedication {
    *  the plan files a clean opposite-form match for. Null on covered meds and
    *  when no equivalent is filed; absent on older API responses. */
   switch_suggestion?: SwitchSuggestion | null;
+  /** Part D / Part B coverage classification (consumer rank-plans). Drives the
+   *  three drug-coverage labels. All optional — absent on older API responses.
+   *  - not_part_d: the drug is excluded from Part D (e.g. OTC); never priced.
+   *  - part_b_eligible: the drug is covered under Part B (the plan's Part B
+   *    drug coinsurance applies), not a Part D tier/copay.
+   *  - part_b_or_d: Part D is the normal path but Part B may cover it in some
+   *    situations — keep the Part D price and add a small note. */
+  not_part_d?: boolean;
+  part_b_eligible?: boolean;
+  part_b_or_d?: boolean;
+  /** Free-text Part B caveat for a part_b_or_d drug; null when none filed. */
+  part_b_note?: string | null;
+  /** Human-readable strength + form (e.g. "500 mg tablet"); null when absent. */
+  strength_display?: string | null;
 }
 
 /** One month of the Jan–Dec drug-cost calendar. */

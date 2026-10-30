@@ -202,6 +202,20 @@ export interface Medication {
   // at the boundary.
   source: 'manual' | 'capture' | 'search' | 'scan' | 'quick-add' | 'agentbase' | 'import';
   confidence?: 'high' | 'medium' | 'low';
+  // Part D / Part B coverage classification + display strength. Populated from
+  // the consumer rank-plans / formulary response when available (per-plan
+  // signal). The drug-search hydration path does NOT carry these, so a med
+  // added via the Meds search box leaves them undefined until a formulary
+  // lookup fills them in. Threaded to the AgentBase sync payload so the CRM
+  // can flag OTC / Part-B drugs on the client card.
+  //  - not_part_d: drug excluded from Part D (e.g. OTC); never priced.
+  //  - partBEligible: covered under Part B (plan's Part B drug coinsurance).
+  //  - partBOrD: Part D normal path, Part B possible in some situations.
+  not_part_d?: boolean;
+  partBEligible?: boolean;
+  partBOrD?: boolean;
+  partBNote?: string | null;
+  strengthDisplay?: string | null;
   addedAt: number;
 }
 
