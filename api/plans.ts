@@ -742,7 +742,13 @@ const DESC_DOLLAR_CATEGORIES: ReadonlySet<string> = new Set([
 // (no annual max filed) surfaced as a $40/yr dental maximum on 17 of 74
 // Durham plans (scripts/tests/plans-desc-dollar.test.ts).
 const DESC_DOLLAR_RE = /\$(\d[\d,]*)(?:\.\d+)?/g;
-const MEMBER_COST_AFTER_RE = /^\s*(?:co-?pay|copayment|coinsurance|per\s+visit|\/\s*visit)\b/i;
+// A dollar amount is a member COST (never an allowance) when it is directly
+// followed by a cost word, OR when it is the LOW end of a cost RANGE whose high
+// end carries the cost word — e.g. "crowns & bridges $44–$528 copay". Without
+// the optional range-continuation group, the low end "$44" read as an allowance
+// and surfaced as a bogus "$44/yr dental maximum" on plans that file per-service
+// copay ranges but no annual cap (Kaiser GA H1170 $44, Verda TX H5163 $50, …).
+const MEMBER_COST_AFTER_RE = /^\s*(?:[–—-]\s*\$[\d,]+(?:\.\d+)?\s*)?(?:co-?pay|copayment|coinsurance|per\s+visit|\/\s*visit)\b/i;
 export function dollarFromDesc(desc: string | null | undefined): number | null {
   if (typeof desc !== 'string' || !desc) return null;
   let max = 0;
