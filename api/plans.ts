@@ -2103,7 +2103,15 @@ export function buildBenefits(
   // the consumer, so if a future Landscape import writes only one
   // column and leaves the other stale, we surface the better value
   // instead of silently shadowing it.
-  const dental = rows.find((r) => r.benefit_category === 'dental');
+  // Prefer the authoritative CMS PBP B16 'dental' row (it carries the structured
+  // `detail` jsonb) over a pbp_benefits synth 'dental' row. A synth row built
+  // from a `dental_comprehensive` pbp entry puts that entry's COPAY into
+  // coverage_amount (e.g. Alignment NC H5296-006: a $10 comprehensive copay),
+  // which then surfaced as a bogus "$10/yr dental maximum" even though the B16
+  // row files no annual cap. The B16 row wins on both the max and the tier.
+  const dental =
+    rows.find((r) => r.benefit_category === 'dental' && r.detail != null) ??
+    rows.find((r) => r.benefit_category === 'dental');
   const pmDentalMax = Math.max(toNum(dental?.max_coverage) ?? 0, toNum(dental?.coverage_amount) ?? 0);
   // Fall back to the medicare.gov scraper's dental_annual_max only when it is a
   // CREDIBLE annual maximum. Some pbp_benefits rows carry a mis-mapped small
