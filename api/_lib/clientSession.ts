@@ -51,6 +51,8 @@ export interface ShapedClient {
   /** AgentBase clients.lis_tier as stored (e.g. "Level 2 (Full)", ""). */
   lis_tier: string;
   medicaid_eligible: boolean | null;
+  /** True when a Medicaid ID is on file (the ID itself is not sent). */
+  has_medicaid_id: boolean;
 }
 
 export interface ShapedMedication {
@@ -118,6 +120,7 @@ interface ClientRow {
   medicaid_level: string | null;
   lis_tier: string | null;
   medicaid_eligible: boolean | null;
+  medicaid_id: string | null;
 }
 
 interface MedicationRow {
@@ -245,6 +248,7 @@ function shapeClient(r: ClientRow): ShapedClient {
     medicaid_level: r.medicaid_level ?? '',
     lis_tier: r.lis_tier ?? '',
     medicaid_eligible: r.medicaid_eligible ?? null,
+    has_medicaid_id: Boolean(r.medicaid_id && r.medicaid_id.trim()),
   };
 }
 
