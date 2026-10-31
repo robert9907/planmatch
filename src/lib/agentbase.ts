@@ -7,6 +7,7 @@
 // pre-populate Steps 2–6 in one go.
 
 import type { StateCode, PlanType } from '@/types/session';
+import { deemLisTier, type LisTier, type MedicaidLevel } from '@/lib/dual-eligible';
 
 // Summary row returned by /api/clients/search — rendered in the
 // dropdown and used to decide which mode (annual review / new quote)
@@ -53,6 +54,11 @@ export interface AgentBaseClientDetail {
     next_step: string;
     updated_at: string | null;
     created_at: string | null;
+    /** Raw AgentBase clients.medicaid_level / lis_tier / medicaid_eligible —
+     *  mapped onto the session by eligibilityFromAgentBase(). */
+    medicaid_level: string;
+    lis_tier: string;
+    medicaid_eligible: boolean | null;
   };
   medications: Array<{
     id: string;
@@ -321,6 +327,9 @@ function deriveDetail(raw: unknown): AgentBaseClientDetail['client'] {
     next_step: String(r.next_step ?? ''),
     updated_at: typeof r.updated_at === 'string' ? r.updated_at : null,
     created_at: typeof r.created_at === 'string' ? r.created_at : null,
+    medicaid_level: String(r.medicaid_level ?? ''),
+    lis_tier: String(r.lis_tier ?? ''),
+    medicaid_eligible: typeof r.medicaid_eligible === 'boolean' ? r.medicaid_eligible : null,
   };
 }
 
@@ -344,4 +353,37 @@ export async function clientByPhone(phone: string): Promise<AgentBaseClient | nu
   const hits = await searchClients(digits);
   const want = digits.slice(-10);
   return hits.find((c) => c.phone.replace(/\D/g, '').slice(-10) === want) ?? null;
+}
+
+// AgentBase stores Medicaid category and LIS as display strings ("QMB",
+// "SLMB+", "Level 2 (Full)"). Map them onto the session the same way the
+// Intake chips do: category → deemed LIS tier + dual-eligible flag.
+const AGENTBASE_MEDICAID: Record<string, MedicaidLevel> = {
+  qmb: 'qmb',
+  'qmb+': 'qmb_plus',
+  slmb: 'slmb',
+  'slmb+': 'slmb_plus',
+  qi: 'qi',
+  qdwi: 'qdwi',
+  fbde: 'fbde',
+};
+
+export function eligibilityFromAgentBase(c: {
+  medicaid_level: string;
+  lis_tier: string;
+  medicaid_eligible: boolean | null;
+}): { medicaidLevel: MedicaidLevel; lisTier: LisTier; dsnpEligible: true | undefined } {
+  const medicaidLevel = AGENTBASE_MEDICAID[c.medicaid_level.trim().toLowerCase()] ?? 'none';
+  const hasLis = /level|full|partial/i.test(c.lis_tier);
+  // Medicaid category on file → the tier CMS deems for it (what Intake does).
+  // LIS on file without a category → an Extra Help applicant, which post-IRA
+  // is always the full-high row.
+  const lisTier: LisTier =
+    medicaidLevel !== 'none'
+      ? deemLisTier(medicaidLevel, 'community')
+      : hasLis
+        ? 'full_high'
+        : 'none';
+  const dsnpEligible = medicaidLevel !== 'none' || c.medicaid_eligible === true ? true : undefined;
+  return { medicaidLevel, lisTier, dsnpEligible };
 }

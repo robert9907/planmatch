@@ -67,6 +67,9 @@ const EMPTY: UseDrugPhasesResult = {
   source: null,
 };
 
+// Server cap per request (api/drug-phases.ts MAX_PLANS).
+const DRUG_PHASES_MAX_PLANS = 20;
+
 // Plan.id is "H5253-189-000" — parse segment_id without a Plan-type add.
 function segmentIdForPlan(plan: Plan): string {
   const parts = plan.id.split('-');
@@ -121,22 +124,34 @@ export function useDrugPhases(
           plan_id: p.plan_number,
           segment_id: segmentIdForPlan(p),
         }));
-        const res = await fetch('/api/drug-phases', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            plans: planInputs,
-            rxcuis,
-            pharmacy_type: pharmacyType,
-            days_supply_code: daysSupplyCode,
-          }),
-        });
-        if (cancelled) return;
-        if (!res.ok) {
-          const text = await res.text().catch(() => '');
-          throw new Error(`drug-phases ${res.status} — ${text.slice(0, 200)}`);
+        // /api/drug-phases takes at most 20 plans per request; a full bench
+        // runs past that, so send it in batches of 20 and merge.
+        const batches: (typeof planInputs)[] = [];
+        for (let i = 0; i < planInputs.length; i += DRUG_PHASES_MAX_PLANS) {
+          batches.push(planInputs.slice(i, i + DRUG_PHASES_MAX_PLANS));
         }
-        const body = (await res.json()) as { results?: DrugPhaseHit[] };
+        const results = await Promise.all(
+          batches.map(async (batch) => {
+            const res = await fetch('/api/drug-phases', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                plans: batch,
+                rxcuis,
+                pharmacy_type: pharmacyType,
+                days_supply_code: daysSupplyCode,
+              }),
+            });
+            if (!res.ok) {
+              const text = await res.text().catch(() => '');
+              throw new Error(`drug-phases ${res.status} — ${text.slice(0, 200)}`);
+            }
+            const b = (await res.json()) as { results?: DrugPhaseHit[] };
+            return b.results ?? [];
+          }),
+        );
+        if (cancelled) return;
+        const body = { results: results.flat() };
         const byPlanIdRxcui = new Map<string, DrugPhaseHit>();
         const idNormalize = (r: DrugPhaseHit) => {
           // Match how Plan.id is formatted app-wide (contract-plan-segment,
