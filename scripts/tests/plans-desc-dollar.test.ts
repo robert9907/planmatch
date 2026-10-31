@@ -32,6 +32,24 @@ test('the real annual max wins over a copay in the same text', () => {
   assert.equal(dollarFromDesc('$25 copay · $1,500/yr dental allowance'), 1500);
 });
 
+test('per-service copay RANGES are costs, not an allowance (Kaiser GA H1170, Verda TX H5163)', () => {
+  // Range low-ends ("$44" in "$44–$528 copay") previously leaked as a bogus
+  // "$44/yr dental maximum" on plans that file per-service copay ranges but no
+  // annual cap. The whole range is a member cost — nothing is an allowance.
+  assert.equal(dollarFromDesc('crowns & bridges $44–$528 copay'), null);
+  assert.equal(dollarFromDesc('fillings $0–$464 copay · dentures $25–$738 copay'), null);
+  assert.equal(
+    dollarFromDesc(
+      'Preventive + comprehensive dental · no yearly max filed · exams, cleanings $0 copay · ' +
+      'fillings $0–$464 copay · root canals $22–$625 copay · gum treatment $0–$643 copay · ' +
+      'dentures $25–$738 copay · crowns & bridges $44–$528 copay · other general services $0–$151 copay',
+    ),
+    null,
+  );
+  // A real annual max alongside copay ranges still wins.
+  assert.equal(dollarFromDesc('Comprehensive dental · $2,500 yearly max · crowns $44–$528 copay'), 2500);
+});
+
 test('plain allowance amounts still parse', () => {
   assert.equal(dollarFromDesc('$150/yr eyewear allowance'), 150);
   assert.equal(dollarFromDesc('OTC allowance · $50 per quarter'), 50);
