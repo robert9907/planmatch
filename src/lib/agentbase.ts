@@ -59,6 +59,7 @@ export interface AgentBaseClientDetail {
     medicaid_level: string;
     lis_tier: string;
     medicaid_eligible: boolean | null;
+    has_medicaid_id: boolean;
   };
   medications: Array<{
     id: string;
@@ -330,6 +331,7 @@ function deriveDetail(raw: unknown): AgentBaseClientDetail['client'] {
     medicaid_level: String(r.medicaid_level ?? ''),
     lis_tier: String(r.lis_tier ?? ''),
     medicaid_eligible: typeof r.medicaid_eligible === 'boolean' ? r.medicaid_eligible : null,
+    has_medicaid_id: r.has_medicaid_id === true,
   };
 }
 
@@ -372,18 +374,27 @@ export function eligibilityFromAgentBase(c: {
   medicaid_level: string;
   lis_tier: string;
   medicaid_eligible: boolean | null;
+  has_medicaid_id?: boolean;
+  plan?: string;
 }): { medicaidLevel: MedicaidLevel; lisTier: LisTier; dsnpEligible: true | undefined } {
   const medicaidLevel = AGENTBASE_MEDICAID[c.medicaid_level.trim().toLowerCase()] ?? 'none';
   const hasLis = /level|full|partial/i.test(c.lis_tier);
+  // On Medicare + Medicaid even when the category was never entered: a
+  // Medicaid ID on file, the CRM's eligible flag, or a current D-SNP plan
+  // (only duals can be enrolled in one). 79 of 95 dual clients had a blank
+  // category (Kim Wiedenbeck, UHC Dual Complete TX-S003, Oct 30 2026).
+  const onDsnp = /\bdual\b|d-?snp/i.test(c.plan ?? '');
+  const isDual =
+    medicaidLevel !== 'none' || c.medicaid_eligible === true || c.has_medicaid_id === true || onDsnp;
   // Medicaid category on file → the tier CMS deems for it (what Intake does).
-  // LIS on file without a category → an Extra Help applicant, which post-IRA
-  // is always the full-high row.
+  // Dual or LIS on file without a category → every Medicaid/MSP enrollee is
+  // deemed Extra Help; use the full-high row (the highest LIS copays) so a
+  // price is never understated until the category is picked on Intake.
   const lisTier: LisTier =
     medicaidLevel !== 'none'
       ? deemLisTier(medicaidLevel, 'community')
-      : hasLis
+      : hasLis || isDual
         ? 'full_high'
         : 'none';
-  const dsnpEligible = medicaidLevel !== 'none' || c.medicaid_eligible === true ? true : undefined;
-  return { medicaidLevel, lisTier, dsnpEligible };
+  return { medicaidLevel, lisTier, dsnpEligible: isDual ? true : undefined };
 }
