@@ -42,8 +42,30 @@ export function isDual(client: BenchClient): boolean {
   return client.dsnpEligible === true || (!!client.medicaidLevel && client.medicaidLevel !== 'none');
 }
 
+// D-SNP accepted Medicaid populations, per-plan manual capture first, then
+// the CMS-derived set — same precedence as the brain's filterPlanPool and
+// the bench filters. Tokens like "QMB+" normalize to the session's "qmb_plus".
+function acceptsMedicaidLevel(
+  plan: { dsnp_accepted_populations?: string[] | null; dsnp_accepted_populations_manual?: string[] | null },
+  level: BenchClient['medicaidLevel'],
+): boolean {
+  if (!level || level === 'none') return true;
+  const manual = plan.dsnp_accepted_populations_manual;
+  const cms = plan.dsnp_accepted_populations;
+  const pops = manual && manual.length > 0 ? manual : cms && cms.length > 0 ? cms : null;
+  // No population filed → keep the plan (an unmapped D-SNP may still fit).
+  if (!pops) return true;
+  return pops.some(
+    (p) => p.trim().toLowerCase().replace(/\+$/, '_plus').replace(/[\s-]/g, '') === level,
+  );
+}
+
 export function qualifiesForBench(
-  plan: Pick<Plan, 'plan_type' | 'snp_type'> & { has_drug_coverage?: boolean | null },
+  plan: Pick<Plan, 'plan_type' | 'snp_type'> & {
+    has_drug_coverage?: boolean | null;
+    dsnp_accepted_populations?: string[] | null;
+    dsnp_accepted_populations_manual?: string[] | null;
+  },
   client: BenchClient,
 ): boolean {
   const t = (plan.plan_type ?? '').toUpperCase();
@@ -53,7 +75,9 @@ export function qualifiesForBench(
   if (maOnly && client.hasVaDrugCoverage !== true) return false;
   switch (snpKind(plan)) {
     case 'D':
-      return isDual(client);
+      // A D-SNP only enrolls the Medicaid categories it accepts (e.g. Full
+      // Dual plans take FBDE / QMB+ / SLMB+, not QMB-only).
+      return isDual(client) && acceptsMedicaidLevel(plan, client.medicaidLevel);
     case 'C':
       return (client.csnpConditions ?? []).length > 0;
     case 'I':

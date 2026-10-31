@@ -46,6 +46,11 @@ export interface ShapedClient {
   next_step: string;
   updated_at: string | null;
   created_at: string | null;
+  /** AgentBase clients.medicaid_level as stored (e.g. "QMB", "SLMB+", "None", ""). */
+  medicaid_level: string;
+  /** AgentBase clients.lis_tier as stored (e.g. "Level 2 (Full)", ""). */
+  lis_tier: string;
+  medicaid_eligible: boolean | null;
 }
 
 export interface ShapedMedication {
@@ -110,6 +115,9 @@ interface ClientRow {
   next_step: string | null;
   updated_at: string | null;
   created_at: string | null;
+  medicaid_level: string | null;
+  lis_tier: string | null;
+  medicaid_eligible: boolean | null;
 }
 
 interface MedicationRow {
@@ -234,6 +242,9 @@ function shapeClient(r: ClientRow): ShapedClient {
     next_step: r.next_step ?? '',
     updated_at: r.updated_at ?? null,
     created_at: r.created_at ?? null,
+    medicaid_level: r.medicaid_level ?? '',
+    lis_tier: r.lis_tier ?? '',
+    medicaid_eligible: r.medicaid_eligible ?? null,
   };
 }
 

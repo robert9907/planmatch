@@ -51,7 +51,7 @@ import { checkNetworkBatch } from '@/lib/networkCheck';
 import { useResolveRxcuis } from '@/hooks/useResolveRxcuis';
 import { useSession } from '@/hooks/useSession';
 import { useScreenShareStore } from '@/hooks/useScreenShare';
-import { fetchClientSession } from '@/lib/agentbase';
+import { eligibilityFromAgentBase, fetchClientSession } from '@/lib/agentbase';
 import { buildAgentV3LisMaps } from '@/lib/lis-cap-agent-v3';
 import { resolveAgentBaseDrugs } from '@/lib/resolveAgentBaseDrugs';
 import { bulkLookupFormulary } from '@/lib/formularyLookup';
@@ -389,6 +389,9 @@ export function AgentV3App() {
         medicaidConfirmed: false,
         email: c.email || undefined,
         mbi: c.medicare_id || undefined,
+        // Medicaid category + Extra Help from the CRM, so a dual client's
+        // D-SNPs and LIS pricing show without re-clicking Intake.
+        ...eligibilityFromAgentBase(c),
       });
       // current_plan_id seeds the swipe deck's benchmark column when the
       // CRM has it; otherwise IntakeScreen's CurrentPlanPicker handles
@@ -1381,11 +1384,18 @@ export function AgentV3App() {
     ]) {
       const p = planById.get(normalizePlanId(lp.plan_id));
       if (p && typeof lp.total_annual_cost_with_medical === 'number') {
-        out[p.id] = lp.total_annual_cost_with_medical;
+        // Swap rank-plans' full-cost drug total for the Extra Help-capped one
+        // (same number the Drug cost row shows) so an LIS client's winner is
+        // decided on what she actually pays. Unchanged when there's no LIS.
+        const capped = annualDrugByPlanId[p.id];
+        out[p.id] =
+          capped != null
+            ? lp.total_annual_cost_with_medical - lp.total_annual_drug_cost + capped
+            : lp.total_annual_cost_with_medical;
       }
     }
     return out;
-  }, [pricedResult, planById]);
+  }, [pricedResult, planById, annualDrugByPlanId]);
 
   // ── Per-plan gate explanations (CompareScreen "Why this plan" pills) ─
   // Sourced from the LOCAL brain (usePlanBrain), not the library response.
