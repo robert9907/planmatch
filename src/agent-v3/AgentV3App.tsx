@@ -84,6 +84,7 @@ import {
 } from './seed';
 import { AGENT_V3_CSS } from './styles';
 import { getLisCopays, lisCapClassFor, normalizeLisTierForClient } from '@/lib/dual-eligible';
+import { PART_D_OOP_CAP } from '@/lib/plan-brain-utils';
 
 // Pricing-pass inputs (see "Pricing pass" in AgentV3App). Module-level so the
 // hook's dependency keys stay stable across renders.
@@ -1317,20 +1318,45 @@ export function AgentV3App() {
         annualCost: 0,
         unmatched: true,
       }));
+    // Extra Help rows still stop at the yearly Part D out-of-pocket cap: once
+    // the client's LIS copays add up to it, every later fill is $0. Applied
+    // month by month across all her drugs so the per-drug rows, the Jan–Dec
+    // calendar and the plan total (lis-cap-agent-v3, also capped) agree.
+    const capRows = (rows: DrugRow[]): DrugRow[] => {
+      if (!lisCopays) return rows;
+      const months = rows.map((d) =>
+        d.covered && Array.isArray(d.monthlyCost) ? [...d.monthlyCost] : null,
+      );
+      let spent = 0;
+      for (let k = 0; k < 12; k++) {
+        const due = months.reduce((sum, m) => sum + (m ? m[k] ?? 0 : 0), 0);
+        const room = Math.max(0, PART_D_OOP_CAP - spent);
+        if (due > room) {
+          const f = due > 0 ? room / due : 0;
+          for (const m of months) if (m) m[k] = Math.round((m[k] ?? 0) * f * 100) / 100;
+        }
+        spent += Math.min(due, room);
+      }
+      return rows.map((d, i) => {
+        const m = months[i];
+        if (!m) return d;
+        return { ...d, monthlyCost: m, annualCost: Math.round(m.reduce((a, b) => a + b, 0) * 100) / 100 };
+      });
+    };
     for (const lp of pricedResult.top_plans) {
       const p = planById.get(normalizePlanId(lp.plan_id));
-      if (p) out[p.id] = [...adapt(lp.medications), ...unmatched];
+      if (p) out[p.id] = [...capRows(adapt(lp.medications)), ...unmatched];
     }
     for (const lp of pricedResult.bench_plans) {
       const p = planById.get(normalizePlanId(lp.plan_id));
-      if (p) out[p.id] = [...adapt(lp.medications), ...unmatched];
+      if (p) out[p.id] = [...capRows(adapt(lp.medications)), ...unmatched];
     }
     // Current plan: priced separately (never ranked) so its card shows real
     // per-drug costs instead of "not priced".
     const cur = pricedResult.current_plan;
     if (cur) {
       const p = planById.get(normalizePlanId(cur.plan_id));
-      if (p) out[p.id] = [...adapt(cur.medications), ...unmatched];
+      if (p) out[p.id] = [...capRows(adapt(cur.medications)), ...unmatched];
     }
     return out;
   }, [pricedResult, planById, medications, lisCopays]);
@@ -1363,8 +1389,14 @@ export function AgentV3App() {
                 0,
               ) * 100,
             ) / 100,
-          phase: 'initial' as const,
+          phase: 'initial' as 'initial' | 'catastrophic',
         }));
+        // Months after the out-of-pocket cap is reached are catastrophic ($0).
+        let run = 0;
+        for (const mo of out[p.id]) {
+          if (run >= PART_D_OOP_CAP) mo.phase = 'catastrophic';
+          run += mo.cost;
+        }
       } else if (lp.drug_cost_by_month && lp.drug_cost_by_month.length === 12) {
         out[p.id] = lp.drug_cost_by_month;
       }
