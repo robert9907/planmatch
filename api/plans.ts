@@ -627,7 +627,14 @@ function transformPbpRow(
   // by costShareFor — never folded into the number the brain/validator
   // read. Mirrors ROB'S DECISION (range shown, not collapsed).
   const copay = isAllowance ? null : row.copay;
-  let max_coverage = row.copay_max;
+  // A synth 'dental' row (from a dental_comprehensive/preventive pbp entry) is a
+  // tier/presence signal, not an allowance: its copay / copay_max is a
+  // PER-SERVICE cost, never the annual maximum. Letting copay_max ride on
+  // max_coverage surfaced e.g. Alignment NC H5296-006's $10 comprehensive
+  // copay-high as a bogus "$10/yr dental maximum" that out-ranked the B16 row.
+  // The real dental annual max comes only from the B16 'dental' row or the
+  // dental_annual_max scraper fallback.
+  let max_coverage = category === 'dental' ? null : row.copay_max;
 
   // OTC normalization: pbp_benefits.copay arrives in mixed units
   // (sb_ocr files quarterly, medicare_gov files monthly, manual
