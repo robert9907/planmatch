@@ -2108,8 +2108,11 @@ export function buildBenefits(
   // value is not a real annual maximum, so it is dropped (→ "no max" / 0),
   // mirroring the > $10,000 filing-error ceiling in api/_lib/b16-dental.ts.
   const MIN_SANE_DENTAL_MAX = 250;
-  const fallbackMax = pbpFallback?.dentalAnnualMax ?? 0;
-  const dentalMax = pmDentalMax > 0 ? pmDentalMax : (fallbackMax >= MIN_SANE_DENTAL_MAX ? fallbackMax : 0);
+  const rawFallbackMax = pbpFallback?.dentalAnnualMax ?? 0;
+  // Only a credible annual maximum survives (see note above). Shared by the max
+  // and the description so neither can surface a bogus sub-$250 "$44/yr" figure.
+  const fallbackMax = rawFallbackMax >= MIN_SANE_DENTAL_MAX ? rawFallbackMax : 0;
+  const dentalMax = pmDentalMax > 0 ? pmDentalMax : fallbackMax;
   // Medicare-covered dental (CMS PBP B16a) — a separate category from the
   // routine allowance, carried through so agent dental == consumer dental
   // (robert9907/plan-match #95 wrote both rows into the shared pm_plan_benefits).
@@ -2213,8 +2216,8 @@ export function buildBenefits(
 
       description:
         dental?.benefit_description ??
-        (pbpFallback?.dentalAnnualMax
-          ? `$${pbpFallback.dentalAnnualMax}/yr dental allowance`
+        (fallbackMax > 0
+          ? `$${fallbackMax}/yr dental allowance`
           : null),
       medicare_covered: dentalMc
         ? {
