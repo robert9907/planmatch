@@ -17,6 +17,12 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import type { Plan } from '@/types/plans';
+import {
+  DSNP_POP_PREFIX,
+  SNP_SUB_SEP,
+  parseSnpFilter,
+  passesSnpFilter,
+} from './benchSnpFilter';
 
 // ── Network shape lookup ───────────────────────────────────────────
 // pm_plans.plan_shape carries the raw landscape plan_type string. The
@@ -162,7 +168,7 @@ export type DsnpPopulation = (typeof DSNP_POPULATIONS)[number];
 // with the older integration-status subs (which share the D-SNP
 // parent). parseSnpFilter reads the sub as either 'pop:<POP>' or a
 // raw integration status.
-const DSNP_POP_PREFIX = 'pop:';
+// DSNP_POP_PREFIX lives in benchSnpFilter.ts.
 
 // ── Sort options ──────────────────────────────────────────────────
 export type SortKey =
@@ -456,13 +462,7 @@ const SNP_LABELS: Record<string, string> = {
 // (superset semantics). Selecting a sub-filter matches only plans
 // whose Landscape field equals the sub value. If both are selected,
 // the top-level's OR-in-dimension semantics still catch every plan.
-const SNP_SUB_SEP = ':';
-
-function parseSnpFilter(value: string): { top: string; sub: string | null } {
-  const idx = value.indexOf(SNP_SUB_SEP);
-  if (idx < 0) return { top: value, sub: null };
-  return { top: value.slice(0, idx), sub: value.slice(idx + 1) };
-}
+// SNP_SUB_SEP / parseSnpFilter live in benchSnpFilter.ts.
 
 // CMS files C-SNP condition types as CamelCase, comma-joined for multi-
 // condition plans ("CardiovascularDisorders,DiabetesMellitus"). Split
@@ -559,8 +559,11 @@ export function useBenchFilters(
         dsnpIntegrationCounts[p.dsnpIntegration] =
           (dsnpIntegrationCounts[p.dsnpIntegration] ?? 0) + 1;
       }
-      if (p.snpType === 'D-SNP' && p.dsnpAcceptedPopulations) {
-        for (const pop of p.dsnpAcceptedPopulations) {
+      if (p.snpType === 'D-SNP') {
+        // Not-on-file D-SNPs pass every population chip (benchSnpFilter),
+        // so they count toward every population too.
+        const pops = p.dsnpPopulationsSource === 'none' ? DSNP_POPULATIONS : p.dsnpAcceptedPopulations ?? [];
+        for (const pop of pops) {
           dsnpPopulationCounts[pop] = (dsnpPopulationCounts[pop] ?? 0) + 1;
         }
       }
@@ -701,35 +704,9 @@ export function useBenchFilters(
     let out = normalized.filter((p) => {
       if (!passDimension(planTypeSet, p.planType)) return false;
       if (!passDimension(networkSet, p.network)) return false;
-      if (snpSet.size > 0) {
-        // OR across every selected token. Top-level ("D-SNP") passes
-        // any plan in that bucket. Sub-filter ("D-SNP:FIDE" for
-        // integration, "D-SNP:pop:QMB" for population) passes only
-        // plans whose corresponding attribute matches the sub-token.
-        // See parseSnpFilter above for encoding.
-        let matches = false;
-        for (const token of snpSet) {
-          const { top, sub } = parseSnpFilter(token);
-          if (top === 'VA') {
-            if (p.isVa) { matches = true; break; }
-            continue;
-          }
-          if (p.snpType !== top) continue;
-          if (sub == null) { matches = true; break; }
-          if (top === 'D-SNP') {
-            if (sub.startsWith(DSNP_POP_PREFIX)) {
-              const pop = sub.slice(DSNP_POP_PREFIX.length);
-              const pops = p.dsnpAcceptedPopulations ?? [];
-              if (pops.includes(pop)) { matches = true; break; }
-              continue;
-            }
-            if (p.dsnpIntegration === sub) { matches = true; break; }
-            continue;
-          }
-          if (top === 'C-SNP' && p.csnpCondition === sub) { matches = true; break; }
-        }
-        if (!matches) return false;
-      }
+      // OR across selected SNP tokens; a D-SNP with no populations on
+      // file passes a population chip. See benchSnpFilter.ts.
+      if (!passesSnpFilter(p, snpSet)) return false;
       if (!passDimension(carrierSet, p.carrier)) return false;
 
       for (const key of state.costQuality) {
