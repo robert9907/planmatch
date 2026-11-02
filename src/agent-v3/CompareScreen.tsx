@@ -2328,7 +2328,30 @@ function DsnpPopulationBadges({ plan }: { plan: Plan }) {
     manualPops && manualPops.length > 0
       ? manualPops
       : cmsPops;
-  if (!pops || pops.length === 0) return null;
+  if (!pops || pops.length === 0) {
+    // No accepted-population filing on file for this plan year. Shown,
+    // not hidden — the broker confirms the client's Medicaid category
+    // with the carrier before enrolling.
+    return (
+      <div
+        title="No accepted Medicaid populations on file for this plan (pm_dsnp_populations and pm_plans both empty)"
+        style={{
+          fontFamily: F.label,
+          fontSize: 10,
+          fontWeight: 600,
+          padding: '4px 8px',
+          borderRadius: 4,
+          letterSpacing: 0.2,
+          lineHeight: 1.35,
+          background: T.amber100,
+          color: T.amber700,
+          border: '1px solid rgba(154,91,10,0.30)',
+        }}
+      >
+        Dual categories not on file · confirm eligibility with carrier before enrolling
+      </div>
+    );
+  }
   const source: 'manual' | 'cms' =
     manualPops && manualPops.length > 0 ? 'manual' : 'cms';
   const sourceLabel =
