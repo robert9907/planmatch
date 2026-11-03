@@ -287,3 +287,34 @@ export function detectedToCsnp(
   }
   return Array.from(out);
 }
+
+// C-SNP eligibility from the client's CURRENT plan (Rob, 2026-11-03 —
+// James Daniel, Plainville GA, on UHC Complete Care GA-3 C-SNP; his
+// Humana Diabetes & Heart C-SNP never reached the bench because no
+// condition chip was ticked and he had no meds on file). Someone already
+// enrolled in a C-SNP was verified for one of its qualifying conditions,
+// so the plan's CMS-filed condition list is the evidence. CMS files it as
+// a CamelCase comma list ("CardiovascularDisorders,DiabetesMellitus").
+const CMS_CSNP_TO_CODE: Record<string, CsnpCondition> = {
+  DiabetesMellitus: 'diabetes',
+  CardiovascularDisorders: 'cardio',
+  ChronicHeartFailure: 'cardio',
+  ChronicLungDisorders: 'copd',
+  ChronicKidneyDisease: 'esrd',
+};
+
+/** Map a C-SNP plan's CMS condition list onto the CsnpCondition codes
+ *  the Intake chips use. Unknown tokens are skipped; returns deduped. */
+export function csnpConditionsFromPlan(
+  snpType: string | null | undefined,
+  conditionType: string | null | undefined,
+): CsnpCondition[] {
+  const t = (snpType ?? '').toLowerCase();
+  if (!(t.includes('c-snp') || t.includes('csnp') || t.includes('chronic'))) return [];
+  const out = new Set<CsnpCondition>();
+  for (const raw of (conditionType ?? '').split(',')) {
+    const mapped = CMS_CSNP_TO_CODE[raw.trim()];
+    if (mapped) out.add(mapped);
+  }
+  return Array.from(out);
+}

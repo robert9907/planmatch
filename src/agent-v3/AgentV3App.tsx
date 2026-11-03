@@ -59,7 +59,7 @@ import { fetchPlansForClient, lastPlanTruncated } from '@/lib/planCatalog';
 import { totalComplianceItems } from '@/lib/compliance';
 import type { Plan } from '@/types/plans';
 import type { CsnpConditionCode, Provider, StateCode } from '@/types/session';
-import { detectConditionsFromMeds, detectedToCsnp } from '@/lib/condition-detector';
+import { csnpConditionsFromPlan, detectConditionsFromMeds, detectedToCsnp } from '@/lib/condition-detector';
 import { useAgentBaseRecommend } from '@/hooks/useAgentBaseRecommend';
 import { AgentBar, type ScreenId } from './AgentBar';
 import { ComplianceScreen } from './ComplianceScreen';
@@ -652,6 +652,29 @@ export function AgentV3App() {
     })();
     return () => ctl.abort();
   }, [client.zip, client.county, client.state]);
+
+  // C-SNP eligibility from the CURRENT plan (Rob, 2026-11-03 — James
+  // Daniel, on UHC Complete Care GA-3 C-SNP, saw "0 C-SNP"). A client
+  // already enrolled in a C-SNP qualifies, so tick the chips for that
+  // plan's CMS-filed conditions. Shares csnpAutoApplied with the med
+  // path, so a chip the broker unticks stays unticked.
+  const currentPlanRow = useMemo(() => {
+    if (!currentPlanId) return null;
+    const target = normalizePlanId(currentPlanId);
+    return eligiblePlans.find((p) => normalizePlanId(p.id) === target) ?? null;
+  }, [currentPlanId, eligiblePlans]);
+  useEffect(() => {
+    if (!currentPlanRow) return;
+    const fromPlan = csnpConditionsFromPlan(
+      currentPlanRow.snp_type,
+      currentPlanRow.csnp_condition_type,
+    ) as CsnpConditionCode[];
+    const current = useSession.getState().client.csnpConditions ?? [];
+    const toAdd = fromPlan.filter((c) => !current.includes(c) && !csnpAutoApplied.current.has(c));
+    for (const c of fromPlan) csnpAutoApplied.current.add(c);
+    if (toAdd.length > 0) updateClient({ csnpConditions: [...current, ...toAdd] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPlanRow]);
 
   // Phase 2 of the test seed — once eligiblePlans has landed, pick a
   // plausible current plan so the swipe deck has something to benchmark
