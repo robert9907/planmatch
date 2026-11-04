@@ -88,7 +88,7 @@ interface NppesResult {
 }
 
 async function nppes(
-  first: string,
+  first: string | null,
   last: string | null,
   state: string | null,
   postalPrefix?: string,
@@ -96,10 +96,10 @@ async function nppes(
   const params = new URLSearchParams({
     version: '2.1',
     enumeration_type: 'NPI-1',
-    first_name: first,
     use_first_name_alias: 'false',
     limit: '50',
   });
+  if (first) params.set('first_name', first);
   if (last) params.set('last_name', last);
   if (postalPrefix) params.set('postal_code', `${postalPrefix}*`);
   if (state) params.set('state', state);
@@ -157,6 +157,8 @@ function credentialFits(credential: string | null, taxonomy: string): boolean {
  *  between same-name people in the state. */
 export interface PrescriberNear {
   zip?: string | null;
+  /** The client's own ZIP — used when the label carries no pharmacy ZIP. */
+  clientZip?: string | null;
 }
 
 function locationZip(r: NppesResult): string {
@@ -177,6 +179,25 @@ export async function resolveParts(
   const nameOnly: ResolvedPrescriber = { name: p.display, npi: null, specialty: null, phone: null, address: null };
   const state = (clientState ?? '').trim().toUpperCase().slice(0, 2) || null;
   if (!p.first || !p.last || !state) return nameOnly;
+
+  // Labels often print just an initial ("S Talbot", "S. Smathers"). NPPES
+  // has no person named "S", so search by last name near the pharmacy (or
+  // the client) and keep those whose first name starts with that letter.
+  // Accepted only when that is exactly one person.
+  const initial = p.first.replace(/\./g, '');
+  if (initial.length === 1) {
+    const zip3 = ((near?.zip || near?.clientZip) ?? '').replace(/\D/g, '').slice(0, 3);
+    const pool = await nppes(null, p.last, state, zip3.length === 3 ? zip3 : undefined);
+    if (!pool || pool.length >= 50) return nameOnly;
+    let hits = pool.filter((r) => (r.basic?.first_name ?? '').toUpperCase().startsWith(initial.toUpperCase()));
+    if (hits.length > 1 && p.credential) {
+      hits = hits.filter((r) => {
+        const tax = r.taxonomies?.find((t) => t.primary) ?? r.taxonomies?.[0];
+        return credentialFits(p.credential, tax?.desc ?? '');
+      });
+    }
+    return hits.length === 1 ? toResolved(hits[0]) : nameOnly;
+  }
 
   // Labels print both "First Last" and "Last First" — try both orders.
   const [a, b] = await Promise.all([nppes(p.first, p.last, state), nppes(p.last, p.first, state)]);

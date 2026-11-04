@@ -160,13 +160,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return p && !declinedParsed.some((d) => sameLast(d, p));
       });
       if (keep.length > 0) {
-        const { data: clientRow } = await ab.from('clients').select('state').eq('id', clientId).maybeSingle();
+        const { data: clientRow } = await ab.from('clients').select('state, zip').eq('id', clientId).maybeSingle();
+        const cr = clientRow as { state?: string | null; zip?: string | null } | null;
         const providers = await planPrescribers(
           ab,
           clientId,
           keep,
-          ((clientRow as { state?: string | null } | null)?.state ?? null),
-          { zip: ph?.zip ?? null },
+          (cr?.state ?? null),
+          { zip: ph?.zip ?? null, clientZip: cr?.zip ?? null },
         );
         if (providers.length > 0) {
           const prov = await upsertProvidersForClient(ab, clientId, providers, { source: 'snap', verifiedAt: null });
