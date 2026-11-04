@@ -30,6 +30,8 @@ export interface IncomingMedication {
   refill_date?: string | null;
   /** AgentBase providers.id of the dispensing pharmacy (bottle scan). */
   pharmacy_id?: number | null;
+  /** Pills per day off the label directions (solid oral forms only). */
+  pills_per_day?: number | null;
   tier_on_recommended_plan?: number | null;
 }
 
@@ -120,7 +122,7 @@ export async function upsertMedicationsForClient(
   // Fields the helper is authorized to write on client_medications.
   // Snap-on-verified rows only allow the subset whose existing value
   // is null (see MED_MATCH branch below).
-  const MED_WRITE_COLS = ['name', 'dose', 'form', 'frequency', 'rxcui', 'refill_days', 'tier', 'quantity', 'refill_date', 'pharmacy_id'] as const;
+  const MED_WRITE_COLS = ['name', 'dose', 'form', 'frequency', 'rxcui', 'refill_days', 'tier', 'quantity', 'refill_date', 'pharmacy_id', 'pills_per_day'] as const;
   const MED_SELECT = `id, verified_at, ${MED_WRITE_COLS.join(', ')}`;
   type ExistingMed = {
     id: number;
@@ -179,6 +181,7 @@ export async function upsertMedicationsForClient(
         quantity: m.quantity ?? null,
         refill_date: m.refill_date ?? null,
         pharmacy_id: m.pharmacy_id ?? null,
+        pills_per_day: m.pills_per_day ?? null,
       };
 
       if (existing) {
@@ -199,7 +202,7 @@ export async function upsertMedicationsForClient(
           // quantity / refill_date only ever fill in — a caller that
           // doesn't know them (the quoting flow, a label without a QTY)
           // must not blank what the broker already has.
-          if (v == null && (col === 'quantity' || col === 'refill_date' || col === 'pharmacy_id')) continue;
+          if (v == null && (col === 'quantity' || col === 'refill_date' || col === 'pharmacy_id' || col === 'pills_per_day')) continue;
           // A label's pharmacy only fills a blank — the broker's (or the
           // client's confirmed) pharmacy on file always wins.
           if (col === 'pharmacy_id' && existing.pharmacy_id != null) continue;

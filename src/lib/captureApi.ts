@@ -60,6 +60,7 @@ export function confirmCapture(input: {
   pharmacy: PharmacyChoice | null;
   declined_prescribers: string[];
   prescriber_readings?: string[];
+  med_prescribers?: { med_name: string; prescriber: string }[];
 }): Promise<{ ok: true }> {
   return postJson('/api/capture-confirm', input);
 }

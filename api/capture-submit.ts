@@ -17,7 +17,8 @@ import {
   type IncomingProvider,
 } from './_lib/agentbaseDedup.js';
 import { resolveSnapRxcui } from './_lib/snapRxcui.js';
-import { daysSupply, nextRefillDate, quantityText } from './_lib/snapRefill.js';
+import { daysSupply, nextRefillDate, pillsPerDay, quantityText } from './_lib/snapRefill.js';
+import { stampMedPrescribers } from './_lib/snapMedPrescribers.js';
 import { lookupTier } from './_lib/snapTier.js';
 import { planPrescribers } from './_lib/snapPrescriberLinks.js';
 import { matchPharmacy, resolvePharmacyId } from './_lib/snapPharmacy.js';
@@ -175,6 +176,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             : Promise.resolve(null),
           card ? sendMedicareCard(session.agentbase_client_id, card) : Promise.resolve(undefined),
         ]);
+        // Bottle prescriber → that med's prescriber_id (+ client default
+        // when none is set). Runs after both upserts so the doctor is
+        // already on Linked Providers. Never fails the writeback.
+        try {
+          await stampMedPrescribers(
+            ab,
+            session.agentbase_client_id,
+            extracted.flatMap((e) =>
+              e.type === 'medication' && e.drug_name && e.prescribing_physician
+                ? [{ medName: e.drug_name, prescriber: e.prescribing_physician }]
+                : [],
+            ),
+          );
+        } catch (stampErr) {
+          console.warn('[capture-submit] med prescriber stamp skipped', {
+            agentbase_client_id: session.agentbase_client_id,
+            message: stampErr instanceof Error ? stampErr.message : String(stampErr),
+          });
+        }
         writeback = { meds: medRes, providers: provRes, medicare_card: cardRes };
         medsWritten = medRes ? medRes.inserted + medRes.updated : 0;
         providersWritten = provRes ? provRes.links_inserted + provRes.links_skipped_dup : 0;
@@ -299,6 +319,13 @@ function mapExtractedToUpsertInputs(items: ExtractedItem[]): {
         refill_days: days != null ? String(days) : null,
         refill_date: nextRefillDate(it.last_filled, days),
         pharmacy_id: it.pharmacy_id ?? null,
+        pills_per_day: pillsPerDay({
+          instructions: it.dosage_instructions,
+          quantity: it.quantity,
+          printedDaysSupply: it.days_supply,
+          form: it.form,
+          ndc: it.ndc_code,
+        }),
       });
     } else if (it.type === 'provider' && it.provider_name) {
       providers.push({
@@ -402,5 +429,10 @@ function snapSummary(items: ExtractedItem[]) {
         })()
       : null,
     prescribers: meds.map((m) => m.prescribing_physician).filter((p): p is string => Boolean(p && p.trim())),
+    // Which bottle each prescriber was printed on — capture-confirm puts
+    // the doctor on that med once the whole visit's names are merged.
+    med_prescribers: meds
+      .filter((m) => m.drug_name && m.prescribing_physician && m.prescribing_physician.trim())
+      .map((m) => ({ med_name: m.drug_name as string, prescriber: (m.prescribing_physician as string).trim() })),
   };
 }

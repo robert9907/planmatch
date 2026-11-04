@@ -29,6 +29,7 @@ import { resolvePharmacyId } from './_lib/snapPharmacy.js';
 import { parsePrescriber, sameLast } from './_lib/snapPrescriber.js';
 import { planPrescribers } from './_lib/snapPrescriberLinks.js';
 import { upsertProvidersForClient } from './_lib/agentbaseDedup.js';
+import { clearDeclinedPrescriber, stampMedPrescribers } from './_lib/snapMedPrescribers.js';
 
 interface ConfirmBody {
   token?: string;
@@ -45,6 +46,7 @@ interface ConfirmBody {
   } | null;
   declined_prescribers?: unknown;
   prescriber_readings?: unknown;
+  med_prescribers?: unknown;
 }
 
 function strList(v: unknown, max = 20): string[] {
@@ -67,6 +69,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const medNames = strList(body.med_names, 40);
     const declined = strList(body.declined_prescribers, 10);
     const readings = strList(body.prescriber_readings, 40);
+    const medPrescribers = (Array.isArray(body.med_prescribers) ? body.med_prescribers : [])
+      .slice(0, 40)
+      .flatMap((x) => {
+        const r = x as { med_name?: unknown; prescriber?: unknown } | null;
+        const med = typeof r?.med_name === 'string' ? r.med_name.trim().slice(0, 160) : '';
+        const doc = typeof r?.prescriber === 'string' ? r.prescriber.trim().slice(0, 160) : '';
+        return med && doc ? [{ medName: med, prescriber: doc }] : [];
+      });
     const ph = body.pharmacy && typeof body.pharmacy.name === 'string' && body.pharmacy.name.trim()
       ? { ...body.pharmacy, name: body.pharmacy.name.trim().slice(0, 160) }
       : null;
@@ -84,7 +94,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const ab = agentbaseSupabase();
     const pharmacyId = ph ? await resolvePharmacyId(ab, ph) : null;
-    const result = { pharmacy_meds_updated: 0, prescriber_links_removed: 0, prescriber_links_added: 0 };
+    const result = {
+      pharmacy_meds_updated: 0,
+      prescriber_links_removed: 0,
+      prescriber_links_added: 0,
+      med_prescribers_cleared: 0,
+      med_prescribers_stamped: 0,
+    };
 
     if (session.agentbase_client_id) {
       const clientId = session.agentbase_client_id;
@@ -110,19 +126,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (declined.length > 0) {
         const { data: links } = await ab
           .from('client_providers')
-          .select('id, verified_at, created_at, provider:providers(name)')
+          .select('id, provider_id, verified_at, created_at, provider:providers(name)')
           .eq('client_id', clientId)
           .is('verified_at', null)
           .gte('created_at', session.created_at);
+        const removedProviderIds: number[] = [];
         for (const raw of declined) {
           const want = parsePrescriber(raw);
           if (!want) continue;
-          for (const l of (links ?? []) as unknown as Array<{ id: number; provider: { name: string | null } | null }>) {
+          for (const l of (links ?? []) as unknown as Array<{ id: number; provider_id: number; provider: { name: string | null } | null }>) {
             const have = parsePrescriber(l.provider?.name ?? '');
             if (!have || !sameLast(have, want)) continue;
             const { error } = await ab.from('client_providers').delete().eq('id', l.id).is('verified_at', null);
-            if (!error) result.prescriber_links_removed += 1;
+            if (!error) {
+              result.prescriber_links_removed += 1;
+              removedProviderIds.push(l.provider_id);
+            }
           }
+        }
+        // "Not my doctor" also comes off the meds and the client default.
+        if (removedProviderIds.length > 0) {
+          result.med_prescribers_cleared = await clearDeclinedPrescriber(ab, clientId, removedProviderIds);
         }
       }
 
@@ -148,6 +172,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const prov = await upsertProvidersForClient(ab, clientId, providers, { source: 'snap', verifiedAt: null });
           result.prescriber_links_added = prov.links_inserted;
         }
+      }
+
+      // Now every kept doctor is linked — put each one on the bottle it
+      // was printed on (blank meds only) and seed the client default.
+      const keptPairs = medPrescribers.filter((mp) => {
+        const p = parsePrescriber(mp.prescriber);
+        return p && !declinedParsed.some((d) => sameLast(d, p));
+      });
+      if (keptPairs.length > 0) {
+        const stamped = await stampMedPrescribers(ab, clientId, keptPairs);
+        result.med_prescribers_stamped = stamped.meds_stamped + stamped.default_filled;
       }
     } else {
       // Agent-v3 quoting session: write the answers onto the scanned items
