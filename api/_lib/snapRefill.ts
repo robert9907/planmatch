@@ -45,7 +45,10 @@ function phaseRate(s: string): number | null {
   else if (/\b(four times|4 times) (a|per|each) day|\bqid\b/.test(s)) timesPerDay = 4;
   else if (/\b(three times|3 times) (a|per|each) day|\btid\b/.test(s)) timesPerDay = 3;
   else if (/\b(twice|two times|2 times) (a|per|each) day|twice daily|\bbid\b/.test(s)) timesPerDay = 2;
-  else if (/\b(once|one time|1 time) (a|per|each) day|once daily|\bdaily\b|every day|each day|\bqd\b|at bedtime|every (morning|evening|night)|in the (morning|evening)/.test(s)) timesPerDay = 1;
+  // "Once" with no other rate ("once with evening meals"), "nightly" and
+  // "at night" are a once-a-day schedule. Weekly/monthly labels were
+  // already turned away in unitsPerDay().
+  else if (/\b(once|one time|1 time) (a|per|each) day|once daily|\bdaily\b|every day|each day|\bqd\b|\bqhs\b|at bedtime|nightly|at night|every (morning|evening|night)|in the (morning|evening)|\bonce\b/.test(s)) timesPerDay = 1;
   if (timesPerDay == null || !Number.isFinite(timesPerDay)) return null;
 
   const total = perDose * timesPerDay;
@@ -74,6 +77,45 @@ export function titrationDays(instructions: string | null | undefined, quantity:
   const used1 = r1 * phase1Days;
   if (quantity <= used1) return Math.floor(quantity / r1);
   return phase1Days + Math.floor((quantity - used1) / r2);
+}
+
+/**
+ * Pills per day for the CRM's PILLS/DAY column (solid oral forms only).
+ * Label directions first ("Take 2 tablets twice daily" → 4). When the
+ * directions leave the rate unclear ("TAKE 1 TABLET"), fall back to the
+ * printed quantity ÷ printed days' supply — but only when that divides
+ * to a clean whole or half pill. Anything less certain stays null.
+ */
+export function pillsPerDay(opts: {
+  instructions?: string | null;
+  quantity?: unknown;
+  printedDaysSupply?: unknown;
+  form?: string | null;
+  ndc?: string | null;
+}): number | null {
+  const form = (opts.form ?? '').toLowerCase();
+  const measured = MEASURE_UNIT_RE.test(String(opts.quantity ?? ''));
+  const solid = !measured && (!form || /tablet|capsule|tab|cap|pill|softgel/.test(form));
+  if (!solid) return null;
+  const s = (opts.instructions ?? '').toLowerCase();
+  // As-needed meds have no fixed daily count — the broker sets "most a day".
+  if (/\b(as needed|prn|if needed|when needed)\b/.test(s)) return null;
+
+  const fromLabel = unitsPerDay(opts.instructions);
+  if (fromLabel != null) return fromLabel;
+  // Tapers / titrations have no single rate.
+  if (/\b(then|increase|decrease|taper|alternate|every other|weekly|week|month|sliding)\b/.test(s)) return null;
+
+  const qty = toNumber(opts.quantity);
+  let days = toNumber(opts.printedDaysSupply);
+  if (days != null && opts.ndc) {
+    const segs = String(opts.ndc).split(/\D+/).filter(Boolean).map(Number);
+    if (segs.includes(days)) days = null;
+  }
+  if (qty == null || days == null || days < 1 || days > 365) return null;
+  const ratio = qty / days;
+  if (ratio < 0.5 || ratio > 12) return null;
+  return Number.isInteger(ratio * 2) ? ratio : null;
 }
 
 /** Days' supply: printed value first, else quantity ÷ daily units (solid oral forms only). */

@@ -127,6 +127,13 @@ export interface SnapSummary {
   med_names: string[];
   pharmacy: SnapPharmacyRead | null;
   prescribers: string[];
+  /** Prescriber as printed on each bottle, paired with that bottle's drug. */
+  med_prescribers?: MedPrescriberReading[];
+}
+
+export interface MedPrescriberReading {
+  med_name: string;
+  prescriber: string;
 }
 
 export interface PharmacyChoice {

@@ -45,6 +45,7 @@ interface SavedVisit {
   pharmacyRead: SnapPharmacyRead | null;
   prescribers: string[];
   prescriberReadings: string[];
+  medPrescribers?: { med_name: string; prescriber: string }[];
   pharmacyAnswer: 'ask' | 'yes' | 'changed';
   chosenPharmacy: PharmacyChoice | null;
   doctorAnswers: Record<string, 'yes' | 'no'>;
@@ -104,6 +105,8 @@ export function CaptureApp() {
   // Every bottle's prescriber as printed — the server merges them by last
   // name at the end of the visit (one bottle often prints only part).
   const [prescriberReadings, setPrescriberReadings] = useState<string[]>(restored?.prescriberReadings ?? []);
+  // Which bottle each reading came off, so the CRM puts the doctor on that med.
+  const [medPrescribers, setMedPrescribers] = useState<{ med_name: string; prescriber: string }[]>(restored?.medPrescribers ?? []);
   const [pharmacyAnswer, setPharmacyAnswer] = useState<'ask' | 'yes' | 'changed'>(restored?.pharmacyAnswer ?? 'ask');
   const [chosenPharmacy, setChosenPharmacy] = useState<PharmacyChoice | null>(restored?.chosenPharmacy ?? null);
   const [doctorAnswers, setDoctorAnswers] = useState<Record<string, 'yes' | 'no'>>(restored?.doctorAnswers ?? {});
@@ -130,13 +133,14 @@ export function CaptureApp() {
       pharmacyRead,
       prescribers,
       prescriberReadings,
+      medPrescribers,
       pharmacyAnswer,
       chosenPharmacy,
       doctorAnswers,
       cameraOpenFor: cameraOpenFor.current,
       step,
     });
-  }, [token, step, savedCount, cardDone, label, medNames, pharmacyRead, prescribers, prescriberReadings, pharmacyAnswer, chosenPharmacy, doctorAnswers]);
+  }, [token, step, savedCount, cardDone, label, medNames, pharmacyRead, prescribers, prescriberReadings, medPrescribers, pharmacyAnswer, chosenPharmacy, doctorAnswers]);
 
   // Check the link before showing the camera, and pick up the client's
   // first name for the greeting. capture-poll is read-only.
@@ -251,6 +255,14 @@ export function CaptureApp() {
         if (snap.pharmacy?.name) {
           setPharmacyRead((prev) => (!prev || (!prev.npi && snap.pharmacy?.npi) ? snap.pharmacy : prev));
         }
+        if (snap.med_prescribers?.length) {
+          const add = snap.med_prescribers;
+          setMedPrescribers((prev) => {
+            const key = (x: { med_name: string; prescriber: string }) => `${x.med_name.toLowerCase()}|${x.prescriber.toLowerCase()}`;
+            const seen = new Set(prev.map(key));
+            return [...prev, ...add.filter((x) => !seen.has(key(x)))];
+          });
+        }
         if (snap.prescribers.length) {
           setPrescriberReadings((prev) => Array.from(new Set([...prev, ...snap.prescribers])));
           setPrescribers((prev) => {
@@ -328,6 +340,7 @@ export function CaptureApp() {
       pharmacyRead,
       prescribers,
       prescriberReadings,
+      medPrescribers,
       pharmacyAnswer,
       chosenPharmacy,
       doctorAnswers,
@@ -379,6 +392,7 @@ export function CaptureApp() {
         pharmacy,
         declined_prescribers: prescribers.filter((p) => doctorAnswers[p] === 'no'),
         prescriber_readings: prescriberReadings,
+        med_prescribers: medPrescribers,
       });
     } catch {
       // The bottles are already saved; a missed answer is not worth
