@@ -120,7 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Client's current plan, for the Tier column.
         const { data: clientRow } = await ab
           .from('clients')
-          .select('plan_id, state, deleted_at')
+          .select('plan_id, state, zip, deleted_at')
           .eq('id', session.agentbase_client_id)
           .maybeSingle();
         // A client deleted after the link went out gets nothing written.
@@ -157,6 +157,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               zip:
                 extracted.find((e): e is Extract<ExtractedItem, { type: 'medication' }> =>
                   e.type === 'medication' && Boolean(e.pharmacy_zip))?.pharmacy_zip ?? null,
+              clientZip: (clientRow.zip as string | null) ?? null,
             },
           )),
         );
