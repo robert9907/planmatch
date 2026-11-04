@@ -119,6 +119,11 @@ interface Plan {
   // by attachManualDsnpPopulations below; mirrors consumer repo main
   // commit 74915b7.
   dsnp_accepted_populations_manual: string[] | null;
+  // True when the pm_dsnp_populations capture predates this plan year's
+  // AEP data (verified before Oct 1 of the prior year) — e.g. an Aug 2026
+  // capture of the 2026 plan being served for 2027. The card flags it so
+  // the broker confirms the categories on HealthSherpa before quoting.
+  dsnp_populations_stale: boolean;
   premium: number;
   // Member-payable premium. For D-SNPs this is always $0 because LIS
   // covers the Part D Basic premium; for all other plans it equals
@@ -910,8 +915,13 @@ function canonicalSegment(s: string | null | undefined): string {
 async function fetchManualDsnpPopulations(
   sb: ReturnType<typeof supabase>,
   rows: readonly Pick<PlanRow, 'contract_id' | 'snp_type'>[],
+  catalogYear: number,
+  staleOut: Set<string>,
 ): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>();
+  // A capture verified before Oct 1 of (catalogYear - 1) was taken off the
+  // prior plan year's cards, before that year's AEP plan data existed.
+  const freshCutoff = `${catalogYear - 1}-10-01`;
   const dsnpContracts = new Set<string>();
   for (const r of rows) {
     if ((r.snp_type ?? '').toUpperCase().includes('D-SNP')) {
@@ -922,7 +932,7 @@ async function fetchManualDsnpPopulations(
   try {
     const { data, error } = await sb
       .from('pm_dsnp_populations')
-      .select('contract_id, plan_id, segment_id, accepted_populations')
+      .select('contract_id, plan_id, segment_id, accepted_populations, verified_at')
       .in('contract_id', [...dsnpContracts])
       .limit(2000);
     if (error) {
@@ -937,11 +947,11 @@ async function fetchManualDsnpPopulations(
       plan_id: string;
       segment_id: string;
       accepted_populations: string[];
+      verified_at: string | null;
     }>) {
-      out.set(
-        `${r.contract_id}-${r.plan_id}-${canonicalSegment(r.segment_id)}`,
-        r.accepted_populations,
-      );
+      const key = `${r.contract_id}-${r.plan_id}-${canonicalSegment(r.segment_id)}`;
+      out.set(key, r.accepted_populations);
+      if (!r.verified_at || r.verified_at.slice(0, 10) < freshCutoff) staleOut.add(key);
     }
     return out;
   } catch (err) {
@@ -1143,7 +1153,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // most plans. Preferred over dsnp_accepted_populations at every
     // read site downstream (bench filter, compare-card badges, audit).
     // Consumer repo commit 74915b7 defines the same pattern.
-    const manualByCps = await fetchManualDsnpPopulations(sb, rows);
+    const staleDsnpCps = new Set<string>();
+    const manualByCps = await fetchManualDsnpPopulations(sb, rows, catalogYear, staleDsnpCps);
 
     // ─── Step 2: aggregate by (contract_id, plan_id, segment_id) ────
     // Landscape rows are one-per-county; the app wants one plan per
@@ -1698,6 +1709,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Manual override wins over CMS-derived at every read site;
         // populated by attachManualDsnpPopulations above.
         dsnp_accepted_populations_manual: manualByCps.get(`${row.contract_id}-${row.plan_id}-${canonicalSegment(row.segment_id)}`) ?? null,
+        dsnp_populations_stale: staleDsnpCps.has(`${row.contract_id}-${row.plan_id}-${canonicalSegment(row.segment_id)}`),
         has_drug_coverage: row.drug_deductible !== null,
         premium: row.monthly_premium ?? 0,
         // D-SNPs file a Part D Basic Premium in monthly_premium (typically

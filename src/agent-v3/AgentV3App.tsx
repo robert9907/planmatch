@@ -66,7 +66,7 @@ import { ComplianceScreen } from './ComplianceScreen';
 import { CompareScreen } from './CompareScreen';
 import { DisclaimersScreen } from './DisclaimersScreen';
 import { DentalScreen } from './DentalScreen';
-import { qualifiesForBench } from '@/lib/benchEligibility';
+import { dsnpMedicaidVerdict, qualifiesForBench } from '@/lib/benchEligibility';
 import { EnrollScreen } from './EnrollScreen';
 import { IntakeScreen } from './IntakeScreen';
 import { MedsScreen } from './MedsScreen';
@@ -977,12 +977,34 @@ export function AgentV3App() {
     );
   }, [ranked.result, eligiblePlans, planById]);
 
+  // Top 4 (and TOP PICK = scoredPlans[0]). Hard Medicaid-category gate:
+  // a D-SNP that doesn't enroll the client's category (e.g. a Full Dual
+  // QMB+/SLMB+ plan for a QMB-only client) can never be a pick, whatever
+  // the ranking service returned. Rob, Nov 4 2026: quoted a QMB client
+  // the $150 food card on Aetna Full Dual Care (QMB+/SLMB+ only) when his
+  // real options were Aetna QMB plans at $105 / $110. Dropped picks are
+  // backfilled in rank order from the brain's bench so the board keeps 4.
   const scoredPlans = useMemo<Plan[]>(() => {
     if (!ranked.result) return [];
-    return ranked.result.top_plans
-      .map((lp) => planById.get(normalizePlanId(lp.plan_id)))
+    const level = client.medicaidLevel;
+    const ok = (p: Plan) => dsnpMedicaidVerdict(p, level) !== 'rejects';
+    const toPlan = (lp: { plan_id: string }) => planById.get(normalizePlanId(lp.plan_id));
+    const top = ranked.result.top_plans
+      .map(toPlan)
       .filter((p): p is Plan => p != null);
-  }, [ranked.result, planById]);
+    const kept = top.filter(ok);
+    if (kept.length === top.length) return kept;
+    const seen = new Set(kept.map((p) => p.id));
+    for (const lp of ranked.result.bench_plans ?? []) {
+      if (kept.length >= top.length) break;
+      const p = toPlan(lp);
+      if (!p || seen.has(p.id) || !ok(p)) continue;
+      if (!qualifiesForBench(p, client)) continue;
+      seen.add(p.id);
+      kept.push(p);
+    }
+    return kept;
+  }, [ranked.result, planById, client]);
 
   // Authoritative sellability from the library brain — UHC/Devoted flags
   // + exclude rules + Wellcare allowlist, richer than /api/plans' exclude-

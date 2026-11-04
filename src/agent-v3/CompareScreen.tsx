@@ -2320,7 +2320,23 @@ function formatListWithOr(items: string[]): string {
   if (items.length === 2) return `${items[0]} or ${items[1]}`;
   return `${items.slice(0, -1).join(', ')}, or ${items[items.length - 1]}`;
 }
+const DSNP_FULL_BENEFIT = new Set(['QMB+', 'SLMB+', 'FBDE']);
+const DSNP_PARTIAL = new Set(['QMB', 'SLMB', 'QI', 'QDWI']);
+const MEDICAID_LEVEL_LABEL: Record<string, string> = {
+  qmb: 'QMB', qmb_plus: 'QMB+', slmb: 'SLMB', slmb_plus: 'SLMB+',
+  qi: 'QI', qdwi: 'QDWI', fbde: 'FBDE',
+};
+const RED_BG = '#FDECEC';
+const RED_INK = '#B42318';
+// Plan-level eligibility line + client verdict. Rob, Nov 4 2026: a QMB
+// client was quoted a Full Dual plan's $150 food card — the card must say
+// in plain words which dual categories the plan takes, and whether THIS
+// client can enroll. Class names are exact: QMB+/SLMB+/FBDE are full-
+// benefit duals; QMB/SLMB/QI/QDWI are partial duals (Medicare Savings
+// Program only). The old copy said "Partial dual only" on every
+// restricted plan, including full-benefit-only plans.
 function DsnpPopulationBadges({ plan }: { plan: Plan }) {
+  const medicaidLevel = useSession((s) => s.client.medicaidLevel);
   if (plan.snp_type !== 'D-SNP') return null;
   const manualPops = plan.dsnp_accepted_populations_manual;
   const cmsPops = plan.dsnp_accepted_populations;
@@ -2328,27 +2344,53 @@ function DsnpPopulationBadges({ plan }: { plan: Plan }) {
     manualPops && manualPops.length > 0
       ? manualPops
       : cmsPops;
+  const clientLabel =
+    medicaidLevel && medicaidLevel !== 'none' ? MEDICAID_LEVEL_LABEL[medicaidLevel] ?? null : null;
+
+  const baseStyle: React.CSSProperties = {
+    fontFamily: F.label,
+    fontSize: 10,
+    fontWeight: 600,
+    padding: '4px 8px',
+    borderRadius: 4,
+    letterSpacing: 0.2,
+    lineHeight: 1.35,
+  };
+  const amber: React.CSSProperties = {
+    ...baseStyle,
+    background: T.amber100,
+    color: T.amber700,
+    border: '1px solid rgba(154,91,10,0.30)',
+  };
+  const green: React.CSSProperties = {
+    ...baseStyle,
+    background: T.mint100,
+    color: T.mint700,
+    border: '1px solid rgba(15,158,119,0.35)',
+  };
+  const red: React.CSSProperties = {
+    ...baseStyle,
+    background: RED_BG,
+    color: RED_INK,
+    border: '1px solid rgba(180,35,24,0.35)',
+    fontWeight: 700,
+  };
+
   if (!pops || pops.length === 0) {
     // No accepted-population filing on file for this plan year. Shown,
     // not hidden — the broker confirms the client's Medicaid category
     // with the carrier before enrolling.
     return (
-      <div
-        title="No accepted Medicaid populations on file for this plan (pm_dsnp_populations and pm_plans both empty)"
-        style={{
-          fontFamily: F.label,
-          fontSize: 10,
-          fontWeight: 600,
-          padding: '4px 8px',
-          borderRadius: 4,
-          letterSpacing: 0.2,
-          lineHeight: 1.35,
-          background: T.amber100,
-          color: T.amber700,
-          border: '1px solid rgba(154,91,10,0.30)',
-        }}
-      >
-        Dual categories not on file · confirm eligibility with carrier before enrolling
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div
+          title="No accepted Medicaid populations on file for this plan (pm_dsnp_populations and pm_plans both empty)"
+          style={amber}
+        >
+          Dual categories not on file · confirm eligibility with carrier before enrolling
+        </div>
+        {clientLabel && (
+          <div style={amber}>Client is {clientLabel} — eligibility unverified, confirm before quoting</div>
+        )}
       </div>
     );
   }
@@ -2364,45 +2406,40 @@ function DsnpPopulationBadges({ plan }: { plan: Plan }) {
   const acceptedInOrder = DSNP_POPULATION_DISPLAY_ORDER.filter((p) => acceptedSet.has(p));
   const excludedInOrder = DSNP_POPULATION_DISPLAY_ORDER.filter((p) => !acceptedSet.has(p));
 
-  const baseStyle: React.CSSProperties = {
-    fontFamily: F.label,
-    fontSize: 10,
-    fontWeight: 600,
-    padding: '4px 8px',
-    borderRadius: 4,
-    letterSpacing: 0.2,
-    lineHeight: 1.35,
-  };
+  let className: string;
+  if (isPermissive) className = 'Accepts all dual categories';
+  else if (acceptedInOrder.length === 1) className = `${acceptedInOrder[0]} only`;
+  else if (acceptedInOrder.every((p) => DSNP_FULL_BENEFIT.has(p))) className = 'Full-benefit duals only';
+  else if (acceptedInOrder.every((p) => DSNP_PARTIAL.has(p))) className = 'Partial duals only';
+  else className = 'Restricted';
 
-  if (isPermissive) {
-    return (
-      <div
-        title={`Accepted Medicaid populations (source: ${sourceLabel})`}
-        style={{
-          ...baseStyle,
-          background: T.mint100,
-          color: T.mint700,
-          border: '1px solid rgba(15,158,119,0.35)',
-        }}
-      >
-        Accepts all dual categories · {acceptedInOrder.join(', ')}
-      </div>
-    );
-  }
+  let verdict: 'accepts' | 'rejects' | null = null;
+  if (clientLabel) verdict = acceptedSet.has(clientLabel) ? 'accepts' : 'rejects';
 
   return (
-    <div
-      title={`Restricted D-SNP (source: ${sourceLabel})`}
-      style={{
-        ...baseStyle,
-        background: T.amber100,
-        color: T.amber700,
-        border: '1px solid rgba(154,91,10,0.30)',
-      }}
-    >
-      Partial dual only · {acceptedInOrder.join(', ')}
-      {excludedInOrder.length > 0 && (
-        <> — does not accept {formatListWithOr(excludedInOrder)}</>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div
+        title={`Accepted Medicaid populations (source: ${sourceLabel})`}
+        style={isPermissive ? green : amber}
+      >
+        {className} · accepts {acceptedInOrder.join(', ')}
+        {excludedInOrder.length > 0 && (
+          <> — does not accept {formatListWithOr(excludedInOrder)}</>
+        )}
+      </div>
+      {verdict === 'accepts' && (
+        <div style={green}>✓ Client is {clientLabel} — eligible for this plan</div>
+      )}
+      {verdict === 'rejects' && (
+        <div style={red}>✗ Client is {clientLabel} — NOT eligible. Do not quote this plan.</div>
+      )}
+      {plan.dsnp_populations_stale && (
+        <div
+          title="This plan's dual categories were captured before this plan year's AEP data — the carrier may have changed them"
+          style={amber}
+        >
+          Categories from last year's capture — confirm on HealthSherpa before quoting
+        </div>
       )}
     </div>
   );

@@ -314,6 +314,9 @@ export interface Plan {
   // dsnp_accepted_populations. Optional on the wire because older
   // /api/plans builds and static fixtures don't emit it.
   dsnp_accepted_populations_manual?: string[] | null;
+  // True when the manual capture predates this plan year's AEP data
+  // (see api/plans.ts). Card shows "confirm on HealthSherpa".
+  dsnp_populations_stale?: boolean;
   // True when the plan's contract is D-SNP-only (no mixed MA/D-SNP
   // under the same contract number). Signals a carrier with a
   // dedicated dual-population network + care model.
