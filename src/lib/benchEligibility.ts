@@ -29,7 +29,7 @@ export type BenchClient = Pick<
 
 type SnpKind = 'D' | 'C' | 'I' | null;
 
-function snpKind(plan: Pick<Plan, 'plan_type' | 'snp_type'>): SnpKind {
+function snpKind(plan: { plan_type?: string | null; snp_type?: string | null }): SnpKind {
   const s = (plan.snp_type ?? '').toUpperCase().replace(/[^A-Z]/g, '');
   const t = (plan.plan_type ?? '').toUpperCase();
   if (s === 'DSNP' || t === 'DSNP') return 'D';
@@ -45,19 +45,41 @@ export function isDual(client: BenchClient): boolean {
 // D-SNP accepted Medicaid populations, per-plan manual capture first, then
 // the CMS-derived set — same precedence as the brain's filterPlanPool and
 // the bench filters. Tokens like "QMB+" normalize to the session's "qmb_plus".
-function acceptsMedicaidLevel(
-  plan: { dsnp_accepted_populations?: string[] | null; dsnp_accepted_populations_manual?: string[] | null },
-  level: BenchClient['medicaidLevel'],
-): boolean {
-  if (!level || level === 'none') return true;
+type DsnpPopsPlan = {
+  snp_type?: string | null;
+  plan_type?: string | null;
+  dsnp_accepted_populations?: string[] | null;
+  dsnp_accepted_populations_manual?: string[] | null;
+};
+
+export function effectiveDsnpPopulations(plan: DsnpPopsPlan): string[] | null {
   const manual = plan.dsnp_accepted_populations_manual;
   const cms = plan.dsnp_accepted_populations;
-  const pops = manual && manual.length > 0 ? manual : cms && cms.length > 0 ? cms : null;
-  // No population filed → keep the plan (an unmapped D-SNP may still fit).
-  if (!pops) return true;
-  return pops.some(
-    (p) => p.trim().toLowerCase().replace(/\+$/, '_plus').replace(/[\s-]/g, '') === level,
-  );
+  return manual && manual.length > 0 ? manual : cms && cms.length > 0 ? cms : null;
+}
+
+function popToken(p: string): string {
+  return p.trim().toLowerCase().replace(/\+$/, '_plus').replace(/[\s-]/g, '');
+}
+
+/** Can a client in Medicaid category `level` enroll in this D-SNP?
+ *  'accepts' / 'rejects' from the filed populations; 'unknown' when no
+ *  population data is on file; 'n/a' for non-D-SNPs or no category set. */
+export function dsnpMedicaidVerdict(
+  plan: DsnpPopsPlan,
+  level: BenchClient['medicaidLevel'],
+): 'accepts' | 'rejects' | 'unknown' | 'n/a' {
+  if (snpKind(plan) !== 'D') return 'n/a';
+  if (!level || level === 'none') return 'n/a';
+  const pops = effectiveDsnpPopulations(plan);
+  if (!pops) return 'unknown';
+  return pops.some((p) => popToken(p) === level) ? 'accepts' : 'rejects';
+}
+
+function acceptsMedicaidLevel(plan: DsnpPopsPlan, level: BenchClient['medicaidLevel']): boolean {
+  // No population filed → keep the plan (an unmapped D-SNP may still fit);
+  // the card flags it as unverified.
+  return dsnpMedicaidVerdict({ ...plan, snp_type: 'D-SNP' }, level) !== 'rejects';
 }
 
 export function qualifiesForBench(
