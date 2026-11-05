@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { supabase, type CaptureSessionRow, type CaptureItem } from './_lib/supabase.js';
 import { badRequest, cors, notFound, sendJson, serverError } from './_lib/http.js';
+import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
@@ -33,6 +34,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const expired = new Date(session.expires_at).getTime() < Date.now();
 
+    // ACA plans cover the whole household, so an ACA client's Snap Link
+    // asks whose bottle each one is (me / spouse / child).
+    let household = false;
+    if (session.agentbase_client_id) {
+      try {
+        const { data: c } = await agentbaseSupabase()
+          .from('clients')
+          .select('line')
+          .eq('id', session.agentbase_client_id)
+          .maybeSingle();
+        household = String((c as { line?: string | null } | null)?.line ?? '').trim().toUpperCase() === 'ACA';
+      } catch {
+        household = false;
+      }
+    }
+
     res.setHeader('Cache-Control', 'no-store');
     sendJson(res, 200, {
       token,
@@ -42,6 +59,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       last_item_at: session.last_item_at,
       expires_at: session.expires_at,
       client_name: session.client_name,
+      household,
     });
   } catch (err) {
     serverError(res, err);
