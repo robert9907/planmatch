@@ -82,6 +82,9 @@ export interface NdcSlot {
 interface FormsPackage {
   ndc?: string;
   type?: string;
+  /** Units inside one package (60 for a box of 60 packets). */
+  size?: number;
+  unit?: string;
   /** Devices (pens, syringes) in one medicare.gov package — a Repatha
    *  SureClick 2-pack is 2, a Lantus SoloStar box is 5. */
   quantity?: number;
@@ -105,13 +108,24 @@ export function devicesByNdc(forms: FormsResponse | null | undefined, rxcui: str
   return out;
 }
 
+/** A box of N units priced per box (cholestyramine: box of 60 packets). The
+ *  client's quantity is a unit count, so it must not be sent against one. */
+function isMultiCountBox(p: FormsPackage): boolean {
+  return Number(p.quantity) === 1 && Number(p.size) > 1 && p.unit === 'EA';
+}
+
 /** The NDC medicare.gov itself uses for this exact rxcui (first package of
- *  the matching dosage). Null when it lists no dosage for that rxcui — never
+ *  the matching dosage, skipping a multi-count box when the dosage also has a
+ *  single-unit package). Null when it lists no dosage for that rxcui — never
  *  borrowed from a different strength. */
 export function medicareNdcFor(forms: FormsResponse | null | undefined, rxcui: string): string | null {
   const dosage = forms?.dosages?.find((d) => String(d.rxcui ?? '') === rxcui);
-  const ndc = dosage?.packages?.map((p) => String(p.ndc ?? '')).find((n) => /^\d{11}$/.test(n));
-  return ndc ?? null;
+  const pkgs = (dosage?.packages ?? []).filter((p) => /^\d{11}$/.test(String(p.ndc ?? '')));
+  if (pkgs.length === 0) return null;
+  const pick = isMultiCountBox(pkgs[0])
+    ? pkgs.find((p) => Number(p.size) === 1 && Number(p.quantity) === 1 && p.unit === 'EA') ?? pkgs[0]
+    : pkgs[0];
+  return String(pick.ndc);
 }
 
 /** Make medicare.gov's NDC the one sent; the caller's NDC becomes the first
