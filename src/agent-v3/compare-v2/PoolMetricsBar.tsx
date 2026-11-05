@@ -65,7 +65,11 @@ export function PoolMetricsBar(props: PoolMetricsBarProps) {
   const fullMatch = scoredPlans.length;
   let partial = 0;
   let eliminated = 0;
+  // Not-sellable plans are benched before the gates run (all-false
+  // gate_results), so they are counted on their own, never as gate failures.
+  let notSellable = 0;
   for (const p of benchPlans) {
+    if (p.non_commissionable) { notSellable += 1; continue; }
     const g = benchGateResultsByPlanId[p.id];
     if (!g) continue; // no gate signal → don't attribute
     if (g.gate1_passed && g.gate2_passed && g.gate3_passed) partial += 1;
@@ -81,6 +85,7 @@ export function PoolMetricsBar(props: PoolMetricsBarProps) {
   let medsUncovered = 0;
   let missingExtra = 0;
   for (const p of benchPlans) {
+    if (p.non_commissionable) continue;
     const g = benchGateResultsByPlanId[p.id];
     if (!g) continue;
     if (!g.gate1_passed) providerOon += 1;
@@ -148,7 +153,7 @@ export function PoolMetricsBar(props: PoolMetricsBarProps) {
         <SecondaryStat value={providerOon} label="Provider OON" />
         <SecondaryStat value={medsUncovered} label="Meds uncovered" />
         <SecondaryStat value={missingExtra} label="Missing extra" />
-        <SecondaryStat value="—" label="Non-commissionable" title="Filtered upstream by /api/plans via pm_non_commissionable_contracts — no count reaches this screen" />
+        <SecondaryStat value={notSellable} label="Not sellable" />
       </div>
 
       {/* Tier 3 — inline composition */}
