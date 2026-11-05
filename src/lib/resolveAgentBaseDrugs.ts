@@ -147,6 +147,61 @@ export interface ResolvedAgentBaseDrug {
    *  NOT get written to the client's permanent CRM row. Always true
    *  for the input.rxcui echo path (the CRM row already trusts it). */
   strengthMatched: boolean;
+  /** Set when the CRM row carried an rxcui that disagreed with its own
+   *  filed dose/form and was re-resolved: the bad stored rxcui. `rxcui`
+   *  then holds the corrected concept, or null when no concept at the
+   *  filed strength was found (the bad one is never used). */
+  correctedFrom?: string;
+}
+
+/** rxcui → RxNorm concept name, for checking a CRM row's stored rxcui
+ *  against its filed dose/form. Missing keys = unknown (trusted). */
+export type ConceptLookupFn = (rxcuis: string[], signal?: AbortSignal) => Promise<Record<string, string>>;
+
+async function fetchConceptNames(rxcuis: string[], signal?: AbortSignal): Promise<Record<string, string>> {
+  try {
+    const res = await fetch('/api/drug-concepts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rxcuis }),
+      signal,
+    });
+    if (!res.ok) return {};
+    const body = (await res.json()) as { concepts?: Record<string, string> };
+    return body.concepts ?? {};
+  } catch {
+    return {};
+  }
+}
+
+const NON_SOLID = /solution|suspension|syrup|elixir|liquid|injector|injection|inhal|spray|cream|gel|ointment|patch|transdermal/i;
+
+/** True when a stored rxcui is provably not what the CRM row says: an
+ *  oral tablet/capsule concept at a different strength than the filed
+ *  dose, or a tablet filed against a capsule/granules concept (and vice
+ *  versa). Injectables, inhalers, liquids and topicals are left alone —
+ *  their filed doses are per-dose/per-actuation and don't compare
+ *  cleanly to RxNorm's per-mL strengths. */
+function storedConceptDisagrees(conceptName: string, input: AgentBaseDrugInput): boolean {
+  if (!/\boral\b/i.test(conceptName) || NON_SOLID.test(conceptName)) return false;
+  const dose = input.dose?.trim() || '';
+  const fromDose = dose ? parseStrengths(dose) : [];
+  const target = fromDose.length > 0 ? fromDose : parseStrengths(input.name);
+  if (target.length > 0 && target.every((t) => t.per === 'each' && t.u === 'mg')) {
+    if (!strengthsMatch(target, parseStrengths(conceptName))) return true;
+  }
+  const filedForm = `${input.form ?? ''} ${input.name}`.toLowerCase();
+  if (/\btab(let)?s?\b/.test(filedForm) && /capsule|granules/i.test(conceptName)) return true;
+  if (/\bcap(sule)?s?\b/.test(filedForm) && /tablet/i.test(conceptName)) return true;
+  return false;
+}
+
+/** Broker typed MG for a microgram drug ("levothyroxine 50MG"). The stored
+ *  concept matches at 1/1000 — keep it rather than leave the row blank. */
+function isMcgTypoOf(conceptName: string, input: AgentBaseDrugInput): boolean {
+  const target = parseStrengths(input.dose?.trim() || input.name);
+  if (target.length === 0) return false;
+  return strengthsMatch(target.map((t) => ({ ...t, v: t.v / 1000 })), parseStrengths(conceptName));
 }
 
 /** Extract a "20 MG" style strength from the tail of a free-text drug
@@ -276,26 +331,33 @@ async function resolveOne(
   input: AgentBaseDrugInput,
   signal: AbortSignal | undefined,
   search: DrugSearchFn,
+  conceptNames: Record<string, string>,
 ): Promise<ResolvedAgentBaseDrug> {
   const originalName = input.name;
   const inputDose = input.dose?.trim() || null;
   const inputForm = input.form?.trim() || null;
 
-  // rxcui already present — the CRM row already carries a resolved
-  // concept from a prior sync. Trust it and skip the library call.
-  if (input.rxcui) {
-    return {
-      id: input.id,
-      hadInputRxcui: true,
-      originalName,
-      canonicalName: originalName,
-      rxcui: input.rxcui,
-      dose: inputDose,
-      form: inputForm,
-      resolved: true,
-      strengthMatched: true,
-    };
-  }
+  // rxcui already present — the CRM row carries a concept from a prior
+  // sync. Trust it unless its RxNorm concept provably disagrees with the
+  // row's own filed dose/form (Laura Goodman 2026-11-05: 112mcg tablet
+  // stored as 0.05 MG capsule → "Not covered" on every plan); then
+  // re-resolve below.
+  const storedName = input.rxcui ? conceptNames[input.rxcui] : undefined;
+  const trusted: ResolvedAgentBaseDrug | null = input.rxcui
+    ? {
+        id: input.id,
+        hadInputRxcui: true,
+        originalName,
+        canonicalName: originalName,
+        rxcui: input.rxcui,
+        dose: inputDose,
+        form: inputForm,
+        resolved: true,
+        strengthMatched: true,
+      }
+    : null;
+  if (trusted && (!storedName || !storedConceptDisagrees(storedName, input))) return trusted;
+  const correctedFrom = input.rxcui ?? undefined;
 
   // Strength for pickBest: dose column wins when populated, else
   // extract from the tail of the name. Empty string ("") is the
@@ -350,6 +412,9 @@ async function resolveOne(
   // oxycodone 5 mg (Janet Moses, 2026-10-20) — a different drug at double
   // the dose, priced against the wrong formulary rows.
   const requireStrength = target.length > 0;
+  const filedForm = `${inputForm ?? ''} ${originalName}`.toLowerCase();
+  const filedTablet = /\btab(let)?s?\b/.test(filedForm);
+  const filedCapsule = /\bcap(sule)?s?\b/.test(filedForm);
   let best: PickedDrug | null = null;
   try {
     for (const q of queries) {
@@ -366,6 +431,11 @@ async function resolveOne(
       // Never cross route: a nasal spray request can't land on an inhaler
       // or a topical cream of the same ingredient.
       if (route != null) results = results.filter((r) => parseDrugRoute(r.name) === route);
+      // A filed tablet never lands on a capsule/granules concept (or the
+      // reverse) — Johnnie Wiggins' rosuvastatin 10 mg tablet had been
+      // stored as the 10 MG capsule.
+      if (filedTablet) results = results.filter((r) => !/capsule|granules/i.test(r.name));
+      if (filedCapsule) results = results.filter((r) => !/tablet/i.test(r.name));
       if (results.length === 0) continue;
       const picked = pickBestAgent(results, target, originalName);
       if (!picked?.drug.rxcui) continue;
@@ -391,9 +461,12 @@ async function resolveOne(
       form: best.drug.dose_form ?? inputForm,
       resolved: true,
       strengthMatched: best.strengthMatched,
+      correctedFrom,
     };
   }
+  if (trusted && storedName && isMcgTypoOf(storedName, input)) return trusted;
   return {
+    correctedFrom,
     id: input.id,
     hadInputRxcui: false,
     originalName,
@@ -419,6 +492,10 @@ export async function resolveAgentBaseDrugs(
   signal?: AbortSignal,
   /** Injectable for tests; production always uses the library search. */
   search: DrugSearchFn = searchDrug,
+  /** Injectable for tests; production reads pm_drugs via /api/drug-concepts. */
+  lookupConcepts: ConceptLookupFn = fetchConceptNames,
 ): Promise<ResolvedAgentBaseDrug[]> {
-  return Promise.all(inputs.map((input) => resolveOne(input, signal, search)));
+  const stored = [...new Set(inputs.map((i) => i.rxcui).filter((r): r is string => !!r))];
+  const conceptNames = stored.length > 0 ? await lookupConcepts(stored, signal).catch(() => ({})) : {};
+  return Promise.all(inputs.map((input) => resolveOne(input, signal, search, conceptNames)));
 }

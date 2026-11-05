@@ -299,30 +299,30 @@ export async function bulkLookupFormulary(
   // (contract, rxcui) pairs as answered — that's what lets the Meds
   // screen say "Not covered" (checked, zero rows) instead of
   // "No formulary data" (never checked).
+  // One request per drug, always. A multi-rxcui POST to the consumer
+  // endpoint silently truncates its result set (Laura Goodman, Anderson
+  // Co TX, 2026-11-05: atorvastatin 10 MG alone → 606 plan rows; the same
+  // rxcui in a 6-drug request → 37), and every plan whose row was dropped
+  // then read as "answered, zero rows" = Not covered — "Covered on 12/46"
+  // for a drug on 44 of the 46 formularies. Per-drug requests return the
+  // full set. Two at a time, not all at once: firing every drug in
+  // parallel (12 drugs × chunks ≈ 24 queries) saturated the database and
+  // made rank-plans fail with statement timeouts (Cynthia Kline,
+  // 2026-10-21).
   const fetchChunk = async (chunk: string[]): Promise<LibraryPostResponse[]> => {
-    try {
-      const resp = await fetchBulkChunkWithRetry(chunk, realRxcuis, scopedNames);
-      markAnswered(chunk, realRxcuis);
-      return [resp];
-    } catch (err) {
-      if (realRxcuis.length <= 1) throw err;
-      console.warn('[formularyLookup] chunk failed after retry, isolating per drug:', err);
-      // Two at a time, not all at once: firing every drug in parallel
-      // (12 drugs × chunks ≈ 24 queries) saturated the database and made
-      // rank-plans fail with statement timeouts (Cynthia Kline, 2026-10-21).
-      const perDrug = await settleWithConcurrency(realRxcuis, PER_DRUG_CONCURRENCY, async (rx) => {
-        const one = scopedNames?.[rx] ? { [rx]: scopedNames[rx] } : undefined;
-        const resp = await fetchBulkChunk(chunk, [rx], one);
-        markAnswered(chunk, [rx]);
-        return resp;
-      });
-      const ok: LibraryPostResponse[] = [];
-      perDrug.forEach((r, i) => {
-        if (r.status === 'fulfilled') ok.push(r.value);
-        else console.warn(`[formularyLookup] rxcui ${realRxcuis[i]} failed:`, r.reason);
-      });
-      return ok;
-    }
+    const perDrug = await settleWithConcurrency(realRxcuis, PER_DRUG_CONCURRENCY, async (rx) => {
+      const one = scopedNames?.[rx] ? { [rx]: scopedNames[rx] } : undefined;
+      const resp = await fetchBulkChunkWithRetry(chunk, [rx], one);
+      markAnswered(chunk, [rx]);
+      return resp;
+    });
+    const ok: LibraryPostResponse[] = [];
+    perDrug.forEach((r, i) => {
+      if (r.status === 'fulfilled') ok.push(r.value);
+      else console.warn(`[formularyLookup] rxcui ${realRxcuis[i]} failed:`, r.reason);
+    });
+    if (ok.length === 0 && perDrug.length > 0) throw new Error('all per-drug formulary requests failed');
+    return ok;
   };
 
   const settled = await Promise.allSettled(chunks.map(fetchChunk));
