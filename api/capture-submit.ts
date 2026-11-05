@@ -38,6 +38,10 @@ interface SubmitBody {
   /** Up to 3 photos of the same bottle, read together as one. When
    *  present it replaces image_base64/mime_type. */
   images?: { image_base64?: string; mime_type?: string }[];
+  /** ACA Snap Link: whose bottle this is. Anything but 'me' goes to the
+   *  client's Household Medications, not their own list. */
+  who?: 'me' | 'spouse' | 'child';
+  who_name?: string;
 }
 
 const MAX_IMAGES = 3;
@@ -110,7 +114,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Written onto each med as pharmacy_id (fills a blank only) and handed
     // back to the phone for the "Is this your pharmacy?" check.
     await enrichPharmacies(extracted);
-    if (session.agentbase_client_id && extracted.length > 0) {
+    const who = body?.who === 'spouse' || body?.who === 'child' ? body.who : 'me';
+    const whoName = String(body?.who_name ?? '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    if (session.agentbase_client_id && extracted.length > 0 && who !== 'me') {
+      try {
+        const n = await writeHouseholdMeds(session.agentbase_client_id, who, whoName, extracted);
+        writeback = { meds: { household: n } };
+        medsWritten = n;
+      } catch (err) {
+        writeback = { error: err instanceof Error ? err.message : String(err) };
+        console.error('[capture-submit] household writeback failed', {
+          token,
+          agentbase_client_id: session.agentbase_client_id,
+          message: writeback.error,
+        });
+      }
+    } else if (session.agentbase_client_id && extracted.length > 0) {
       try {
         const { meds, providers } = mapExtractedToUpsertInputs(extracted);
         // Attach an RxCUI when the label maps to exactly one drug, so the
@@ -336,6 +355,71 @@ function mapExtractedToUpsertInputs(items: ExtractedItem[]): {
     }
   }
   return { meds, providers };
+}
+
+// A spouse's or child's bottle (ACA Snap Link) → AgentBase Household
+// Medications, one row per member + drug (same table and shape the ACA
+// Review check writes). Never touches the client's own meds or providers.
+async function writeHouseholdMeds(
+  clientId: number,
+  who: 'spouse' | 'child',
+  whoName: string,
+  items: ExtractedItem[],
+): Promise<number> {
+  const ab = agentbaseSupabase();
+  const { data: clientRow } = await ab.from('clients').select('deleted_at').eq('id', clientId).maybeSingle();
+  if (!clientRow || clientRow.deleted_at) throw new Error('client_deleted');
+  const memberName = whoName || (who === 'spouse' ? 'Spouse' : 'Child');
+  const now = new Date().toISOString();
+  let written = 0;
+  for (const it of items) {
+    if (it.type !== 'medication' || !it.drug_name) continue;
+    const name = it.drug_name.trim().replace(/\s+/g, ' ');
+    const asNeeded = /\b(as needed|prn|if needed|when needed)\b/i.test(it.dosage_instructions ?? '');
+    const ppd = pillsPerDay({
+      instructions: it.dosage_instructions,
+      quantity: it.quantity,
+      printedDaysSupply: it.days_supply,
+      form: it.form,
+      ndc: it.ndc_code,
+    });
+    const rxcui = await resolveSnapRxcui(supabase(), { name, dose: it.strength ?? null, form: it.form ?? null });
+    const row: Record<string, unknown> = {
+      client_id: clientId,
+      member_name: memberName,
+      member_relation: who,
+      name,
+      dose: it.strength ?? null,
+      form: it.form ?? null,
+      quantity: quantityText(it.quantity),
+      pills_per_day: ppd,
+      frequency: asNeeded ? 'As needed' : it.dosage_instructions ?? null,
+      as_needed: asNeeded,
+      pharmacy_id: it.pharmacy_id ?? null,
+      pharmacy_name: it.pharmacy_name ?? null,
+      prescriber_name: it.prescribing_physician ?? null,
+      rxcui,
+      source: 'snap',
+      verified_at: null,
+      updated_at: now,
+    };
+    const { data: existing, error: findErr } = await ab
+      .from('client_household_medications')
+      .select('id')
+      .eq('client_id', clientId)
+      .is('deleted_at', null)
+      .ilike('member_name', memberName)
+      .ilike('name', name)
+      .limit(1);
+    if (findErr) throw findErr;
+    const hit = (existing as { id: number }[] | null)?.[0];
+    const { error: wErr } = hit
+      ? await ab.from('client_household_medications').update(row).eq('id', hit.id)
+      : await ab.from('client_household_medications').insert(row);
+    if (wErr) throw wErr;
+    written += 1;
+  }
+  return written;
 }
 
 // AgentBase outcomes that mean the card's data is safely in the CRM (or

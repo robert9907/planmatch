@@ -24,10 +24,12 @@ type Step =
   | 'failed' // didn't send (signal) → try again
   | 'confirm' // is this your pharmacy? is this your doctor?
   | 'pick-pharmacy' // a different pharmacy
+  | 'who' // ACA only: whose bottle is this? (me / spouse / child)
   | 'finish';
 
 type Photo = { base64: string; mimeType: string };
 type CameraFor = 'bottle' | 'more';
+type Who = 'me' | 'spouse' | 'child';
 
 // Android (and sometimes iPhone) closes the browser in the background
 // while its camera app is open; on return the page reloads and every
@@ -50,6 +52,9 @@ interface SavedVisit {
    *  the picture never came back. */
   cameraOpenFor: CameraFor | null;
   step: Step;
+  /** ACA Snap Link: whose bottle the current picture is. */
+  who?: Who;
+  whoName?: string;
 }
 
 const visitKey = (token: string) => `snap_visit_${token}`;
@@ -110,6 +115,10 @@ export function CaptureApp() {
   const [missedFor, setMissedFor] = useState<CameraFor>(restored?.cameraOpenFor === 'more' ? 'more' : 'bottle');
   const cameraOpenFor = useRef<CameraFor | null>(null);
   const [confirmSending, setConfirmSending] = useState(false);
+  // ACA plans cover the household, so ACA clients say whose bottle each is.
+  const [household, setHousehold] = useState(false);
+  const [who, setWho] = useState<Who>(restored?.who ?? 'me');
+  const [whoName, setWhoName] = useState<string>(restored?.whoName ?? '');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraFor = useRef<CameraFor>('bottle');
   // The first photo of a bottle is held in memory (never stored) in case
@@ -134,8 +143,10 @@ export function CaptureApp() {
       doctorAnswers,
       cameraOpenFor: cameraOpenFor.current,
       step,
+      who,
+      whoName,
     });
-  }, [token, step, savedCount, label, medNames, pharmacyRead, prescribers, prescriberReadings, medPrescribers, pharmacyAnswer, chosenPharmacy, doctorAnswers]);
+  }, [token, step, savedCount, label, medNames, pharmacyRead, prescribers, prescriberReadings, medPrescribers, pharmacyAnswer, chosenPharmacy, doctorAnswers, who, whoName]);
 
   // Check the link before showing the camera, and pick up the client's
   // first name for the greeting. capture-poll is read-only.
@@ -154,8 +165,9 @@ export function CaptureApp() {
           setLinkState('ok'); // transient blip — don't strand a good link
           return;
         }
-        const body = (await resp.json()) as { status?: string; client_name?: string | null };
+        const body = (await resp.json()) as { status?: string; client_name?: string | null; household?: boolean };
         if (cancelled) return;
+        setHousehold(body?.household === true);
         const first = (body?.client_name ?? '').trim().split(/\s+/)[0] ?? '';
         if (first) setFirstName(first.charAt(0).toUpperCase() + first.slice(1).toLowerCase());
         setLinkState(body?.status === 'expired' ? 'expired' : 'ok');
@@ -240,9 +252,12 @@ export function CaptureApp() {
               token: token!,
               images: photos.map((ph) => ({ image_base64: ph.base64, mime_type: ph.mimeType })),
             },
+        household && who !== 'me' ? { who, who_name: whoName.trim() } : undefined,
       );
       pending.current = null;
-      if (resp.snap) {
+      // A spouse's or child's bottle doesn't feed "Is this your pharmacy /
+      // your doctor?" — those checks are about the client's own list.
+      if (resp.snap && !(household && who !== 'me')) {
         const snap = resp.snap;
         if (snap.med_names.length) {
           setMedNames((prev) => Array.from(new Set([...prev, ...snap.med_names])));
@@ -329,7 +344,16 @@ export function CaptureApp() {
       doctorAnswers,
       cameraOpenFor: null,
       step,
+      who,
+      whoName,
     };
+  }
+
+  // New bottle: ACA households say whose it is first; everyone else goes
+  // straight to the camera.
+  function nextBottle() {
+    if (household) setStep('who');
+    else openCamera('bottle');
   }
 
   function retrySend() {
@@ -403,14 +427,41 @@ export function CaptureApp() {
       {step === 'start' && (
         <div>
           <h1 style={h1}>{firstName ? `Hi ${firstName}!` : 'Hi there!'}</h1>
-          <p style={para}>Let's take a picture of your pill bottles, one bottle at a time.</p>
+          <p style={para}>
+            {household
+              ? "Let's take a picture of the pill bottles for everyone on your plan, one bottle at a time."
+              : "Let's take a picture of your pill bottles, one bottle at a time."}
+          </p>
           <p style={para}>
             Hold the bottle about a hand's width from your phone, in good light. Tap the words on your screen
             so they look sharp, then hold still.
           </p>
-          <BigButton onClick={() => openCamera('bottle')}>Take a picture of a pill bottle</BigButton>
+          <BigButton onClick={nextBottle}>Take a picture of a pill bottle</BigButton>
           {savedCount > 0 && (
             <QuietButton onClick={allDone}>I'm all done</QuietButton>
+          )}
+        </div>
+      )}
+
+      {step === 'who' && (
+        <div>
+          <h1 style={h1}>Whose medicine is this?</h1>
+          <BigButton onClick={() => { setWho('me'); setWhoName(''); openCamera('bottle'); }}>Mine</BigButton>
+          <SecondButton onClick={() => { setWho('spouse'); setWhoName(''); openCamera('bottle'); }}>My spouse's</SecondButton>
+          <SecondButton onClick={() => { setWho('child'); setWhoName(''); }}>My child's</SecondButton>
+          {who === 'child' && (
+            <div style={{ ...card, marginTop: 16 }}>
+              <p style={eyebrow}>YOUR CHILD'S FIRST NAME</p>
+              <input
+                value={whoName}
+                onChange={(e) => setWhoName(e.target.value)}
+                autoCapitalize="words"
+                autoComplete="off"
+                placeholder="First name"
+                style={{ width: '100%', boxSizing: 'border-box', fontSize: 22, padding: '14px 16px', borderRadius: 12, border: '2px solid #CBD5E1', marginBottom: 12 }}
+              />
+              <BigButton onClick={() => openCamera('bottle')}>Take a picture of the bottle</BigButton>
+            </div>
           )}
         </div>
       )}
@@ -428,7 +479,7 @@ export function CaptureApp() {
           <Check />
           <h1 style={{ ...h1, textAlign: 'center' }}>Got it!</h1>
           {label && <p style={{ ...big, textAlign: 'center' }}>{label}</p>}
-          <BigButton onClick={() => openCamera('bottle')}>Next bottle</BigButton>
+          <BigButton onClick={nextBottle}>Next bottle</BigButton>
           <SecondButton onClick={allDone}>I'm all done</SecondButton>
         </div>
       )}
@@ -462,7 +513,7 @@ export function CaptureApp() {
           <p style={para}>
             I saved what I could read. For the best results, let's do them one at a time.
           </p>
-          <BigButton onClick={() => openCamera('bottle')}>Next bottle</BigButton>
+          <BigButton onClick={nextBottle}>Next bottle</BigButton>
           <SecondButton onClick={allDone}>I'm all done</SecondButton>
         </div>
       )}
@@ -578,7 +629,7 @@ export function CaptureApp() {
           <h1 style={h1}>{firstName ? `Thank you, ${firstName}!` : 'Thank you!'}</h1>
           <p style={para}>Rob has everything you sent. You can close this page now.</p>
           <Lockdown />
-          <QuietButton onClick={() => setStep('start')}>I have another bottle</QuietButton>
+          <QuietButton onClick={() => (household ? setStep('who') : setStep('start'))}>I have another bottle</QuietButton>
         </Center>
       )}
     </Shell>

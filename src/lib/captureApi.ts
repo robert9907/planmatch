@@ -50,8 +50,8 @@ export function submitCapture(input: {
   mime_type?: string;
   /** Several photos of the same bottle, read together as one. */
   images?: { image_base64: string; mime_type: string }[];
-}): Promise<CaptureSubmitResponse> {
-  return postJson('/api/capture-submit', input);
+}, whose?: { who: 'spouse' | 'child' | 'me'; who_name: string }): Promise<CaptureSubmitResponse> {
+  return postJson('/api/capture-submit', whose ? { ...input, ...whose } : input);
 }
 
 export function confirmCapture(input: {
