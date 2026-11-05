@@ -24,12 +24,10 @@ type Step =
   | 'failed' // didn't send (signal) → try again
   | 'confirm' // is this your pharmacy? is this your doctor?
   | 'pick-pharmacy' // a different pharmacy
-  | 'card-ask' // last thing: Medicare card?
-  | 'card-got'
   | 'finish';
 
 type Photo = { base64: string; mimeType: string };
-type CameraFor = 'bottle' | 'more' | 'card';
+type CameraFor = 'bottle' | 'more';
 
 // Android (and sometimes iPhone) closes the browser in the background
 // while its camera app is open; on return the page reloads and every
@@ -39,7 +37,6 @@ type CameraFor = 'bottle' | 'more' | 'card';
 // closes) so a reload picks up where the client was. No photos stored.
 interface SavedVisit {
   savedCount: number;
-  cardDone: boolean;
   label: string;
   medNames: string[];
   pharmacyRead: SnapPharmacyRead | null;
@@ -76,10 +73,10 @@ function saveVisit(token: string, visit: SavedVisit): void {
 }
 
 // Screens that are safe to land back on after a reload.
-const RESUMABLE: Step[] = ['start', 'got', 'more', 'many', 'confirm', 'card-ask', 'card-got', 'finish'];
+const RESUMABLE: Step[] = ['start', 'got', 'more', 'many', 'confirm', 'finish'];
 
 function resumeStep(v: SavedVisit): Step {
-  if (v.cameraOpenFor) return 'missed';
+  if (v.cameraOpenFor === 'bottle' || v.cameraOpenFor === 'more') return 'missed';
   if (RESUMABLE.includes(v.step)) return v.step;
   return v.savedCount > 0 ? 'got' : 'start';
 }
@@ -96,7 +93,6 @@ export function CaptureApp() {
   const [label, setLabel] = useState<string>(restored?.label ?? '');
   const [bottleCount, setBottleCount] = useState(0);
   const [savedCount, setSavedCount] = useState(restored?.savedCount ?? 0);
-  const [cardDone, setCardDone] = useState(restored?.cardDone ?? false);
   const [failMessage, setFailMessage] = useState<string>('');
   // Collected across the visit for the pharmacy / doctor check at the end.
   const [medNames, setMedNames] = useState<string[]>(restored?.medNames ?? []);
@@ -111,7 +107,7 @@ export function CaptureApp() {
   const [chosenPharmacy, setChosenPharmacy] = useState<PharmacyChoice | null>(restored?.chosenPharmacy ?? null);
   const [doctorAnswers, setDoctorAnswers] = useState<Record<string, 'yes' | 'no'>>(restored?.doctorAnswers ?? {});
   // Which picture the camera was open for when the page reloaded.
-  const [missedFor, setMissedFor] = useState<CameraFor>(restored?.cameraOpenFor ?? 'bottle');
+  const [missedFor, setMissedFor] = useState<CameraFor>(restored?.cameraOpenFor === 'more' ? 'more' : 'bottle');
   const cameraOpenFor = useRef<CameraFor | null>(null);
   const [confirmSending, setConfirmSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -127,7 +123,6 @@ export function CaptureApp() {
     if (!token) return;
     saveVisit(token, {
       savedCount,
-      cardDone,
       label,
       medNames,
       pharmacyRead,
@@ -140,7 +135,7 @@ export function CaptureApp() {
       cameraOpenFor: cameraOpenFor.current,
       step,
     });
-  }, [token, step, savedCount, cardDone, label, medNames, pharmacyRead, prescribers, prescriberReadings, medPrescribers, pharmacyAnswer, chosenPharmacy, doctorAnswers]);
+  }, [token, step, savedCount, label, medNames, pharmacyRead, prescribers, prescriberReadings, medPrescribers, pharmacyAnswer, chosenPharmacy, doctorAnswers]);
 
   // Check the link before showing the camera, and pick up the client's
   // first name for the greeting. capture-poll is read-only.
@@ -280,17 +275,6 @@ export function CaptureApp() {
       const g = resp.guidance;
       const readable = g ? g.readable : resp.extracted.some((x) => x.type !== 'unknown');
 
-      if (kind === 'card') {
-        if (resp.extracted.some((x) => x.type === 'medicare_card')) {
-          setCardDone(true);
-          setStep('card-got');
-        } else {
-          setStep('blurry');
-          cameraFor.current = 'card';
-        }
-        return;
-      }
-
       if (!readable) {
         // A second picture that adds nothing still keeps the first read.
         if (kind === 'more') {
@@ -334,7 +318,6 @@ export function CaptureApp() {
   function currentVisit(): SavedVisit {
     return {
       savedCount,
-      cardDone,
       label,
       medNames,
       pharmacyRead,
@@ -367,7 +350,7 @@ export function CaptureApp() {
       void sendConfirm();
       return;
     }
-    setStep(cardDone ? 'finish' : 'card-ask');
+    setStep('finish');
   }
 
   async function sendConfirm() {
@@ -399,7 +382,7 @@ export function CaptureApp() {
       // stranding the client on an error screen.
     } finally {
       setConfirmSending(false);
-      setStep(cardDone ? 'finish' : 'card-ask');
+      setStep('finish');
     }
   }
 
@@ -452,14 +435,15 @@ export function CaptureApp() {
 
       {step === 'more' && (
         <div>
-          <h1 style={h1}>Now turn it to the barcode</h1>
+          <h1 style={h1}>Now find how many pills</h1>
           {label && <p style={big}>{label}</p>}
           <p style={para}>
-            Turn the <strong>same bottle</strong> around to the side with the barcode and take one more picture.
-            The number under the barcode tells us how much medicine you get.
+            Turn the <strong>same bottle</strong> until you see <strong>QTY</strong> or <strong>Quantity</strong> and a
+            number, like "QTY: 90". Take one more picture with that number in the middle of your screen.
           </p>
+          <p style={para}>We don't need the barcode — just the number.</p>
           <TurnBottle />
-          <BigButton onClick={() => openCamera('more')}>Take a picture of the barcode side</BigButton>
+          <BigButton onClick={() => openCamera('more')}>Take a picture of the quantity</BigButton>
           <QuietButton
             onClick={() => {
               firstPhoto.current = null;
@@ -490,13 +474,10 @@ export function CaptureApp() {
             Let's try again. Hold the bottle about a hand's width away — any closer and the phone can't focus.
             Tap the words on your screen so they look sharp, then hold still.
           </p>
-          <BigButton onClick={() => openCamera(cameraFor.current === 'card' ? 'card' : 'bottle')}>
-            Try again
-          </BigButton>
+          <BigButton onClick={() => openCamera('bottle')}>Try again</BigButton>
           <QuietButton
             onClick={() => {
-              if (cameraFor.current === 'card') setStep('finish');
-              else setStep(savedCount > 0 ? 'got' : 'start');
+              setStep(savedCount > 0 ? 'got' : 'start');
               setLabel('');
             }}
           >
@@ -515,8 +496,7 @@ export function CaptureApp() {
           <BigButton onClick={() => openCamera(missedFor)}>Take the picture again</BigButton>
           <QuietButton
             onClick={() => {
-              if (missedFor === 'card') setStep('finish');
-              else setStep(savedCount > 0 ? 'got' : 'start');
+              setStep(savedCount > 0 ? 'got' : 'start');
               setMissedFor('bottle');
             }}
           >
@@ -590,24 +570,6 @@ export function CaptureApp() {
             setStep('confirm');
           }}
         />
-      )}
-
-      {step === 'card-ask' && (
-        <div>
-          <h1 style={h1}>One last thing</h1>
-          <p style={para}>Do you have your red, white and blue Medicare card handy?</p>
-          <MedicareCardPicture />
-          <BigButton onClick={() => openCamera('card')}>Take a picture of my Medicare card</BigButton>
-          <SecondButton onClick={() => setStep('finish')}>Not right now</SecondButton>
-        </div>
-      )}
-
-      {step === 'card-got' && (
-        <div>
-          <Check />
-          <h1 style={{ ...h1, textAlign: 'center' }}>Got your Medicare card!</h1>
-          <BigButton onClick={() => setStep('finish')}>I'm all done</BigButton>
-        </div>
       )}
 
       {step === 'finish' && (
@@ -774,7 +736,6 @@ function describe(items: ExtractedItem[]): string {
       .join(' ');
   }
   if (meds.length > 1) return `${meds.length} medications`;
-  if (items.some((x) => x.type === 'medicare_card')) return 'Medicare card';
   return '';
 }
 
@@ -935,21 +896,6 @@ function TurnBottle() {
       <line x1="80" y1="98" x2="134" y2="98" stroke="var(--i3)" strokeWidth="3" />
       <path d="M40 120 Q110 158 180 120" fill="none" stroke="var(--sage)" strokeWidth="6" strokeLinecap="round" />
       <path d="M168 108 L184 118 L170 132" fill="none" stroke="var(--sage)" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function MedicareCardPicture() {
-  return (
-    <svg viewBox="0 0 240 150" role="img" aria-label="A Medicare card" style={{ display: 'block', width: 240, maxWidth: '75%', margin: '8px auto 4px' }}>
-      <rect x="2" y="2" width="236" height="146" rx="12" fill="#fff" stroke="var(--w3)" strokeWidth="2" />
-      <rect x="2" y="2" width="236" height="34" rx="12" fill="#2B5BA8" />
-      <rect x="2" y="24" width="236" height="12" fill="#2B5BA8" />
-      <text x="120" y="25" textAnchor="middle" fontSize="13" fontWeight="700" fill="#fff" fontFamily="Arial, sans-serif">MEDICARE</text>
-      <line x1="18" y1="60" x2="130" y2="60" stroke="var(--i3)" strokeWidth="5" />
-      <line x1="18" y1="84" x2="160" y2="84" stroke="var(--i3)" strokeWidth="5" />
-      <line x1="18" y1="108" x2="110" y2="108" stroke="var(--i3)" strokeWidth="5" />
-      <rect x="2" y="126" width="236" height="10" fill="#C0392B" />
     </svg>
   );
 }
