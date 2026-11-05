@@ -79,6 +79,17 @@ export function titrationDays(instructions: string | null | undefined, quantity:
   return phase1Days + Math.floor((quantity - used1) / r2);
 }
 
+/** Second-step daily rate of the exact "<rate> for N days, then <rate>"
+ *  titration shape titrationDays() handles; null for anything else. */
+export function titrationRate(instructions: string | null | undefined): number | null {
+  const s = (instructions ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const parts = s.split(/,?\s*\bthen\b\s*/);
+  if (parts.length !== 2) return null;
+  if (/\b(as needed|prn|taper|decrease|every other|weekly|week|month)\b/.test(s)) return null;
+  if (!/\bfor \d+ days?\b/.test(parts[0]) || /\bfor \d+ days?\b/.test(parts[1])) return null;
+  return phaseRate(parts[1].replace(/^(increase|decrease) to /, 'take '));
+}
+
 /**
  * Pills per day for the CRM's PILLS/DAY column (solid oral forms only).
  * Label directions first ("Take 2 tablets twice daily" → 4). When the
@@ -103,7 +114,13 @@ export function pillsPerDay(opts: {
 
   const fromLabel = unitsPerDay(opts.instructions);
   if (fromLabel != null) return fromLabel;
-  // Tapers / titrations have no single rate.
+  // A two-step titration ("…two times a day for 14 days, then increase to
+  // 1 capsule 3 times a day") lands at its second-step rate — the dose the
+  // client stays on. Rob, 2026-11-05: Autumn Montgomery's gabapentin came
+  // in with no pills a day, which blocks the Rx snapshot in AgentBase.
+  const maintenance = titrationRate(opts.instructions);
+  if (maintenance != null) return maintenance;
+  // Other tapers have no single rate.
   if (/\b(then|increase|decrease|taper|alternate|every other|weekly|week|month|sliding)\b/.test(s)) return null;
 
   const qty = toNumber(opts.quantity);
