@@ -138,3 +138,85 @@ test('a failing search query does not stop the remaining variants', async () => 
   const [r] = await resolveAgentBaseDrugs([{ id: 'f', name: 'Fluticasone Propionate Nasal Spray, USP', dose: '50 mcg' }], undefined, flaky);
   assert.equal(r.rxcui, '1797907');
 });
+
+// Regression (Rob, 2026-11-05 — Laura Goodman, AgentBase #401): the CRM
+// row "Levothyroxine" 112mcg tablet carried rxcui 966407 — levothyroxine
+// 0.05 MG Oral CAPSULE, wrong strength AND form — and the resolver trusted
+// any stored rxcui unchanged, so Meds showed "Tier ? · Not covered" on all
+// 46 plans for a drug on every 2027 formulary. A stored rxcui on an oral
+// solid is now checked against the row's filed dose/form and re-resolved
+// when it disagrees.
+const LEVO_112 = [
+  drug('966248', 'levothyroxine sodium 0.112 MG Oral Tablet', null, '0.112 MG'),
+  drug('966185', 'levothyroxine sodium 0.112 MG Oral Tablet [Synthroid]', 'Synthroid', '0.112 MG'),
+];
+const ROSU_10 = [
+  drug('2167557', 'rosuvastatin 10 MG Oral Capsule', null, '10 MG'),
+  drug('859747', 'rosuvastatin calcium 10 MG Oral Tablet', null, '10 MG'),
+];
+const concepts: Record<string, string> = {
+  '966407': 'levothyroxine sodium 0.05 MG Oral Capsule',
+  '905199': 'hydralazine hydrochloride 10 MG Oral Tablet',
+  '2167557': 'rosuvastatin 10 MG Oral Capsule',
+  '2398842': '3 ML semaglutide 1.34 MG/ML Pen Injector [Ozempic]',
+};
+const lookup = async (ids: string[]): Promise<Record<string, string>> =>
+  Object.fromEntries(ids.filter((id) => concepts[id]).map((id) => [id, concepts[id]]));
+
+test('stored rxcui at the wrong strength/form is re-resolved (levothyroxine 112 mcg tablet)', async () => {
+  const [r] = await resolveAgentBaseDrugs(
+    [{ id: '3229', name: 'Levothyroxine', dose: '112mcg', form: 'tablet', rxcui: '966407' }],
+    undefined,
+    fakeSearch({ 'levothyroxine 0.112 mg': LEVO_112, 'levothyroxine 112 mcg': LEVO_112 }),
+    lookup,
+  );
+  assert.equal(r.rxcui, '966248');
+  assert.equal(r.correctedFrom, '966407');
+  assert.equal(r.hadInputRxcui, false);
+  assert.equal(r.strengthMatched, true);
+});
+
+test('stored rxcui with the wrong form is re-resolved (rosuvastatin 10 mg tablet stored as capsule)', async () => {
+  const [r] = await resolveAgentBaseDrugs(
+    [{ id: '3196', name: 'Rosuvastatin', dose: '10mg', form: 'tablet', rxcui: '2167557' }],
+    undefined,
+    fakeSearch({ 'rosuvastatin 10 mg': ROSU_10 }),
+    lookup,
+  );
+  assert.equal(r.rxcui, '859747');
+  assert.equal(r.correctedFrom, '2167557');
+});
+
+test('stored rxcui that agrees with the filed dose is kept', async () => {
+  const [r] = await resolveAgentBaseDrugs(
+    [{ id: 'c', name: 'hydralazine hydrochloride 10 MG', dose: '10 MG', rxcui: '905199' }],
+    undefined,
+    fakeSearch({}),
+    lookup,
+  );
+  assert.equal(r.rxcui, '905199');
+  assert.equal(r.hadInputRxcui, true);
+  assert.equal(r.correctedFrom, undefined);
+});
+
+test('stored injectable rxcui is not second-guessed on a per-dose strength', async () => {
+  const [r] = await resolveAgentBaseDrugs(
+    [{ id: 'o', name: 'Ozempic', dose: '1mg', rxcui: '2398842' }],
+    undefined,
+    fakeSearch({}),
+    lookup,
+  );
+  assert.equal(r.rxcui, '2398842');
+  assert.equal(r.hadInputRxcui, true);
+});
+
+test('stored wrong rxcui with no correct match → unresolved, never the wrong drug', async () => {
+  const [r] = await resolveAgentBaseDrugs(
+    [{ id: 'n', name: 'levothyroxine sodium', dose: '150mcg', form: 'tablet', rxcui: '966407' }],
+    undefined,
+    async () => [],
+    lookup,
+  );
+  assert.equal(r.rxcui, null);
+  assert.equal(r.correctedFrom, '966407');
+});

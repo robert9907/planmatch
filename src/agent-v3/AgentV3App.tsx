@@ -474,6 +474,13 @@ export function AgentV3App() {
           const storeId = abIdToStoreId.get(r.id);
           if (!storeId) continue;
           if (r.hadInputRxcui) continue;
+          if (r.correctedFrom && !r.rxcui) {
+            // Stored CRM rxcui was the wrong strength/form and no correct
+            // concept was found — drop it so the row shows "re-search"
+            // instead of pricing the wrong drug.
+            store.updateMedication(storeId, { rxcui: undefined, confidence: 'low' });
+            continue;
+          }
           if (!r.resolved || !r.rxcui) continue;
           store.updateMedication(storeId, {
             name: r.canonicalName,
@@ -493,8 +500,29 @@ export function AgentV3App() {
         //   • The picked concept came from the strength-filtered pool,
         //     not the full-results fallback (r.strengthMatched)
         const persistCandidates = resolvedMeds
-          .filter((r) => r.id && !r.hadInputRxcui && r.resolved && r.rxcui && r.strengthMatched)
+          .filter((r) => r.id && !r.hadInputRxcui && !r.correctedFrom && r.resolved && r.rxcui && r.strengthMatched)
           .map((r) => ({ id: r.id as string, rxcui: r.rxcui as string }));
+        // Corrections (stored rxcui disagreed with the filed dose/form and
+        // re-resolved at the filed strength) go to a guarded
+        // compare-and-set endpoint — the backfill webhook only fills NULLs.
+        const corrections = resolvedMeds
+          .filter((r) => r.id && r.correctedFrom && r.rxcui && r.strengthMatched)
+          .map((r) => ({ id: r.id as string, from: r.correctedFrom as string, to: r.rxcui as string }));
+        if (corrections.length > 0) {
+          void fetch('/api/agentbase-correct-rxcuis', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clientId, updates: corrections }),
+            keepalive: true,
+          }).then((r) => r.json().then((body) => {
+            console.info(
+              `[agent-v3] rxcui corrections: requested=${corrections.length} → ` +
+              JSON.stringify(body?.summary ?? { error: body?.error }),
+            );
+          })).catch((err) => {
+            console.warn('[agent-v3] rxcui correction failed (non-fatal):', err?.message ?? err);
+          });
+        }
         if (persistCandidates.length > 0) {
           void fetch('/api/agentbase-backfill-rxcuis', {
             method: 'POST',
