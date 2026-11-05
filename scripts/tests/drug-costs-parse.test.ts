@@ -154,3 +154,38 @@ test('devices per medicare.gov package, per NDC', () => {
   assert.equal(devicesByNdc(forms, '847232').get('50090139800'), 5);
   assert.equal(devicesByNdc(forms, '999').size, 0);
 });
+
+// Regression (Rob, 2026-11-05 — Laura Goodman): cholestyramine 4 g packets
+// (rxcui 848943). medicare.gov's FIRST package is a box of 60 packets priced
+// per box (default_quantity_30 = 1). The client's quantity is a packet count
+// (30/mo), so sending it against the box NDC priced 30 boxes = 1,800 packets
+// and drove the drug to the Part D cap (~$186–$198/mo vs ~$2–10 real).
+// medicare.gov forms, 2027, captured 2026-11-05.
+const cholestyramine = {
+  dosages: [
+    { rxcui: '848943', packages: [
+      { ndc: '42806026695', type: 'PACKAGE_TYPE_BOX', size: 60, unit: 'EA', quantity: 1, use_quantity: true },
+      { ndc: '42806026698', type: 'PACKAGE_TYPE_PACKET', size: 1, unit: 'EA', quantity: 1, use_quantity: true },
+      { ndc: '27241013421', type: 'PACKAGE_TYPE_SACHET', size: 1, unit: 'EA', quantity: 1, use_quantity: true },
+    ] },
+  ],
+};
+
+test('a multi-count box is skipped for a single-unit package of the same dosage', () => {
+  assert.equal(medicareNdcFor(cholestyramine, '848943'), '42806026698');
+});
+
+test('a box with no single-unit sibling is still used', () => {
+  const boxOnly = { dosages: [{ rxcui: '1', packages: [
+    { ndc: '42806026695', type: 'PACKAGE_TYPE_BOX', size: 60, unit: 'EA', quantity: 1, use_quantity: true },
+  ] }] };
+  assert.equal(medicareNdcFor(boxOnly, '1'), '42806026695');
+});
+
+test('pen cartons (devices per package) keep medicare.gov first package', () => {
+  const repatha = { dosages: [{ rxcui: '1665900', packages: [
+    { ndc: '72511039302', type: 'PACKAGE_TYPE_PEN', size: 2, unit: 'EA', quantity: 2, use_quantity: true },
+    { ndc: '72511039301', type: 'PACKAGE_TYPE_PEN', size: 1, unit: 'EA', quantity: 1, use_quantity: true },
+  ] }] };
+  assert.equal(medicareNdcFor(repatha, '1665900'), '72511039302');
+});
