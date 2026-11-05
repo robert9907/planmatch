@@ -2705,7 +2705,11 @@ function BenchCard({
   // gate semantics: a plan is labeled by the FIRST gate that excluded
   // it. Plans on the bench that passed every gate (the Gate-4 cost
   // ranking pushed them past slot 4) get the softer blue chip.
-  const elim = gateResults ? eliminationReason(gateResults) : null;
+  // A not-sellable plan never runs the gates (the ranker benches it before
+  // Gate 1 and returns all-false gate_results), so a gate-based reason would
+  // be wrong — it labeled in-network UHC plans "Provider OON" (Laura Goodman /
+  // Dr. Chadwell, Nov 5 2026). The "Not sellable" chip is the reason.
+  const elim = gateResults && !plan.non_commissionable ? eliminationReason(gateResults) : null;
   const elimSurvived = elim === 'Outside Top 4';
   const showElimChip = elim != null && !isBaseline;
 
