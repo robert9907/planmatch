@@ -55,6 +55,40 @@ function phaseRate(s: string): number | null {
   return total > 0 ? total : null;
 }
 
+const DAILY_WORDS: Record<number, string> = {
+  1: 'Once daily', 2: 'Twice daily', 3: 'Three times daily', 4: 'Four times daily',
+};
+
+/**
+ * The CRM's Frequency word from the label directions ("Take 1 capsule by
+ * mouth once a day" → "Once daily"). As-needed labels → "As needed".
+ * Tapers, weekly/monthly and anything unclear keep the label text as-is —
+ * never guess. Rob, 2026-11-06: Judy Sexton's tolterodine showed the raw
+ * bottle wording in Frequency.
+ */
+export function frequencyFromDirections(instructions: string | null | undefined): string | null {
+  const raw = (instructions ?? '').trim();
+  if (!raw) return null;
+  const s = raw.toLowerCase().replace(/\s+/g, ' ');
+  if (/\b(as needed|prn|if needed|when needed)\b/.test(s)) return 'As needed';
+  if (/\b(then|increase|decrease|taper|alternate|every other|weekly|week|month|sliding)\b/.test(s)) return raw;
+  const t = timesPerDayOf(s);
+  return t != null && DAILY_WORDS[t] ? DAILY_WORDS[t] : raw;
+}
+
+function timesPerDayOf(s: string): number | null {
+  const everyHours = s.match(/every (\d+) hours?/);
+  if (everyHours) {
+    const t = 24 / Number(everyHours[1]);
+    return Number.isInteger(t) ? t : null;
+  }
+  if (/\b(four times|4 times) (a|per|each) day|\bqid\b/.test(s)) return 4;
+  if (/\b(three times|3 times) (a|per|each) day|\btid\b/.test(s)) return 3;
+  if (/\b(twice|two times|2 times) (a|per|each) day|twice daily|\bbid\b/.test(s)) return 2;
+  if (/\b(once|one time|1 time) (a|per|each) day|once daily|\bdaily\b|every day|each day|\bqd\b|\bqhs\b|at bedtime|nightly|at night|every (morning|evening|night)|in the (morning|evening)|\bonce\b/.test(s)) return 1;
+  return null;
+}
+
 /**
  * Days a quantity lasts under a two-step titration label, e.g.
  * "1 capsule two times a day for 14 days, then increase to 1 capsule

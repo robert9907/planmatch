@@ -17,7 +17,7 @@ import {
   type IncomingProvider,
 } from './_lib/agentbaseDedup.js';
 import { resolveSnapRxcui } from './_lib/snapRxcui.js';
-import { daysSupply, nextRefillDate, pillsPerDay, quantityText } from './_lib/snapRefill.js';
+import { daysSupply, frequencyFromDirections, nextRefillDate, pillsPerDay, quantityText } from './_lib/snapRefill.js';
 import { stampMedPrescribers } from './_lib/snapMedPrescribers.js';
 import { lookupTier } from './_lib/snapTier.js';
 import { planPrescribers } from './_lib/snapPrescriberLinks.js';
@@ -334,7 +334,7 @@ function mapExtractedToUpsertInputs(items: ExtractedItem[]): {
         name: it.drug_name,
         dose: it.strength,
         form: it.form,
-        frequency: it.dosage_instructions,
+        frequency: frequencyFromDirections(it.dosage_instructions),
         quantity: quantityText(it.quantity),
         refill_days: days != null ? String(days) : null,
         refill_date: nextRefillDate(it.last_filled, days),
