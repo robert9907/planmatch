@@ -151,8 +151,22 @@ export const BENEFICIARY_COST: CmsFileSpec = {
 // ─── D. pharmacy_network ──────────────────────────────────────────────
 // Note: landing table has a synthetic id; we don't include it in the
 // COPY column list. pharmacy_zipcode is nullable per CMS. Split across
-// 6 inner ZIPs ("part 1" … "part 6") for the 2026 Q1 release; total
-// uncompressed ~24 GB. Skipped by default — pass --skip= to override.
+// 6 inner ZIPs ("part 1" … "part 6"); total uncompressed ~22 GB.
+//
+// Column layout DRIFTS by release kind (header validation is positional,
+// so this spec must match the file being loaded exactly):
+//   • 2027 monthly (release 16): 19 cols — the list below. No FLOOR_PRICE;
+//     SELECTED_DISPENSING_FEE_30/60/90 appended after the generic fees.
+//   • 2026 quarterly (PPUF_2026Q1): 20 cols — additionally carries a
+//     FLOOR_PRICE column between IN_AREA_FLAG and BRAND_DISPENSING_FEE_30.
+// This spec is pinned to the 2027 monthly layout. A 2026-style quarterly
+// pharmacy file will (correctly) fail validateHeader until FLOOR_PRICE is
+// re-added here — see migration 019 for the matching landing columns.
+//
+// This file was in DEFAULT_SKIP for its whole history, so its header was
+// never validated against a real CMS file — that is why the SELECTED_*
+// drift (and the never-loaded landing table) went unnoticed through the
+// 006_cms_spuf_drift_fixes audit.
 export const PHARMACY_NETWORK: CmsFileSpec = {
   name: 'pharmacy_networks',
   fileName: 'pharmacy_network.txt',
@@ -176,6 +190,13 @@ export const PHARMACY_NETWORK: CmsFileSpec = {
     n('GENERIC_DISPENSING_FEE_30', 'generic_dispensing_fee_30', true),
     n('GENERIC_DISPENSING_FEE_60', 'generic_dispensing_fee_60', true),
     n('GENERIC_DISPENSING_FEE_90', 'generic_dispensing_fee_90', true),
+    // Added 2025+ (present in both 2026 Q and 2027 monthly files): the
+    // dispensing fee for the "Selected" pharmacy tier, parallel to the
+    // brand/generic fees. Nullable — CMS leaves it blank for plans
+    // without a Selected tier.
+    n('SELECTED_DISPENSING_FEE_30', 'selected_dispensing_fee_30', true),
+    n('SELECTED_DISPENSING_FEE_60', 'selected_dispensing_fee_60', true),
+    n('SELECTED_DISPENSING_FEE_90', 'selected_dispensing_fee_90', true),
   ],
 };
 
@@ -290,10 +311,20 @@ export const ALL_FILES: CmsFileSpec[] = [
   PRICING,
 ];
 
-// Default skip list — pharmacy_networks unzips to ~24 GB across 6
-// inner ZIPs and would add ~30–50 GB to Postgres after indexes. The
-// existing pm_provider_network_cache (FHIR-fed) covers the app's
-// current network-membership use cases; SPUF pharmacy_network is
-// useful for "preferred vs standard" pharmacy pricing detail that the
-// app doesn't surface yet. Override with --skip= or --skip=other_names.
-export const DEFAULT_SKIP: string[] = ['pharmacy_networks'];
+// Default skip list — empty. Every file CMS ships is loaded, BUT
+// pharmacy_networks is loaded through a default filter, never whole.
+//
+// The national pharmacy_networks file is enormous: the 2027 monthly release
+// is ~21.8 GiB uncompressed / 307.7M rows (~160–180 GB in Postgres across the
+// landing + pm_pharmacy_network_v2 tables after indexes). Loading it whole is
+// a ~5× blowup on a shared instance for data nothing reads in full. So the
+// importer applies a DEFAULT state filter to pharmacy_networks (NC/TX/GA
+// plans, pharmacies in-state or mail-order — see pharmacy-filter.ts), which
+// bounds it to ~6.2M rows / ~2.8 GB. --pharmacy-allow-national bypasses the
+// filter to load the entire file.
+//
+// It is NOT skipped, so it actually loads (silently skipping it is the exact
+// bug — a skipped spec is exempt from the zero-row hard-fail — that left
+// cms_spuf_pharmacy_network / pm_pharmacy_network_v2 empty on every release
+// with no error; cms-watch now alerts on 0 pharmacy rows to catch a regress).
+export const DEFAULT_SKIP: string[] = [];

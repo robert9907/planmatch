@@ -44,6 +44,7 @@
     "scripts/cms-spuf/discover.ts",
     "scripts/cms-spuf/download.ts",
     "scripts/cms-spuf/parser.ts",
+    "scripts/cms-spuf/pharmacy-filter.ts",
     "scripts/cms-spuf/pg.ts",
     "scripts/cms-spuf/env.ts"
   ]
