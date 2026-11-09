@@ -185,6 +185,11 @@ export async function parseSpufEntry(
   zipPath: string,
   spec: CmsFileSpec,
   workDir: string,
+  // Optional predicate over the raw split fields of a DATA row (header
+  // excluded). Return false to drop the row before it is COPY'd — used to
+  // load a filtered subset (e.g. NC/TX/GA pharmacy_network) without staging
+  // the full national file. Dropped rows are not counted in rowCounter.
+  rowFilter?: (record: string[]) => boolean,
 ): Promise<ParseResult | null> {
   const txtPaths = await locateAndExtract(zipPath, spec, workDir);
   if (txtPaths.length === 0) return null;
@@ -214,6 +219,7 @@ export async function parseSpufEntry(
           headerSeen = true;
           return cb();
         }
+        if (rowFilter && !rowFilter(record)) return cb(); // dropped by filter
         const line = rowToCopyLine(record, spec, rowCounter.count + 1);
         rowCounter.count += 1;
         cb(null, line + '\n');

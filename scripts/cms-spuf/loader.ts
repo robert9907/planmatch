@@ -125,13 +125,17 @@ export async function loadFile(opts: {
   zipPath: string;
   releaseId: number;
   workDir: string;
+  // Optional row predicate — only rows for which it returns true are loaded.
+  // Used to stage a filtered subset (e.g. NC/TX/GA pharmacy_network) without
+  // ever landing the full national file.
+  rowFilter?: (record: string[]) => boolean;
 }): Promise<{ rows: number; skipped: boolean }> {
-  const { client, spec, zipPath, releaseId, workDir } = opts;
+  const { client, spec, zipPath, releaseId, workDir, rowFilter } = opts;
 
   // Parse the entry. parseSpufEntry returns null when the file is not
   // present in this ZIP (quarterly-only files in monthly bundles, or
   // CMS-removed files like partial_gap_coverage.txt in 2025+).
-  const parsed = await parseSpufEntry(zipPath, spec, workDir);
+  const parsed = await parseSpufEntry(zipPath, spec, workDir, rowFilter);
   if (!parsed) {
     console.log(`[load]   ${spec.fileName}: not present in ZIP — skipped`);
     return { rows: 0, skipped: true };
