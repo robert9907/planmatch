@@ -311,20 +311,20 @@ export const ALL_FILES: CmsFileSpec[] = [
   PRICING,
 ];
 
-// Default skip list — pharmacy_networks stays skipped by default.
+// Default skip list — empty. Every file CMS ships is loaded, BUT
+// pharmacy_networks is loaded through a default filter, never whole.
 //
 // The national pharmacy_networks file is enormous: the 2027 monthly release
-// is ~21.8 GiB uncompressed / 307.7M rows, which measures to ~160–180 GB in
-// Postgres across the landing + pm_pharmacy_network_v2 tables after indexes
-// (the earlier "~30–50 GB" estimate predated counting the real file). On a
-// shared prod instance that is a ~5× blowup, and nothing in the app reads
-// these tables yet — so a normal import must NEVER load it on its own.
+// is ~21.8 GiB uncompressed / 307.7M rows (~160–180 GB in Postgres across the
+// landing + pm_pharmacy_network_v2 tables after indexes). Loading it whole is
+// a ~5× blowup on a shared instance for data nothing reads in full. So the
+// importer applies a DEFAULT state filter to pharmacy_networks (NC/TX/GA
+// plans, pharmacies in-state or mail-order — see pharmacy-filter.ts), which
+// bounds it to ~6.2M rows / ~2.8 GB. --pharmacy-allow-national bypasses the
+// filter to load the entire file.
 //
-// Historically it was skipped silently, which hid a real failure mode: a
-// skipped spec is exempt from the zero-row hard-fail in import-cms-spuf.ts,
-// so cms_spuf_pharmacy_network / pm_pharmacy_network_v2 sat empty on every
-// release with no error. The column-drift fix (SELECTED_DISPENSING_FEE_*,
-// see PHARMACY_NETWORK above) + migration 019 make an EXPLICIT, filtered
-// load work correctly when we want it; loading it still requires an explicit
-// opt-in flag (import-cms-spuf.ts refuses the full national file otherwise).
-export const DEFAULT_SKIP: string[] = ['pharmacy_networks'];
+// It is NOT skipped, so it actually loads (silently skipping it is the exact
+// bug — a skipped spec is exempt from the zero-row hard-fail — that left
+// cms_spuf_pharmacy_network / pm_pharmacy_network_v2 empty on every release
+// with no error; cms-watch now alerts on 0 pharmacy rows to catch a regress).
+export const DEFAULT_SKIP: string[] = [];

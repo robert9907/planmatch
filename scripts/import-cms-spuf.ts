@@ -25,6 +25,7 @@ import { closePool, withClient } from './cms-spuf/pg.js';
 import { discoverRelease, parseUrlMetadata } from './cms-spuf/discover.js';
 import { downloadZip, shaLocal } from './cms-spuf/download.js';
 import { ALL_FILES, DEFAULT_SKIP } from './cms-spuf/schema.js';
+import { buildPharmacyRowFilter, DEFAULT_PHARMACY_STATES } from './cms-spuf/pharmacy-filter.js';
 import {
   insertRelease,
   setReleaseStatus,
@@ -50,6 +51,8 @@ interface Args {
   keepZip: boolean;
   /** Explicit opt-in to load the full national pharmacy_networks file (~170 GB). */
   pharmacyAllowNational: boolean;
+  /** States whose plans/pharmacies the pharmacy_networks load is filtered to. */
+  pharmacyStates: string[];
   skipSpecs: string[]; // resolved skip list (from --skip or DEFAULT_SKIP)
   /** Finish an already-staged release: skip download + load, promote only. */
   promoteOnly: boolean;
@@ -64,6 +67,7 @@ function parseArgs(argv: string[]): Args {
     skipPromote: false,
     keepZip: false,
     pharmacyAllowNational: false,
+    pharmacyStates: [...DEFAULT_PHARMACY_STATES],
     skipSpecs: [...DEFAULT_SKIP],
     promoteOnly: false,
     releaseId: null,
@@ -85,6 +89,9 @@ function parseArgs(argv: string[]): Args {
       case 'dry-run':         out.dryRun = true; break;
       case 'skip-promote':    out.skipPromote = true; break;
       case 'pharmacy-allow-national': out.pharmacyAllowNational = true; break;
+      case 'pharmacy-states':
+        out.pharmacyStates = (val ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+        break;
       case 'promote-only':    out.promoteOnly = true; break;
       case 'release-id':      out.releaseId = Number(val); break;
       case 'keep-zip':        out.keepZip = true; break;
@@ -138,11 +145,14 @@ Optional:
   --skip=spec1,spec2                   Skip these file specs. Default: ${DEFAULT_SKIP.join(',')}
                                        Pass --skip= to load everything (but see
                                        --pharmacy-allow-national below).
-  --pharmacy-allow-national            Required to load the full national
-                                       pharmacy_networks file (~307.7M rows /
-                                       ~160–180 GB). Without it, un-skipping
-                                       pharmacy_networks is refused. A normal
-                                       import can never load it on its own.
+  --pharmacy-states=NC,TX,GA           States to filter pharmacy_networks to.
+                                       Default: ${DEFAULT_PHARMACY_STATES.join(',')}. Keeps rows whose plan
+                                       serves a listed state AND whose pharmacy
+                                       is in-state (by ZIP) or mail-order.
+                                       Bounds the load to ~6.2M rows / ~2.8 GB.
+  --pharmacy-allow-national            Bypass the state filter and load the FULL
+                                       national pharmacy_networks file (~307.7M
+                                       rows / ~160–180 GB). Use deliberately.
                                        Names: plan_information, basic_drugs, beneficiary_cost,
                                        pharmacy_networks, excluded_drugs, indication_based_coverage,
                                        insulin_beneficiary_cost, pricing, geographic_locator
@@ -395,19 +405,26 @@ async function main(): Promise<void> {
   console.log(`[main] Work dir: ${workDir}`);
   const skipSet = new Set(args.skipSpecs);
 
-  // Guardrail: the full national pharmacy_networks file is ~307.7M rows /
-  // ~160–180 GB in Postgres after indexes. It is skipped by DEFAULT_SKIP, but
-  // an explicit `--skip=` (load everything) would otherwise pull it in and
-  // blow up a shared prod instance. Refuse unless the operator explicitly
-  // acknowledges the national load with --pharmacy-allow-national. (A filtered
-  // NC/TX/GA load is handled by a separate, deliberate path.)
-  if (!skipSet.has('pharmacy_networks') && !args.pharmacyAllowNational) {
-    throw new Error(
-      'Refusing to load the full national pharmacy_networks file (~307.7M rows / ~160–180 GB ' +
-        'after indexes, no reader in the app yet). It is skipped by DEFAULT_SKIP; pass ' +
-        '--pharmacy-allow-national to load the whole national file anyway, or load a filtered subset. ' +
-        'See DEFAULT_SKIP in scripts/cms-spuf/schema.ts.',
-    );
+  // pharmacy_networks defaults to a STATE-FILTERED load (NC/TX/GA plans,
+  // pharmacies in-state or mail-order — see pharmacy-filter.ts), bounding it to
+  // ~6.2M rows / ~2.8 GB instead of the ~307.7M-row / ~170 GB national file.
+  // --pharmacy-allow-national bypasses the filter and loads it whole. Build the
+  // predicate up front so a bad --pharmacy-states fails before any load starts.
+  let pharmacyFilter: ((record: string[]) => boolean) | undefined;
+  if (!skipSet.has('pharmacy_networks')) {
+    if (args.pharmacyAllowNational) {
+      console.warn(
+        '[main] --pharmacy-allow-national: loading the FULL national pharmacy_networks ' +
+          'file (~307.7M rows / ~170 GB after indexes). No state filter applied.',
+      );
+    } else {
+      const built = await withClient((c) => buildPharmacyRowFilter(c, releaseId, args.pharmacyStates));
+      pharmacyFilter = built.filter;
+      console.log(
+        `[main] pharmacy_networks: default filter → ${built.states.join('/')} ` +
+          `(${built.planCount} plans), pharmacies in-state OR mail-order.`,
+      );
+    }
   }
 
   await setReleaseStatus(releaseId, 'loading');
@@ -420,7 +437,10 @@ async function main(): Promise<void> {
       }
       const result = await withClient(async (client) => {
         await client.query(`SET statement_timeout = 0`);
-        return loadFile({ client, spec, zipPath, releaseId, workDir });
+        return loadFile({
+          client, spec, zipPath, releaseId, workDir,
+          rowFilter: spec.name === 'pharmacy_networks' ? pharmacyFilter : undefined,
+        });
       });
       if (!result.skipped) rowCounts[spec.landingTable] = result.rows;
       // Fail loud on a non-skipped file that loaded ZERO rows. loadFile returns
