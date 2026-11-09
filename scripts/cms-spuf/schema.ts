@@ -290,10 +290,17 @@ export const ALL_FILES: CmsFileSpec[] = [
   PRICING,
 ];
 
-// Default skip list — pharmacy_networks unzips to ~24 GB across 6
-// inner ZIPs and would add ~30–50 GB to Postgres after indexes. The
-// existing pm_provider_network_cache (FHIR-fed) covers the app's
-// current network-membership use cases; SPUF pharmacy_network is
-// useful for "preferred vs standard" pharmacy pricing detail that the
-// app doesn't surface yet. Override with --skip= or --skip=other_names.
-export const DEFAULT_SKIP: string[] = ['pharmacy_networks'];
+// Default skip list — empty: every file CMS ships in a release is loaded.
+//
+// pharmacy_networks USED to be skipped here: it unzips to ~24 GB across 6
+// inner ZIPs and adds ~30–50 GB to Postgres after indexes, and at the time
+// nothing in the app consumed it. The side effect was that
+// cms_spuf_pharmacy_network and pm_pharmacy_network_v2 stayed empty on
+// every release, silently — a skipped spec is not a load error and is
+// deliberately exempt from the zero-row hard-fail in import-cms-spuf.ts,
+// so neither a failed status nor an error was ever recorded. That made a
+// whole SPUF file quietly absent. We now load it so preferred-vs-standard
+// pharmacy pricing is available and the data footprint is explicit and
+// auditable. Pass --skip=pharmacy_networks on a given run if you ever need
+// to stage a release without the large network file.
+export const DEFAULT_SKIP: string[] = [];
