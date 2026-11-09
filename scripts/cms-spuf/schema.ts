@@ -311,17 +311,20 @@ export const ALL_FILES: CmsFileSpec[] = [
   PRICING,
 ];
 
-// Default skip list — empty: every file CMS ships in a release is loaded.
+// Default skip list — pharmacy_networks stays skipped by default.
 //
-// pharmacy_networks USED to be skipped here: it unzips to ~24 GB across 6
-// inner ZIPs and adds ~30–50 GB to Postgres after indexes, and at the time
-// nothing in the app consumed it. The side effect was that
-// cms_spuf_pharmacy_network and pm_pharmacy_network_v2 stayed empty on
-// every release, silently — a skipped spec is not a load error and is
-// deliberately exempt from the zero-row hard-fail in import-cms-spuf.ts,
-// so neither a failed status nor an error was ever recorded. That made a
-// whole SPUF file quietly absent. We now load it so preferred-vs-standard
-// pharmacy pricing is available and the data footprint is explicit and
-// auditable. Pass --skip=pharmacy_networks on a given run if you ever need
-// to stage a release without the large network file.
-export const DEFAULT_SKIP: string[] = [];
+// The national pharmacy_networks file is enormous: the 2027 monthly release
+// is ~21.8 GiB uncompressed / 307.7M rows, which measures to ~160–180 GB in
+// Postgres across the landing + pm_pharmacy_network_v2 tables after indexes
+// (the earlier "~30–50 GB" estimate predated counting the real file). On a
+// shared prod instance that is a ~5× blowup, and nothing in the app reads
+// these tables yet — so a normal import must NEVER load it on its own.
+//
+// Historically it was skipped silently, which hid a real failure mode: a
+// skipped spec is exempt from the zero-row hard-fail in import-cms-spuf.ts,
+// so cms_spuf_pharmacy_network / pm_pharmacy_network_v2 sat empty on every
+// release with no error. The column-drift fix (SELECTED_DISPENSING_FEE_*,
+// see PHARMACY_NETWORK above) + migration 019 make an EXPLICIT, filtered
+// load work correctly when we want it; loading it still requires an explicit
+// opt-in flag (import-cms-spuf.ts refuses the full national file otherwise).
+export const DEFAULT_SKIP: string[] = ['pharmacy_networks'];

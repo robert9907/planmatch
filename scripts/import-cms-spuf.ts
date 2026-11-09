@@ -48,6 +48,8 @@ interface Args {
   dryRun: boolean;
   skipPromote: boolean;
   keepZip: boolean;
+  /** Explicit opt-in to load the full national pharmacy_networks file (~170 GB). */
+  pharmacyAllowNational: boolean;
   skipSpecs: string[]; // resolved skip list (from --skip or DEFAULT_SKIP)
   /** Finish an already-staged release: skip download + load, promote only. */
   promoteOnly: boolean;
@@ -61,6 +63,7 @@ function parseArgs(argv: string[]): Args {
     dryRun: false,
     skipPromote: false,
     keepZip: false,
+    pharmacyAllowNational: false,
     skipSpecs: [...DEFAULT_SKIP],
     promoteOnly: false,
     releaseId: null,
@@ -81,6 +84,7 @@ function parseArgs(argv: string[]): Args {
       case 'force':           out.force = true; break;
       case 'dry-run':         out.dryRun = true; break;
       case 'skip-promote':    out.skipPromote = true; break;
+      case 'pharmacy-allow-national': out.pharmacyAllowNational = true; break;
       case 'promote-only':    out.promoteOnly = true; break;
       case 'release-id':      out.releaseId = Number(val); break;
       case 'keep-zip':        out.keepZip = true; break;
@@ -132,7 +136,13 @@ Optional:
                                        an import died after the COPY phase and
                                        left the release stuck at status='loading'.
   --skip=spec1,spec2                   Skip these file specs. Default: ${DEFAULT_SKIP.join(',')}
-                                       Pass --skip= to load everything.
+                                       Pass --skip= to load everything (but see
+                                       --pharmacy-allow-national below).
+  --pharmacy-allow-national            Required to load the full national
+                                       pharmacy_networks file (~307.7M rows /
+                                       ~160–180 GB). Without it, un-skipping
+                                       pharmacy_networks is refused. A normal
+                                       import can never load it on its own.
                                        Names: plan_information, basic_drugs, beneficiary_cost,
                                        pharmacy_networks, excluded_drugs, indication_based_coverage,
                                        insulin_beneficiary_cost, pricing, geographic_locator
@@ -384,6 +394,22 @@ async function main(): Promise<void> {
   const workDir = makeWorkDir();
   console.log(`[main] Work dir: ${workDir}`);
   const skipSet = new Set(args.skipSpecs);
+
+  // Guardrail: the full national pharmacy_networks file is ~307.7M rows /
+  // ~160–180 GB in Postgres after indexes. It is skipped by DEFAULT_SKIP, but
+  // an explicit `--skip=` (load everything) would otherwise pull it in and
+  // blow up a shared prod instance. Refuse unless the operator explicitly
+  // acknowledges the national load with --pharmacy-allow-national. (A filtered
+  // NC/TX/GA load is handled by a separate, deliberate path.)
+  if (!skipSet.has('pharmacy_networks') && !args.pharmacyAllowNational) {
+    throw new Error(
+      'Refusing to load the full national pharmacy_networks file (~307.7M rows / ~160–180 GB ' +
+        'after indexes, no reader in the app yet). It is skipped by DEFAULT_SKIP; pass ' +
+        '--pharmacy-allow-national to load the whole national file anyway, or load a filtered subset. ' +
+        'See DEFAULT_SKIP in scripts/cms-spuf/schema.ts.',
+    );
+  }
+
   await setReleaseStatus(releaseId, 'loading');
   const rowCounts: Record<string, number> = {};
   try {
