@@ -56,3 +56,6 @@ _scrape-debug/
 _tmp/
 vercel.dev.json
 src/_apilibrary_dev
+
+# graphify knowledge-graph output (session-local, not project source)
+graphify-out/
