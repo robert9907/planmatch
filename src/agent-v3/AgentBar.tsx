@@ -51,7 +51,9 @@ export type ScreenId =
   | 'enroll'
   // Stand-alone tool, not a step in the MA flow — rendered after the
   // flow nav behind a divider and deliberately NOT in SCREENS.
-  | 'dental';
+  | 'dental'
+  // Stand-alone hospital indemnity quote (under-65 / supplemental).
+  | 'hospital';
 
 export const SCREENS: ScreenId[] = [
   'intake',
@@ -74,6 +76,7 @@ const LABELS: Record<ScreenId, string> = {
   compliance: 'Compliance',
   enroll: 'Enroll',
   dental: 'Dental',
+  hospital: 'Hospital',
 };
 
 interface Props {
@@ -354,6 +357,24 @@ export function AgentBar({
           }}
         >
           {LABELS.dental}
+        </button>
+        <button
+          type="button"
+          onClick={() => onNav('hospital')}
+          title="Hospital indemnity quote — Bankers Fidelity Vantage Flex Plus (separate from the Medicare flow)"
+          style={{
+            marginLeft: 2,
+            background: screen === 'hospital' ? '#83f0f9' : 'rgba(255,255,255,0.04)',
+            color: screen === 'hospital' ? '#0d2f5e' : 'rgba(255,255,255,0.6)',
+            border: '1px solid rgba(131,240,249,0.3)',
+            borderRadius: 4,
+            padding: '4px 8px',
+            fontSize: 10,
+            fontWeight: screen === 'hospital' ? 700 : 600,
+            cursor: 'pointer',
+          }}
+        >
+          {LABELS.hospital}
         </button>
       </div>
 

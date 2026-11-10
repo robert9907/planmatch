@@ -66,6 +66,7 @@ import { ComplianceScreen } from './ComplianceScreen';
 import { CompareScreen } from './CompareScreen';
 import { DisclaimersScreen } from './DisclaimersScreen';
 import { DentalScreen } from './DentalScreen';
+import { HospitalScreen } from './HospitalScreen';
 import { dsnpMedicaidVerdict, qualifiesForBench } from '@/lib/benchEligibility';
 import { EnrollScreen } from './EnrollScreen';
 import { IntakeScreen } from './IntakeScreen';
@@ -197,7 +198,14 @@ const PRIORITY_TO_EXTRAS: Partial<Record<PriorityKey, string>> = {
 const DEFAULT_PRIORITIES: PriorityKey[] = [];
 
 export function AgentV3App() {
-  const [screen, setScreen] = useState<ScreenId>('intake');
+  // ?screen=hospital (AgentBase's under-65 "Quote in Plan Match") lands
+  // straight on the Hospital tab; every other load starts on Client.
+  const [screen, setScreen] = useState<ScreenId>(() =>
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('screen') === 'hospital'
+      ? 'hospital'
+      : 'intake',
+  );
   const [clientView, setClientView] = useState(false);
   const [priorities, setPriorities] = useState<PriorityKey[]>(DEFAULT_PRIORITIES);
 
@@ -1898,6 +1906,7 @@ const explanationsByPlanId = useMemo<
           />
         )}
         {screen === 'dental' && <DentalScreen />}
+        {screen === 'hospital' && <HospitalScreen />}
       </div>
 
       {/* AgentBase hydration banner — only renders for clientId loads.
@@ -1918,9 +1927,9 @@ const explanationsByPlanId = useMemo<
           without a real pool the bench renders the wrong plans, so the
           banner is sticky and unmissable. Placed as a top strip so it
           shows across every screen, not just Compare. See Phase 1.10. */}
-      {/* Not on Dental: that screen doesn't use the MA county pool, and
+      {/* Not on Dental/Hospital: those screens don't use the MA county pool, and
           the fixed banner sits over its inputs. */}
-      {screen !== 'dental' && (poolMissingGeo || poolTruncated) && (
+      {screen !== 'dental' && screen !== 'hospital' && (poolMissingGeo || poolTruncated) && (
         <PoolIntegrityBanner
           missingGeo={poolMissingGeo}
           truncated={poolTruncated}
