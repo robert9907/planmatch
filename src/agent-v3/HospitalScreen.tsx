@@ -39,8 +39,11 @@ const AMB = '#9A6B1A';
 const AMB_BG = '#FDF3E3';
 const SERIF = "'Fraunces', Georgia, serif";
 
+/** Where the quote link goes in the editable text. */
+const LINK_TOKEN = '[quote link]';
+
 const FED_NOTICE =
-  'THIS IS A SUPPLEMENT TO HEALTH INSURANCE AND IS NOT A SUBSTITUTE FOR MAJOR MEDICAL COVERAGE. LACK OF MAJOR MEDICAL COVERAGE (OR OTHER MINIMUM ESSENTIAL COVERAGE) MAY RESULT IN AN ADDITIONAL PAYMENT WITH YOUR TAXES.';
+  'THIS IS A SUPPLEMENT TO HEALTH INSURANCE AND IS NOT A SUBSTITUTE FOR MAJOR MEDICAL COVERAGE.';
 
 type PkgKey = keyof typeof PACKAGES;
 
@@ -333,7 +336,10 @@ function SendPanel(props: {
   if (!props.sendCheck.ok && props.sendCheck.reason) missing.push(props.sendCheck.reason);
   const canGo = !busy && missing.length === 0;
 
-  const preview = `${mode === 'personal' && first ? `Hi ${first}` : 'Hi'}, it's Rob with GenerationHealth.me. Here's your Bankers Fidelity hospital indemnity quote:\n\nplanmatch.generationhealth.me/hospital-quote/…${mode === 'personal' && name ? `/${slugName(name)}` : ''}\n\nThis quote is good for 30 days. Call or text me at (828) 761-3326.`;
+  const defaultMessage = `${mode === 'personal' && first.trim() ? `Hi ${first.trim()}` : 'Hi'}, it's Rob with GenerationHealth.me. Here's your Bankers Fidelity hospital indemnity quote:\n\n${LINK_TOKEN}\n\nThis quote is good for 30 days. Call or text me at (828) 761-3326.`;
+  const [message, setMessage] = useState<string | null>(null); // null = use the default
+  const text = message ?? defaultMessage;
+  const linkShown = `planmatch.generationhealth.me/hospital-quote/…${mode === 'personal' && name ? `/${slugName(name)}` : ''}`;
 
   async function send() {
     if (!canGo) return;
@@ -356,6 +362,7 @@ function SendPanel(props: {
           household: props.household,
           benefits: props.b,
           monthlyPremium: props.total,
+          message: wantSms ? text : null,
         }),
       });
       const data = (await resp.json().catch(() => null)) as
@@ -408,8 +415,23 @@ function SendPanel(props: {
         <button type="button" aria-pressed={mail} onClick={() => setMail((v) => !v)} style={mail ? PILL_ON : PILL_OFF}>Email</button>
       </div>
       {!wantSms && !wantEmail && <div style={{ fontSize: 11, color: MUTED }}>Nothing will be texted or emailed — you'll get the link to copy.</div>}
-      <div style={LABEL}>Text preview</div>
-      <div style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: INK, background: '#f8f9fa', border: `1px solid ${LINE}`, borderRadius: 8, padding: 10, lineHeight: 1.45 }}>{preview}</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <label htmlFor="hq-msg" style={LABEL}>Text message</label>
+        {message !== null && <button type="button" onClick={() => setMessage(null)} style={LINK_BTN}>Reset</button>}
+      </div>
+      <textarea
+        id="hq-msg"
+        value={text}
+        onChange={(e) => setMessage(e.target.value)}
+        rows={7}
+        maxLength={600}
+        style={{ fontFamily: 'inherit', fontSize: 12.5, color: INK, background: 'white', border: '1px solid rgba(13,47,94,0.2)', borderRadius: 8, padding: 10, lineHeight: 1.45, resize: 'vertical' }}
+      />
+      <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.45 }}>
+        {text.includes(LINK_TOKEN)
+          ? <>{LINK_TOKEN} becomes the quote link ({linkShown}).</>
+          : <>No {LINK_TOKEN} in the message — the link is added at the end.</>}
+      </div>
       {missing.length > 0 && <div style={{ fontSize: 12, color: '#991b1b', lineHeight: 1.45 }}>{missing.join(' · ')}</div>}
       {result.kind === 'error' && <div style={{ fontSize: 12, color: '#991b1b' }}>Not sent: {result.message}</div>}
       <div style={{ display: 'flex', gap: 8 }}>
