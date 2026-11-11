@@ -32,6 +32,13 @@ function clean(raw: unknown, max: number): string {
   return raw.replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+/** Keeps line breaks (the text message is multi-line); strips other control chars. */
+function cleanMessage(raw: unknown, max: number): string {
+  if (typeof raw !== 'string') return '';
+  // eslint-disable-next-line no-control-regex
+  return raw.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000B-\u001F\u007F]/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, max);
+}
+
 const inList = (v: unknown, list: readonly number[]): v is number => typeof v === 'number' && list.includes(v);
 
 function parseBenefits(raw: unknown): HospitalBenefits | null {
@@ -102,6 +109,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     },
     stateCode,
     zip: /^\d{5}$/.test(zip) ? zip : null,
+    message: cleanMessage(body.message, 600) || null,
     agentName: 'Rob Simm',
     agentPhone: '(828) 761-3326',
     agentNpn: '10447418',
