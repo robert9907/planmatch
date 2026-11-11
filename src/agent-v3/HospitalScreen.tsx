@@ -92,10 +92,6 @@ function explain(b: HospitalBenefits): Record<string, string> {
   };
 }
 
-function slugName(name: string): string {
-  return name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-}
-
 export function HospitalScreen() {
   const session = useSession();
   const client = session.client;
@@ -339,7 +335,6 @@ function SendPanel(props: {
   const defaultMessage = `${mode === 'personal' && first.trim() ? `Hi ${first.trim()}` : 'Hi'}, it's Rob with GenerationHealth.me. Here's your Bankers Fidelity hospital indemnity quote:\n\n${LINK_TOKEN}\n\nThis quote is good for 30 days. Call or text me at (828) 761-3326.`;
   const [message, setMessage] = useState<string | null>(null); // null = use the default
   const text = message ?? defaultMessage;
-  const linkShown = `planmatch.generationhealth.me/hospital-quote/…${mode === 'personal' && name ? `/${slugName(name)}` : ''}`;
 
   async function send() {
     if (!canGo) return;
@@ -429,7 +424,7 @@ function SendPanel(props: {
       />
       <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.45 }}>
         {text.includes(LINK_TOKEN)
-          ? <>{LINK_TOKEN} becomes the quote link ({linkShown}).</>
+          ? <>{LINK_TOKEN} is swapped for {mode === 'personal' && first.trim() ? `${first.trim()}'s` : 'the'} real quote link when you hit Send. The link shows here after it's sent.</>
           : <>No {LINK_TOKEN} in the message — the link is added at the end.</>}
       </div>
       {missing.length > 0 && <div style={{ fontSize: 12, color: '#991b1b', lineHeight: 1.45 }}>{missing.join(' · ')}</div>}
