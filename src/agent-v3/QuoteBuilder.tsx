@@ -109,7 +109,10 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent, headToHead }: QuoteBuil
   const emailValid = !email || /^[^\s@<>"']+@[^\s@<>"']+\.[a-z]{2,}$/i.test(email);
   const willText = sendText && phone.replace(/\D/g, '').length >= 10;
   const willEmail = sendEmail && !!email && emailValid;
-  const canSend = !submitting && selectedIds.length > 0 && missingFields.length === 0 && emailValid;
+  // A quote can be Medicare plans, dental plans, or both. Dental-only (0
+  // Medicare plans checked) is allowed — e.g. under-65 / dental-only clients.
+  const hasAnyPlan = selectedIds.length > 0 || (!headToHead && quoteDental.length > 0);
+  const canSend = !submitting && hasAnyPlan && missingFields.length === 0 && emailValid;
 
   const onSend = async () => {
     if (!canSend) return;
@@ -240,7 +243,8 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent, headToHead }: QuoteBuil
         </div>
         <div style={{ marginTop: 4, fontSize: 12, color: MUTED }}>
           Pick up to {MAX_PLANS} plans, add a personal note, and text and/or email the
-          client a link to a frozen comparison page.
+          client a link to a frozen comparison page. For a dental-only quote, leave every
+          Medicare plan unchecked and send just the dental plans below.
         </div>
 
         <FieldLabel>Plans</FieldLabel>
@@ -414,7 +418,9 @@ export function QuoteBuilder({ rankedPlans, onQuoteSent, headToHead }: QuoteBuil
         title={
           canSend
             ? undefined
-            : `Add ${missingFields.join(', ')} on the Intake screen before sending`
+            : !hasAnyPlan
+              ? 'Pick at least one Medicare plan or add a dental plan'
+              : `Add ${missingFields.join(', ')} on the Intake screen before sending`
         }
         style={{ marginTop: 16 }}
       >
