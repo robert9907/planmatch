@@ -20,6 +20,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import Twilio from 'twilio';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
+import { requireSession } from './_lib/require-session.js';
 
 // AgentBase TwiML App SID. Hardcoded fallback so the broker doesn't
 // have to set an extra env var when they want the standard routing.
@@ -33,6 +34,12 @@ const DEFAULT_TTL_SECONDS = 60 * 60;
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
   if (req.method !== 'GET') return badRequest(res, 'GET required');
+
+  // Broker login required. This token lets its holder place calls on the
+  // Twilio account, so it is never handed to an anonymous visitor — the
+  // gh_session cookie AgentBase sets on .generationhealth.me must verify
+  // and belong to an active broker (same gate as /api/agentbase-clients).
+  if (await requireSession(req, res)) return;
 
   // No-store on every response. Tokens contain an exp claim; serving
   // a cached one means the broker dials with a token that's already
