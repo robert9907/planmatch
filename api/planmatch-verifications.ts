@@ -21,7 +21,9 @@
 // observability; the agent-tool queue UI calls this (own-origin).
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { supabase } from './_lib/supabase.js';
+// provider_verifications lives in the AgentBase database on Google (schema
+// planmatch, HIPAA Phase 2).
+import { clientData } from './_lib/clientData.js';
 
 const VALID_STATUSES = new Set(['unverified', 'researching', 'verified']);
 const QUEUE_STATUSES = ['unverified', 'researching'];
@@ -53,7 +55,7 @@ async function handleGet(req: VercelRequest, res: VercelResponse) {
     ? req.query.session_id.trim()
     : '';
 
-  let query = supabase()
+  let query = clientData()
     .from('provider_verifications')
     .select('*')
     .order('created_at', { ascending: false });
@@ -124,7 +126,7 @@ async function handlePatch(req: VercelRequest, res: VercelResponse) {
     update.in_network_carriers = [];
   }
 
-  const { data, error } = await supabase()
+  const { data, error } = await clientData()
     .from('provider_verifications')
     .update(update)
     .eq('id', id)
