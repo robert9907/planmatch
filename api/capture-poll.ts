@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { supabase, type CaptureSessionRow, type CaptureItem } from './_lib/supabase.js';
+import { type CaptureSessionRow, type CaptureItem } from './_lib/supabase.js';
+import { clientData } from './_lib/clientData.js';
 import { badRequest, cors, notFound, sendJson, serverError } from './_lib/http.js';
 import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
 
@@ -15,7 +16,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const since = sinceParam ? new Date(sinceParam).getTime() : 0;
 
-    const { data: session, error } = await supabase()
+    const { data: session, error } = await clientData()
       .from('capture_sessions')
       .select<'*', CaptureSessionRow>('*')
       .eq('token', token)

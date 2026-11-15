@@ -22,7 +22,8 @@
 //   prescriber.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { supabase, type CaptureItem, type CaptureSessionRow } from './_lib/supabase.js';
+import { type CaptureItem, type CaptureSessionRow } from './_lib/supabase.js';
+import { clientData } from './_lib/clientData.js';
 import { badRequest, cors, notFound, sendJson, serverError } from './_lib/http.js';
 import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
 import { resolvePharmacyId } from './_lib/snapPharmacy.js';
@@ -81,7 +82,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? { ...body.pharmacy, name: body.pharmacy.name.trim().slice(0, 160) }
       : null;
 
-    const { data: session, error: findErr } = await supabase()
+    const { data: session, error: findErr } = await clientData()
       .from('capture_sessions')
       .select<'*', CaptureSessionRow>('*')
       .eq('token', token)
@@ -211,7 +212,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const changed = JSON.stringify(extracted) !== JSON.stringify(item.extracted ?? []);
         return changed ? { ...item, extracted, updated_at: now } : item;
       });
-      const { error: updErr } = await supabase().from('capture_sessions').update({ payload }).eq('token', token);
+      const { error: updErr } = await clientData().from('capture_sessions').update({ payload }).eq('token', token);
       if (updErr) return serverError(res, updErr);
     }
 

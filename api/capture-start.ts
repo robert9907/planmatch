@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomUUID } from 'node:crypto';
-import { supabase } from './_lib/supabase.js';
+import { clientData } from './_lib/clientData.js';
 import { sendCaptureSms, normalizePhone } from './_lib/twilio.js';
 import { badRequest, cors, sendJson, serverError } from './_lib/http.js';
 
@@ -41,7 +41,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const normalizedPhone = normalizePhone(clientPhone);
-    const sb = supabase();
+    const sb = clientData();
 
     // Anti-stacking guard for AgentBase-initiated sessions: reject if
     // there's already an open (waiting|has_results) unexpired capture
