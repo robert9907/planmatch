@@ -11,6 +11,7 @@
 // row is the proof of what the directory said on enrollment day.
 
 import { supabase } from './supabase.js';
+import { clientData } from './clientData.js';
 import { outranks, isTrustedSource } from './network-row-precedence.js';
 
 export type EvidenceStatus = 'in_network' | 'out_of_network' | 'not_confirmed';
@@ -146,7 +147,9 @@ export async function recordEnrollmentEvidence(args: {
     cacheRows = (data ?? []) as CacheRowLite[];
   }
   const rows = buildEvidenceRows({ ...args, cacheRows });
-  const { error: insErr } = await sb.from('pm_enrollment_provider_evidence').insert(rows);
+  // Evidence names the client — it lives with the other client records on
+  // Google (schema planmatch); the network cache read above stays on plan-match-prod.
+  const { error: insErr } = await clientData().from('pm_enrollment_provider_evidence').insert(rows);
   if (insErr) throw new Error(`evidence insert: ${insErr.message}`);
   return rows;
 }

@@ -7,6 +7,7 @@ import {
   type ExtractedItem,
   type ExtractedMedicareCard,
 } from './_lib/supabase.js';
+import { clientData } from './_lib/clientData.js';
 import { extractFromImages } from './_lib/vision.js';
 import { badRequest, cors, notFound, sendJson, serverError } from './_lib/http.js';
 import { agentbaseSupabase } from './_lib/agentbaseSupabase.js';
@@ -67,7 +68,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!token) return badRequest(res, 'token is required');
     if (images.some((img) => !img.base64)) return badRequest(res, 'image_base64 is required');
 
-    const { data: session, error: findErr } = await supabase()
+    const { data: session, error: findErr } = await clientData()
       .from('capture_sessions')
       .select<'*', CaptureSessionRow>('*')
       .eq('token', token)
@@ -76,7 +77,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!session) return notFound(res, 'Capture session not found');
 
     if (new Date(session.expires_at).getTime() < Date.now()) {
-      await supabase().from('capture_sessions').update({ status: 'expired' }).eq('token', token);
+      await clientData().from('capture_sessions').update({ status: 'expired' }).eq('token', token);
       return sendJson(res, 410, { error: 'Session expired' });
     }
 
@@ -261,7 +262,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const nextPayload = [...(session.payload ?? []), item];
 
-    const { error: updateErr } = await supabase()
+    const { error: updateErr } = await clientData()
       .from('capture_sessions')
       .update({
         payload: nextPayload,
