@@ -1,11 +1,16 @@
-// Session gate for the 8 broker-only endpoints in this repo. Verifies the
-// gh_session cookie's JWT against the AgentBase project's JWKS — this repo
-// never issues tokens, only verifies AgentBase-issued ones.
+// Session gate for the broker-only endpoints in this repo. Verifies the
+// gh_session cookie's JWT — this repo never issues tokens, only verifies
+// AgentBase-issued ones.
+//
+// Since Nov 2026 AgentBase signs them itself (ES256, public key at
+// https://crm.generationhealth.me/api/auth/jwks). Cookies minted before
+// the switch were issued by Supabase Auth; that LEGACY issuer is still
+// accepted until they age out, then the branch can go.
 //
 // 401 JSON on any failure. No WWW-Authenticate. No dev bypass.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { createRemoteJWKSet, decodeJwt, jwtVerify } from 'jose';
 import { createClient } from '@supabase/supabase-js';
 
 const PROJECT_REF = 'wyyasqvouvdcovttzfnv';
@@ -13,6 +18,48 @@ const JWKS_URL = `https://${PROJECT_REF}.supabase.co/auth/v1/.well-known/jwks.js
 const EXPECTED_ISS = `https://${PROJECT_REF}.supabase.co/auth/v1`;
 
 const jwks = createRemoteJWKSet(new URL(JWKS_URL));
+
+const AGENTBASE_ISS = 'https://crm.generationhealth.me/auth';
+const AGENTBASE_AUD = 'agentbase';
+const agentbaseJwks = createRemoteJWKSet(
+  new URL('https://crm.generationhealth.me/api/auth/jwks'),
+);
+
+function amrHasPasskey(payload: Record<string, unknown>): boolean {
+  const amr = payload.amr;
+  if (!Array.isArray(amr)) return false;
+  return amr.some((e) =>
+    e === 'passkey' ||
+    (e && typeof e === 'object' && (e as { method?: unknown }).method === 'passkey'),
+  );
+}
+
+async function verifyToken(token: string) {
+  let iss: unknown;
+  try {
+    iss = decodeJwt(token).iss;
+  } catch {
+    throw new UnauthenticatedError('jwt_invalid');
+  }
+  try {
+    if (iss === AGENTBASE_ISS) {
+      const { payload } = await jwtVerify(token, agentbaseJwks, {
+        issuer: AGENTBASE_ISS,
+        audience: AGENTBASE_AUD,
+        algorithms: ['ES256'],
+      });
+      if (!amrHasPasskey(payload as Record<string, unknown>)) {
+        throw new UnauthenticatedError('amr_not_allowed');
+      }
+      return payload;
+    }
+    const { payload } = await jwtVerify(token, jwks, { issuer: EXPECTED_ISS });
+    return payload;
+  } catch (e) {
+    if (e instanceof UnauthenticatedError) throw e;
+    throw new UnauthenticatedError('jwt_invalid');
+  }
+}
 
 class UnauthenticatedError extends Error {
   reason: string;
@@ -96,12 +143,7 @@ export async function requireSession(
   try {
     const token = readSessionCookie(req.headers.cookie);
     if (!token) throw new UnauthenticatedError('no_cookie');
-    let payload;
-    try {
-      ({ payload } = await jwtVerify(token, jwks, { issuer: EXPECTED_ISS }));
-    } catch {
-      throw new UnauthenticatedError('jwt_invalid');
-    }
+    const payload = await verifyToken(token);
     const sub = payload.sub;
     if (typeof sub !== 'string' || sub.length === 0) {
       throw new UnauthenticatedError('no_sub');
