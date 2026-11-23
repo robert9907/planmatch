@@ -3,21 +3,14 @@
 // AgentBase-issued ones.
 //
 // Since Nov 2026 AgentBase signs them itself (ES256, public key at
-// https://crm.generationhealth.me/api/auth/jwks). Cookies minted before
-// the switch were issued by Supabase Auth; that LEGACY issuer is still
-// accepted until they age out, then the branch can go.
+// https://crm.generationhealth.me/api/auth/jwks). The legacy Supabase Auth
+// issuer was removed on 2026-11-23 once the old project showed no activity.
 //
 // 401 JSON on any failure. No WWW-Authenticate. No dev bypass.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createRemoteJWKSet, decodeJwt, jwtVerify } from 'jose';
 import { createClient } from '@supabase/supabase-js';
-
-const PROJECT_REF = 'wyyasqvouvdcovttzfnv';
-const JWKS_URL = `https://${PROJECT_REF}.supabase.co/auth/v1/.well-known/jwks.json`;
-const EXPECTED_ISS = `https://${PROJECT_REF}.supabase.co/auth/v1`;
-
-const jwks = createRemoteJWKSet(new URL(JWKS_URL));
 
 const AGENTBASE_ISS = 'https://crm.generationhealth.me/auth';
 const AGENTBASE_AUD = 'agentbase';
@@ -41,19 +34,16 @@ async function verifyToken(token: string) {
   } catch {
     throw new UnauthenticatedError('jwt_invalid');
   }
+  if (iss !== AGENTBASE_ISS) throw new UnauthenticatedError('jwt_invalid');
   try {
-    if (iss === AGENTBASE_ISS) {
-      const { payload } = await jwtVerify(token, agentbaseJwks, {
-        issuer: AGENTBASE_ISS,
-        audience: AGENTBASE_AUD,
-        algorithms: ['ES256'],
-      });
-      if (!amrHasPasskey(payload as Record<string, unknown>)) {
-        throw new UnauthenticatedError('amr_not_allowed');
-      }
-      return payload;
+    const { payload } = await jwtVerify(token, agentbaseJwks, {
+      issuer: AGENTBASE_ISS,
+      audience: AGENTBASE_AUD,
+      algorithms: ['ES256'],
+    });
+    if (!amrHasPasskey(payload as Record<string, unknown>)) {
+      throw new UnauthenticatedError('amr_not_allowed');
     }
-    const { payload } = await jwtVerify(token, jwks, { issuer: EXPECTED_ISS });
     return payload;
   } catch (e) {
     if (e instanceof UnauthenticatedError) throw e;
